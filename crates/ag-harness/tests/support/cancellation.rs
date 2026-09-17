@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, FileSystem, Harness, LoadedSession, LocalFileSystem, Model, ModelCompletion,
-    ModelError, ModelMessage, ModelMetadata, ModelRequest, ModelResponse, NewSession, OutputSchema,
-    SessionError, SessionStore, SqliteStore, StoreIdentity, Tool, ToolCall, ToolPolicy,
-    TurnControl, TurnError, TurnErrorType, TurnLimits, TurnOptions, TurnOwner, WriteRecord,
-    WriteStatus,
+    AcquiredTurn, FileSystem, Harness, LoadedSession, LocalFileSystem, MemoryStore, Model,
+    ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
+    NewSession, OutputSchema, SessionError, SessionStore, SqliteStore, StoreIdentity, Tool,
+    ToolCall, ToolPolicy, TurnControl, TurnError, TurnErrorType, TurnLimits, TurnOptions,
+    TurnOwner, WriteRecord, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -68,6 +68,14 @@ impl Model for TestModel {
         self.0.calls.fetch_add(1, Ordering::SeqCst);
         self.0.entered.notify_one();
         let _notice = DropNotice(Arc::clone(&self.0));
+        if matches!(
+            request.messages().last(),
+            Some(ModelMessage::ToolResult { .. })
+        ) {
+            return Ok(ModelCompletion::from_response(ModelResponse::Output(
+                json!({}),
+            )));
+        }
         match request.prompt() {
             "wait" => pending().await,
             "panic" => std::panic::resume_unwind(Box::new("injected model panic")),
@@ -102,11 +110,14 @@ enum Phase {
     Fail,
     Cleanup,
     Renew,
+    Intent,
+    Outcome,
 }
 
 struct Gate {
     entered: Notify,
     fail_cleanup: AtomicBool,
+    fail_outcome: AtomicBool,
     phase: Phase,
     release: Notify,
     store: Arc<dyn SessionStore>,
@@ -117,6 +128,7 @@ impl Gate {
         Self {
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
+            fail_outcome: AtomicBool::new(false),
             phase,
             release: Notify::new(),
             store,
@@ -211,9 +223,12 @@ impl SessionStore for Gate {
         expected: Option<&[u8]>,
         resulting: &[u8],
     ) -> Result<i64, SessionError> {
-        self.store
+        let intent = self
+            .store
             .write_intent(owner, call, root, path, expected, resulting)
-            .await
+            .await?;
+        self.pause(Phase::Intent).await;
+        Ok(intent)
     }
 
     async fn finish_write(
@@ -222,12 +237,20 @@ impl SessionStore for Gate {
         id: i64,
         applied: bool,
     ) -> Result<(), SessionError> {
+        self.pause(Phase::Outcome).await;
+        if self.fail_outcome.load(Ordering::SeqCst) {
+            return Err(SessionError::Store {
+                operation: "record write outcome",
+                source: Box::new(io::Error::other("injected outcome failure")),
+            });
+        }
         self.store.finish_write(owner, id, applied).await
     }
 }
 
 async fn stores() -> Vec<Arc<dyn SessionStore>> {
     vec![
+        Arc::new(MemoryStore::new()),
         Arc::new(ExternalStore::new()),
         Arc::new(
             SqliteStore::open(Path::new(":memory:"))
@@ -250,10 +273,16 @@ async fn cancellation_before_poll_and_unstarted_drop_do_not_execute() {
     control.cancel();
     let error = turn.await.expect_err("cancelled");
     bounded(control.settled()).await.expect("settled");
+    bounded(control.effects_settled())
+        .await
+        .expect("effects settled");
     control.retry_settlement().await.expect("no cleanup needed");
     let unstarted = harness.run_once_controlled("wait", options());
     let unstarted_control = unstarted.control();
     drop(unstarted);
+    bounded(unstarted_control.effects_settled())
+        .await
+        .expect("unstarted effects");
     bounded(unstarted_control.settled())
         .await
         .expect("unstarted settled");
@@ -536,34 +565,273 @@ impl FileSystem for DeferredReplacement {
     }
 }
 
+fn write_options() -> TurnOptions {
+    TurnOptions::new(
+        schema(),
+        ToolPolicy::default().allow(Tool::Write),
+        TurnLimits::default(),
+    )
+}
+
+async fn effects_pending(control: &TurnControl) {
+    assert!(
+        timeout(Duration::from_millis(20), control.effects_settled())
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
     // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let entered = Arc::new(Notify::new());
+        let finished = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+            .store(store)
+            .repository(repository_with_host_git(root.path()))
+            .file_system(DeferredReplacement {
+                entered: Arc::clone(&entered),
+                finished: Arc::clone(&finished),
+                release: Arc::clone(&release),
+            });
+        let mut session = harness
+            .session("write", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let control = turn.control();
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = entered.notified() => {},
+        }
+
+        // Act
+        control.cancel();
+        assert!(matches!(
+            bounded(turn).await,
+            Err(SessionError::Turn(TurnError::Cancelled))
+        ));
+        bounded(control.settled())
+            .await
+            .expect("persistence settled");
+        effects_pending(&control).await;
+
+        // Assert
+        assert!(!root.path().join("file.txt").exists());
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Pending
+        );
+        assert!(matches!(
+            session.send("ok").await,
+            Err(SessionError::Busy { .. })
+        ));
+        control.retry_settlement().await.expect("no cleanup needed");
+        assert!(matches!(
+            session.send("ok").await,
+            Err(SessionError::Busy { .. })
+        ));
+        release.notify_one();
+        bounded(finished.notified()).await;
+        bounded(control.effects_settled())
+            .await
+            .expect("effects acknowledged");
+        assert_eq!(
+            tokio::fs::read(root.path().join("file.txt"))
+                .await
+                .expect("late replacement"),
+            b"new\n"
+        );
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Applied
+        );
+        let mut successor = Box::pin(session.send_controlled("wait", options()));
+        let successor_control = successor.control();
+        tokio::select! {
+            result = &mut successor => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = tokio::time::sleep(Duration::from_millis(20)) => {},
+        }
+        control.cancel();
+        control.retry_settlement().await.expect("stale retry");
+        bounded(control.effects_settled())
+            .await
+            .expect("stale effects");
+        unsettled(&successor_control).await;
+        drop(successor);
+        bounded(successor_control.settled())
+            .await
+            .expect("successor cleanup");
+    }
+}
+
+#[tokio::test]
+async fn cancelled_intent_does_not_start_replacement() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let gate = Arc::new(Gate::new(store, Phase::Intent));
+        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+            .store(gate.clone())
+            .repository(repository_with_host_git(root.path()));
+        let mut session = harness
+            .session("intent", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let control = turn.control();
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = gate.entered.notified() => {},
+        }
+
+        // Act
+        drop(turn);
+        bounded(control.settled()).await.expect("persistence");
+        bounded(control.effects_settled())
+            .await
+            .expect("no effects");
+        gate.release.notify_one();
+
+        // Assert
+        assert!(!root.path().join("file.txt").exists());
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Pending
+        );
+        session.send("ok").await.expect("successor");
+    }
+}
+
+#[tokio::test]
+async fn dropped_ordinary_turn_retains_replacement_and_admission() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let gate = Arc::new(Gate::new(store, Phase::Outcome));
+        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+            .store(gate.clone())
+            .repository(repository_with_host_git(root.path()))
+            .file_system(DeferredReplacement {
+                entered: entered.clone(),
+                finished: Arc::new(Notify::new()),
+                release: release.clone(),
+            });
+        let mut session = harness
+            .session("ordinary", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(session.send_with_options("write", write_options()));
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = entered.notified() => {},
+        }
+
+        // Act
+        drop(turn);
+        assert!(matches!(
+            session.send("ok").await,
+            Err(SessionError::Busy { .. })
+        ));
+        release.notify_one();
+        bounded(gate.entered.notified()).await;
+
+        // Assert
+        assert!(root.path().join("file.txt").exists());
+        assert!(matches!(
+            session.send("ok").await,
+            Err(SessionError::Busy { .. })
+        ));
+        gate.release.notify_one();
+        bounded(async {
+            loop {
+                match session.send("ok").await {
+                    Ok(_) => break,
+                    Err(SessionError::Busy { .. }) => tokio::task::yield_now().await,
+                    Err(error) => std::panic::resume_unwind(Box::new(error)),
+                }
+            }
+        })
+        .await;
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Applied
+        );
+    }
+}
+
+#[tokio::test]
+async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let gate = Arc::new(Gate::new(store, Phase::Outcome));
+        gate.fail_outcome.store(true, Ordering::SeqCst);
+        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+            .store(gate.clone())
+            .repository(repository_with_host_git(root.path()));
+        let mut session = harness
+            .session("outcome", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let control = turn.control();
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = gate.entered.notified() => {},
+        }
+
+        // Act
+        drop(turn);
+        bounded(control.settled()).await.expect("persistence");
+        effects_pending(&control).await;
+        assert!(matches!(
+            session.send("ok").await,
+            Err(SessionError::Busy { .. })
+        ));
+        gate.release.notify_one();
+        let error = bounded(control.effects_settled())
+            .await
+            .expect_err("outcome failure");
+
+        // Assert
+        assert!(!error.is_unresolved());
+        assert!(error.to_string().contains("injected outcome failure"));
+        assert!(root.path().join("file.txt").exists());
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Pending
+        );
+        session
+            .send("ok")
+            .await
+            .expect("acknowledged effect permits successor");
+    }
+}
+
+#[tokio::test]
+async fn one_shot_drop_retains_effect_completion() {
+    // Arrange
     let root = tempfile::tempdir().expect("repository");
     let entered = Arc::new(Notify::new());
-    let finished = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
     let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-        .store(Arc::new(ExternalStore::new()))
         .repository(repository_with_host_git(root.path()))
         .file_system(DeferredReplacement {
-            entered: Arc::clone(&entered),
-            finished: Arc::clone(&finished),
-            release: Arc::clone(&release),
+            entered: entered.clone(),
+            finished: Arc::new(Notify::new()),
+            release: release.clone(),
         });
-    let mut session = harness
-        .session("write", schema())
-        .create()
-        .await
-        .expect("session");
-    let mut turn = Box::pin(session.send_controlled(
-        "write",
-        TurnOptions::new(
-            schema(),
-            ToolPolicy::default().allow(Tool::Write),
-            TurnLimits::default(),
-        ),
-    ));
+    let mut turn = Box::pin(harness.run_once_controlled("write", write_options()));
     let control = turn.control();
     tokio::select! {
         result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -571,32 +839,20 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
     }
 
     // Act
-    control.cancel();
-    assert!(matches!(
-        bounded(turn).await,
-        Err(SessionError::Turn(TurnError::Cancelled))
-    ));
-    bounded(control.settled())
+    drop(turn);
+    bounded(control.settled()).await.expect("execution settled");
+    effects_pending(&control).await;
+    release.notify_one();
+    bounded(control.effects_settled())
         .await
-        .expect("persistence settled");
+        .expect("effect completion");
 
     // Assert
-    assert!(!root.path().join("file.txt").exists());
-    assert_eq!(
-        session.writes().await.expect("journal")[0].status,
-        WriteStatus::Pending
-    );
-    release.notify_one();
-    bounded(finished.notified()).await;
     assert_eq!(
         tokio::fs::read(root.path().join("file.txt"))
             .await
-            .expect("late replacement"),
+            .expect("replacement"),
         b"new\n"
-    );
-    assert_eq!(
-        session.writes().await.expect("journal")[0].status,
-        WriteStatus::Pending
     );
 }
 
@@ -684,4 +940,184 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
         1
     );
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+}
+
+struct BrokenReplacement {
+    panic: bool,
+}
+
+#[async_trait]
+impl FileSystem for BrokenReplacement {
+    async fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        LocalFileSystem.canonicalize(path).await
+    }
+
+    async fn open_beneath(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        LocalFileSystem.open_beneath(root, path).await
+    }
+
+    async fn replace_beneath(
+        &self,
+        _root: &Path,
+        _path: &Path,
+        _expected: Option<Vec<u8>>,
+        _content: Vec<u8>,
+    ) -> io::Result<()> {
+        if self.panic {
+            std::panic::resume_unwind(Box::new("injected replacement panic"));
+        }
+        Err(io::Error::other("injected replacement failure"))
+    }
+}
+
+#[tokio::test]
+async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission() {
+    // Arrange
+    for store in stores().await {
+        for panic in [false, true] {
+            let root = tempfile::tempdir().expect("repository");
+            let gate = Arc::new(Gate::new(store.clone(), Phase::None));
+            gate.fail_outcome.store(true, Ordering::SeqCst);
+            let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+                .store(gate)
+                .repository(repository_with_host_git(root.path()))
+                .file_system(BrokenReplacement { panic });
+            let id = if panic { "panic-write" } else { "failed-write" };
+            let mut session = harness
+                .session(id, schema())
+                .create()
+                .await
+                .expect("session");
+            let turn = session.send_controlled("write", write_options());
+            let control = turn.control();
+
+            // Act
+            let error = bounded(turn).await.expect_err("write failed");
+            bounded(control.settled())
+                .await
+                .expect("persistence settled");
+            let effects = bounded(control.effects_settled())
+                .await
+                .expect_err("effect failure");
+            control
+                .retry_settlement()
+                .await
+                .expect("persistence retry does not replay");
+
+            // Assert
+            assert_eq!(effects.is_unresolved(), panic);
+            assert_eq!(
+                session.writes().await.expect("journal")[0].status,
+                WriteStatus::Pending
+            );
+            if panic {
+                drop(control);
+                assert!(matches!(
+                    session.send("ok").await,
+                    Err(SessionError::Busy { .. })
+                ));
+            } else {
+                assert!(error.to_string().contains("injected replacement failure"));
+                assert!(error.to_string().contains("injected outcome failure"));
+                assert!(effects.to_string().contains("injected replacement failure"));
+                assert!(effects.to_string().contains("injected outcome failure"));
+                session
+                    .send("ok")
+                    .await
+                    .expect("acknowledged failure releases admission");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn lease_loss_settles_persistence_before_retained_replacement() {
+    // Arrange
+    let store = Arc::new(ExternalStore::with_leases(
+        Duration::from_secs(2),
+        Duration::from_secs(2),
+    ));
+    let gate = Arc::new(Gate::new(store, Phase::Renew));
+    let root = tempfile::tempdir().expect("repository");
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+        .store(gate)
+        .repository(repository_with_host_git(root.path()))
+        .file_system(DeferredReplacement {
+            entered: entered.clone(),
+            finished: Arc::new(Notify::new()),
+            release: release.clone(),
+        });
+    let mut session = harness
+        .session("lease-write", schema())
+        .create()
+        .await
+        .expect("session");
+    let mut turn = Box::pin(session.send_controlled("write", write_options()));
+    let control = turn.control();
+    tokio::select! {
+        result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+        () = entered.notified() => {},
+    }
+
+    // Act
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(3)).await;
+    tokio::time::resume();
+    assert!(matches!(
+        bounded(turn).await,
+        Err(SessionError::OwnershipLost { .. })
+    ));
+    bounded(control.settled()).await.expect("persistence");
+    effects_pending(&control).await;
+    assert!(matches!(
+        session.send("ok").await,
+        Err(SessionError::Busy { .. })
+    ));
+    release.notify_one();
+    bounded(control.effects_settled())
+        .await
+        .expect("late outcome");
+
+    // Assert
+    assert_eq!(
+        session.writes().await.expect("journal")[0].status,
+        WriteStatus::Applied
+    );
+    session.send("ok").await.expect("successor");
+}
+
+#[tokio::test]
+async fn successful_controlled_writes_acknowledge_both_boundaries() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
+            .store(store)
+            .repository(repository_with_host_git(root.path()));
+        let mut session = harness
+            .session("success-write", schema())
+            .create()
+            .await
+            .expect("session");
+        let turn = session.send_controlled("write", write_options());
+        let control = turn.control();
+
+        // Act
+        bounded(turn).await.expect("completed write");
+        bounded(control.settled()).await.expect("persistence");
+        bounded(control.effects_settled()).await.expect("effects");
+
+        // Assert
+        assert_eq!(
+            session.writes().await.expect("journal")[0].status,
+            WriteStatus::Applied
+        );
+        session.send("ok").await.expect("successor");
+    }
 }

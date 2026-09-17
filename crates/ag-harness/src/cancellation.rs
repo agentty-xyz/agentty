@@ -1,4 +1,4 @@
-//! Turn-scoped cancellation and observation of retained persistence ownership.
+//! Turn-scoped cancellation and independent persistence and effect observation.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,13 +7,15 @@ use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::sync::watch;
 
+use crate::effect::{EffectSettlementError, Effects};
 use crate::session::{SessionError, TurnOwner, recover_abandoned_owner};
 use crate::{ModelError, TurnError, TurnOutcome};
 
 /// A lazy turn future with a separately retainable cancellation control.
 ///
 /// Poll or await this value to start execution. Dropping it requests
-/// cancellation; keep its [`Self::control`] to observe persistence settlement.
+/// cancellation; keep its [`Self::control`] to observe persistence and effect
+/// settlement.
 #[must_use = "turns do not start until polled"]
 pub struct ControlledTurn<'a, E> {
     control: TurnControl,
@@ -33,9 +35,11 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
     {
         let control = TurnControl {
             cancellation: watch::Sender::new(false),
+            effects: Effects::default(),
             settlement: Settlement(watch::Sender::new(State::default())),
         };
         let lease = control.settlement.retain();
+        let effects = control.effects.retain();
         let worker_control = control.clone();
         let future = Box::pin(async move {
             if *worker_control.cancellation.borrow() {
@@ -45,6 +49,7 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
             let mut task = tokio::spawn(async move {
                 let result = worker.await;
                 drop(lease);
+                drop(effects);
 
                 result
             });
@@ -75,13 +80,15 @@ impl<E> Drop for ControlledTurn<'_, E> {
     }
 }
 
-/// Cloneable cancellation and persistence observation for exactly one turn.
+/// Cloneable cancellation, persistence, and effect observation for one turn.
 ///
 /// Cancellation stops the waiter promptly. A terminal commit already in
 /// progress can still succeed. Keep the Tokio runtime driven until settlement.
-/// Neither cancellation nor settlement proves filesystem effects have stopped.
+/// Neither cancellation nor persistence settlement proves filesystem effects
+/// have stopped; observe [`Self::effects_settled`] separately.
 #[derive(Clone)]
 pub struct TurnControl {
+    pub(crate) effects: Effects,
     pub(crate) settlement: Settlement,
     cancellation: watch::Sender<bool>,
 }
@@ -114,6 +121,22 @@ impl TurnControl {
             // This control retains the sender for the entire wait.
             let _ = receiver.changed().await;
         }
+    }
+
+    /// Waits until this turn can start no more writes and all managed
+    /// replacements have acknowledged completion and attempted outcome
+    /// recording.
+    ///
+    /// Independent of [`Self::settled`]: persistence cleanup can finish first.
+    /// Success does not mean writes succeeded or were rolled back. It does not
+    /// fence other processes or stop remote providers. Keep the runtime driven.
+    ///
+    /// # Errors
+    /// Reports unacknowledged filesystem completion or failed outcome
+    /// recording. Persistence retries do not retry effects or their journal
+    /// outcomes.
+    pub async fn effects_settled(&self) -> Result<(), EffectSettlementError> {
+        self.effects.settled().await
     }
 
     /// Retries only this turn's failed owner-scoped persistence cleanup.

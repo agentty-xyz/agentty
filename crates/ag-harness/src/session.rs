@@ -1326,6 +1326,7 @@ pub(crate) async fn recover_abandoned_owner(owner: &TurnOwner) -> Result<(), Ses
 }
 
 /// Owned journal access scoped to the turn that acquired it.
+#[derive(Clone)]
 pub(crate) struct WriteJournal {
     database: Arc<dyn SessionStore>,
     owner: TurnOwner,

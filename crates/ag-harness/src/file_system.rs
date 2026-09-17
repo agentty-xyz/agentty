@@ -80,6 +80,10 @@ pub trait FileSystem: Send + Sync {
     /// Replacements preserve the target's ownership and access-control
     /// metadata or fail and restore the original file.
     /// Missing parent directories are created without following symlinks.
+    /// Returning either success or failure acknowledges that this operation
+    /// can make no further filesystem changes. Implementations must await any
+    /// delegated work before returning. The harness retains this future after
+    /// caller cancellation so its completion remains observable.
     ///
     /// # Errors
     ///

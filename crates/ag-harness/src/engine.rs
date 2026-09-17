@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::effect::Effects;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{LifecycleEmitter, LifecycleId, ToolErrorType, ToolLifecycle};
 use crate::model::{
@@ -21,6 +22,7 @@ use crate::write::{WriteError, WriteTool};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
+    pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
     pub(crate) model: &'a Arc<dyn Model>,
@@ -174,6 +176,7 @@ impl Engine<'_> {
                 repository.root().to_path_buf(),
             );
             tool.journal = journal;
+            tool.effects = self.effects.clone();
 
             tool
         });

@@ -73,6 +73,7 @@ let result = tokio::select! {
     }
 };
 control.settled().await?;
+control.effects_settled().await?;
 ```
 
 Cancellation stops the waiter promptly; an in-progress terminal commit can still
@@ -83,10 +84,20 @@ owner, then `settled()` observes the result. Repeated cancellation and stale con
 cannot stop a successor turn. Acquisition abandoned before acknowledgment never starts
 model or tool execution.
 
-Persistence settlement does not prove an already-started filesystem replacement or
-remote provider operation has finished. Inspect durable history and write records after
-cancellation; pending write outcomes remain uncertain. This API provides no rollback or
-filesystem-effect settlement.
+`effects_settled()` separately waits until the turn can start no more writes and all
+managed replacements have acknowledged completion and attempted journal recording.
+Started replacements and outcome recording survive cancellation and caller-future drop,
+including ordinary turns. Local session admission stays protected through both
+persistence cleanup and managed effects. Existing write intents can settle after lease
+expiry; cancellation never replays a replacement.
+
+An `EffectSettlementError` with `is_unresolved()` means a worker stopped without
+acknowledging filesystem completion; local admission stays blocked until process exit,
+even if controls are dropped. A journal-recording error reports known filesystem
+completion but leaves the durable outcome pending. `retry_settlement()` only retries
+owner cleanup, not writes or outcome recording. Inspect durable history and write
+records after cancellation. Neither boundary provides rollback, distributed workspace
+fencing, or proof that remote providers and unrelated processes have stopped.
 
 ## Custom session stores
 
