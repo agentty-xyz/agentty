@@ -10,6 +10,7 @@ use ag_agent::{AppServerClient, RealOneShotClient};
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
+use ag_runtime::AgentChannel;
 use ag_worker::{RunClient, RunWorker};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -28,7 +29,6 @@ use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalog
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
-    app_server_client_override: Option<Arc<dyn AppServerClient>>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
     base_path: PathBuf,
@@ -44,6 +44,7 @@ pub struct AppServices {
     review_request_client: Arc<dyn ReviewRequestClient>,
     run_client: Arc<dyn RunClient>,
     run_worker: Arc<RunWorker>,
+    session_channel_factory: Arc<dyn SessionChannelFactory>,
     session_update_versions: SessionUpdateVersionMap,
 }
 
@@ -67,6 +68,7 @@ impl AppServices {
             personality_catalog_client_override,
             repositories,
             review_request_client,
+            session_channel_factory,
         } = deps;
         let clipboard_image_client = clipboard_image_client_override.unwrap_or_else(|| {
             Arc::new(RealClipboardImageClient::new(
@@ -89,7 +91,6 @@ impl AppServices {
         Self {
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
-            app_server_client_override,
             base_path,
             cleanup_task_handles: Arc::default(),
             creation_task_handles: Arc::default(),
@@ -100,6 +101,7 @@ impl AppServices {
             git_client,
             run_client,
             run_worker,
+            session_channel_factory,
             personality_catalog_client,
             repositories,
             review_request_client,
@@ -149,8 +151,12 @@ impl AppServices {
     }
 
     /// Composes a session runtime for execution exclusively by the worker.
-    pub(crate) fn agent_channel(&self, kind: AgentKind) -> Arc<dyn ag_runtime::AgentChannel> {
-        ag_agent::create_agent_channel(kind, self.app_server_client_override())
+    pub(crate) fn agent_channel(
+        &self,
+        session_id: &SessionId,
+        kind: AgentKind,
+    ) -> Arc<dyn AgentChannel> {
+        self.session_channel_factory.create(session_id, kind)
     }
 
     /// Stops detached and nested utility runs owned by a canceled session.
@@ -305,12 +311,6 @@ impl AppServices {
         Arc::clone(&self.session_update_versions)
     }
 
-    /// Returns the optional app-server client override used by tests and
-    /// injected environments.
-    pub(crate) fn app_server_client_override(&self) -> Option<Arc<dyn AppServerClient>> {
-        self.app_server_client_override.as_ref().map(Arc::clone)
-    }
-
     /// Returns a stable instrumentation label for one app event variant.
     fn app_event_label(event: &AppEvent) -> &'static str {
         match event {
@@ -436,8 +436,7 @@ pub(crate) type SessionUpdateVersionMap = Arc<Mutex<HashMap<SessionId, u64>>>;
 /// External clients and cached machine-scoped availability injected into
 /// [`AppServices`].
 pub(crate) struct AppServiceDeps {
-    /// Shared provider-owned app-server client override used by tests and
-    /// injected environments.
+    /// Optional app-server transport for utility-prompt composition.
     pub(crate) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     /// Cached locally runnable backends used to scope model selection.
     pub(crate) available_agent_kinds: Vec<AgentKind>,
@@ -457,6 +456,37 @@ pub(crate) struct AppServiceDeps {
     pub(crate) repositories: AppRepositories,
     /// Shared forge review-request client.
     pub(crate) review_request_client: Arc<dyn ReviewRequestClient>,
+    /// Constructs one runtime adapter whenever a session worker is created.
+    pub(crate) session_channel_factory: Arc<dyn SessionChannelFactory>,
+}
+
+/// Constructs session channels without executing turns or retaining workers.
+///
+/// The caller invokes this only for a new worker. That worker owns channel
+/// reuse, cancellation, and shutdown; per-turn model settings remain in its
+/// requests.
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait SessionChannelFactory: Send + Sync {
+    /// Creates a channel for one worker's session and selected provider.
+    fn create(&self, session_id: &SessionId, kind: AgentKind) -> Arc<dyn AgentChannel>;
+}
+
+/// Production session-channel composition, with optional injected transport.
+pub(crate) struct RealSessionChannelFactory {
+    app_server_client: Option<Arc<dyn AppServerClient>>,
+}
+
+impl RealSessionChannelFactory {
+    /// Captures transport composition without starting a provider process.
+    pub(crate) fn new(app_server_client: Option<Arc<dyn AppServerClient>>) -> Self {
+        Self { app_server_client }
+    }
+}
+
+impl SessionChannelFactory for RealSessionChannelFactory {
+    fn create(&self, _session_id: &SessionId, kind: AgentKind) -> Arc<dyn AgentChannel> {
+        ag_agent::create_agent_channel(kind, self.app_server_client.clone())
+    }
 }
 
 /// Maximum graceful-shutdown wait shared by all background cleanup tasks.
@@ -465,3 +495,11 @@ const CLEANUP_TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(test)]
 #[path = "service_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "service_channel_test.rs"]
+mod channel_tests;
+
+#[cfg(test)]
+#[path = "service_test_support_test.rs"]
+pub(crate) mod test_support;

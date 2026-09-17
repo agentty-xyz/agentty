@@ -399,6 +399,7 @@ impl App {
                 )),
                 repositories,
                 review_request_client: Arc::clone(&clients.review_request_client),
+                session_channel_factory: Arc::clone(&clients.session_channel_factory),
             },
             available_agent_clis,
         ))

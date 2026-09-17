@@ -19,6 +19,7 @@ use super::support::{
 use crate::app::SessionState;
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
@@ -1048,10 +1049,8 @@ async fn test_start_staged_session_launches_stacked_draft_child() {
 
             Box::pin(std::future::pending())
         });
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(child_session_id.clone().into(), Arc::new(channel));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&child_session_id, Arc::new(channel));
 
     // Act
     app.start_staged_session(&child_session_id)

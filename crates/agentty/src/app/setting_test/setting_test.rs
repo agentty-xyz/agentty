@@ -9,7 +9,6 @@ use super::support::{
     assert_role_defaults_persisted, new_settings_manager, select_row, settings_manager,
     test_services, test_services_with_available_agent_kinds,
 };
-use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::setting::SettingName;
@@ -877,25 +876,8 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
 #[tokio::test]
 async fn load_default_smart_model_setting_falls_back_to_available_backend() {
     // Arrange
-    let (mut services, project_id) = test_services().await;
-    let available_agent_kinds = vec![AgentKind::Codex];
-    services = AppServices::new_with_agent_clis(
-        services.base_path().to_path_buf(),
-        services.clock(),
-        services.event_sender(),
-        crate::app::service::AppServiceDeps {
-            app_server_client_override: services.app_server_client_override(),
-            available_agent_kinds: available_agent_kinds.clone(),
-            clipboard_image_client_override: None,
-            fs_client: services.fs_client(),
-            git_client: services.git_client(),
-            run_client_override: Some(services.run_client()),
-            personality_catalog_client_override: Some(services.personality_catalog_client()),
-            repositories: services.db().clone(),
-            review_request_client: services.review_request_client(),
-        },
-        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds),
-    );
+    let (services, project_id) =
+        test_services_with_available_agent_kinds(vec![AgentKind::Codex]).await;
     services
         .db()
         .settings()

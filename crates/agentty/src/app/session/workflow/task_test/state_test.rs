@@ -178,6 +178,9 @@ async fn test_status_transition_from_services_updates_handle_and_persistence() {
         )),
         app_event_tx,
         AppServiceDeps {
+            session_channel_factory: Arc::new(
+                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            ),
             app_server_client_override: Some(crate::test_support::mock_app_server()),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,

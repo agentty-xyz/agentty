@@ -273,6 +273,9 @@ pub(super) fn test_services_with_fs_client(
         clock,
         event_tx,
         crate::app::service::AppServiceDeps {
+            session_channel_factory: Arc::new(
+                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            ),
             app_server_client_override: Some(crate::test_support::mock_app_server()),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,
@@ -315,6 +318,9 @@ pub(super) fn test_services_with_event_receiver(
         Arc::new(crate::infra::clock::RealClock),
         event_tx,
         crate::app::service::AppServiceDeps {
+            session_channel_factory: Arc::new(
+                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            ),
             app_server_client_override: Some(crate::test_support::mock_app_server()),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,

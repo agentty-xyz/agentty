@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -10,7 +11,6 @@ use super::super::{
     handle_with_cache, insert_pasted_image_placeholder, take_submitted_turn_prompt,
 };
 use crate::app::App;
-use crate::domain::agent::AgentCliInfo;
 use crate::domain::input::InputState;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPrompt;
@@ -62,39 +62,9 @@ pub(super) async fn apply_next_session_diff(app: &mut App) {
     }
 }
 
-/// Replaces the app-level git client with a caller-provided mock by
-/// rebuilding `AppServices` through its public constructor, preserving
-/// the remaining shared dependencies.
+/// Replaces the app-level Git boundary, preserving other shared dependencies.
 pub(super) fn install_mock_git_client(app: &mut App, mock_git_client: ag_git::MockGitClient) {
-    let mock_git_client: std::sync::Arc<dyn ag_git::GitClient> =
-        std::sync::Arc::new(mock_git_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let clipboard_image_client_override = Some(app.services.clipboard_image_client());
-    let fs_client = app.services.fs_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = crate::app::AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        crate::app::test_support::AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override,
-            fs_client,
-            git_client: mock_git_client,
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services.set_git_client(Arc::new(mock_git_client));
 }
 
 /// Replaces the app-level clipboard-image dependency with one
@@ -103,69 +73,14 @@ pub(super) fn install_mock_clipboard_image_client(
     app: &mut App,
     mock_clipboard_image_client: crate::infra::clipboard_image::MockClipboardImageClient,
 ) {
-    let clipboard_image_client: std::sync::Arc<
-        dyn crate::infra::clipboard_image::ClipboardImageClient,
-    > = std::sync::Arc::new(mock_clipboard_image_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let fs_client = app.services.fs_client();
-    let git_client = app.services.git_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = crate::app::AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        crate::app::test_support::AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override: Some(clipboard_image_client),
-            fs_client,
-            git_client,
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services
+        .set_clipboard_image_client(Arc::new(mock_clipboard_image_client));
 }
 
 /// Replaces the app-level filesystem dependency with a caller-provided
 /// mock.
 pub(super) fn install_mock_fs_client(app: &mut App, mock_fs_client: fs::MockFsClient) {
-    let fs_client: std::sync::Arc<dyn fs::FsClient> = std::sync::Arc::new(mock_fs_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis = AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let clipboard_image_client_override = Some(app.services.clipboard_image_client());
-    let git_client = app.services.git_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = crate::app::AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        crate::app::test_support::AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override,
-            fs_client,
-            git_client,
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services.set_fs_client(Arc::new(mock_fs_client));
 }
 
 pub(super) fn setup_test_git_repo(path: &Path) {

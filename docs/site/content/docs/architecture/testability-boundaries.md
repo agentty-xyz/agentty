@@ -204,6 +204,15 @@ inherited output pipes still open. Closed-mailbox tests cover paused work, opera
 settlement, and caller notifications. Session models and storage depend on contracts
 without pulling in provider transports.
 
+## Session composition boundary
+
+Application tests inject `SessionChannelFactory` before submitting ordinary session
+commands. The default test factory stays offline: non-model worker operations can create
+and shut down a channel, but an unscripted model turn fails the test process, even from
+a detached worker. Tests requiring turns provide a scripted `AgentChannel` or explicitly
+compose an isolated CLI or mocked app-server adapter. Worker reuse, model-switch
+replacement, and shutdown follow the production path.
+
 ## Worker submission boundary
 
 Workflow tests inject `ag-worker::MockRunClient`; worker tests inject runtime and

@@ -148,6 +148,18 @@ could prompt duplicate creation.
   lag.
 - Tick interval is `50ms`; metadata-based session reload fallback is `5s`.
 
+## Session Channel Composition
+
+`AppClients` injects `SessionChannelFactory` through `AppServices`. The factory
+constructs a channel for a session identifier and provider kind without starting a
+process or executing a turn. Production composition selects the provider adapter; tests
+supply scripted channels through the same interface.
+
+`SessionWorkerService` asks for a channel only when creating a worker. The worker reuses
+that channel across turns and owns cancellation and shutdown. Clearing the worker after
+a model switch causes the next submission to compose a fresh channel; per-turn settings
+remain in the turn request. Utility prompts keep their existing `RunClient` composition.
+
 ## Data Channels
 
 <a id="architecture-runtime-flow-channels"></a> Agentty uses five primary runtime data

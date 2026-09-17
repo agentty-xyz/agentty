@@ -5,10 +5,9 @@ use std::time::Duration;
 
 use ag_agent::{AgentAvailabilityProbe, AppServerClient};
 use ag_forge as forge;
-use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use app::review::ReviewCacheEntry;
-use app::service::AppServices;
+use app::service::{RealSessionChannelFactory, SessionChannelFactory};
 use app::sync;
 use session::{SyncMainOutcome, TurnAppliedState};
 use tempfile::tempdir;
@@ -18,7 +17,6 @@ use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::{AppEvent, ReviewRequestStatusUpdate};
 use crate::app::session;
-use crate::app::test_support::AppServiceDeps;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
@@ -404,34 +402,7 @@ pub(in crate::app::core) fn install_mock_git_client(
     app: &mut App,
     mock_git_client: ag_git::MockGitClient,
 ) {
-    let mock_git_client: Arc<dyn ag_git::GitClient> = Arc::new(mock_git_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis =
-        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
-    let app_server_client_override = app.services.app_server_client_override();
-    let fs_client = app.services.fs_client();
-    let review_request_client = app.services.review_request_client();
-
-    app.services = AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override: None,
-            fs_client,
-            git_client: Arc::clone(&mock_git_client),
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services.set_git_client(Arc::new(mock_git_client));
 }
 
 /// Replaces the app-level review-request dependency with one
@@ -440,34 +411,8 @@ pub(super) fn install_mock_review_request_client(
     app: &mut App,
     mock_review_request_client: forge::MockReviewRequestClient,
 ) {
-    let review_request_client: Arc<dyn ReviewRequestClient> = Arc::new(mock_review_request_client);
-    let base_path = app.services.base_path().to_path_buf();
-    let db = app.services.db().clone();
-    let event_sender = app.services.event_sender();
-    let app_server_client_override = app.services.app_server_client_override();
-    let available_agent_kinds = app.services.available_agent_kinds();
-    let available_agent_clis =
-        crate::domain::agent::AgentCliInfo::from_kinds(&available_agent_kinds);
-    let fs_client = app.services.fs_client();
-    let git_client = app.services.git_client();
-
-    app.services = AppServices::new_with_agent_clis(
-        base_path,
-        app.services.clock(),
-        event_sender,
-        AppServiceDeps {
-            app_server_client_override,
-            available_agent_kinds,
-            clipboard_image_client_override: None,
-            fs_client,
-            git_client,
-            run_client_override: None,
-            personality_catalog_client_override: None,
-            repositories: db,
-            review_request_client,
-        },
-        available_agent_clis,
-    );
+    app.services
+        .set_review_request_client(Arc::new(mock_review_request_client));
 }
 
 /// Builds one GitHub remote fixture for review-comment state tests.
@@ -652,7 +597,21 @@ impl AppClients {
         mut self,
         app_server_client_override: Arc<dyn AppServerClient>,
     ) -> Self {
+        self.session_channel_factory = Arc::new(RealSessionChannelFactory::new(Some(Arc::clone(
+            &app_server_client_override,
+        ))));
         self.app_server_client_override = Some(app_server_client_override);
+
+        self
+    }
+
+    /// Replaces session-channel composition for deterministic app tests.
+    #[must_use]
+    pub(crate) fn with_session_channel_factory(
+        mut self,
+        session_channel_factory: Arc<dyn SessionChannelFactory>,
+    ) -> Self {
+        self.session_channel_factory = session_channel_factory;
 
         self
     }

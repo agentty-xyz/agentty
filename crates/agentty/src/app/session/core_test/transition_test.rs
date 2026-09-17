@@ -20,10 +20,11 @@ use super::support::{
     add_manual_session_with_status, allow_detect_git_info, create_and_start_session,
     create_passthrough_mock_fs_client, expect_pre_commit_hook_ready, install_mock_git_client,
     new_test_app, new_test_app_with_db, new_test_app_with_db_and_app_server, new_test_app_with_git,
-    new_test_app_with_git_and_db, session_replay_text, wait_for_output_contains,
-    wait_for_path_absent, wait_for_status,
+    new_test_app_with_git_and_db, register_session_backend, session_replay_text,
+    wait_for_output_contains, wait_for_path_absent, wait_for_status,
 };
 use crate::app::session::workflow::task::SessionTaskService;
+use crate::app::test_support::TestSessionChannelFactory;
 use crate::app::{SessionState, Tab};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::selection::SelectionState;
@@ -110,14 +111,10 @@ async fn test_spawn_session_task_auto_commits_changes() {
         .create_session()
         .await
         .expect("failed to create session");
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    register_session_backend(&app, &channels, &session_id, Arc::new(mock));
     app.sessions
-        .reply_with_backend(
-            &app.services,
-            &session_id,
-            "AutoCommit",
-            Arc::new(mock),
-            AgentModel::ClaudeSonnet5,
-        )
+        .reply(&app.services, &session_id, "AutoCommit")
         .await;
 
     // Act — wait for agent to finish and auto-commit
@@ -221,14 +218,10 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
         .create_session()
         .await
         .expect("failed to create session");
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    register_session_backend(&app, &channels, &session_id, Arc::new(mock));
     app.sessions
-        .reply_with_backend(
-            &app.services,
-            &session_id,
-            "NoChanges",
-            Arc::new(mock),
-            AgentModel::ClaudeOpus5,
-        )
+        .reply(&app.services, &session_id, "NoChanges")
         .await;
 
     // Act — wait for agent to finish
@@ -655,10 +648,8 @@ async fn test_spawn_integration() {
         .create_session()
         .await
         .expect("failed to create session");
-    app.sessions
-        .worker_service
-        .test_agent_channels
-        .insert(session_id.clone().into(), Arc::new(mock_channel));
+    let channels = TestSessionChannelFactory::install(&mut app.services);
+    channels.register(&session_id, Arc::new(mock_channel));
     app.sessions
         .reply(&app.services, &session_id, "SpawnInit")
         .await;
