@@ -160,7 +160,8 @@ stays fixed for that invocation. Without the flag, ordinary repository reads rem
 available. Harness is not yet an Agentty backend.
 
 Library hosts can inject a transactional `SessionStore` with `Harness::store`; SQLite
-remains the default backend selected through `Harness::database`.
+remains the default backend selected through `Harness::database`. Built-in `MemoryStore`
+provides process-local sessions and write journals without restart durability.
 
 ## Documentation
 

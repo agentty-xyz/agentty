@@ -21,11 +21,11 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::{
     ComparisonBase, CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind,
-    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, Model,
-    ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider,
-    ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError, Repository,
-    RepositoryError, Session, SessionBuilder, SessionError, SessionInfo, Tool, ToolCall,
-    ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteStatus,
+    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, MemoryStore,
+    Model, ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata,
+    ModelProvider, ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError,
+    Repository, RepositoryError, Session, SessionBuilder, SessionError, SessionInfo, Tool,
+    ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -154,75 +154,76 @@ fn external_repository_configuration_rejects_relative_git_executable() -> Result
 async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<(), Box<dyn Error>>
 {
     for batched in [false, true] {
-        // Arrange
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let model = ExternalToolModel {
-            batched,
-            requests: Arc::clone(&requests),
-        };
-        let directory = tempfile::tempdir()?;
-        let repository = repository_fixture::repository_with_host_git(directory.path());
-        let harness = Harness::new(model)
-            .database(directory.path().join("harness.db"))
-            .repository(repository)
-            .file_system(NameFileSystem)
-            .allow(Tool::Read);
-        let mut chat = harness
-            .session(format!("external-{batched}"), request()?.schema().clone())
-            .system_prompt("Extract names")
-            .create()
-            .await?;
+        for store in store_conformance_test::stores().await {
+            // Arrange
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let model = ExternalToolModel {
+                batched,
+                requests: Arc::clone(&requests),
+            };
+            let directory = tempfile::tempdir()?;
+            let repository = repository_fixture::repository_with_host_git(directory.path());
+            let harness = Harness::new(model)
+                .store(store)
+                .repository(repository)
+                .file_system(NameFileSystem)
+                .allow(Tool::Read);
+            let mut chat = harness
+                .session(format!("external-{batched}"), request()?.schema().clone())
+                .system_prompt("Extract names")
+                .create()
+                .await?;
 
-        // Act
-        drop(harness);
-        let (first, second) = tokio::spawn(async move {
-            let first = chat.send("Read the name").await?;
-            let second = chat.send("Recall the name").await?;
+            // Act
+            drop(harness);
+            let (first, second) = tokio::spawn(async move {
+                let first = chat.send("Read the name").await?;
+                let second = chat.send("Recall the name").await?;
 
-            Ok::<_, SessionError>((first, second))
-        })
-        .await??;
+                Ok::<_, SessionError>((first, second))
+            })
+            .await??;
 
-        // Assert
-        assert_eq!(first.output(), &json!({ "name": "Ada" }));
-        assert_eq!(second.output(), first.output());
-        assert_eq!(
-            first.report().tool_calls().len(),
-            if batched { 2 } else { 1 }
-        );
-        assert_eq!(second.report().tool_calls().len(), 0);
-        let requests = requests
-            .lock()
-            .expect("request recorder should not be poisoned");
-        assert_eq!(requests.len(), 3);
-        assert!(
-            matches!(requests[0].as_slice(), [ModelMessage::System(system), ModelMessage::User(prompt)]
-            if system == "Extract names" && prompt == "Read the name")
-        );
-        let calls = match &requests[1][2] {
-            ModelMessage::AssistantToolCall(call) if !batched => std::slice::from_ref(call),
-            ModelMessage::AssistantToolCalls(calls) if batched => calls.as_slice(),
-            message => return Err(format!("unexpected assistant message: {message:?}").into()),
-        };
-        assert_eq!(requests[1].len(), 3 + calls.len());
-        assert_eq!(
-            calls[0].reasoning_content(),
-            Some("provider replay context")
-        );
-        assert_eq!(calls[0].arguments_json()?, r#"{"path":"name.txt"}"#);
-        for (call, result) in calls.iter().zip(&requests[1][3..]) {
-            assert!(
-                matches!(result, ModelMessage::ToolResult { call_id, content, name }
-                if call_id == call.id() && name == "read" && content.contains("Ada"))
+            // Assert
+            assert_eq!(first.output(), &json!({ "name": "Ada" }));
+            assert_eq!(second.output(), first.output());
+            assert_eq!(
+                first.report().tool_calls().len(),
+                if batched { 2 } else { 1 }
             );
-        }
-        assert_eq!(&requests[2][..requests[1].len()], requests[1].as_slice());
-        assert!(matches!(&requests[2][requests[1].len()..],
+            assert_eq!(second.report().tool_calls().len(), 0);
+            let requests = requests
+                .lock()
+                .expect("request recorder should not be poisoned");
+            assert_eq!(requests.len(), 3);
+            assert!(
+                matches!(requests[0].as_slice(), [ModelMessage::System(system), ModelMessage::User(prompt)]
+            if system == "Extract names" && prompt == "Read the name")
+            );
+            let calls = match &requests[1][2] {
+                ModelMessage::AssistantToolCall(call) if !batched => std::slice::from_ref(call),
+                ModelMessage::AssistantToolCalls(calls) if batched => calls.as_slice(),
+                message => return Err(format!("unexpected assistant message: {message:?}").into()),
+            };
+            assert_eq!(requests[1].len(), 3 + calls.len());
+            assert_eq!(
+                calls[0].reasoning_content(),
+                Some("provider replay context")
+            );
+            assert_eq!(calls[0].arguments_json()?, r#"{"path":"name.txt"}"#);
+            for (call, result) in calls.iter().zip(&requests[1][3..]) {
+                assert!(
+                    matches!(result, ModelMessage::ToolResult { call_id, content, name }
+                if call_id == call.id() && name == "read" && content.contains("Ada"))
+                );
+            }
+            assert_eq!(&requests[2][..requests[1].len()], requests[1].as_slice());
+            assert!(matches!(&requests[2][requests[1].len()..],
             [ModelMessage::Assistant(output), ModelMessage::User(prompt)]
                 if serde_json::from_str::<serde_json::Value>(output)? == *first.output()
                     && prompt == "Recall the name"));
+        }
     }
-
     Ok(())
 }
 
@@ -715,54 +716,66 @@ impl FileSystem for NativeRootFileSystem {
 
 #[tokio::test]
 async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(), Box<dyn Error>> {
-    // Arrange
-    let directory = tempfile::tempdir()?;
-    let root = directory.path().canonicalize()?;
-    let native_root = root.join(OsString::from_vec(b"host-private-\xff".to_vec()));
-    let file_system = NativeRootFileSystem {
-        native_root: native_root.clone(),
-        physical_root: root.clone(),
-    };
-    let repository = repository_fixture::repository_with_host_git(&root);
-    let harness = Harness::new(FailingAfterWriteModel)
-        .database(directory.path().join("harness.db"))
-        .repository(repository)
-        .file_system(file_system)
-        .allow(Tool::Write);
-    let mut session = harness
-        .session("write-failure", request()?.schema().clone())
-        .create()
-        .await?;
+    for memory in [false, true] {
+        // Arrange
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?;
+        let native_root = root.join(OsString::from_vec(b"host-private-\xff".to_vec()));
+        let file_system = NativeRootFileSystem {
+            native_root: native_root.clone(),
+            physical_root: root.clone(),
+        };
+        let repository = repository_fixture::repository_with_host_git(&root);
+        let store = Arc::new(MemoryStore::new());
+        let harness = Harness::new(FailingAfterWriteModel)
+            .database(directory.path().join("harness.db"))
+            .repository(repository)
+            .file_system(file_system)
+            .allow(Tool::Write);
+        let harness = if memory {
+            harness.store(store.clone())
+        } else {
+            harness
+        };
+        let mut session = harness
+            .session("write-failure", request()?.schema().clone())
+            .create()
+            .await?;
 
-    // Act
-    let error = session
-        .send("write")
-        .await
-        .expect_err("model must fail after writing");
-    let before = session.writes().await?;
-    drop(session);
-    drop(harness);
-    // Inspection works without the original filesystem or a configured
-    // repository.
-    let inspector = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
-    let reopened = inspector.resume("write-failure").await?;
-    let after = reopened.writes().await?;
+        // Act
+        let error = session
+            .send("write")
+            .await
+            .expect_err("model must fail after writing");
+        let before = session.writes().await?;
+        drop(session);
+        drop(harness);
+        // Inspection works without the original filesystem or a configured
+        // repository.
+        let inspector = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+        let inspector = if memory {
+            inspector.store(store)
+        } else {
+            inspector
+        };
+        let reopened = inspector.resume("write-failure").await?;
+        let after = reopened.writes().await?;
 
-    // Assert
-    assert!(matches!(
-        error,
-        SessionError::Turn(TurnError::Model(ModelError::InvalidResponse))
-    ));
-    assert_eq!(std::fs::read(root.join("name.txt"))?, b"Ada\n");
-    assert_eq!(before, after);
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].status, WriteStatus::Applied);
-    assert_eq!(after[0].repository_root, native_root);
-    assert_eq!(after[0].path, "name.txt");
-    assert_eq!(after[0].call_id, "write-name");
-    assert_eq!(after[0].expected_hash, None);
-    assert_eq!(after[0].resulting_hash.len(), 64);
-
+        // Assert
+        assert!(matches!(
+            error,
+            SessionError::Turn(TurnError::Model(ModelError::InvalidResponse))
+        ));
+        assert_eq!(std::fs::read(root.join("name.txt"))?, b"Ada\n");
+        assert_eq!(before, after);
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].status, WriteStatus::Applied);
+        assert_eq!(after[0].repository_root, native_root);
+        assert_eq!(after[0].path, "name.txt");
+        assert_eq!(after[0].call_id, "write-name");
+        assert_eq!(after[0].expected_hash, None);
+        assert_eq!(after[0].resulting_hash.len(), 64);
+    }
     Ok(())
 }
 

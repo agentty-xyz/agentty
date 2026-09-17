@@ -28,6 +28,7 @@ mod execution;
 mod file_system;
 mod harness;
 mod lifecycle;
+mod memory_store;
 mod model;
 mod policy;
 mod provider;
@@ -53,6 +54,7 @@ pub use lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
     LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
 };
+pub use memory_store::MemoryStore;
 pub use model::{
     CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
     ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_write SET status = ?\nWHERE id = ? AND session_id = ? AND turn_position = ?\n  AND (status = 'pending' OR status = ?)\n  AND EXISTS (\n    SELECT 1 FROM session_turn\n    WHERE session_id = ? AND turn_position = ? AND owner_token = ?\n  )\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "9a0fbc2ec86f82b6697f86a969273bbd668cb2a096a490e47dc413249692ef0f"
+}

@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, Harness, Model, ModelCompletion, ModelError, ModelMessage, ModelRequest,
-    ModelResponse, NewSession, OutputSchema, SessionError, SessionStore, SqliteStore,
+    AcquiredTurn, Harness, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
+    ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError, SessionStore, SqliteStore,
     StoreIdentity, StoredTurnOptions, ToolPolicy, TurnError, TurnLimits, TurnOptions, TurnOwner,
     WriteStatus,
 };
@@ -37,6 +37,7 @@ pub(crate) fn options() -> TurnOptions {
 pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
     vec![
         Arc::new(ExternalStore::new()),
+        Arc::new(MemoryStore::new()),
         Arc::new(
             SqliteStore::open(Path::new(":memory:"))
                 .await
@@ -172,10 +173,164 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
 }
 
 #[tokio::test]
-async fn both_backends_satisfy_lifecycle_and_journal_contract() {
+async fn all_backends_satisfy_lifecycle_and_journal_contract() {
     // Arrange / Act / Assert
     for store in stores().await {
         lifecycle(store).await;
+    }
+}
+
+#[tokio::test]
+async fn write_settlement_retries_preserve_terminal_outcomes() {
+    // Arrange
+    for store in stores().await {
+        for applied in [false, true] {
+            let id = format!("settlement-{applied}");
+            store
+                .create_session(&NewSession::new(&id, schema()), None, 100)
+                .await
+                .expect("create");
+            let turn = store
+                .begin_turn(store.clone(), &id, "first", &options())
+                .await
+                .expect("turn");
+            let write = store
+                .write_intent(
+                    turn.owner(),
+                    "call",
+                    Path::new("repo"),
+                    "file",
+                    None,
+                    b"new",
+                )
+                .await
+                .expect("intent");
+
+            // Act
+            store
+                .finish_write(turn.owner(), write, applied)
+                .await
+                .expect("initial settlement");
+            let settled = store.load_writes(&id).await.expect("settled record");
+            store
+                .finish_write(turn.owner(), write, applied)
+                .await
+                .expect("idempotent retry");
+            let active_conflict = store.finish_write(turn.owner(), write, !applied).await;
+            store
+                .complete_turn(turn.owner(), &[], None)
+                .await
+                .expect("complete");
+            let successor = store
+                .begin_turn(store.clone(), &id, "successor", &options())
+                .await
+                .expect("successor");
+            store
+                .finish_write(turn.owner(), write, applied)
+                .await
+                .expect("delayed idempotent retry");
+            let delayed_conflict = store.finish_write(turn.owner(), write, !applied).await;
+
+            // Assert
+            assert!(active_conflict.is_err());
+            assert!(delayed_conflict.is_err());
+            assert_eq!(
+                settled[0].status,
+                if applied {
+                    WriteStatus::Applied
+                } else {
+                    WriteStatus::Failed
+                }
+            );
+            assert_eq!(store.load_writes(&id).await.expect("unchanged"), settled);
+            store.renew(successor.owner()).await.expect("still owned");
+        }
+    }
+}
+
+#[tokio::test]
+async fn conflicting_write_settlements_have_one_winner() {
+    // Arrange
+    for store in stores().await {
+        store
+            .create_session(&NewSession::new("settlement-race", schema()), None, 100)
+            .await
+            .expect("create");
+        let turn = store
+            .begin_turn(store.clone(), "settlement-race", "prompt", &options())
+            .await
+            .expect("turn");
+        let write = store
+            .write_intent(
+                turn.owner(),
+                "call",
+                Path::new("repo"),
+                "file",
+                None,
+                b"new",
+            )
+            .await
+            .expect("intent");
+
+        // Act
+        let (applied, failed) = tokio::join!(
+            store.finish_write(turn.owner(), write, true),
+            store.finish_write(turn.owner(), write, false),
+        );
+
+        // Assert
+        assert_ne!(applied.is_ok(), failed.is_ok());
+        let records = store.load_writes("settlement-race").await.expect("writes");
+        assert_eq!(
+            records[0].status,
+            if applied.is_ok() {
+                WriteStatus::Applied
+            } else {
+                WriteStatus::Failed
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn concurrent_creation_and_acquisition_have_one_winner() {
+    // Arrange
+    for store in stores().await {
+        let config = NewSession::new("race", schema());
+        let selected = options();
+
+        // Act
+        let (first, second) = tokio::join!(
+            store.create_session(&config, None, 100),
+            store.create_session(&config, None, 100),
+        );
+        let creations = [first, second];
+        let (first, second) = tokio::join!(
+            store.begin_turn(store.clone(), "race", "first", &selected),
+            store.begin_turn(store.clone(), "race", "second", &selected),
+        );
+        let acquisitions = [first, second];
+
+        // Assert
+        assert_eq!(creations.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            creations
+                .iter()
+                .filter(|result| matches!(result, Err(SessionError::AlreadyExists { .. })))
+                .count(),
+            1
+        );
+        assert_eq!(
+            acquisitions.iter().filter(|result| result.is_ok()).count(),
+            1
+        );
+        assert_eq!(
+            acquisitions
+                .iter()
+                .filter(|result| matches!(result, Err(SessionError::Busy { .. })))
+                .count(),
+            1
+        );
     }
 }
 
