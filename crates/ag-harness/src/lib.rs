@@ -23,6 +23,7 @@ mod cancellation_test;
 
 mod chat_completion;
 mod comparison;
+mod effect;
 mod engine;
 mod execution;
 mod file_system;
@@ -48,6 +49,7 @@ mod write_journal;
 
 pub use cancellation::{ControlledTurn, SettlementError, TurnControl};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
+pub use effect::EffectSettlementError;
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
 pub use lifecycle::{

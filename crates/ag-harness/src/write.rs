@@ -2,10 +2,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use opentelemetry::trace::FutureExt as _;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::io::AsyncReadExt as _;
 
+use crate::effect::Effects;
 use crate::file_system::FileSystem;
 use crate::schema_contract;
 use crate::session::WriteJournal;
@@ -155,6 +157,7 @@ impl WriteError {
 }
 
 pub(crate) struct WriteTool {
+    pub(crate) effects: Effects,
     pub(crate) journal: Option<WriteJournal>,
     file_system: Arc<dyn FileSystem>,
     repository_root: PathBuf,
@@ -163,6 +166,7 @@ pub(crate) struct WriteTool {
 impl WriteTool {
     pub(crate) fn new(file_system: Arc<dyn FileSystem>, repository_root: PathBuf) -> Self {
         Self {
+            effects: Effects::default(),
             journal: None,
             file_system,
             repository_root,
@@ -214,28 +218,47 @@ impl WriteTool {
             ),
             None => None,
         };
-        let replacement = self
-            .file_system
-            .replace_beneath(&root, Path::new(arguments.path()), current, result)
-            .await;
-        if let (Some(journal), Some(intent)) = (&self.journal, intent) {
-            journal
-                .finish(intent, replacement.is_ok())
-                .await
-                .map_err(|source| WriteError::WriteTarget {
-                    path: arguments.path().to_string(),
-                    source: io::Error::other(source),
-                })?;
-        }
-        replacement.map_err(|source| WriteError::WriteTarget {
-            path: arguments.path().to_string(),
-            source,
-        })?;
+        let file_system = Arc::clone(&self.file_system);
+        let journal = self.journal.clone();
+        let path = arguments.path().to_string();
+        let effects = self.effects.clone();
+        let mut effect = effects.retain();
+        effect.starting();
+        let operation = async move {
+            let replacement = file_system
+                .replace_beneath(&root, Path::new(&path), current, result)
+                .await;
+            effect.acknowledged();
+            if let (Some(journal), Some(intent)) = (journal, intent)
+                && let Err(recording) = journal.finish(intent, replacement.is_ok()).await
+            {
+                let source = match replacement {
+                    Ok(()) => io::Error::other(recording),
+                    Err(error) => {
+                        io::Error::other(format!("{error}; outcome recording failed: {recording}"))
+                    }
+                };
+                effect.recorded();
+                effects.recording_failed(&source);
 
-        Ok(WriteOutput::new(
-            arguments.path().to_string(),
-            bytes_written,
-        ))
+                return Err(WriteError::WriteTarget { path, source });
+            }
+            effect.recorded();
+            replacement.map_err(|source| WriteError::WriteTarget {
+                path: path.clone(),
+                source,
+            })?;
+
+            Ok(WriteOutput::new(path, bytes_written))
+        };
+        // Retain the tool context even after cancellation ends its lifecycle
+        // span.
+        let task = tokio::spawn(operation.with_current_context());
+
+        task.await.map_err(|source| WriteError::WriteTarget {
+            path: arguments.path().to_string(),
+            source: io::Error::other(source),
+        })?
     }
 
     async fn read_current(&self, root: &Path, path: &str) -> Result<Option<Vec<u8>>, WriteError> {

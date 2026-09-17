@@ -7,6 +7,7 @@ use std::time::Instant;
 use tokio::sync::OnceCell;
 
 use crate::cancellation::{ControlledTurn, TurnControl};
+use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::{
@@ -97,9 +98,9 @@ impl Session {
     /// control.
     ///
     /// The returned future starts execution when polled. Its control observes
-    /// persistence settlement even if the future is dropped. Cancellation may
-    /// race a successful terminal commit; inspect stored history after
-    /// settlement.
+    /// persistence and managed-effect settlement even if the future is dropped.
+    /// Cancellation may race a successful terminal commit; inspect stored
+    /// history after settlement.
     ///
     /// # Errors
     /// The future returns [`SessionError`] for execution or persistence
@@ -163,12 +164,15 @@ impl Session {
         turn_id: Option<LifecycleId>,
         control: Option<&TurnControl>,
     ) -> Result<TurnOutcome, SessionError> {
+        let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
+        let _effects = effects.retain();
         let acquisition = store_coordinator::acquire(
             Arc::clone(&self.database),
             self.id.clone(),
             prompt.clone(),
             options.clone(),
             control.map(|control| control.settlement.clone()),
+            effects.clone(),
         );
         let AcquiredTurn {
             mut guard,
@@ -189,7 +193,8 @@ impl Session {
         let mut request = ModelRequest::with_history(messages, prompt, options.schema().clone());
         request.set_provider_session_id(self.provider_session_id.clone());
         let journal = guard.write_journal();
-        let engine = self.harness.engine(options);
+        let mut engine = self.harness.engine(options);
+        engine.effects = effects;
         let result = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -493,26 +498,15 @@ impl Harness {
         prompt: impl Into<String>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, TurnError> {
-        let request = ModelRequest::new(prompt, options.schema().clone());
-        let turn = self.lifecycle.start_turn();
-        let turn_id = turn.as_ref().map(TurnLifecycle::id);
-        let result = self.engine(&options).run(request, turn_id, None).await;
-
-        if let Some(turn) = turn {
-            match &result {
-                Ok(_) => turn.completed(),
-                Err(error) => turn.failed(error.error_type()),
-            }
-        }
-
-        result.map(|(outcome, _, _)| outcome)
+        self.run_once_observed(prompt.into(), options, Effects::default())
+            .await
     }
 
     /// Prepares a storage-free turn with separately retained cancellation.
     ///
-    /// Dropping the returned future requests cancellation. Settlement observes
-    /// local execution, not detached filesystem effects or remote provider
-    /// work.
+    /// Dropping the returned future requests cancellation. Observe persistence
+    /// settlement and managed filesystem-effect settlement separately through
+    /// the retained control. Neither waits for remote provider work.
     ///
     /// # Errors
     /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
@@ -528,7 +522,7 @@ impl Harness {
             tokio::select! {
                 biased;
                 () = control.cancelled() => Err(TurnError::Cancelled),
-                result = harness.run_once_with_options(prompt, options) => result,
+                result = harness.run_once_observed(prompt, options, control.effects.clone()) => result,
             }
         })
     }
@@ -574,6 +568,30 @@ impl Harness {
             schema: loaded.schema,
             system_prompt: loaded.system_prompt,
         })
+    }
+
+    async fn run_once_observed(
+        &self,
+        prompt: String,
+        options: TurnOptions,
+        effects: Effects,
+    ) -> Result<TurnOutcome, TurnError> {
+        let _effects = effects.retain();
+        let request = ModelRequest::new(prompt, options.schema().clone());
+        let turn = self.lifecycle.start_turn();
+        let turn_id = turn.as_ref().map(TurnLifecycle::id);
+        let mut engine = self.engine(&options);
+        engine.effects = effects;
+        let result = engine.run(request, turn_id, None).await;
+
+        if let Some(turn) = turn {
+            match &result {
+                Ok(_) => turn.completed(),
+                Err(error) => turn.failed(error.error_type()),
+            }
+        }
+
+        result.map(|(outcome, _, _)| outcome)
     }
 
     fn snapshot(&self) -> Self {
@@ -646,6 +664,7 @@ impl Harness {
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
         Engine {
+            effects: Effects::default(),
             file_system: &self.file_system,
             lifecycle: &self.lifecycle,
             model: &self.model,

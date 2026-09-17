@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
-use std::io::Cursor;
+use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use opentelemetry::baggage::BaggageExt as _;
@@ -10,31 +11,41 @@ use opentelemetry::trace::{FutureExt as _, Span as _, SpanId, SpanKind, Status, 
 use opentelemetry::{Context, KeyValue, global};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::json;
-use tokio::sync::Mutex as TestMutex;
+use tokio::io::AsyncRead;
+use tokio::sync::{Mutex as TestMutex, Notify};
+use tokio::time::{Instant, timeout};
 
 use super::{
     LifecycleTraceObserver, PendingTool, TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES, TraceState,
     finish_span,
 };
-use crate::file_system::MockFileSystem;
+use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{
     LifecycleEmitter, LifecycleEvent, ModelResponseType, ToolErrorType, TurnErrorType,
 };
+use crate::memory_store::MemoryStore;
 use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
-    ModelMetadata, ModelRequest, ModelResponse,
+    ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
+use crate::session::{
+    AcquiredTurn, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
+};
+use crate::store::SessionStore;
 use crate::telemetry;
 use crate::tool::{ReadArguments, Tool, ToolCall};
+use crate::turn::{TurnError, TurnOptions};
+use crate::write_journal::{WriteRecord, WriteStatus};
 
 static TRACE_PROVIDER_LOCK: TestMutex<()> = TestMutex::const_new(());
 
 struct NestedSpanModel {
     call_count: AtomicUsize,
     observed_baggage: Arc<StdMutex<Vec<String>>>,
+    tool_call: ToolCall,
 }
 
 #[async_trait]
@@ -50,14 +61,8 @@ impl Model for NestedSpanModel {
         record_baggage(&self.observed_baggage);
         nested_span("mock.model.child");
         if self.call_count.fetch_add(1, Ordering::SeqCst) == 0 {
-            let arguments = serde_json::from_value::<ReadArguments>(json!({
-                "path": "Cargo.toml",
-                "limit": 1
-            }))
-            .expect("read arguments should be valid");
-
             return Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
-                ToolCall::read("mock-call".to_string(), arguments, None),
+                self.tool_call.clone(),
             )));
         }
 
@@ -511,6 +516,12 @@ async fn propagates_model_and_tool_contexts_to_nested_spans() {
     let harness = Harness::new(NestedSpanModel {
         call_count: AtomicUsize::new(0),
         observed_baggage: Arc::clone(&observed_baggage),
+        tool_call: ToolCall::read(
+            "mock-call".to_string(),
+            serde_json::from_value::<ReadArguments>(json!({"path": "Cargo.toml", "limit": 1}))
+                .expect("read arguments"),
+            None,
+        ),
     })
     .file_system(file_system)
     .repository(Repository::fixture("repo"))
@@ -712,4 +723,271 @@ fn missing_correlations_do_not_create_partial_spans() {
     assert!(state.tool_spans.is_empty());
     assert!(state.model_spans.is_empty());
     assert!(absent_tool.is_none());
+}
+
+struct TracedReplacement {
+    entered: Arc<Notify>,
+    observed_baggage: Arc<StdMutex<Vec<String>>>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl FileSystem for TracedReplacement {
+    async fn canonicalize(&self, _path: &Path) -> io::Result<PathBuf> {
+        Ok(PathBuf::from("/repo"))
+    }
+
+    async fn open_beneath(
+        &self,
+        _root: &Path,
+        _path: &Path,
+    ) -> io::Result<Box<dyn AsyncRead + Send + Unpin>> {
+        Err(io::Error::from(io::ErrorKind::NotFound))
+    }
+
+    async fn replace_beneath(
+        &self,
+        _root: &Path,
+        _path: &Path,
+        _expected: Option<Vec<u8>>,
+        _content: Vec<u8>,
+    ) -> io::Result<()> {
+        record_write_context(&self.observed_baggage, "mock.write.replace.before");
+        self.entered.notify_one();
+        self.release.notified().await;
+        record_write_context(&self.observed_baggage, "mock.write.replace.after");
+
+        Ok(())
+    }
+}
+
+fn record_write_context(observed_baggage: &StdMutex<Vec<String>>, name: &'static str) {
+    let context = Context::current();
+    let value = context
+        .baggage()
+        .get("workflow.id")
+        .map(ToString::to_string);
+    observed_baggage
+        .lock()
+        .expect("baggage recorder")
+        .push(value.unwrap_or_default());
+    nested_span(name);
+}
+
+struct TracedWriteStore {
+    finished: Notify,
+    observed_baggage: Arc<StdMutex<Vec<String>>>,
+    store: MemoryStore,
+}
+
+#[async_trait]
+impl SessionStore for TracedWriteStore {
+    fn identity(&self) -> &StoreIdentity {
+        self.store.identity()
+    }
+
+    async fn create_session(
+        &self,
+        config: &NewSession,
+        metadata: Option<ModelMetadata>,
+        budget: usize,
+    ) -> Result<(), SessionError> {
+        self.store.create_session(config, metadata, budget).await
+    }
+
+    async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError> {
+        self.store.load_session(id).await
+    }
+
+    async fn begin_turn(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+    ) -> Result<AcquiredTurn, SessionError> {
+        self.store.begin_turn(store, id, prompt, options).await
+    }
+
+    async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
+        self.store.renew(owner).await
+    }
+
+    async fn complete_turn(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+    ) -> Result<(), SessionError> {
+        self.store
+            .complete_turn(owner, messages, continuation)
+            .await
+    }
+
+    async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
+        self.store.fail_turn(owner, error).await
+    }
+
+    async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
+        self.store.interrupt(owner).await
+    }
+
+    async fn load_writes(&self, id: &str) -> Result<Vec<WriteRecord>, SessionError> {
+        self.store.load_writes(id).await
+    }
+
+    async fn write_intent(
+        &self,
+        owner: &TurnOwner,
+        call: &str,
+        root: &Path,
+        path: &str,
+        expected: Option<&[u8]>,
+        resulting: &[u8],
+    ) -> Result<i64, SessionError> {
+        self.store
+            .write_intent(owner, call, root, path, expected, resulting)
+            .await
+    }
+
+    async fn finish_write(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        applied: bool,
+    ) -> Result<(), SessionError> {
+        record_write_context(&self.observed_baggage, "mock.write.record.before");
+        tokio::task::yield_now().await;
+        self.store.finish_write(owner, id, applied).await?;
+        record_write_context(&self.observed_baggage, "mock.write.record.after");
+        self.finished.notify_one();
+
+        Ok(())
+    }
+}
+
+async fn assert_retained_write_context(drop_caller: bool) {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let observed_baggage = Arc::new(StdMutex::new(Vec::new()));
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let store = Arc::new(TracedWriteStore {
+        store: MemoryStore::new(),
+        observed_baggage: Arc::clone(&observed_baggage),
+        finished: Notify::new(),
+    });
+    let harness = Harness::new(NestedSpanModel {
+        call_count: AtomicUsize::new(0),
+        observed_baggage: Arc::clone(&observed_baggage),
+        tool_call: ToolCall::from_json(
+            "write-call".into(),
+            "write",
+            &json!({
+                "path": "new.txt",
+                "patch": "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+            })
+            .to_string(),
+            None,
+        )
+        .expect("write arguments"),
+    })
+    .store(store.clone())
+    .file_system(TracedReplacement {
+        entered: Arc::clone(&entered),
+        release: Arc::clone(&release),
+        observed_baggage: Arc::clone(&observed_baggage),
+    })
+    .repository(Repository::fixture("repo"))
+    .allow(Tool::Write)
+    .with_lifecycle_observer(LifecycleTraceObserver::new());
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let mut session = harness
+        .session("traced-write", schema)
+        .create()
+        .await
+        .expect("session");
+    let context = Context::current().with_baggage([KeyValue::new("workflow.id", "workflow-42")]);
+    let mut turn = Box::pin(session.send("create a file").with_context(context));
+
+    // Act
+    tokio::select! {
+        result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+        result = timeout(Duration::from_secs(5), entered.notified()) => result.expect("replacement started"),
+    }
+    if drop_caller {
+        drop(turn);
+        let spans = exporter.get_finished_spans().expect("spans");
+        find_span(&spans, "execute_tool write", Some("cancelled"));
+        assert!(
+            !spans
+                .iter()
+                .any(|span| span.name == "mock.write.replace.after")
+        );
+        release.notify_one();
+    } else {
+        release.notify_one();
+        timeout(Duration::from_secs(5), turn)
+            .await
+            .expect("turn completed")
+            .expect("write succeeded");
+    }
+    timeout(Duration::from_secs(5), store.finished.notified())
+        .await
+        .expect("retained recording completed");
+    provider.force_flush().expect("flush");
+    let spans = exporter.get_finished_spans().expect("spans");
+
+    // Assert
+    assert_write_span_parents(&spans, drop_caller);
+    let baggage = observed_baggage.lock().expect("baggage recorder").clone();
+    assert_eq!(
+        baggage,
+        vec!["workflow-42"; if drop_caller { 5 } else { 6 }]
+    );
+    assert_eq!(
+        session.writes().await.expect("journal")[0].status,
+        WriteStatus::Applied
+    );
+    assert!(Context::current().baggage().get("workflow.id").is_none());
+    provider.shutdown().expect("shutdown");
+}
+
+#[tokio::test]
+async fn propagates_write_context_to_replacement_and_journal() {
+    // Arrange, Act, Assert
+    assert_retained_write_context(false).await;
+}
+
+#[tokio::test]
+async fn retains_write_context_after_caller_and_tool_lifecycle_drop() {
+    // Arrange, Act, Assert
+    assert_retained_write_context(true).await;
+}
+
+fn assert_write_span_parents(spans: &[SpanData], drop_caller: bool) {
+    let tool = find_span(
+        spans,
+        "execute_tool write",
+        drop_caller.then_some("cancelled"),
+    );
+    for name in [
+        "mock.write.replace.before",
+        "mock.write.replace.after",
+        "mock.write.record.before",
+        "mock.write.record.after",
+    ] {
+        let child = find_span(spans, name, None);
+        assert_eq!(child.parent_span_id, tool.span_context.span_id(), "{name}");
+        assert_eq!(
+            child.span_context.trace_id(),
+            tool.span_context.trace_id(),
+            "{name}"
+        );
+    }
 }

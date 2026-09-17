@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 
+use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
@@ -26,6 +27,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     );
     let lifecycle = LifecycleEmitter::default();
     let engine = Engine {
+        effects: Effects::default(),
         file_system: &file_system,
         lifecycle: &lifecycle,
         model: &model,

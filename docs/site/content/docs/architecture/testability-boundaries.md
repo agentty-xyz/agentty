@@ -112,7 +112,11 @@ execution. Persistence tests cover options snapshots, legacy reads without live
 repository validation, and continuation invalidation against canonical configuration.
 Host comparison validation shares the bounded repository command runner; real-Git
 fixtures cover pinned OIDs and nested scopes; terminal lifecycle tests retain the
-persistence-before-completion boundary.
+persistence-before-completion boundary. Gated filesystem replacements and journal
+recording verify independent persistence and effect settlement, retained execution after
+caller drop, successor admission, and stale controls across all stores. The filesystem
+boundary must acknowledge completion of delegated work before returning; worker failure
+without acknowledgment remains explicitly unresolved.
 
 The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
 private. Application workflows that submit isolated utility prompts inject

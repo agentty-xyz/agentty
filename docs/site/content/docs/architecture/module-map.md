@@ -41,14 +41,17 @@ For file-level detail, read the module docstrings directly.
   history, leases, terminal transitions, and write journals through a public
   transactional `SessionStore` with SQLite and process-local `MemoryStore` backends.
   Hosts can inject stores; shared local admission retains acquisition and cleanup
-  ownership. Controlled turn futures expose turn-scoped cancellation and independently
-  observable persistence settlement after caller drop. Its `SqliteStore` implementation
-  encapsulates pool access and row decoding. Bounded tools use validated `Repository`
-  and injectable `FileSystem` boundaries. Hosts own prompts, comparison-base selection,
-  permissions, and telemetry setup; the engine enforces a validated, pinned commit for
-  comparisons. Private execution contracts and platform-independent supervision own
-  bounded preparation, process-tree completion, output draining, and retained cleanup
-  through injected boundaries, without a production backend or a public tool surface.
+  ownership. Controlled turn futures expose turn-scoped cancellation with independent
+  persistence and managed filesystem-effect settlement after caller drop. Retained write
+  workers own replacement completion and journal recording; local admission remains
+  protected until both settle, with unacknowledged completion blocking admission for the
+  process lifetime. Its `SqliteStore` implementation encapsulates pool access and row
+  decoding. Bounded tools use validated `Repository` and injectable `FileSystem`
+  boundaries. Hosts own prompts, comparison-base selection, permissions, and telemetry
+  setup; the engine enforces a validated, pinned commit for comparisons. Private
+  execution contracts and platform-independent supervision own bounded preparation,
+  process-tree completion, output draining, and retained cleanup through injected
+  boundaries, without a production backend or a public tool surface.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

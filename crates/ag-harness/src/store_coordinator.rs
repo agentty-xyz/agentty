@@ -9,6 +9,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio::time::Instant;
 
 use crate::cancellation::{Settlement, SettlementLease};
+use crate::effect::Effects;
 use crate::session::{
     AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner, recover_abandoned,
 };
@@ -24,9 +25,11 @@ pub(crate) async fn acquire(
     prompt: String,
     options: TurnOptions,
     settlement: Option<Settlement>,
+    effects: Effects,
 ) -> Result<AcquiredTurn, SessionError> {
     recover_abandoned(&store, &session_id).await?;
-    let admission = admission(store.identity(), &session_id)?;
+    let admission = Arc::new(admission(store.identity(), &session_id)?);
+    effects.admit(Arc::clone(&admission));
     let store: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
         store,
         admission: Mutex::new(Some(admission)),
@@ -73,7 +76,7 @@ fn admission(
 // Acquisition must bind the guard to this decorator, so admission survives
 // delayed commit acknowledgment, dropped callers, and failed cleanup.
 struct AdmittedStore {
-    admission: Mutex<Option<OwnedMutexGuard<()>>>,
+    admission: Mutex<Option<Arc<OwnedMutexGuard<()>>>>,
     lease: Mutex<Option<SettlementLease>>,
     settlement: Option<Settlement>,
     store: Arc<dyn SessionStore>,

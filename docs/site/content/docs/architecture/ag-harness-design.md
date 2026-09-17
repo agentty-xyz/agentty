@@ -123,8 +123,14 @@ stops the waiter promptly; retained work finishes acquisition or terminal acknow
 and owner cleanup. `settled()` observes that persistence settlement even after caller
 future drop; failed cleanup remains observable and can be retried for the same owner. A
 terminal commit already in progress can still succeed after cancellation. Hosts keep the
-Tokio runtime running until settlement. This persistence boundary does not establish
-filesystem-effect completion; an already-started replacement can finish afterward.
+Tokio runtime running until settlement. `effects_settled()` separately observes managed
+filesystem replacements and their outcome-recording attempts. Replacement workers retain
+execution and local admission after cancellation or caller drop, including ordinary
+turns; persistence cleanup can settle while a replacement remains outstanding. An
+unacknowledged worker failure is explicitly unresolved and protects local admission for
+the remainder of the process. Journal-recording failure remains observable without
+claiming the acknowledged filesystem operation is still running. Neither settlement
+boundary establishes distributed workspace fencing or rollback.
 
 ```mermaid
 flowchart TD

@@ -1089,6 +1089,13 @@ acknowledgement. The session emits completion only after persisting the result; 
 execution uses the same engine without opening SQLite. These are library boundaries for
 the planned Agentty adapters, not a replacement for the current Agentty runtime.
 
+Its cancellation control exposes persistence settlement and managed filesystem-effect
+settlement independently. Once admitted, write replacement and journal recording run
+under retained ownership even after caller drop. Local session admission releases only
+when both persistence and managed effects settle; unacknowledged filesystem completion
+remains observable and keeps admission blocked for the process lifetime. This protects
+local session execution, not unrelated processes or distributed workspace access.
+
 Private `ag-harness` supervision runs independently of its caller on a host-owned
 runtime. Retained control observes bounded cleanup, including after cancellation or
 partial preparation. The host keeps the runtime running until cleanup settles. This path
