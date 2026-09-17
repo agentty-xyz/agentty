@@ -364,6 +364,13 @@ impl Database {
             .await
             .session_context("load persistent session turn acquisition")?;
         let configuration = load_turn_configuration(&mut transaction, session_id).await?;
+        let provider_context = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT provider_context FROM session WHERE id = ?",
+        )
+        .bind(session_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .session_context("load persistent session turn acquisition")?;
         let max_history_bytes =
             decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
@@ -377,6 +384,7 @@ impl Database {
         Ok(TurnAcquisition {
             configuration,
             latest_completed_turn,
+            provider_context,
             turn_position,
             turns,
         })
@@ -622,12 +630,20 @@ WHERE id = ?
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
+        let provider_context = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT provider_context FROM session WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await
+        .session_context("load persistent session provider context")?;
         let turns = self.load_turns(id, max_history_bytes).await?;
 
         Ok(LoadedSession {
             max_history_bytes,
             model: row.model,
             provider: row.provider,
+            provider_context,
             provider_session_id: row.provider_session_id,
             schema,
             system_prompt: row.system_prompt,
@@ -673,6 +689,7 @@ WHERE id = ?
             {
                 return Ok(AcquiredTurn {
                     guard,
+                    provider_context: acquisition.provider_context.clone(),
                     provider_session_id: acquisition
                         .configuration
                         .provider_session_id
@@ -687,6 +704,7 @@ WHERE id = ?
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        provider_context: Option<&str>,
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
         let encoded_messages = messages
@@ -737,10 +755,11 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
         sqlx::query(
             r"
 UPDATE session
-SET provider_session_id = ?, updated_at = ?
+SET provider_context = ?, provider_session_id = ?, updated_at = ?
 WHERE id = ?
 ",
         )
+        .bind(provider_context)
         .bind(provider_session_id)
         .bind(now)
         .bind(session_id)
@@ -1071,6 +1090,7 @@ impl From<StoredTurnOptionsError> for SessionError {
 /// settle filesystem effects.
 pub struct AcquiredTurn {
     pub(crate) guard: TurnGuard,
+    pub(crate) provider_context: Option<String>,
     pub(crate) provider_session_id: Option<String>,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
@@ -1099,9 +1119,18 @@ impl AcquiredTurn {
 
         Ok(Self {
             guard: TurnGuard::new(store, owner, deadline),
+            provider_context: None,
             provider_session_id,
             turns,
         })
+    }
+
+    /// Sets opaque provider context retained independently of bounded history.
+    #[must_use]
+    pub fn with_provider_context(mut self, provider_context: Option<String>) -> Self {
+        self.provider_context = provider_context;
+
+        self
     }
 
     /// Starts ownership monitoring after the reservation is acknowledged.
@@ -1139,6 +1168,8 @@ pub struct LoadedSession {
     pub model: Option<String>,
     /// Provider paired with the stored model name.
     pub provider: Option<String>,
+    /// Opaque provider context retained independently of bounded history.
+    pub provider_context: Option<String>,
     /// Optional provider continuation, cleared on failure or interruption.
     pub provider_session_id: Option<String>,
     /// Session's default output schema.
@@ -1153,6 +1184,7 @@ pub struct LoadedSession {
 struct TurnAcquisition {
     configuration: TurnConfigurationRow,
     latest_completed_turn: Option<i64>,
+    provider_context: Option<String>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
 }
@@ -1458,12 +1490,18 @@ impl TurnGuard {
     pub(crate) async fn complete(
         &mut self,
         messages: &[ModelMessage],
+        provider_context: Option<&str>,
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
         let database = Arc::clone(&self.database);
         let owner = self.owner.clone();
-        self.finalize(database.complete_turn(&owner, messages, provider_session_id))
-            .await
+        self.finalize(database.complete_turn(
+            &owner,
+            messages,
+            provider_context,
+            provider_session_id,
+        ))
+        .await
     }
 
     pub(crate) async fn fail(&mut self, error: &TurnError) -> Result<(), SessionError> {

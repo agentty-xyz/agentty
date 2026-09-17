@@ -159,6 +159,32 @@ return an opaque continuation identifier; if native resume is unavailable, the h
 retries once using the stored history and retains any replacement continuation returned
 by that replay.
 
+For ChatGPT-subscription-backed Codex, authenticate the `codex` executable with ChatGPT
+and construct the model directly:
+
+```rust
+use ag_harness::{Codex, CodexConfig, Harness};
+
+let model_name = std::env::var("CODEX_MODEL")?;
+let model = Codex::new(CodexConfig::new(model_name))?;
+let output = Harness::new(model)
+    .run_once(prompt, output_schema)
+    .await?;
+```
+
+This experimental v0 reads ChatGPT OAuth credentials from `CODEX_HOME/auth.json` (or
+`~/.codex/auth.json`) and streams a Responses request directly to the ChatGPT Codex
+endpoint. It rejects API-key authentication rather than silently incurring API charges.
+The endpoint is unofficial and may change; use it only where the account, workspace,
+plan, and applicable OpenAI terms permit. The adapter does not refresh OAuth tokens, so
+reauthenticate with Codex after an expired-token response. Set `CODEX_MODEL` only to a
+model verified for the account and the `ag-harness` originator. Harness tool definitions
+are not supported by this v0 adapter. Per-turn reasoning effort is forwarded to Codex.
+For durable sessions, the adapter requests encrypted reasoning state and replays it with
+the validated assistant output so later turns satisfy the Responses pairing contract.
+Each retained turn also carries a one-way account fingerprint; resumed requests fail
+before HTTP if the active ChatGPT workspace differs from the stored workspace.
+
 Attach `Harness::with_lifecycle_observer()` for content-free turn, model, and tool
 events. The rejected resume and replay are separate model attempts in lifecycle events
 and `TurnOutcome::report()`.

@@ -41,9 +41,51 @@ pub trait Model: Send + Sync {
 /// [`ModelClient::complete`], which owns telemetry and structured-output
 /// validation.
 pub struct ModelClient {
-    backend: chat_completion::ChatCompletionBackend,
+    backend: ModelBackend,
     lifecycle: LifecycleEmitter,
     metadata: ModelMetadata,
+}
+
+/// Provider-neutral result returned by an internal model backend.
+pub(crate) enum GeneratedResponse {
+    Failed {
+        error: ModelError,
+        metadata: CompletionMetadata,
+    },
+    Output {
+        metadata: CompletionMetadata,
+        output: String,
+        provider_context: Option<String>,
+        reasoning_content: Option<String>,
+    },
+    ToolCall {
+        call: tool::ToolCall,
+        metadata: CompletionMetadata,
+    },
+    ToolCalls {
+        calls: Vec<tool::ToolCall>,
+        metadata: CompletionMetadata,
+    },
+}
+
+impl GeneratedResponse {
+    pub(crate) fn failed(error: ModelError, metadata: CompletionMetadata) -> Self {
+        Self::Failed { error, metadata }
+    }
+}
+
+enum ModelBackend {
+    ChatCompletion(chat_completion::ChatCompletionBackend),
+    Codex(provider::CodexBackend),
+}
+
+impl ModelBackend {
+    async fn generate(&self, request: &ModelRequest) -> Result<GeneratedResponse, ModelError> {
+        match self {
+            Self::ChatCompletion(backend) => backend.generate(request).await,
+            Self::Codex(backend) => backend.generate(request).await,
+        }
+    }
 }
 
 impl ModelClient {
@@ -86,6 +128,23 @@ impl ModelClient {
         Self::chat_completion(config.api_key, config.base_url, config.model, policy)
     }
 
+    pub(crate) fn codex(config: provider::CodexConfig) -> Result<Self, ModelMetadataError> {
+        Self::codex_backend(provider::CodexBackend::new(config))
+    }
+
+    pub(crate) fn codex_backend(
+        backend: provider::CodexBackend,
+    ) -> Result<Self, ModelMetadataError> {
+        let (provider, model) = backend.identity();
+        let metadata = ModelMetadata::new(provider, model)?;
+
+        Ok(Self {
+            backend: ModelBackend::Codex(backend),
+            lifecycle: LifecycleEmitter::default(),
+            metadata,
+        })
+    }
+
     /// Returns the validated provider and model identity retained by the
     /// client.
     pub fn metadata(&self) -> &ModelMetadata {
@@ -120,32 +179,38 @@ impl ModelClient {
             Some(lifecycle) => lifecycle.scope(operation).await,
             None => operation.await,
         };
-        let (result, failure_metadata) = match generated {
-            Ok(chat_completion::GeneratedResponse::Failed { error, metadata }) => {
-                (Err(error), Some(metadata))
-            }
-            Ok(chat_completion::GeneratedResponse::Output {
-                metadata,
-                output,
-                reasoning_content,
-            }) => match request.schema().parse_and_validate(&output) {
+        let complete_output = |metadata: CompletionMetadata,
+                               output: String,
+                               provider_context: Option<String>,
+                               reasoning_content: Option<String>| {
+            match request.schema().parse_and_validate(&output) {
                 Ok(response) => (
                     Ok(
                         ModelCompletion::new(metadata, ModelResponse::from_output(response))
+                            .with_provider_context(provider_context)
                             .with_reasoning_content(reasoning_content),
                     ),
                     None,
                 ),
                 Err(error) => (Err(ModelError::from(error)), Some(metadata)),
-            },
-            Ok(chat_completion::GeneratedResponse::ToolCall { call, metadata }) => (
+            }
+        };
+        let (result, failure_metadata) = match generated {
+            Ok(GeneratedResponse::Failed { error, metadata }) => (Err(error), Some(metadata)),
+            Ok(GeneratedResponse::Output {
+                metadata,
+                output,
+                provider_context,
+                reasoning_content,
+            }) => complete_output(metadata, output, provider_context, reasoning_content),
+            Ok(GeneratedResponse::ToolCall { call, metadata }) => (
                 Ok(ModelCompletion::new(
                     metadata,
                     ModelResponse::tool_call(call),
                 )),
                 None,
             ),
-            Ok(chat_completion::GeneratedResponse::ToolCalls { calls, metadata }) => (
+            Ok(GeneratedResponse::ToolCalls { calls, metadata }) => (
                 Ok(ModelCompletion::new(
                     metadata,
                     ModelResponse::tool_calls(calls),
@@ -188,7 +253,7 @@ impl ModelClient {
         let metadata = ModelMetadata::new(provider, model)?;
 
         Ok(Self {
-            backend,
+            backend: ModelBackend::ChatCompletion(backend),
             lifecycle: LifecycleEmitter::default(),
             metadata,
         })
@@ -264,6 +329,7 @@ pub struct ModelRequest {
     messages: Vec<ModelMessage>,
     model_reasoning_effort: Option<ReasoningEffort>,
     prompt: String,
+    provider_context: Option<String>,
     provider_session_id: Option<String>,
     schema: OutputSchema,
     tools: Vec<tool::ToolDefinition>,
@@ -279,6 +345,7 @@ impl ModelRequest {
             messages: vec![ModelMessage::User(prompt.clone())],
             model_reasoning_effort: None,
             prompt,
+            provider_context: None,
             provider_session_id: None,
             schema,
             tools: Vec::new(),
@@ -299,6 +366,7 @@ impl ModelRequest {
             messages,
             model_reasoning_effort: None,
             prompt,
+            provider_context: None,
             provider_session_id: None,
             schema,
             tools: Vec::new(),
@@ -372,6 +440,14 @@ impl ModelRequest {
 
     pub(crate) fn set_provider_session_id(&mut self, provider_session_id: Option<String>) {
         self.provider_session_id = provider_session_id;
+    }
+
+    pub(crate) fn provider_context(&self) -> Option<&str> {
+        self.provider_context.as_deref()
+    }
+
+    pub(crate) fn set_provider_context(&mut self, provider_context: Option<String>) {
+        self.provider_context = provider_context;
     }
 
     pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
@@ -549,6 +625,7 @@ impl ModelMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelCompletion {
     metadata: Option<CompletionMetadata>,
+    provider_context: Option<String>,
     provider_session_id: Option<String>,
     reasoning_content: Option<String>,
     response: ModelResponse,
@@ -559,6 +636,7 @@ impl ModelCompletion {
     pub fn new(metadata: CompletionMetadata, response: ModelResponse) -> Self {
         Self {
             metadata: Some(metadata),
+            provider_context: None,
             provider_session_id: None,
             reasoning_content: None,
             response,
@@ -569,6 +647,7 @@ impl ModelCompletion {
     pub fn from_response(response: ModelResponse) -> Self {
         Self {
             metadata: None,
+            provider_context: None,
             provider_session_id: None,
             reasoning_content: None,
             response,
@@ -585,6 +664,12 @@ impl ModelCompletion {
 
     pub(crate) fn with_reasoning_content(mut self, reasoning_content: Option<String>) -> Self {
         self.reasoning_content = reasoning_content;
+
+        self
+    }
+
+    pub(crate) fn with_provider_context(mut self, provider_context: Option<String>) -> Self {
+        self.provider_context = provider_context;
 
         self
     }
@@ -616,10 +701,12 @@ impl ModelCompletion {
         Option<CompletionMetadata>,
         Option<String>,
         Option<String>,
+        Option<String>,
     ) {
         (
             self.response,
             self.metadata,
+            self.provider_context,
             self.provider_session_id,
             self.reasoning_content,
         )
@@ -993,6 +1080,8 @@ pub enum ModelErrorType {
     InvalidProviderResponse,
     /// The provider returned an unusable or incomplete successful response.
     InvalidResponse,
+    /// The provider cannot satisfy a requested model capability.
+    UnsupportedCapability,
     /// The provider cannot satisfy the requested output contract.
     UnsupportedOutput,
     /// The response exceeded a configured safety bound.
@@ -1012,6 +1101,7 @@ impl ModelErrorType {
             Self::Provider => telemetry::ERROR_PROVIDER,
             Self::InvalidProviderResponse => telemetry::ERROR_INVALID_PROVIDER_RESPONSE,
             Self::InvalidResponse => telemetry::ERROR_INVALID_RESPONSE,
+            Self::UnsupportedCapability => telemetry::ERROR_UNSUPPORTED_CAPABILITY,
             Self::UnsupportedOutput => telemetry::ERROR_UNSUPPORTED_OUTPUT,
             Self::ResponseTooLarge => telemetry::ERROR_RESPONSE_TOO_LARGE,
             Self::InvalidOutput => telemetry::ERROR_INVALID_OUTPUT,

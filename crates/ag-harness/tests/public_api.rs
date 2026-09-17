@@ -20,12 +20,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    ComparisonBase, CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind,
-    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, MemoryStore,
-    Model, ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata,
-    ModelProvider, ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError,
-    Repository, RepositoryError, Session, SessionBuilder, SessionError, SessionInfo, Tool,
-    ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteStatus,
+    Codex, CodexConfig, ComparisonBase, CompletionMetadata, CompletionUsage, FileSystem, Harness,
+    LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
+    LocalFileSystem, MemoryStore, Model, ModelCompletion, ModelConfiguration, ModelError,
+    ModelMessage, ModelMetadata, ModelProvider, ModelRequest, ModelResponse, ModelResponseType,
+    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
+    SessionError, SessionInfo, Tool, ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions,
+    WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -386,6 +387,20 @@ fn external_consumer_configures_every_catalog_provider() {
     for (client, provider) in clients.iter().zip(ModelProvider::all()) {
         assert_eq!(client.metadata().model(), provider.known_models()[0]);
     }
+}
+
+#[test]
+fn external_consumer_constructs_subscription_backed_codex() {
+    // Arrange
+    let config = CodexConfig::new("gpt-test").auth_file("custom-auth.json");
+
+    // Act
+    let model = Codex::new(config).expect("Codex model metadata should be valid");
+
+    // Assert
+    let metadata = Model::metadata(&model).expect("Codex should expose metadata");
+    assert_eq!(metadata.provider(), "openai");
+    assert_eq!(metadata.model(), "gpt-test");
 }
 
 #[test]

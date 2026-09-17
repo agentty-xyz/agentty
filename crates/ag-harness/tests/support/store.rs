@@ -120,6 +120,7 @@ impl SessionStore for ExternalStore {
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
+                    provider_context: None,
                     provider_session_id: None,
                     schema: config.schema().clone(),
                     system_prompt: config.system_prompt().map(str::to_string),
@@ -186,7 +187,8 @@ impl SessionStore for ExternalStore {
             deadline,
             session.bounded().turns,
             continuation.clone(),
-        )?;
+        )?
+        .with_provider_context(session.loaded.provider_context.clone());
         session.next_turn += 1;
         session.owner = Some((owner, deadline));
         session.pending = vec![ModelMessage::User(prompt.to_string())];
@@ -212,7 +214,8 @@ impl SessionStore for ExternalStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
+        provider_context: Option<&str>,
+        provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
@@ -223,7 +226,8 @@ impl SessionStore for ExternalStore {
             .turns
             .push(std::mem::take(&mut session.pending));
         session.owner = None;
-        session.loaded.provider_session_id = continuation.map(str::to_string);
+        session.loaded.provider_context = provider_context.map(str::to_string);
+        session.loaded.provider_session_id = provider_session_id.map(str::to_string);
 
         Ok(())
     }

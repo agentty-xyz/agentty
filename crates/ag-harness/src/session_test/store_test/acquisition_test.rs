@@ -56,7 +56,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
         .expect("replacement");
     replacement
         .guard
-        .complete(&[], None)
+        .complete(&[], None, None)
         .await
         .expect("complete replacement");
     let states = sqlx::query_as::<_, (i64, String)>(

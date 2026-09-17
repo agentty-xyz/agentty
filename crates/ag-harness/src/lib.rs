@@ -41,6 +41,7 @@ mod store_coordinator;
 mod telemetry;
 mod tool;
 mod trace;
+mod transport;
 mod turn;
 mod turn_options_snapshot;
 mod write;
@@ -62,9 +63,9 @@ pub use model::{
 };
 pub use policy::ToolPolicy;
 pub use provider::{
-    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,
-    ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
-    QwenConfig,
+    Codex, CodexConfig, KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR,
+    ModelConfiguration, ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse,
+    MuseConfig, QWEN_PLUS, QwenConfig,
 };
 pub use read::{ReadError, ReadOutput};
 pub use repository::{Repository, RepositoryError};

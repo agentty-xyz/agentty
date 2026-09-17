@@ -89,6 +89,7 @@ impl SessionStore for MemoryStore {
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
+                    provider_context: None,
                     provider_session_id: None,
                     schema: config.schema().clone(),
                     system_prompt: config.system_prompt().map(str::to_string),
@@ -178,7 +179,8 @@ impl SessionStore for MemoryStore {
             deadline,
             session.history(),
             continuation.clone(),
-        )?;
+        )?
+        .with_provider_context(session.configuration.provider_context.clone());
         session.turns.push(TurnRecord {
             deadline,
             error_type: None,
@@ -207,6 +209,7 @@ impl SessionStore for MemoryStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        provider_context: Option<&str>,
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError> {
         self.validate_identity(owner)?;
@@ -215,6 +218,7 @@ impl SessionStore for MemoryStore {
         let turn = session.live_turn(owner)?;
         turn.messages.extend_from_slice(messages);
         turn.status = Status::Completed;
+        session.configuration.provider_context = provider_context.map(str::to_string);
         session.configuration.provider_session_id = provider_session_id.map(str::to_string);
 
         Ok(())

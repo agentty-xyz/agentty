@@ -59,6 +59,7 @@ pub trait SessionStore: Send + Sync {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        provider_context: Option<&str>,
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError>;
     /// Marks an unexpired owned turn failed and clears its continuation.

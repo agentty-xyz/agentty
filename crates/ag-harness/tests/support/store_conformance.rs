@@ -108,6 +108,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .complete_turn(
             &owner,
             &[ModelMessage::Assistant("answer".to_string())],
+            Some("provider-account"),
             Some("native"),
         )
         .await
@@ -145,6 +146,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
     assert_eq!(owner.interruption_error_type(), "cancelled");
     let loaded = store.load_session("session").await.expect("load");
     assert_eq!(loaded.system_prompt.as_deref(), Some("policy"));
+    assert_eq!(loaded.provider_context.as_deref(), Some("provider-account"));
     assert_eq!(loaded.turns.len(), 1);
     store
         .fail_turn(
@@ -218,7 +220,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .expect("idempotent retry");
             let active_conflict = store.finish_write(turn.owner(), write, !applied).await;
             store
-                .complete_turn(turn.owner(), &[], None)
+                .complete_turn(turn.owner(), &[], None, None)
                 .await
                 .expect("complete");
             let successor = store

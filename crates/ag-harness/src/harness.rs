@@ -34,6 +34,7 @@ pub struct Session {
     harness: Harness,
     history: SessionHistory,
     id: String,
+    provider_context: Option<String>,
     provider_session_id: Option<String>,
     schema: OutputSchema,
     system_prompt: Option<String>,
@@ -116,6 +117,7 @@ impl Session {
             harness: self.harness.snapshot(),
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
+            provider_context: self.provider_context.clone(),
             provider_session_id: None,
             schema: self.schema.clone(),
             system_prompt: self.system_prompt.clone(),
@@ -172,6 +174,7 @@ impl Session {
         );
         let AcquiredTurn {
             mut guard,
+            provider_context,
             provider_session_id,
             turns,
         } = tokio::select! {
@@ -180,6 +183,7 @@ impl Session {
             result = acquisition => result?,
         };
         self.history.replace(turns);
+        self.provider_context = provider_context;
         self.provider_session_id = provider_session_id;
         let mut messages = self.history.messages();
         if let Some(system_prompt) = &self.system_prompt {
@@ -187,6 +191,7 @@ impl Session {
         }
         let retained_messages = messages.len();
         let mut request = ModelRequest::with_history(messages, prompt, options.schema().clone());
+        request.set_provider_context(self.provider_context.clone());
         request.set_provider_session_id(self.provider_session_id.clone());
         let journal = guard.write_journal();
         let engine = self.harness.engine(options);
@@ -200,7 +205,7 @@ impl Session {
             }
             result = engine.run(request, turn_id, Some(journal)) => result,
         };
-        let (outcome, mut messages, provider_session_id) = match result {
+        let (outcome, mut messages, provider_context, provider_session_id) = match result {
             Ok(result) => result,
             Err(error) => {
                 self.provider_session_id = None;
@@ -219,13 +224,18 @@ impl Session {
         };
         let turn = messages.split_off(retained_messages);
         let persistence = guard
-            .complete(&turn[1..], provider_session_id.as_deref())
+            .complete(
+                &turn[1..],
+                provider_context.as_deref(),
+                provider_session_id.as_deref(),
+            )
             .await;
         if let Err(error) = persistence {
             guard.mark_interrupted();
 
             return Err(error);
         }
+        self.provider_context = provider_context;
         self.provider_session_id = provider_session_id;
         self.history.push(turn);
 
@@ -277,6 +287,7 @@ impl SessionBuilder {
             harness: self.harness,
             history,
             id: config.id().to_string(),
+            provider_context: None,
             provider_session_id: None,
             schema: config.schema().clone(),
             system_prompt: config.system_prompt().map(str::to_string),
@@ -505,7 +516,7 @@ impl Harness {
             }
         }
 
-        result.map(|(outcome, _, _)| outcome)
+        result.map(|(outcome, _, _, _)| outcome)
     }
 
     /// Prepares a storage-free turn with separately retained cancellation.
@@ -570,6 +581,7 @@ impl Harness {
             harness: self.snapshot(),
             history,
             id: id.to_string(),
+            provider_context: loaded.provider_context,
             provider_session_id: loaded.provider_session_id,
             schema: loaded.schema,
             system_prompt: loaded.system_prompt,

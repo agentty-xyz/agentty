@@ -118,10 +118,18 @@ impl SessionStore for GatedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
+        provider_context: Option<&str>,
         continuation: Option<&str>,
     ) -> Result<(), SessionError> {
         self.pause(PauseAt::Completion).await;
-        SessionStore::complete_turn(&self.database, owner, messages, continuation).await?;
+        SessionStore::complete_turn(
+            &self.database,
+            owner,
+            messages,
+            provider_context,
+            continuation,
+        )
+        .await?;
         self.pause(PauseAt::CompletionAcknowledgement).await;
 
         Ok(())
