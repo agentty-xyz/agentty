@@ -23,7 +23,7 @@ runs:
   using: composite
   steps:
     - name: Setup `uv`
-      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
       with:
         # This Rust workspace uses `uv` only to install `prek`, so there is no
         # Python dependency manifest that can safely invalidate the `uv` cache.
@@ -56,24 +56,24 @@ runs:
 
     - name: Install `cargo-llvm-cov`
       if: ${{ inputs['cargo-llvm-cov'] == 'true' }}
-      uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+      uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
       with:
         tool: cargo-llvm-cov
 
     - name: Install `cargo-audit`
       if: ${{ inputs['cargo-audit'] == 'true' }}
-      uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+      uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
       with:
         tool: cargo-audit
 
     - name: Install `cargo-machete`
       if: ${{ inputs['cargo-machete'] == 'true' }}
-      uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+      uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
       with:
         tool: cargo-machete
 
     - name: Install `cargo-nextest`
-      uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+      uses: taiki-e/install-action@fa23953489c080190314742a9b907f8e97c6767c # v2.87.10
       with:
         tool: nextest
 
