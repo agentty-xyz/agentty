@@ -112,6 +112,17 @@ class ValidationHookTests(unittest.TestCase):
         )
         return generation
 
+    def test_prompt_evaluation_is_explicit_and_runs_only_live_cases(self):
+        result = self.run_hook("prompt-evaluation")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        call, = self.calls()
+        self.assertEqual(call["args"], [
+            "test", "--locked", "-p", "agentty", "--test", "prompt_evaluation",
+            "live_prompt_evaluation", "--", "--ignored", "--exact", "--nocapture",
+        ])
+        self.assertEqual(HOOKS["prompt-evaluation"]["stages"], ["manual"])
+
     def test_coverage_generates_once_before_checking_all_thresholds(self):
         (self.directory / "coverage.lcov").write_text("stale report")
 

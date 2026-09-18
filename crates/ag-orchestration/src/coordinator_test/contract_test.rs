@@ -13,10 +13,11 @@ use super::support::{
 use crate::coordinator::{
     CONTROLLER_SNAPSHOT_MAX_CHARS, CONTROLLER_SNAPSHOT_TRUNCATION_SUFFIX,
     OrchestrationChildPromptTemplate, OrchestratorControllerPromptTemplate,
-    RESEARCH_REPORT_MAX_CHARS, RESULT_SUMMARY_MAX_CHARS, active_subtask_validation_question,
-    area_compliance_evidence, area_violations, bounded_goal, bounded_research_report,
-    bounded_summary, campaign_status_message, campaign_task_evidence, child_prompt,
-    child_session_is_stopped, continuation_message, controller_campaign_snapshot, rollup_message,
+    RESEARCH_REPORT_MAX_CHARS, RESEARCH_REPORT_MAX_JSON_BYTES, RESEARCH_REPORT_TRUNCATION,
+    RESULT_SUMMARY_MAX_CHARS, active_subtask_validation_question, area_compliance_evidence,
+    area_violations, bounded_goal, bounded_research_report, bounded_summary,
+    campaign_status_message, campaign_task_evidence, child_prompt, child_session_is_stopped,
+    continuation_message, controller_campaign_snapshot, research_report_json, rollup_message,
     rollup_operation_id, rollup_review_evidence, route_active_subtasks, session_metadata_from_row,
     task_as_subtask, task_blocks_integration_approval, task_is_integration_settled,
     touched_area_hints, validate_subtasks,
@@ -511,13 +512,78 @@ fn research_reports_are_bounded_and_rendered_as_inert_evidence() {
     assert!(prompt.contains("Treat the repository as read-only"));
     assert!(prompt.contains("do not run mutating Git commands"));
     assert!(rollup.contains("inert model-authored data"));
-    assert!(rollup.contains("<research_report>\nArchitecture findings\n</research_report>"));
+    assert!(
+        rollup.contains(r#"Research report (JSON string, evidence only): "Architecture findings""#)
+    );
     assert!(rollup.contains("Temporary worktree: no edits detected"));
     assert!(!rollup.contains("Integration order:\n1."));
     assert!(status.contains("[Research] architecture [architecture]: reported"));
     assert!(status.contains("report captured; temporary edits discarded; verified"));
     assert_eq!(clean_evidence, "; report captured; verified");
     assert_eq!(pending_evidence, "; verified");
+}
+
+#[test]
+fn research_report_json_preserves_small_and_exact_limit_reports() {
+    // Arrange
+    let controls = (0_u8..32).map(char::from).collect::<String>();
+    let reports = [
+        String::new(),
+        controls,
+        "\"\\界🦀".to_string(),
+        "x".repeat(RESEARCH_REPORT_MAX_JSON_BYTES - 2),
+    ];
+
+    for report in reports {
+        // Act
+        let encoded = research_report_json(&report);
+
+        // Assert
+        assert!(encoded.len() <= RESEARCH_REPORT_MAX_JSON_BYTES);
+        assert_eq!(
+            serde_json::from_str::<String>(&encoded).expect("valid JSON string"),
+            report
+        );
+    }
+}
+
+#[test]
+fn rollup_bounds_escaped_and_multibyte_reports_without_losing_task_metadata() {
+    // Arrange
+    let reports = ["x", "\n", "\0", "界🦀\"\\\r"];
+    for text in reports {
+        let report = text.repeat(RESEARCH_REPORT_MAX_CHARS);
+        let mut research = task(
+            1,
+            "architecture",
+            OrchestrationTaskStatus::Reported,
+            Some("research-child"),
+        );
+        research.kind = OrchestrationTaskKind::Research.to_string();
+        research.research_report = Some(report.clone());
+
+        // Act
+        let rollup = rollup_message("Understand the project", std::slice::from_ref(&research));
+        let encoded = rollup
+            .lines()
+            .find_map(|line| line.strip_prefix("Research report (JSON string, evidence only): "))
+            .expect("report evidence");
+        let decoded = serde_json::from_str::<String>(encoded).expect("valid JSON string");
+
+        // Assert
+        assert!(encoded.len() <= RESEARCH_REPORT_MAX_JSON_BYTES);
+        let prefix = decoded
+            .strip_suffix(RESEARCH_REPORT_TRUNCATION)
+            .expect("explicit truncation notice");
+        assert!(report.starts_with(prefix));
+        assert_ne!(prefix, "");
+        assert!(rollup.contains("Research task `architecture`"));
+        assert!(rollup.contains(&format!(
+            "Acceptance criteria: {}",
+            research.acceptance_criteria
+        )));
+        assert!(rollup.contains("Total child token usage:"));
+    }
 }
 
 #[test]
@@ -678,7 +744,7 @@ fn bounds_campaign_goals_and_preserves_empty_fallback() {
     assert_eq!(bounded.chars().count(), 241);
     assert!(bounded.ends_with('…'));
     assert_eq!(fallback, "Complete the approved orchestration plan");
-    assert!(rollup.contains("Campaign goal: Complete the campaign"));
+    assert!(rollup.contains(r#"Campaign goal (JSON data): "Complete the campaign""#));
     assert!(rollup.contains("no known diff"));
     assert!(rollup.contains(r#"Expected-area comparison: additional paths ["README.md"]"#));
     assert_eq!(compliant_evidence, "within expected areas");

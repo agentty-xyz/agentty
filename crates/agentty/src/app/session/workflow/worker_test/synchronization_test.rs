@@ -401,10 +401,7 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
 
     // Assert
     assert_eq!(provider_conversation_id.as_deref(), Some("thread-after"));
-    assert_eq!(
-        instruction_conversation_id,
-        ag_contracts::normalize_instruction_conversation_id(Some("thread-after"))
-    );
+    assert_eq!(instruction_conversation_id, None);
     assert_eq!(final_status, Status::Review);
     assert!(output_text.contains("[Sync Assist] Attempt 1/3. Resolving conflicts in:"));
     assert!(output_text.contains("- src/lib.rs"));

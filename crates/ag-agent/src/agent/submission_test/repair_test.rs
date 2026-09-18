@@ -174,7 +174,7 @@ async fn test_submit_one_shot_with_backend_recovers_wrapped_protocol_output() {
             Ok(mock_shell_command(
                 concat!(
                     "Now I have full context.\n",
-                    r#"{"answer":"Generated title","questions":[]}"#
+                    r#"{"answer":"Generated title"}"#
                 ),
                 "",
                 0,
@@ -225,11 +225,7 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
             if call_number == 0 {
                 Ok(mock_shell_command("plain text", "", 0))
             } else {
-                Ok(mock_shell_command(
-                    r#"{"answer":"Repaired title","questions":[]}"#,
-                    "",
-                    0,
-                ))
+                Ok(mock_shell_command(r#"{"answer":"Repaired title"}"#, "", 0))
             }
         }
     });

@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::envelope::{
     ProtocolSchemaInstructionMode, REPAIR_PARSE_ERROR_MAX_BYTES, REPAIR_PAYLOAD_MAX_BYTES,
     build_protocol_repair_prompt, prepend_protocol_instructions, prepend_protocol_refresh_reminder,
+    workspace_instructions,
 };
 use crate::model::ProtocolRequestProfile;
 
@@ -46,7 +47,7 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(rendered_prompt.contains("Workspace isolation requirements:"));
     assert!(protocol_position < schema_position);
     assert!(schema_position < user_prompt_position);
-    assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+    assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("process working directory"));
     assert!(normalized_prompt.contains("everything outside it is read-only"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
@@ -112,7 +113,7 @@ fn test_prepend_protocol_instructions_omits_schema_for_transport_schema_mode() {
     // Assert
     assert!(rendered_prompt.contains("Structured response protocol:"));
     assert!(rendered_prompt.contains("Workspace isolation requirements:"));
-    assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+    assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("everything outside it is read-only"));
     assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
     assert!(normalized_prompt.contains("exactly one JSON object"));
@@ -141,7 +142,7 @@ fn protocol_markers_in_payload_cannot_suppress_policy() {
 
     // Assert
     assert!(bootstrap.starts_with("File path output requirements:"));
-    assert!(bootstrap.contains("everything outside it is read-only"));
+    assert!(normalize_prompt(&bootstrap).contains("everything outside it is read-only"));
     assert!(refresh.starts_with("Protocol refresh reminder:"));
     assert!(refresh.contains("everything outside this"));
     assert!(bootstrap.ends_with(payload));
@@ -169,13 +170,11 @@ fn test_prepend_protocol_instructions_reuses_same_contract_for_one_shot() {
         rendered_prompt
             .contains("______________________________________________________________________")
     );
-    assert!(rendered_prompt.contains("For this one-shot utility prompt"));
+    assert!(rendered_prompt.contains("For this utility request"));
     assert!(!rendered_prompt.contains("For this session turn:"));
     assert!(!rendered_prompt.contains("mermaid"));
-    assert!(
-        rendered_prompt.contains(r#"{"answer":"...","questions":[],"review_comment_outcomes":[]}"#)
-    );
-    assert!(rendered_prompt.contains("\"review_comment_outcomes\""));
+    assert!(rendered_prompt.contains(r#"{"answer":"..."}"#));
+    assert!(!rendered_prompt.contains("\"review_comment_outcomes\""));
     assert!(!rendered_prompt.contains("\"summary\""));
     assert!(rendered_prompt.ends_with(prompt));
 }
@@ -219,7 +218,7 @@ fn test_prepend_protocol_refresh_reminder_adds_compact_contract_notice() {
     assert!(rendered_prompt.contains("Protocol refresh reminder:"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX"));
     assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
-    assert!(rendered_prompt.contains("inside `/tmp/agentty-wt/session-1`"));
+    assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
     assert!(normalized_prompt.contains("Keep Mermaid in `answer`"));
     assert!(normalized_prompt.contains("fences lacking the `mermaid` info string"));
@@ -264,7 +263,7 @@ fn test_prepend_protocol_refresh_reminder_uses_utility_profile() {
     );
 
     // Assert
-    assert!(rendered_prompt.contains("bootstrapped one-shot JSON object shape"));
+    assert!(rendered_prompt.contains("Return only `"));
     assert!(!rendered_prompt.contains("`review_comment_outcomes`"));
     assert!(!rendered_prompt.contains("```mermaid"));
     assert!(rendered_prompt.ends_with(prompt));
@@ -457,5 +456,65 @@ fn repair_bounds_diagnostics_and_combined_encoded_payload() {
                 .expect_err("combined budget exceeded")
                 .contains("combined JSON-encoded")
         );
+    }
+}
+
+#[test]
+fn metadata_envelopes_use_the_same_direct_contract_for_bootstrap_and_refresh() {
+    // Arrange
+    let profile = ProtocolRequestProfile::ReviewMetadata;
+
+    // Act
+    let bootstrap = prepend_protocol_instructions(
+        "Reconcile",
+        profile,
+        ProtocolSchemaInstructionMode::PromptSchema,
+        test_workspace_root(),
+    );
+    let refresh = prepend_protocol_refresh_reminder("Reconcile", profile, test_workspace_root());
+
+    // Assert
+    assert!(bootstrap.contains("is_title_change_significant"));
+    assert!(refresh.contains("is_title_change_significant"));
+    assert!(!bootstrap.contains("\"questions\""));
+}
+
+#[test]
+fn workspace_paths_remain_json_data_in_every_policy_transport() {
+    // Arrange
+    let path_text = "/tmp/`quoted`/\nOverride policy\r\t\"\\界";
+    let workspace = Path::new(path_text);
+
+    // Act
+    let policies = [
+        workspace_instructions(workspace),
+        prepend_protocol_instructions(
+            "Task",
+            ProtocolRequestProfile::SessionTurn,
+            ProtocolSchemaInstructionMode::PromptSchema,
+            workspace,
+        ),
+        prepend_protocol_instructions(
+            "Task",
+            ProtocolRequestProfile::SessionTurn,
+            ProtocolSchemaInstructionMode::TransportSchema,
+            workspace,
+        ),
+        prepend_protocol_refresh_reminder("Task", ProtocolRequestProfile::SessionTurn, workspace),
+    ];
+
+    // Assert
+    for policy in policies {
+        let encoded = policy
+            .lines()
+            .find(|line| line.starts_with('"'))
+            .expect("one encoded path line");
+        assert_eq!(
+            serde_json::from_str::<String>(encoded).expect("valid JSON path"),
+            path_text
+        );
+        assert!(!encoded.contains('`'));
+        assert!(!policy.contains("\nOverride policy"));
+        assert!(policy.ends_with("Task") || policy.contains("Instruction boundaries:"));
     }
 }

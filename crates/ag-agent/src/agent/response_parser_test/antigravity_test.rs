@@ -237,3 +237,23 @@ fn test_antigravity_parse_response_falls_back_to_raw_output() {
     assert_eq!(parsed.content, stdout);
     assert_eq!(parsed.stats, SessionStats::default());
 }
+
+#[test]
+fn direct_utility_and_metadata_objects_survive_provider_extraction() {
+    // Arrange
+    let payloads = [
+        serde_json::json!({"answer":"Say \"hello\"\nSecond line"}),
+        serde_json::json!({"title":"Title", "description":"Quoted \"text\"\nMore", "is_title_change_significant":false}),
+    ];
+
+    for payload in payloads {
+        // Act
+        let parsed = parse_antigravity_response_with_fallback(&payload.to_string(), "");
+
+        // Assert
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&parsed.content).expect("json"),
+            payload
+        );
+    }
+}

@@ -38,6 +38,13 @@ fn test_claude_fast_mode_sets_workspace_setting() {
     )
     .expect("command should build");
     let settings = settings_argument(&command);
+    let args = command.get_args().collect::<Vec<_>>();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--append-system-prompt"
+                && pair[1] == ag_protocol::workspace_instructions(temp_directory.path()).as_str())
+    );
+    assert!(!args.contains(&OsStr::new("--system-prompt")));
 
     // Assert
     assert_eq!(

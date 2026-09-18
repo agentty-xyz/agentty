@@ -61,7 +61,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
                 })
                 && input.body.as_ref().is_some_and(|body| {
                     body.current == "Tracks #42: https://example.com/issues/42"
-                        && body.desired == "Tracks #42: https://example.com/issues/42\n\nNew body."
+                        && body.desired == format!("{}\n\nNew body.", body.current)
                 })
         })
         .returning(|_, _, _| {

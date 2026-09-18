@@ -67,10 +67,10 @@ prompt=$(cat)
 case "$prompt" in
   *"Generate a concise, commit-style title"*)
     case "$prompt" in
-      *'\<latest_request> Improve session title generation. \</latest_request>'*)
+      *'Latest request (JSON string): "Improve session title generation."'*)
         answer=''
         ;;
-      *'\<original_request> Improve session title generation. \</original_request>'*'\<latest_request> Also reject punctuation-only copies. \</latest_request>'*)
+      *'Original request (JSON string): "Improve session title generation."'*'Latest request (JSON string): "Also reject punctuation-only copies."'*)
         answer='Stabilize session title generation'
         ;;
       *)
@@ -89,7 +89,7 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[]}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"{\\"answer\\":\\"%s\\"}","usage":{"input_tokens":5,"output_tokens":9}}\n' "$answer"
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -312,7 +312,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"tool_use","name":"StructuredOutput","input":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}}}}]}}}}'
-printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}","questions":[]}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'
+printf '%s\n' '{{"type":"result","subtype":"success","result":"","structured_output":{{"answer":"{CLAUDE_STRUCTURED_RESPONSE_TEXT}"}},"usage":{{"input_tokens":8,"output_tokens":6}}}}'
 "#
     );
     std::fs::write(&claude_path, script)?;

@@ -467,11 +467,12 @@ appear as transient status rows rather than persisted transcript messages.
 Large changes are summarized in bounded chunks before generating the commit message. If
 diff preparation exceeds the agent’s input or reduction limit, Agentty retries using
 only the changed file list, your chat history, and the existing session commit message,
-without the diff. The existing message keeps earlier work represented. This preserves
-the complete worktree and the single evolving commit. If that fallback also exceeds its
-limit, auto-commit stops without invoking code-repair assistance. Empty or oversized
-summaries get a bounded repair attempt before their source fragments are split again.
-Small fragments are kept verbatim.
+without the diff. The existing message keeps earlier work represented; oversized
+messages are reduced as commit continuity, preserving their subject, changes, and
+rationale. This preserves the complete worktree and the single evolving commit. If that
+fallback also exceeds its limit, auto-commit stops without invoking code-repair
+assistance. Empty or oversized summaries get a bounded repair attempt before their
+source fragments are split again. Small fragments are kept verbatim.
 
 Focused review checks original diff batches, cross-file interactions, and then
 consolidates supported findings. Large candidate sets are reconciled in groups without
@@ -748,14 +749,15 @@ can retry without reporting a false terminal cancellation.
   documentation, and review fixes keep it stable.
 - Description updates retain the intent of user-added content, including issue links,
   other URLs, checklists, instructions, and context, while incorporating session details
-  that changed. A proposed description that omits a substantive current line is
-  rejected, leaving the remote description unchanged. Agentty stores no metadata
-  baseline. It checks the remote fields again immediately before editing and skips a
-  field if somebody changed it during reconciliation. This check is best-effort because
-  forge metadata updates have no atomic version precondition; an edit made after the
-  final check can still race with Agentty's update. Failed background pushes or metadata
-  evaluation keep the manual `p` flow available for retry and surface the existing
-  review-request sync warning.
+  that changed. The entire existing remote description is preserved, including marked
+  sections and older generated text. Agentty cannot establish authorship from remote
+  markers, so it does not automatically remove obsolete description text. Updates that
+  omit substantive existing content are rejected. Agentty checks the remote fields again
+  immediately before editing and skips a field if somebody changed it during
+  reconciliation. This check is best-effort because forge metadata updates have no
+  atomic version precondition; an edit made after the final check can still race with
+  Agentty's update. Failed background pushes or metadata evaluation keep the manual `p`
+  flow available for retry and surface the existing review-request sync warning.
 - In Diff mode's Comments section, press `Space` to select actionable inline threads,
   then press `Enter` to submit them in one agent turn. The agent evaluates each comment,
   makes a worktree change when needed, and posts a very short explanation of what was
@@ -979,10 +981,11 @@ managed read-only research sessions, and the isolated title prompt is itself rea
 Title generation uses the persisted original request, current title, and latest request
 as one stable context snapshot. The original request anchors the overall goal; later
 requests can establish a goal after context-only text or clarify the existing goal, but
-a narrow follow-up or clarification answer does not replace broader session intent. Each
-context field is shortened at a valid text boundary when necessary, so unusually large
-sessions retain every context category without exceeding a model's prompt transport
-limit. Draft sessions regenerate the title as more drafts are staged.
+a narrow follow-up or clarification answer does not replace broader session intent. An
+explicit cancellation or replacement does change the goal. Each context field is
+shortened at a valid text boundary when necessary, so unusually large sessions retain
+every context category without exceeding a model's prompt transport limit. Draft
+sessions regenerate the title as more drafts are staged.
 
 Provider failures are logged and retried once. If both attempts fail, or the model finds
 no actionable goal, Agentty keeps the provisional title so a later substantive request

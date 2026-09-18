@@ -3,7 +3,10 @@
 
 use serde_json::Value;
 
-use super::model::{AgentResponse, questions_field_description, subtasks_field_description};
+use super::model::{
+    AgentResponse, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
+    questions_field_description, subtasks_field_description,
+};
 use super::review::FocusedReview;
 
 /// Selects how a provider transport lists `required` schema properties.
@@ -82,20 +85,29 @@ pub fn protocol_output_schema(
     profile: super::model::ProtocolRequestProfile,
     required_policy: SchemaRequiredPolicy,
 ) -> Value {
-    if matches!(profile, super::model::ProtocolRequestProfile::FocusedReview) {
-        return focused_review_output_schema();
-    }
+    let mut schema = protocol_schema(profile);
+    normalize_schema_for_transport(&mut schema, required_policy);
 
-    agent_response_output_schema(required_policy)
+    schema
 }
 
 /// Returns the prompt-facing schema selected for one protocol request profile.
-pub(crate) fn protocol_json_schema_json(profile: super::model::ProtocolRequestProfile) -> String {
-    if matches!(profile, super::model::ProtocolRequestProfile::FocusedReview) {
-        return focused_review_json_schema_json();
-    }
+pub(crate) fn protocol_json_schema_json(profile: ProtocolRequestProfile) -> String {
+    stringify_schema_json(&protocol_schema(profile))
+}
 
-    agent_response_json_schema_json()
+/// Selects a task-specific schema before provider normalization.
+fn protocol_schema(profile: ProtocolRequestProfile) -> Value {
+    match profile {
+        ProtocolRequestProfile::FocusedReview => focused_review_json_schema(),
+        ProtocolRequestProfile::SessionTurn => agent_response_json_schema(),
+        ProtocolRequestProfile::UtilityPrompt => {
+            serde_json::json!(schemars::schema_for!(UtilityResponse))
+        }
+        ProtocolRequestProfile::ReviewMetadata => {
+            serde_json::json!(schemars::schema_for!(ReviewMetadata))
+        }
+    }
 }
 
 /// Returns the self-descriptive focused-review JSON Schema.

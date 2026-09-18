@@ -25,7 +25,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 input=$(cat)
 case "$input" in
   *"Generate a concise, commit-style title"*)
-    result='{\"answer\":\"Coordinate parallel work\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[]}'
+    result='{\"answer\":\"Coordinate parallel work\"}'
     ;;
   *"The user or coordinator message follows:"*"Implement the protocol review suggestions"*)
     result='{\"answer\":\"I will continue the protocol worker with the review findings.\",\"questions\":[],\"review_comment_outcomes\":[],\"subtasks\":[{\"task_key\":\"protocol\",\"title\":\"Protocol worker\",\"prompt\":\"Implement the protocol findings on the same worker branch.\",\"touched_areas\":[\"crates/ag-protocol/\"],\"acceptance_criteria\":[\"Protocol review findings are implemented and checked\"]}]}'

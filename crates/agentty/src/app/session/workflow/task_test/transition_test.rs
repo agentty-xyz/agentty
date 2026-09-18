@@ -289,6 +289,16 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
         assert!(request.prompt.len() <= 60_000);
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
         if request.prompt.starts_with("Summarize") {
+            if request.prompt.contains("previous message") {
+                assert!(request.prompt.contains("commit-message continuity"));
+                assert!(request.prompt.contains("Preserve the\nsubject"));
+                assert!(!request.prompt.contains("Produce a compact checkpoint"));
+                return Ok(one_shot_submission(
+                    "Earlier commit subject and changes",
+                    0,
+                    0,
+                ));
+            }
             return Ok(one_shot_submission(
                 "Preserve changes to all affected files",
                 0,
@@ -296,6 +306,11 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
             ));
         }
         assert!(request.prompt.contains("Summarized input"));
+        assert!(
+            request
+                .prompt
+                .contains("Earlier commit subject and changes")
+        );
         Ok(one_shot_submission("Handle large changes", 0, 0))
     });
 
@@ -308,7 +323,7 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
             crate::domain::agent::SpeedMode::Normal,
         ),
         &"+change\n".repeat(160_000),
-        Some(&"previous message\n".repeat(10_000)),
+        (Some(&"previous message\n".repeat(10_000)), "{}"),
         &client,
         true,
         false,
@@ -403,7 +418,7 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
             crate::domain::agent::SpeedMode::Normal,
         ),
         "diff --git a/a.rs b/a.rs",
-        None,
+        (None, "{}"),
         &run_client,
         false,
         false,
@@ -447,7 +462,10 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
             crate::domain::agent::SpeedMode::Fast,
         ),
         "diff --git a/a.rs b/a.rs",
-        Some("Keep session commit accurate\n\n- Preserve existing behavior"),
+        (
+            Some("Keep session commit accurate\n\n- Preserve existing behavior"),
+            "{}",
+        ),
         &run_client,
         false,
         false,
@@ -553,7 +571,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
             .withf(|request| request.prompt.contains("DIFF_ONLY_SECRET"))
             .returning(move |request| {
                 if oversized_diff {
-                    assert!(request.prompt.contains("Summarize this fragment"));
+                    assert!(request.prompt.contains("Summarize the supplied fragment"));
                     request
                         .provider_call_budget
                         .expect("shared budget")
@@ -732,7 +750,11 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(move |request| {
-            assert!(request.prompt.contains(previous_message));
+            assert!(
+                request
+                    .prompt
+                    .contains(&serde_json::json!(previous_message).to_string())
+            );
             assert!(request.prompt.contains("Preserve previously documented"));
             assert!(request.prompt.contains("src/new.rs"));
             assert!(request.prompt.contains("Implemented commit fallback"));

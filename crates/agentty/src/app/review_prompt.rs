@@ -46,7 +46,8 @@ pub(super) async fn submit(
         if context.len() > 7_500 {
             progress(ReviewProgress::SummarizingHistory);
         }
-        context = diff_prompt::summarize(client, &request, &context, 7_500, &budget).await?;
+        context =
+            diff_prompt::summarize_context(client, &request, &context, 7_500, &budget).await?;
     }
     let (mut review, completed, mut coverage) = review_batches(
         client,
@@ -284,7 +285,7 @@ async fn review_fragment(
             && request.prompt.len() <= PROMPT_BUDGET
             && context.len() > MIN_CHUNK_BYTES
         {
-            *context = diff_prompt::summarize(
+            *context = diff_prompt::summarize_context(
                 client,
                 &request,
                 context,
@@ -371,7 +372,7 @@ async fn cross_file_review(
             return result;
         }
         target = (target / 2).max(MIN_CHUNK_BYTES);
-        *context = diff_prompt::summarize(client, request, context, target, budget).await?;
+        *context = diff_prompt::summarize_context(client, request, context, target, budget).await?;
     }
 }
 
@@ -417,7 +418,7 @@ async fn reduce_review(
                             budget,
                         )
                         .await?;
-                        *context = diff_prompt::summarize(
+                        *context = diff_prompt::summarize_context(
                             client,
                             request,
                             context,

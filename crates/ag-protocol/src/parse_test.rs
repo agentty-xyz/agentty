@@ -414,3 +414,76 @@ fn test_format_protocol_parse_debug_details_reports_unrecognized_json_keys() {
          verification_verdicts"
     ));
 }
+
+#[test]
+fn utility_profiles_validate_direct_wire_objects_before_normalizing() {
+    // Arrange
+    let metadata = serde_json::json!({"title":"Keep \"quotes\"", "description":"First line\nSecond line", "is_title_change_significant":false});
+    let inputs = [
+        (
+            crate::ProtocolRequestProfile::UtilityPrompt,
+            r#"{"answer":"First line\nSay \"hello\""}"#.to_string(),
+        ),
+        (
+            crate::ProtocolRequestProfile::ReviewMetadata,
+            metadata.to_string(),
+        ),
+    ];
+
+    for (profile, wire) in inputs {
+        // Act
+        let response =
+            crate::parse_protocol_response_strict(&wire, profile).expect("valid direct object");
+
+        // Assert
+        assert_eq!(response.questions.len(), 0);
+        assert_eq!(response.subtasks.len(), 0);
+        assert_ne!(response.answer, "");
+        assert!(crate::parse_protocol_response_strict("", profile).is_err());
+        assert!(crate::parse_protocol_response_strict("{}", profile).is_err());
+        assert!(
+            crate::parse_protocol_response_strict(r#"{"answer":"x","questions":[]}"#, profile)
+                .is_err()
+        );
+    }
+    let response = crate::parse_protocol_response_strict(
+        &metadata.to_string(),
+        crate::ProtocolRequestProfile::ReviewMetadata,
+    )
+    .expect("metadata");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response.answer).expect("json"),
+        metadata
+    );
+}
+
+#[test]
+fn utility_wrapper_recovery_still_rejects_unexpected_fields() {
+    // Arrange
+    let payload = r#"{"answer":"Done"}"#;
+    let wrappers = [
+        payload.to_string(),
+        format!("```json\n{payload}\n```"),
+        format!("Commentary\n{payload}"),
+        format!("Commentary\n```json\n{payload}\n```"),
+    ];
+
+    for raw in wrappers {
+        // Act
+        let response = crate::parse_protocol_response_strict(
+            &raw,
+            crate::ProtocolRequestProfile::UtilityPrompt,
+        )
+        .expect("recover valid utility");
+
+        // Assert
+        assert_eq!(response.answer, "Done");
+    }
+    assert!(
+        crate::parse_protocol_response_strict(
+            r#"{"answer":"Done","subtasks":[]}"#,
+            crate::ProtocolRequestProfile::UtilityPrompt
+        )
+        .is_err()
+    );
+}

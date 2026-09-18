@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ag_contracts::{AgentRequestKind, LiveTranscript, ReasoningLevel};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
-use crate::agent::InstructionDeliveryMode;
+use crate::agent::{InstructionDeliveryMode, instruction_bootstrap_key};
 use crate::app_server::contract::AppServerTurnRequest;
 use crate::app_server::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_replay_transcript, turn_prompt_for_runtime,
@@ -35,7 +35,7 @@ fn live_transcript(text: &str) -> Arc<dyn LiveTranscript> {
 fn persisted_instruction_conversation_id_for_session_turn(
     provider_conversation_id: Option<&str>,
 ) -> Option<String> {
-    ag_contracts::normalize_instruction_conversation_id(provider_conversation_id)
+    instruction_bootstrap_key(provider_conversation_id)
 }
 
 #[test]

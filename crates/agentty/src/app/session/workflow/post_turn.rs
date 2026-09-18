@@ -209,6 +209,10 @@ impl TurnPersistence<'_> {
         };
         let instruction_conversation_id =
             if ag_worker::uses_persistent_session(self.session_agent.kind()) {
+                // The worker contract exposes a conversation ID, not the
+                // adapter's policy fingerprint. Persist only
+                // that ID; the adapter treats it as unversioned
+                // and safely sends the full bootstrap again.
                 ag_contracts::normalize_instruction_conversation_id(provider_conversation_id)
             } else {
                 None

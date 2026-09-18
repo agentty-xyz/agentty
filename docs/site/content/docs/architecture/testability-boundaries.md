@@ -263,3 +263,13 @@ Production-composition tests verify that the worker uses isolated pooled runtime
 submissions and closes retained runtimes after draining calls. Provider-size regressions
 exercise adaptive cross-file prompts and whole-finding consolidation through
 `RunClient`; PTY coverage verifies that retrying a partial review skips completed work.
+
+## Prompt Behavior
+
+Protocol tests cover task-specific schemas, native policy delivery, instruction-key
+invalidation, evidence encoding, and preservation of remote descriptions. Behavioral
+fixtures additionally run through `RunWorker` and the real runtime with an injected
+provider boundary. Opt-in repeated live evaluations use the same execution path and
+record raw responses, settings, tokens, latency, and bounded rule-based grades. These
+grades are regression signals, not a general correctness proof; unavailable telemetry is
+recorded as unknown. See `skills/development/references/prompts.md` for the recipe.

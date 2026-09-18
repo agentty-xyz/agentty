@@ -151,6 +151,7 @@ fn bootstrap_response_timeout(
     if matches!(
         request_kind,
         ag_contracts::AgentRequestKind::FocusedReview
+            | ag_contracts::AgentRequestKind::ReviewMetadata
             | ag_contracts::AgentRequestKind::UtilityPrompt
     ) {
         app_server_transport::TURN_TIMEOUT

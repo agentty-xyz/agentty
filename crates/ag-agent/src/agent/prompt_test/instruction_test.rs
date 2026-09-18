@@ -81,7 +81,7 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(rendered_prompt.contains("Workspace isolation requirements:"));
     assert!(protocol_position < schema_position);
     assert!(schema_position < user_prompt_position);
-    assert!(rendered_prompt.contains("`/tmp/agentty-wt/session-1`"));
+    assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("everything outside it is read-only"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
     assert!(normalized_prompt.contains("Git commands must be read-only"));
@@ -172,12 +172,10 @@ fn test_prepend_protocol_instructions_reuses_same_contract_for_one_shot() {
         rendered_prompt
             .contains("______________________________________________________________________")
     );
-    assert!(rendered_prompt.contains("For this one-shot utility prompt"));
+    assert!(rendered_prompt.contains("For this utility request"));
     assert!(!rendered_prompt.contains("For this session turn:"));
-    assert!(
-        rendered_prompt.contains(r#"{"answer":"...","questions":[],"review_comment_outcomes":[]}"#)
-    );
-    assert!(rendered_prompt.contains("\"review_comment_outcomes\""));
+    assert!(rendered_prompt.contains(r#"{"answer":"..."}"#));
+    assert!(!rendered_prompt.contains("\"review_comment_outcomes\""));
     assert!(!rendered_prompt.contains("\"summary\""));
     assert!(rendered_prompt.ends_with(prompt));
 }
@@ -205,8 +203,8 @@ fn test_prepare_prompt_text_applies_replay_and_protocol_instructions() {
     assert!(prepared_prompt.contains("Structured response protocol:"));
     assert!(prepared_prompt.contains("Workspace isolation requirements:"));
     assert!(prepared_prompt.contains("previous transcript"));
-    assert!(prepared_prompt.contains(r"\<user_prompt> Continue edits \</user_prompt>"));
-    assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
+    assert!(prepared_prompt.contains("User prompt:\n\nContinue edits"));
+    assert!(prepared_prompt.contains("User prompt:"));
 }
 
 #[test]
@@ -229,7 +227,7 @@ fn test_prepare_prompt_text_bootstraps_personality_before_user_prompt() {
         .find("Structured response protocol:")
         .expect("protocol preamble should be present");
     let personality_position = prepared_prompt
-        .find("# Personality\n\nReview every change for correctness.")
+        .find("Review every change for correctness.")
         .expect("personality should be present");
     let user_prompt_position = prepared_prompt
         .find("Inspect the patch.")
@@ -257,15 +255,15 @@ fn test_prepare_prompt_text_replays_with_current_personality() {
     // Act
     let prepared_prompt = prepare_prompt_text(request).expect("prompt should render");
     let personality_position = prepared_prompt
-        .find("# Personality\n\nPlan before editing.")
+        .find("Plan before editing.")
         .expect("personality should be present");
     let transcript_position = prepared_prompt
-        .find(r"\<session_transcript> assistant: prior work")
+        .find(r#""assistant: prior work""#)
         .expect("transcript should be present");
 
     // Assert
     assert!(personality_position < transcript_position);
-    assert!(prepared_prompt.ends_with(r"\</user_prompt>"));
+    assert!(prepared_prompt.contains("User prompt:"));
 }
 
 #[test]
@@ -288,7 +286,7 @@ fn test_prepend_protocol_refresh_reminder_adds_compact_contract_notice() {
     assert!(rendered_prompt.contains("Protocol refresh reminder:"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX"));
     assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
-    assert!(rendered_prompt.contains("inside `/tmp/agentty-wt/session-1`"));
+    assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
     assert!(
         rendered_prompt
@@ -347,7 +345,7 @@ fn test_prepare_prompt_text_delta_mode_sends_personality_update_and_clear() {
     let cleared_prompt = prepare_prompt_text(cleared).expect("clear should render");
 
     // Assert
-    assert!(updated_prompt.contains("# Personality Update\n\nBe concise."));
+    assert!(updated_prompt.contains("Be concise."));
     assert!(updated_prompt.ends_with("Continue edits"));
     assert!(cleared_prompt.contains("The session personality has been cleared."));
     assert!(cleared_prompt.ends_with("Continue edits"));

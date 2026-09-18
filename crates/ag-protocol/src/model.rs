@@ -12,19 +12,40 @@ use super::verification::VerificationVerdictItem;
 /// Protocol-owned request family preserved across prompt submission and repair
 /// retries.
 ///
-/// Session discussion turns and ordinary utility prompts share the top-level
-/// [`AgentResponse`] schema. Focused reviews use their own direct structured
-/// response so transports can enforce the review fields instead of embedding
-/// JSON inside `AgentResponse::answer`.
+/// Session turns use [`AgentResponse`]. Isolated utilities, reviews, and
+/// metadata reconciliation have narrow wire schemas and normalize into
+/// `AgentResponse` only after request-specific validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProtocolRequestProfile {
     /// Isolated focused review with a direct structured review response.
     FocusedReview,
+    /// Direct review-request title and description reconciliation.
+    ReviewMetadata,
     /// Interactive session turn.
     SessionTurn,
     /// Isolated utility prompt.
     UtilityPrompt,
+}
+
+/// Minimal wire response for isolated text generation tasks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UtilityResponse {
+    /// Requested result, without commentary or session control fields.
+    pub answer: String,
+}
+
+/// Direct wire response for review-request metadata reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewMetadata {
+    /// Proposed description; user-owned content must be preserved.
+    pub description: String,
+    /// Whether a replaced primary objective makes the current title misleading.
+    pub is_title_change_significant: bool,
+    /// Proposed single-line title.
+    pub title: String,
 }
 
 /// Agent-reported disposition for one forge review thread.

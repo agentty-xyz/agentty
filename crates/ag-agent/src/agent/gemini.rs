@@ -21,6 +21,7 @@ impl AgentBackend for GeminiBackend {
             && !matches!(
                 request.request_kind,
                 ag_contracts::AgentRequestKind::FocusedReview
+                    | ag_contracts::AgentRequestKind::ReviewMetadata
                     | ag_contracts::AgentRequestKind::UtilityPrompt
             )
         {

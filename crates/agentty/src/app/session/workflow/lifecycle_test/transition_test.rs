@@ -190,13 +190,17 @@ fn session_id_for_index_returns_owned_id_or_none_for_out_of_range() {
 
 #[test]
 /// Ensures byte truncation never splits a multibyte UTF-8 character.
-fn test_truncate_session_title_context_preserves_utf8_boundaries() {
+fn test_encode_session_title_context_preserves_utf8_boundaries() {
     // Arrange
-    let max_bytes = SESSION_TITLE_CONTEXT_TRUNCATION_MARKER.len() + 2;
+    let max_bytes = serde_json::json!(SESSION_TITLE_CONTEXT_TRUNCATION_MARKER)
+        .to_string()
+        .len()
+        + 2;
     let value = "€".repeat(max_bytes);
 
     // Act
-    let truncated = SessionManager::truncate_session_title_context(&value, max_bytes);
+    let encoded = SessionManager::encode_session_title_context(&value, max_bytes);
+    let truncated: String = serde_json::from_str(&encoded).expect("valid JSON");
 
     // Assert
     assert_eq!(truncated, SESSION_TITLE_CONTEXT_TRUNCATION_MARKER);

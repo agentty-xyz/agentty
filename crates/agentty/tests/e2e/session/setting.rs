@@ -65,7 +65,7 @@ while IFS= read -r request; do
             request_id=$(extract_id "$request")
             printf '{"id":"%s","result":{"turn":{"id":"policy-turn"}}}\n' "$request_id"
             printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"policy-turn"}}}'
-            printf '{"method":"item/completed","params":{"threadId":"policy-thread","turnId":"policy-turn","item":{"type":"agentMessage","id":"policy-answer","text":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[],\\"subtasks\\":[],\\"verification_verdicts\\":[]}","phase":"final_answer"}}}\n' "$answer"
+            printf '{"method":"item/completed","params":{"threadId":"policy-thread","turnId":"policy-turn","item":{"type":"agentMessage","id":"policy-answer","text":"{\\"answer\\":\\"%s\\"}","phase":"final_answer"}}}\n' "$answer"
             printf '%s\n' '{"method":"turn/completed","params":{"threadId":"policy-thread","turn":{"id":"policy-turn","status":"completed","items":[]}}}'
             ;;
     esac

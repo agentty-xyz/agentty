@@ -83,6 +83,9 @@ impl AgentBackend for ClaudeBackend {
             permission_mode,
             speed_mode,
         );
+        command
+            .arg("--append-system-prompt")
+            .arg(ag_protocol::workspace_instructions(folder));
         command.arg("--input-format").arg("text");
         command.arg("--strict-mcp-config");
         command.arg("--verbose");

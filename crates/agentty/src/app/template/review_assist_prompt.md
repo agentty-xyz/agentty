@@ -32,16 +32,15 @@ Execution constraints (mandatory):
   follow-up turn; never ask the user to run it. Otherwise continue from the available
   evidence.
 
-Follow the field descriptions in this schema. Both arrays must be present; use an empty
-array when that section has no content.
-
-Authoritative focused-review JSON Schema:
-
-{{ focused_review_json_schema }}
+Follow the field descriptions in the response contract. Both arrays must be present; use
+an empty array when that section has no content.
 
 - Include only `high` and `medium` findings, with high severity for correctness,
   security, data-loss, or build-breaking risks, and medium severity for reliability,
   maintainability, performance, or workflow risks with concrete practical impact.
+- Each finding needs a concrete trigger, source evidence, practical impact, and an
+  actionable correction. An import absent from the diff but present in unchanged source
+  is not a missing-import finding. A clean review is valid; do not fill a quota.
 - Prioritize high severity. Exclude low-severity polish, optional changes, and style
   nits. Keep findings scoped to this diff.
 - Use the session chat history as decision context, not merely background. Treat

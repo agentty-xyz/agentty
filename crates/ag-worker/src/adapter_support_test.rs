@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 pub use ag_runtime::test_support::{
     AgentBackend, AgentBackendError, AppServerClient, AppServerError, AppServerTurnResponse,
-    MockAgentBackend, MockAppServerClient, RealOneShotClient,
+    MockAgentBackend, MockAppServerClient, RealOneShotClient, instruction_bootstrap_key,
 };
 use ag_session::AgentKind;
 

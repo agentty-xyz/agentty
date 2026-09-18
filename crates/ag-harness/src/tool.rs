@@ -11,7 +11,9 @@ const READ_DESCRIPTION: &str = concat!(
     "optional `offset`/`limit` for worktree text; `list` with optional `path`/`limit`; ",
     "`search` with `query` and optional `path`/`limit`; `diff` with optional `path` for ",
     "changes from the host-selected commit; or `show` with `path`, `side` (`base` or `head`), ",
-    "and optional `offset`/`limit`."
+    "and optional `offset`/`limit`. Search queries are literal strings, not regular expressions. ",
+    "File/show offsets are one-based line numbers and limits count lines. If truncated, ",
+    "continue file/show at next_offset; narrow list/search/diff when no continuation is supplied."
 );
 const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
@@ -95,13 +97,14 @@ impl ToolDefinition {
             definition.parameters["properties"]["action"]["enum"] =
                 json!(["file", "list", "search", "show"]);
             definition.parameters["properties"]["side"]["enum"] = json!(["head", null]);
-            definition.description = "Inspect repository worktree text with file, list, or \
-                                      search, or use show with side head for committed text. No \
-                                      comparison base is configured; diff and show(base) are \
-                                      unavailable. File and show accept path and optional \
-                                      offset/limit; list accepts optional path/limit; search \
-                                      requires query and accepts optional path/limit."
-                .to_string();
+            definition.description =
+                "Inspect repository worktree text with file, list, or search, or use show with \
+                 side head for committed text. No comparison base is configured; diff and \
+                 show(base) are unavailable. File and show accept path and optional offset/limit; \
+                 list accepts optional path/limit; search requires a literal query (not a regex) \
+                 and accepts optional path/limit. File/show offsets are one-based lines. On \
+                 truncation follow next_offset for file/show; narrow other requests."
+                    .to_string();
         }
 
         definition
