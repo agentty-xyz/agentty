@@ -148,6 +148,7 @@ ORDER BY turn_position, message_position
 
     // Assert
     assert_eq!(session_row, (5, 30, None));
+    assert_eq!(loaded.registration_identity, None);
     assert_eq!(
         turns,
         vec![
@@ -294,6 +295,38 @@ async fn database_reports_creation_and_loading_errors() {
     assert!(matches!(empty, SessionError::InvalidData { .. }));
     assert!(matches!(oversized_limit, SessionError::InvalidData { .. }));
     assert!(matches!(missing, SessionError::NotFound { .. }));
+}
+
+#[tokio::test]
+async fn database_rejects_incomplete_or_invalid_registration_identity() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session");
+
+    // Act
+    for (key, revision) in [
+        (Some("key"), None),
+        (None, Some("revision")),
+        (Some(""), Some("revision")),
+        (Some("key"), Some("")),
+    ] {
+        sqlx::query(
+            "UPDATE session SET registration_key = ?, registration_revision = ? WHERE id = \
+             'session-a'",
+        )
+        .bind(key)
+        .bind(revision)
+        .execute(database.pool())
+        .await
+        .expect("corrupt identity");
+        let result = database.load_session("session-a").await;
+
+        // Assert
+        assert!(matches!(result, Err(SessionError::InvalidData { .. })));
+    }
 }
 
 #[tokio::test]

@@ -26,7 +26,8 @@ pub trait SessionStore: Send + Sync {
     /// Independent handles for the same backing store share this identity.
     fn identity(&self) -> &StoreIdentity;
 
-    /// Atomically creates a session, rejecting an existing identifier.
+    /// Atomically creates a session, rejecting an existing identifier. Retain
+    /// [`NewSession::registration_identity`] unchanged, including its absence.
     async fn create_session(
         &self,
         config: &NewSession,
@@ -34,7 +35,8 @@ pub trait SessionStore: Send + Sync {
         max_history_bytes: usize,
     ) -> Result<(), SessionError>;
     /// Loads configuration and bounded completed history; recovers expired
-    /// turns.
+    /// turns. Return the original registration identity in [`LoadedSession`];
+    /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
     /// Bind the reservation to `store` before commit, including abandoned
     /// acquisition cleanup. Decorators forward this handle unchanged; it must

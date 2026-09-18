@@ -26,8 +26,8 @@ use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
 use crate::{
-    HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, OutputSchema,
-    OutputSchemaError, TurnError, TurnOptions, TurnOutcome,
+    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
+    OutputSchema, OutputSchemaError, TurnError, TurnOptions, TurnOutcome,
 };
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -128,6 +128,8 @@ struct SessionRow {
     output_schema: String,
     provider: Option<String>,
     provider_session_id: Option<String>,
+    registration_key: Option<String>,
+    registration_revision: Option<String>,
     system_prompt: Option<String>,
     turn_options: Option<String>,
 }
@@ -181,6 +183,7 @@ impl SessionInfo {
 #[derive(Clone, Debug)]
 pub struct NewSession {
     id: String,
+    registration_identity: Option<ExecutionIdentity>,
     schema: OutputSchema,
     system_prompt: Option<String>,
 }
@@ -190,6 +193,7 @@ impl NewSession {
     pub fn new(id: impl Into<String>, schema: OutputSchema) -> Self {
         Self {
             id: id.into(),
+            registration_identity: None,
             schema,
             system_prompt: None,
         }
@@ -203,9 +207,24 @@ impl NewSession {
         self
     }
 
+    /// Sets the immutable model registration captured when the session is
+    /// created. `None` denotes direct construction, including legacy
+    /// sessions.
+    #[must_use]
+    pub fn with_registration_identity(mut self, identity: Option<ExecutionIdentity>) -> Self {
+        self.registration_identity = identity;
+
+        self
+    }
+
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Returns the registration that stores must retain unchanged across loads.
+    pub fn registration_identity(&self) -> Option<&ExecutionIdentity> {
+        self.registration_identity.as_ref()
     }
 
     /// Returns the structured-output schema retained by the session.
@@ -739,9 +758,10 @@ impl SessionStore for Database {
         let result = sqlx::query(
             r"
 INSERT INTO session (
-    id, provider, model, output_schema, system_prompt, max_history_bytes, created_at, updated_at
+    id, provider, model, output_schema, system_prompt, max_history_bytes, created_at, updated_at,
+    registration_key, registration_revision
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
 ",
         )
@@ -753,6 +773,12 @@ ON CONFLICT(id) DO NOTHING
         .bind(max_history_bytes)
         .bind(now)
         .bind(now)
+        .bind(config.registration_identity().map(ExecutionIdentity::key))
+        .bind(
+            config
+                .registration_identity()
+                .map(ExecutionIdentity::revision),
+        )
         .execute(&self.pool)
         .await
         .session_context("create persistent session")?;
@@ -773,6 +799,8 @@ ON CONFLICT(id) DO NOTHING
             r#"
 SELECT provider,
        model,
+       registration_key,
+       registration_revision,
        output_schema,
        system_prompt,
        max_history_bytes AS "max_history_bytes!: i64",
@@ -799,12 +827,22 @@ WHERE id = ?
             StoredTurnOptions::decode(&snapshot)?;
         }
         let turns = self.load_turns(id, max_history_bytes).await?;
+        let registration_identity = match (row.registration_key, row.registration_revision) {
+            (None, None) => None,
+            (Some(key), Some(revision)) => Some(ExecutionIdentity::new(key, revision)?),
+            _ => {
+                return Err(SessionError::InvalidData {
+                    reason: format!("session `{id}` has incomplete registration identity"),
+                });
+            }
+        };
 
         Ok(LoadedSession {
             max_history_bytes,
             model: row.model,
             provider: row.provider,
             provider_session_id: row.provider_session_id,
+            registration_identity,
             schema,
             system_prompt: row.system_prompt,
             turns,
@@ -1092,6 +1130,13 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
 /// Error returned by persistent session operations.
 #[derive(Debug, Error)]
 pub enum SessionError {
+    /// The harness's registration differs from the session's immutable
+    /// selection.
+    #[error("persistent session `{id}` has a different model registration")]
+    RegistrationMismatch {
+        /// Requested session identifier.
+        id: String,
+    },
     /// Host-ID submission requires a stable assertion of execution
     /// configuration.
     #[error("host requests require Harness::execution_identity")]
@@ -1285,6 +1330,9 @@ pub struct LoadedSession {
     pub provider: Option<String>,
     /// Optional provider continuation, cleared on failure or interruption.
     pub provider_session_id: Option<String>,
+    /// Immutable registration key/revision, or `None` for direct/legacy
+    /// sessions.
+    pub registration_identity: Option<ExecutionIdentity>,
     /// Session's default output schema.
     pub schema: OutputSchema,
     /// Session's retained system prompt.

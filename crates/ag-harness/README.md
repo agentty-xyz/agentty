@@ -3,6 +3,48 @@
 `ag-harness` runs structured LLM turns with explicit repository permissions and durable
 SQLite sessions, process-local memory sessions, or host-provided session stores.
 
+## Registered models
+
+Use `ModelRegistry` to select built-in clients or injected `Model` implementations by a
+stable host key:
+
+```rust
+use ag_harness::{ExecutionIdentity, Harness, ModelCapabilities, ModelRegistry, Muse, MUSE_SPARK_1_3};
+
+let mut models = ModelRegistry::new();
+models.register(
+    ExecutionIdentity::new("review-model", "config-v1")?,
+    Muse::from_env(MUSE_SPARK_1_3)?,
+    ModelCapabilities { native_continuation: false, tool_calls: true },
+)?;
+let harness = Harness::from_registry(&models, "review-model")?;
+let result = harness.run_once("Review this proposal", output_schema).await?;
+```
+
+Clients constructed through `ModelConfiguration::client_from_environment` can be
+registered the same way. Duplicate keys fail without replacing the existing model,
+including when the revision differs. Unknown keys fail before provider execution.
+Harnesses, session builders, and sessions retain their registration after the registry
+is dropped. `Harness::model_registration` exposes the captured identity, adapter
+metadata, and capabilities; direct `Harness::new(model)` remains supported.
+
+Use `ModelRegistry::register_shared` for an existing `Arc<dyn Model>`. A boxed model can
+use the same method through `Arc::from(boxed_model)`.
+
+Capabilities are host declarations about the configured adapter, not tool permissions or
+automatic feature detection. They do not enable images or bypass provider validation.
+The registration supplies the `ExecutionIdentity` required for host-ID submissions.
+Revise it when configuration, endpoints, credential scope, capability declarations, or
+injected behavior changes; never include secrets. A host can override
+`Harness::execution_identity` for additional injected execution configuration, while the
+registration identity and capabilities remain part of the request fingerprint. Direct
+and registered construction have distinct request fingerprints. Recreate the same
+registration to recover a registered request after restart. Durable sessions persist the
+registration key and revision; resuming requires the same registration even when adapter
+metadata matches or is absent. Direct construction cannot resume registered sessions,
+and legacy or directly created sessions must resume through direct construction.
+Registry selection does not switch a stored session's model.
+
 ## Durable sessions
 
 ```rust

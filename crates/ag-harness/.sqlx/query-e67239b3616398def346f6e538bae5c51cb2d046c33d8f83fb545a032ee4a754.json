@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT provider,\n       model,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT provider,\n       model,\n       registration_key,\n       registration_revision,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,30 @@
         }
       },
       {
-        "name": "output_schema",
+        "name": "registration_key",
         "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "registration_key"
+          }
+        }
+      },
+      {
+        "name": "registration_revision",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "registration_revision"
+          }
+        }
+      },
+      {
+        "name": "output_schema",
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +60,7 @@
       },
       {
         "name": "system_prompt",
-        "ordinal": 3,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +71,7 @@
       },
       {
         "name": "max_history_bytes!: i64",
-        "ordinal": 4,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -60,7 +82,7 @@
       },
       {
         "name": "provider_session_id",
-        "ordinal": 5,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +93,7 @@
       },
       {
         "name": "turn_options?: String",
-        "ordinal": 6,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -87,6 +109,8 @@
     "nullable": [
       true,
       true,
+      true,
+      true,
       false,
       true,
       false,
@@ -94,5 +118,5 @@
       true
     ]
   },
-  "hash": "e0ed7813e2de9a9ca86f7dd6336f509bd51c5469f3b896b9c42f8c62b9fb9baa"
+  "hash": "e67239b3616398def346f6e538bae5c51cb2d046c33d8f83fb545a032ee4a754"
 }

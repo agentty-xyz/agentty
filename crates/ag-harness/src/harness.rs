@@ -13,6 +13,7 @@ use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
 use crate::model::{Model, ModelMessage, ModelRequest, ReasoningEffort};
+use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
 use crate::policy::ToolPolicy;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
@@ -209,25 +210,32 @@ impl Session {
                 "git": repository.git_executable().as_os_str().as_encoded_bytes(),
             })
         });
-        HostRequest::from_configuration(
-            id,
-            json!({
-                "version": 1,
-                "input": prompt,
-                "options": {
-                    "schema": options.schema().value(),
-                    "permissions": options.tool_policy(),
-                    "max_tool_calls": options.limits().max_tool_calls(),
-                    "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
-                },
-                "repository": repository,
-                "system_prompt": self.system_prompt,
-                "reasoning": self.harness.model_reasoning_effort,
-                "execution_identity": identity,
-                "model": metadata.as_ref().map(|metadata| (metadata.provider(), metadata.model())),
-                "max_history_bytes": self.history.max_bytes,
-            }),
-        )
+        let mut configuration = json!({
+            "version": 1,
+            "input": prompt,
+            "options": {
+                "schema": options.schema().value(),
+                "permissions": options.tool_policy(),
+                "max_tool_calls": options.limits().max_tool_calls(),
+                "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
+            },
+            "repository": repository,
+            "system_prompt": self.system_prompt,
+            "reasoning": self.harness.model_reasoning_effort,
+            "execution_identity": identity,
+            "model": metadata.as_ref().map(|metadata| (metadata.provider(), metadata.model())),
+            "max_history_bytes": self.history.max_bytes,
+        });
+        if let Some(registration) = &self.harness.model_registration {
+            let capabilities = registration.capabilities();
+            configuration["model_registration"] = json!({
+                "identity": registration.identity(),
+                "native_continuation": capabilities.native_continuation,
+                "tool_calls": capabilities.tool_calls,
+            });
+        }
+
+        HostRequest::from_configuration(id, configuration)
     }
 
     async fn send_observed(
@@ -414,8 +422,14 @@ impl SessionBuilder {
     /// already exists, or the store cannot create the session.
     pub async fn create(self) -> Result<Session, SessionError> {
         let database = self.harness.open_database().await?;
-        let config =
-            NewSession::new(self.id, self.schema).with_optional_system_prompt(self.system_prompt);
+        let config = NewSession::new(self.id, self.schema)
+            .with_optional_system_prompt(self.system_prompt)
+            .with_registration_identity(
+                self.harness
+                    .model_registration
+                    .as_ref()
+                    .map(|registration| registration.identity().clone()),
+            );
         database
             .create_session(
                 &config,
@@ -504,6 +518,7 @@ pub struct Harness {
     max_history_bytes: usize,
     model: Arc<dyn Model>,
     model_reasoning_effort: Option<ReasoningEffort>,
+    model_registration: Option<ModelRegistration>,
     policy: ToolPolicy,
     repository: Option<Repository>,
     store: Option<Arc<dyn SessionStore>>,
@@ -512,25 +527,37 @@ pub struct Harness {
 impl Harness {
     /// Creates a deny-by-default harness backed by the local filesystem.
     pub fn new(model: impl Model + 'static) -> Self {
-        Self {
-            database: Arc::new(OnceCell::new()),
-            database_path: None,
-            execution_identity: None,
-            file_system: Arc::new(LocalFileSystem),
-            lifecycle: LifecycleEmitter::default(),
-            limits: TurnLimits::default(),
-            max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
-            model: Arc::new(model),
-            model_reasoning_effort: None,
-            policy: ToolPolicy::default(),
-            repository: None,
-            store: None,
-        }
+        Self::from_shared_model(Arc::new(model))
+    }
+
+    /// Creates a harness using a registered model and its execution identity.
+    ///
+    /// Captures the registration immediately, so the harness and its sessions
+    /// can outlive the registry. Capabilities are host declarations, not tool
+    /// permissions. Durable sessions retain the key and revision and require
+    /// the same registration on resume. This does not switch a stored model.
+    ///
+    /// # Errors
+    /// Returns [`ModelRegistryError::UnknownKey`] for an unregistered key.
+    pub fn from_registry(registry: &ModelRegistry, key: &str) -> Result<Self, ModelRegistryError> {
+        let registration = registry.resolve(key)?.clone();
+        let mut harness = Self::from_shared_model(registration.model());
+        harness.execution_identity = Some(registration.identity().clone());
+        harness.model_registration = Some(registration);
+
+        Ok(harness)
+    }
+
+    /// Returns the captured registration, or `None` for direct construction.
+    pub fn model_registration(&self) -> Option<&ModelRegistration> {
+        self.model_registration.as_ref()
     }
 
     /// Identifies all execution configuration not captured by explicit options.
     /// Required for host-ID submission, including injected models/filesystems.
     /// Hosts must revise it when their behavior or configuration changes.
+    /// For registered models, this overrides the host execution assertion but
+    /// retains the selected registration in request fingerprints.
     #[must_use]
     pub fn execution_identity(mut self, identity: ExecutionIdentity) -> Self {
         self.execution_identity = Some(identity);
@@ -709,7 +736,7 @@ impl Harness {
     /// # Errors
     ///
     /// Returns [`SessionError`] when storage is not configured, the session is
-    /// missing, its model differs, or the store cannot load it.
+    /// missing, its model or registration differs, or the store cannot load it.
     pub async fn resume(&self, id: &str) -> Result<Session, SessionError> {
         let database = self.open_database().await?;
         let loaded = database.load_session(id).await?;
@@ -728,6 +755,24 @@ impl Harness {
             schema: loaded.schema,
             system_prompt: loaded.system_prompt,
         })
+    }
+
+    fn from_shared_model(model: Arc<dyn Model>) -> Self {
+        Self {
+            database: Arc::new(OnceCell::new()),
+            database_path: None,
+            execution_identity: None,
+            file_system: Arc::new(LocalFileSystem),
+            lifecycle: LifecycleEmitter::default(),
+            limits: TurnLimits::default(),
+            max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
+            model,
+            model_reasoning_effort: None,
+            model_registration: None,
+            policy: ToolPolicy::default(),
+            repository: None,
+            store: None,
+        }
     }
 
     async fn run_once_observed(
@@ -765,6 +810,7 @@ impl Harness {
             max_history_bytes: self.max_history_bytes,
             model: Arc::clone(&self.model),
             model_reasoning_effort: self.model_reasoning_effort,
+            model_registration: self.model_registration.clone(),
             policy: self.policy,
             repository: self.repository.clone(),
             store: self.store.clone(),
@@ -787,6 +833,14 @@ impl Harness {
     }
 
     fn validate_session_model(&self, id: &str, loaded: &LoadedSession) -> Result<(), SessionError> {
+        if loaded.registration_identity.as_ref()
+            != self
+                .model_registration
+                .as_ref()
+                .map(ModelRegistration::identity)
+        {
+            return Err(SessionError::RegistrationMismatch { id: id.to_string() });
+        }
         let (Some(stored_provider), Some(stored_model)) = (&loaded.provider, &loaded.model) else {
             if loaded.provider.is_none() && loaded.model.is_none() {
                 return Ok(());
