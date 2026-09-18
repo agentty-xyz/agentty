@@ -8,9 +8,11 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use ag_session::AgentKind;
+pub use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use semver::Version;
 
-use crate::model::agent::{AgentCliInfo, AgentKind};
+use crate::model::agent::AgentCliInfo;
 
 /// Oldest Antigravity CLI release supported by Agentty's native stream
 /// protocol.
@@ -66,18 +68,6 @@ impl AgentCliUpdateCommand {
     }
 }
 
-/// Detects which provider CLIs are locally runnable on the current machine.
-#[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
-pub trait AgentAvailabilityProbe: Send + Sync {
-    /// Returns the agent kinds whose backing CLI executable is available.
-    fn available_agent_kinds(&self) -> Vec<AgentKind>;
-
-    /// Returns available agent CLI executables and their refreshed versions.
-    fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
-        AgentCliInfo::from_kinds(&self.available_agent_kinds())
-    }
-}
-
 /// Production availability probe backed by `PATH` executable discovery.
 pub struct RealAgentAvailabilityProbe;
 
@@ -88,18 +78,6 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
 
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         available_agent_clis_from_path(env::var_os("PATH").as_deref())
-    }
-}
-
-/// Availability probe that returns one caller-provided snapshot.
-pub struct StaticAgentAvailabilityProbe {
-    /// Agent kinds reported as available by the static probe.
-    pub available_agent_kinds: Vec<AgentKind>,
-}
-
-impl AgentAvailabilityProbe for StaticAgentAvailabilityProbe {
-    fn available_agent_kinds(&self) -> Vec<AgentKind> {
-        self.available_agent_kinds.clone()
     }
 }
 

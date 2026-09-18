@@ -5,16 +5,16 @@
 
 use std::sync::Arc;
 
+use ag_contracts::{
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    TurnResult,
+};
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use crate::agent;
 use crate::app_server::{AppServerClient, AppServerStreamEvent, AppServerTurnRequest};
-use crate::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
-    TurnResult,
-};
-use crate::model::agent::AgentKind;
 
 /// [`AgentChannel`] adapter backed by a persistent app-server session.
 ///
@@ -269,7 +269,7 @@ async fn parse_or_repair_app_server_response(
         main_checkout_root: repair_request.main_checkout_root,
         model: repair_request.model,
         permission_mode: repair_request.permission_mode,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: repair_request.request_kind,
         replay_transcript: None,

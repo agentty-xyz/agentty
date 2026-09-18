@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
+use ag_contracts::AgentChannel;
+use ag_session::AgentKind;
+
 use crate::agent;
 use crate::app_server::AppServerClient;
 use crate::channel::app_server::AppServerAgentChannel;
 use crate::channel::cli::CliAgentChannel;
-use crate::channel::contract::AgentChannel;
-use crate::model::agent::AgentKind;
 
 /// Creates the provider-specific channel for the given agent kind.
 ///

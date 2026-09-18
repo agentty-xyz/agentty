@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent, AgentRequestKind};
+use ag_contracts::AgentRequestKind;
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
@@ -21,9 +21,7 @@ use super::{
 };
 use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
-use crate::domain::agent::{
-    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle, SpeedMode,
-};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     QueuedMessage, ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, Status,
@@ -1039,11 +1037,9 @@ impl SessionManager {
                 &persisted_session_id,
             )
             .await?;
-            agent::create_backend(session_agent.kind())
-                .setup(&folder)
-                .map_err(|error| {
-                    SessionError::Workflow(format!("Failed to setup session backend: {error}"))
-                })?;
+            ag_worker::setup_backend(session_agent.kind(), &folder).map_err(|error| {
+                SessionError::Workflow(format!("Failed to setup session backend: {error}"))
+            })?;
             self.persist_stack_base_for_stacked_draft_worktree(
                 services,
                 &folder,
@@ -1068,7 +1064,7 @@ impl SessionManager {
         )
         .await?;
 
-        if let Err(error) = agent::create_backend(session_agent.kind()).setup(&folder) {
+        if let Err(error) = ag_worker::setup_backend(session_agent.kind(), &folder) {
             let cleanup_errors = Self::cleanup_session_worktree_resources(
                 services.fs_client().clone(),
                 services.git_client(),
@@ -1897,8 +1893,9 @@ impl SessionManager {
     ///
     /// When the model changes, this also clears any persisted provider-native
     /// conversation identifier so incompatible runtimes do not attempt resume
-    /// with stale ids, and drops the existing session worker so the next turn
-    /// creates a fresh worker with the correct [`AgentChannel`] type.
+    /// with stale ids. The worker finishes in-flight effects and holds pending
+    /// work while the selection is saved atomically. Failure resumes the old
+    /// worker; success discards pending work and releases its runtime.
     ///
     /// # Errors
     /// Returns an error if the session is missing or persistence fails.
@@ -2076,55 +2073,37 @@ impl SessionManager {
         let model_changed = self
             .session_at(session_index)
             .is_some_and(|session| session.agent.model() != session_model);
-        let session_agent_kind = session_agent.kind().to_string();
-
-        services
-            .db()
-            .sessions()
-            .update_session_agent_model(session_id, &session_agent_kind, session_model.as_str())
-            .await?;
-        if agent_changed {
-            services
-                .db()
-                .sessions()
-                .update_session_provider_conversation_id(session_id, None)
-                .await?;
-            services
-                .db()
-                .sessions()
-                .update_session_instruction_conversation_id(session_id, None)
-                .await?;
-
-            self.clear_session_worker(session_id);
-        }
-
-        if persist_last_used_model_as_default
-            && let session_project_id = services
+        let paused_worker = if agent_changed {
+            self.pause_session_worker(session_id).await
+        } else {
+            None
+        };
+        // Hold scheduling across lookups as well as the write. Any failure
+        // drops the reversible hold without discarding pending user work.
+        let default_project_id = if persist_last_used_model_as_default {
+            let project_id = services
                 .db()
                 .sessions()
                 .load_session_project_id(session_id)
-                .await?
-            && Self::should_persist_last_used_model_as_default(services, session_project_id).await?
-            && let Some(project_id) = session_project_id
-        {
-            services
-                .db()
-                .settings()
-                .upsert_project_setting(
-                    project_id,
-                    SettingName::DefaultSmartAgent,
-                    session_agent.kind().name(),
-                )
                 .await?;
-            services
-                .db()
-                .settings()
-                .upsert_project_setting(
-                    project_id,
-                    SettingName::DefaultSmartModel,
-                    session_model.as_str(),
-                )
-                .await?;
+            if Self::should_persist_last_used_model_as_default(services, project_id).await? {
+                project_id
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // Dropping the hold on any persistence error resumes the unchanged
+        // worker, retaining both queued commands and conversational messages.
+        services
+            .db()
+            .sessions()
+            .apply_session_agent_model(session_id, session_agent, agent_changed, default_project_id)
+            .await?;
+        if let Some(paused_worker) = paused_worker {
+            self.clear_session_worker(session_id);
+            paused_worker.shutdown().await;
         }
 
         services.emit_app_event(AppEvent::SessionModelUpdated {
@@ -2602,8 +2581,7 @@ impl SessionManager {
         }
 
         let replay_transcript = if !is_first_message
-            && (should_replay_history
-                || agent::transport_mode(session.agent.kind()).uses_app_server())
+            && (should_replay_history || ag_worker::uses_persistent_session(session.agent.kind()))
         {
             session
                 .transcript
@@ -3129,13 +3107,13 @@ impl SessionManager {
     ) -> Option<String> {
         for attempt in 1..=SESSION_TITLE_GENERATION_MAX_ATTEMPTS {
             let result = run_client
-                .submit(agent::OneShotRequest {
+                .submit(ag_contracts::OneShotRequest {
                     provider_call_budget: None,
                     harness: (session_agent.kind()).to_string(),
                     child_pid: None,
                     folder: folder.to_path_buf(),
                     model: (session_agent.model()).as_str().to_string(),
-                    permission_mode: ag_agent::PermissionMode::ReadOnly,
+                    permission_mode: ag_contracts::PermissionMode::ReadOnly,
                     prompt: prompt.to_string(),
                     request_kind: AgentRequestKind::UtilityPrompt,
                     reasoning_level,

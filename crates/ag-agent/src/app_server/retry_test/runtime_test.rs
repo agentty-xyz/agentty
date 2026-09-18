@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
 use super::support::{
@@ -14,8 +15,6 @@ use crate::app_server::registry::AppServerSessionRegistry;
 use crate::app_server::retry::{
     RuntimeInspector, build_attempt_prompt, finish_prompt_preparation, run_turn_with_restart_retry,
 };
-use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
 
 #[tokio::test]
 async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
@@ -31,8 +30,8 @@ async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".into(),
-        permission_mode: crate::model::permission::PermissionMode::ReadOnly,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::ReadOnly,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Continue".into(),
         request_kind: AgentRequestKind::SessionResume,
         replay_transcript: Some("history".repeat(8192)),
@@ -40,7 +39,7 @@ async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "replay-test".into(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -125,8 +124,8 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
         live_transcript: Some(live_transcript("streamed before crash")),
         main_checkout_root: Some(PathBuf::from("/tmp/project")),
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("queued snapshot".to_string()),
@@ -134,7 +133,7 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let captured_retry_prompt = Arc::new(Mutex::new(String::new()));
 
@@ -208,8 +207,8 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_start_request_kind(),
         replay_transcript: None,
@@ -217,7 +216,7 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let shutdown_count = Arc::new(AtomicUsize::new(0));
 
@@ -280,8 +279,8 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some(history.clone()),
@@ -289,7 +288,7 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let start_count = Arc::new(AtomicUsize::new(0));
     let run_count = Arc::new(AtomicUsize::new(0));
@@ -389,8 +388,8 @@ async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtim
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("previous transcript".to_string()),
@@ -398,7 +397,7 @@ async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtim
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let run_count = Arc::new(AtomicUsize::new(0));
     let shutdown_count = Arc::new(AtomicUsize::new(0));
@@ -467,8 +466,8 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("previous transcript".to_string()),
@@ -476,7 +475,7 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let captured_prompt = Arc::new(Mutex::new(String::new()));
 
@@ -552,8 +551,8 @@ async fn size_rejections_shutdown_without_restarting() {
             live_transcript: None,
             main_checkout_root: None,
             model: "test".into(),
-            permission_mode: crate::PermissionMode::ReadOnly,
-            personality: crate::channel::PersonalityPrompt::default(),
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
+            personality: ag_contracts::PersonalityPrompt::default(),
             prompt: "input".into(),
             request_kind: AgentRequestKind::UtilityPrompt,
             replay_transcript: None,
@@ -561,7 +560,7 @@ async fn size_rejections_shutdown_without_restarting() {
             persisted_instruction_conversation_id: None,
             reasoning_level: ReasoningLevel::default(),
             session_id: "size-error".into(),
-            speed_mode: crate::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         };
         let starts = AtomicUsize::new(0);
         let shutdowns = AtomicUsize::new(0);

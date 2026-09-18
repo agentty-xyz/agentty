@@ -20,8 +20,8 @@ impl AgentBackend for GeminiBackend {
         if request.permission_mode.is_read_only()
             && !matches!(
                 request.request_kind,
-                crate::channel::AgentRequestKind::FocusedReview
-                    | crate::channel::AgentRequestKind::UtilityPrompt
+                ag_contracts::AgentRequestKind::FocusedReview
+                    | ag_contracts::AgentRequestKind::UtilityPrompt
             )
         {
             command.arg("--approval-mode").arg("plan").arg("--sandbox");

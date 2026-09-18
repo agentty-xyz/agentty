@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::{AgentChannel, ReasoningLevel, TurnEvent};
 use ag_protocol::TurnPromptAttachment;
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use super::support::{collect_pid_updates, make_ok_response, make_turn_request};
 use crate::app_server::{AppServerStreamEvent, AppServerTurnResponse, MockAppServerClient};
 use crate::channel::app_server::AppServerAgentChannel;
-use crate::channel::contract::{AgentChannel, TurnEvent};
-use crate::model::agent::{AgentKind, ReasoningLevel};
 
 #[tokio::test]
 async fn forwards_runtime_pid_and_clears_it_after_non_retained_turn() {
@@ -192,12 +192,8 @@ async fn test_run_turn_passes_and_returns_provider_conversation_id() {
     let (events_tx, mut events_rx) = mpsc::unbounded_channel();
     let mut request = make_turn_request();
     request.reasoning_level = ReasoningLevel::Medium;
-    request.continuation = crate::channel::TurnContinuation::provider(
-        None,
-        None,
-        Some("thread-abc".to_string()),
-        None,
-    );
+    request.continuation =
+        ag_contracts::TurnContinuation::provider(None, None, Some("thread-abc".to_string()), None);
 
     // Act
     let result = channel

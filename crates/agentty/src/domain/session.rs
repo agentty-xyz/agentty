@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub use ag_agent::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
+pub use ag_contracts::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 pub use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
     SessionStatus as Status, activity_day_key_with_offset,

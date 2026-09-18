@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ag_agent::{SessionDiffState, SessionStats, SpeedMode};
+use ag_contracts::{SessionDiffState, SessionStats, SpeedMode};
 use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
     SessionStatus as Status, activity_day_key_with_offset,

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_session::AgentModel;
 use tokio::sync::mpsc;
 
 use crate::agent::app_server::antigravity::client::{
@@ -11,9 +13,6 @@ use crate::agent::app_server::client::{RuntimeClientProvider, RuntimeClientRunti
 use crate::agent::app_server::stdio_transport::AppServerStdioTransport;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
 use crate::app_server_transport;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 fn request(folder: PathBuf) -> AppServerTurnRequest {
     AppServerTurnRequest {
@@ -24,12 +23,12 @@ fn request(folder: PathBuf) -> AppServerTurnRequest {
         model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Continue"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,
         replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionResume,
+        request_kind: ag_contracts::AgentRequestKind::SessionResume,
         session_id: "session-1".to_string(),
         speed_mode: SpeedMode::default(),
     }

@@ -6,8 +6,7 @@ use std::path::PathBuf;
 pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
-    self, AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
-    SpeedMode,
+    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -1053,7 +1052,7 @@ fn resolve_model_stage_agent(
     selected_agent: Option<AgentKind>,
 ) -> Option<AgentKind> {
     selected_agent.or_else(|| {
-        agent::resolve_prompt_model_agent_kind(session_agent_kind, available_agent_kinds)
+        ag_session::resolve_prompt_model_agent_kind(session_agent_kind, available_agent_kinds)
     })
 }
 

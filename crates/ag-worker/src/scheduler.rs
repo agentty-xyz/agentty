@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
+use tokio_util::sync::CancellationToken;
 
 /// Scheduling metadata supplied by an application command.
 pub trait ScheduledCommand: Send {
@@ -90,18 +91,61 @@ pub fn next_work<H: WorkQueue>(
 pub async fn run<H: WorkerHost>(
     host: H,
     wakeup: Arc<Notify>,
+    receiver: mpsc::UnboundedReceiver<H::Command>,
+) {
+    run_until_stopped(
+        host,
+        wakeup,
+        receiver,
+        CancellationToken::new(),
+        Arc::default(),
+    )
+    .await;
+}
+
+/// Explicit retirement finishes the current workflow but abandons queued work
+/// instead of draining it into a runtime the host is about to replace.
+pub(crate) async fn run_until_stopped<H: WorkerHost>(
+    host: H,
+    wakeup: Arc<Notify>,
     mut receiver: mpsc::UnboundedReceiver<H::Command>,
+    stop: CancellationToken,
+    execution: Arc<Mutex<()>>,
 ) {
     let mut commands = VecDeque::new();
     loop {
-        while let Ok(command) = receiver.try_recv() {
+        let execution_guard = execution.lock().await;
+        let mut drained = 0;
+        while drained < MAILBOX_DRAIN_BATCH_SIZE && !stop.is_cancelled() {
+            let Ok(command) = receiver.try_recv() else {
+                break;
+            };
             commands.push_back(command);
+            drained += 1;
+        }
+        if stop.is_cancelled() {
+            break;
         }
         if let Some(work) = next_work(&host, &mut commands) {
+            // Select from the oldest buffered command and message before
+            // admitting another batch. Unread commands follow the buffered
+            // ones in submission order, so neither queue can be starved by
+            // producers keeping the mailbox full.
             host.execute(work).await;
+            drop(execution_guard);
+            tokio::task::yield_now().await;
+            continue;
+        }
+        drop(execution_guard);
+        if drained == MAILBOX_DRAIN_BATCH_SIZE {
+            // Paused work still needs cooperative draining to find commands
+            // that may run while paused, without delaying cancellation.
+            tokio::task::yield_now().await;
             continue;
         }
         tokio::select! {
+            biased;
+            () = stop.cancelled() => break,
             command = receiver.recv() => {
                 let Some(command) = command else { break; };
                 commands.push_back(command);
@@ -109,6 +153,11 @@ pub async fn run<H: WorkerHost>(
             () = wakeup.notified() => {}
         }
     }
+    receiver.close();
+    while let Ok(command) = receiver.try_recv() {
+        commands.push_back(command);
+    }
+    let _execution_guard = execution.lock().await;
     for command in commands {
         host.abandon(ScheduledWork::Command(command)).await;
     }
@@ -117,6 +166,9 @@ pub async fn run<H: WorkerHost>(
     }
     host.shutdown().await;
 }
+
+/// Bound synchronous polling so callers can request retirement or a pause.
+const MAILBOX_DRAIN_BATCH_SIZE: usize = 64;
 
 #[cfg(test)]
 #[path = "scheduler_test.rs"]

@@ -1,18 +1,18 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::{
+    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
+};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
-use crate::agent::submission::{OneShotClient, OneShotRequest, RealOneShotClient};
+use crate::agent::submission::RealOneShotClient;
 use crate::agent::submission_pool::SubmissionPool;
 use crate::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     AppServerTurnResponse, MockAppServerClient,
 };
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 fn request() -> OneShotRequest {
     OneShotRequest {

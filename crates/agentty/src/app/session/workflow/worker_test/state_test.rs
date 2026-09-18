@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{AgentRequestKind, MockAgentChannel, TurnEvent, TurnResult};
+use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnEvent, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_worker::SessionRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -186,7 +187,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),

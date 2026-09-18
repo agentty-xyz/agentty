@@ -1,8 +1,7 @@
 //! Shared provider-aware CLI exit error formatting.
 
+use ag_session::AgentKind;
 use serde_json::Value;
-
-use crate::model::agent::AgentKind;
 
 /// Formats one failed agent CLI command into a user-facing error string.
 pub(crate) fn format_agent_cli_exit_error(

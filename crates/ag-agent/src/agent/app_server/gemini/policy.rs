@@ -1,12 +1,11 @@
 //! Gemini ACP permission policy helpers.
 
+use ag_contracts::PermissionMode;
 use agent_client_protocol::schema::v1::{
     CLIENT_METHOD_NAMES, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
 };
 use serde_json::Value;
-
-use crate::model::permission::PermissionMode;
 
 /// Builds a `session/request_permission` response for the active session.
 ///

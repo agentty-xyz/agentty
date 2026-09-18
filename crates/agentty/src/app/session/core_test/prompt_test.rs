@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::{AgentRequestKind, MockAgentChannel, TurnResult};
+use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_protocol::AgentResponse;
 use tempfile::tempdir;
 
@@ -11,7 +11,7 @@ use super::support::{
     new_test_app_with_git, new_test_app_with_git_and_db, register_session_backend,
     test_session_manager, test_session_manager_with_clock, wait_for_status,
 };
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::{SessionStats, Status};
@@ -187,7 +187,7 @@ async fn test_reply_replays_history_once_after_model_switch() {
     mock_channel
         .expect_shutdown_session()
         .returning(|_| Box::pin(async { Ok(()) }));
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     channels.register(&session_id, Arc::new(mock_channel));
 
     // Act — first reply after model switch: history should be replayed.
@@ -305,7 +305,7 @@ async fn test_reply_first_message_uses_full_prompt_text_as_title() {
     let backend = create_mock_backend();
 
     // Act
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     register_session_backend(&app, &channels, &session_id, Arc::new(backend));
     app.sessions.reply(&app.services, &session_id, prompt).await;
 

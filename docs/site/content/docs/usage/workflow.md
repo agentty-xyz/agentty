@@ -252,6 +252,11 @@ workers, queued messages, and workflow-action rows. Returning to the project can
 more work on the same worker, and workflow results completed in the background remain
 available in the session transcript.
 
+Changing a session's provider or model waits for its current workflow to finish and
+saves the new selection before discarding pending chat messages and queued actions. If
+saving fails, the old selection and pending work remain intact. Resubmit any discarded
+work after a successful switch.
+
 While the composer is open, `Tab` moves focus to the chat transcript above it so the
 conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
 losing the typed draft. `Shift+Tab` cycles the session through `Auto Edit`,

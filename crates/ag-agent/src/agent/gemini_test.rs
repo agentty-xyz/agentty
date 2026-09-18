@@ -1,9 +1,8 @@
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use tempfile::tempdir;
 
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
 use crate::agent::gemini::GeminiBackend;
-use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
 
 /// Returns a utility request kind for Gemini command construction tests.
 fn utility_request_kind() -> AgentRequestKind {
@@ -55,12 +54,12 @@ fn test_gemini_build_command_uses_acp_runtime_command() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gemini-3.8-flash",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &utility_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -91,12 +90,12 @@ fn test_gemini_read_only_command_uses_sandboxed_plan_mode() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gemini-3.8-flash",
-            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_prompt: None,
             prompt: "Inspect the architecture",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -136,12 +135,12 @@ fn test_gemini_read_only_utility_command_uses_standard_acp_mode() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gemini-3.8-flash",
-            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_prompt: None,
             prompt: "Review the supplied diff",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &utility_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -170,12 +169,12 @@ fn test_gemini_read_only_focused_review_uses_standard_acp_mode() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gemini-3.8-flash",
-            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_prompt: None,
             prompt: "Review the supplied diff",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &focused_review_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");

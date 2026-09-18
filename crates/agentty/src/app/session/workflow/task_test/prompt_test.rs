@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_contracts::OneShotError;
 use ag_git::MockGitClient;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -50,7 +50,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
                 .contains("Generate the canonical session commit message")
         );
 
-        Err(agent::OneShotError::new(
+        Err(OneShotError::new(
             "Input exceeds the maximum length of 1048576 characters.",
         ))
     });
@@ -97,7 +97,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
 /// diagnostics.
 fn test_is_input_size_error_detects_window_limits() {
     // Arrange
-    let overflow_error = SessionError::OneShot(agent::OneShotError::new(
+    let overflow_error = SessionError::OneShot(OneShotError::new(
         "Codex app-server failed: contextWindowExceeded",
     ));
     let other_error = SessionError::Workflow("network timeout".to_string());

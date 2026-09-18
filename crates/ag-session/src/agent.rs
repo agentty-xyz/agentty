@@ -1,7 +1,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use ag_runtime::{ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode};
 
 /// Supported agent provider families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -530,7 +530,7 @@ impl AgentKind {
     /// Gemini and Antigravity have no equivalent control, so neither the
     /// command nor the speed display is offered for them.
     ///
-    /// [`SpeedMode`]: ag_runtime::SpeedMode
+    /// [`SpeedMode`]: ag_contracts::SpeedMode
     pub fn supports_speed_mode(self) -> bool {
         matches!(self, Self::Claude | Self::Codex)
     }

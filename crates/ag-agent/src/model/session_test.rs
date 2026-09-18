@@ -1,4 +1,4 @@
-use ag_runtime::SpeedMode;
+use ag_contracts::SpeedMode;
 
 use crate::model::session;
 

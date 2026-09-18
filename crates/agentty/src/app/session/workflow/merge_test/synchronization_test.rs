@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::{GitClient, GitError};
@@ -1703,15 +1703,15 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
             assert_eq!(request.prompt, "Resolve sync conflicts");
             assert_eq!(
                 request.request_kind,
-                ag_agent::AgentRequestKind::UtilityPrompt
+                ag_contracts::AgentRequestKind::UtilityPrompt
             );
 
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain("resolved"),
-                stats: agent::SessionStats {
+                stats: ag_contracts::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
+                    diff_state: ag_contracts::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },

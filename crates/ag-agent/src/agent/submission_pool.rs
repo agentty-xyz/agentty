@@ -3,9 +3,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ag_session::AgentKind;
+
 use crate::agent::create_app_server_client;
 use crate::app_server::AppServerClient;
-use crate::model::agent::AgentKind;
 
 /// Retains one process per concurrent submission until its owner closes it.
 #[derive(Default)]

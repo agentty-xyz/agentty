@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_contracts::{AgentChannel, AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
 use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
+use ag_session::AgentKind;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -12,8 +14,6 @@ use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
 use crate::channel::cli::{
     CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
 };
-use crate::channel::contract::{AgentChannel, AgentRequestKind, TurnEvent, TurnRequest};
-use crate::model::agent::{AgentKind, ReasoningLevel};
 
 /// Drains all currently buffered turn events from a test receiver.
 #[test]
@@ -64,17 +64,17 @@ fn test_cli_turn_observer_ignores_blank_progress_text() {
 fn test_build_command_request_uses_agent_facing_prompt_text() {
     // Arrange
     let request = TurnRequest {
-        continuation: crate::channel::TurnContinuation::fresh(),
+        continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp/session"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
         model: "claude-sonnet-5".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Review @src/main.rs"),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
-        response_style: crate::ResponseStyle::default(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        response_style: ag_contracts::ResponseStyle::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let prompt_text = request.prompt.agent_text();
 
@@ -328,7 +328,7 @@ async fn cli_archive_failure_stops_before_spawning_provider() {
     let backend = Arc::new(MockAgentBackend::new());
     let channel = CliAgentChannel::with_backend(backend, AgentKind::Claude);
     let mut request = make_turn_request(folder.path().join("missing"));
-    request.continuation = crate::channel::TurnContinuation::replaying("x".repeat(40 * 1024));
+    request.continuation = ag_contracts::TurnContinuation::replaying("x".repeat(40 * 1024));
     let (events, _receiver) = mpsc::unbounded_channel();
 
     // Act

@@ -5,7 +5,6 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_worker::RunClient;
@@ -624,15 +623,15 @@ impl SessionTaskService {
             generated_title,
         );
         let submission = run_client
-            .submit(agent::OneShotRequest {
+            .submit(ag_contracts::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
                 folder: folder.to_path_buf(),
                 model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 prompt,
-                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
             })
@@ -819,7 +818,7 @@ impl SessionTaskService {
     ) -> Result<String, SessionError> {
         let stripped_current_commit_message =
             current_commit_message.map_or_else(String::new, strip_agentty_coauthor_trailer);
-        let fence = agent::diff_fence(diff);
+        let fence = ag_protocol::diff_fence(diff);
         let language = if fallback { "text" } else { "diff" };
         let fenced_diff = format!("{fence}{language}\n{diff}\n{fence}");
         let template = SessionCommitMessagePromptTemplate {
@@ -1066,23 +1065,26 @@ impl SessionTaskService {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
         let (submission, _) = crate::app::diff_prompt::submit(
             run_client,
-            agent::OneShotRequest {
+            ag_contracts::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
                 folder: folder.to_path_buf(),
                 model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_agent::PermissionMode::ReadOnly,
+                permission_mode: ag_contracts::PermissionMode::ReadOnly,
                 prompt: String::new(),
-                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level,
                 speed_mode,
             },
             diff,
             current_commit_message.unwrap_or_default(),
             |diff, context| {
-                Self::session_commit_message_prompt(diff, Some(context), fallback)
-                    .map_err(|error| agent::OneShotError::new(error.to_string()))
+                crate::app::diff_prompt::render_result(Self::session_commit_message_prompt(
+                    diff,
+                    Some(context),
+                    fallback,
+                ))
             },
         )
         .await?;
@@ -1133,17 +1135,17 @@ impl SessionTaskService {
         // App-server utilities own a separate temporary runtime. Their PID
         // cleanup must not clear the retained chat runtime's accounting root.
         let assist_child_pid =
-            (!agent::transport_mode(session_agent.kind()).uses_app_server()).then_some(child_pid);
+            (!ag_worker::uses_persistent_session(session_agent.kind())).then_some(child_pid);
         let assist_submission = run_client
-            .submit(agent::OneShotRequest {
+            .submit(ag_contracts::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: assist_child_pid,
                 folder,
                 model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 prompt,
-                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
             })
@@ -1488,8 +1490,8 @@ fn append_agentty_coauthor_trailer(
 /// one-shot flow due to provider input-size or context limits.
 fn is_input_size_error(error: &SessionError) -> bool {
     match error {
-        SessionError::OneShot(error) => agent::is_input_size_error(&error.to_string()),
-        SessionError::Workflow(message) => agent::is_input_size_error(message),
+        SessionError::OneShot(error) => ag_contracts::is_input_size_error(&error.to_string()),
+        SessionError::Workflow(message) => ag_contracts::is_input_size_error(message),
         _ => false,
     }
 }
@@ -1501,7 +1503,7 @@ fn is_input_size_error(error: &SessionError) -> bool {
 /// small marker between them so critical diagnostics and retry details remain
 /// visible while trimming duplicated or excessive payload.
 fn compact_commit_error_for_assist(commit_error: &str) -> String {
-    if !agent::is_input_size_error(commit_error) {
+    if !ag_contracts::is_input_size_error(commit_error) {
         return commit_error.to_string();
     }
 

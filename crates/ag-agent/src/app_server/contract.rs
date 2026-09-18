@@ -5,14 +5,13 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use ag_contracts::{
+    AgentRequestKind, LiveTranscript, PermissionMode, PersonalityPrompt, ReasoningLevel, SpeedMode,
+};
 use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerError;
-use crate::channel::{AgentRequestKind, LiveTranscript, PersonalityPrompt};
-use crate::model::agent::ReasoningLevel;
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 /// Boxed async result used by [`AppServerClient`] trait methods.
 pub type AppServerFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -74,7 +73,7 @@ pub struct AppServerTurnRequest {
     /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
     /// Optional shared limit, charged for every underlying attempt and retry.
-    pub provider_call_budget: Option<crate::ProviderCallBudget>,
+    pub provider_call_budget: Option<ag_contracts::ProviderCallBudget>,
     /// Provider-native thread/session id used to resume context in a newly
     /// started runtime.
     pub provider_conversation_id: Option<String>,

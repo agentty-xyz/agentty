@@ -6,7 +6,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::{
+    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
+    TurnResult,
+};
 use ag_protocol::{AgentResponse, TurnPrompt, build_protocol_repair_prompt};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -15,11 +20,6 @@ use crate::agent::cli::execution::{
     self, CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver,
 };
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
-use crate::channel::{
-    AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
-    TurnResult,
-};
-use crate::model::agent::AgentKind;
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
 ///
@@ -333,7 +333,7 @@ async fn execute_cli_repair_turn(
         main_checkout_root: None,
         replay_transcript: None,
         model: &request.model,
-        permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+        permission_mode: ag_contracts::PermissionMode::ReadOnly,
         personality_prompt: None,
         prompt: repair_prompt,
         reasoning_level: request.reasoning_level,

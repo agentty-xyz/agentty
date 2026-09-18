@@ -1,12 +1,12 @@
 use std::error::Error;
 use std::path::Path;
 
-use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, VerificationVerdict, VerificationVerdictItem};
 use ag_session::{
-    IntegrationApproach, OrchestrationPolicy, OrchestrationStatus, OrchestrationTaskKind,
-    OrchestrationTaskStatus, SessionId,
+    AgentKind, IntegrationApproach, OrchestrationPolicy, OrchestrationStatus,
+    OrchestrationTaskKind, OrchestrationTaskStatus, SessionId,
 };
 use ag_store::{DbError, PersistedOrchestrationTask, PersistedSessionCreation};
 
@@ -582,11 +582,11 @@ async fn running_child_count_includes_reverse_linked_child() {
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: Some(task_id),
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: None,
             speed_mode: SpeedMode::Normal,
             status: "InProgress",

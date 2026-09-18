@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use ag_session::AgentModel;
 use mockall::Sequence;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -19,8 +21,6 @@ use crate::agent::app_server::stdio_transport::{
 };
 use crate::app_server::{AppServerError, AppServerTurnRequest};
 use crate::app_server_transport;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn runtime_reuse_requires_matching_permission_mode() {
@@ -30,7 +30,7 @@ async fn runtime_reuse_requires_matching_permission_mode() {
 
     // Act
     let auto_edit_matches = runtime.matches_request(&request);
-    request.permission_mode = crate::model::permission::PermissionMode::ReadOnly;
+    request.permission_mode = ag_contracts::PermissionMode::ReadOnly;
     let read_only_matches = runtime.matches_request(&request);
     runtime.shutdown_runtime().await;
 
@@ -134,7 +134,7 @@ async fn start_thread_returns_thread_id_from_matching_response() {
         &mut transport,
         folder.path(),
         AgentModel::Gpt56Sol.as_str(),
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
     )
@@ -226,7 +226,7 @@ async fn start_or_resume_thread_falls_back_to_thread_start_after_resume_failure(
         folder.path(),
         AgentModel::Gpt56Sol.as_str(),
         Some("thread-existing"),
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
     )
@@ -256,7 +256,7 @@ async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
         lifecycle::CodexTurnEventLoopInput {
             folder: folder.path(),
             model: AgentModel::Gpt56Sol.as_str(),
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             prompt: "Implement the task".into(),
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::default(),
@@ -295,7 +295,7 @@ async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary
         lifecycle::CodexTurnEventLoopInput {
             folder: folder.path(),
             model: AgentModel::Gpt56Sol.as_str(),
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             prompt: "Review the current diff".into(),
             protocol_profile: ProtocolRequestProfile::SessionTurn,
             reasoning_level: ReasoningLevel::default(),
@@ -354,14 +354,14 @@ fn runtime_request(runtime: &CodexSessionRuntime) -> AppServerTurnRequest {
         live_transcript: None,
         main_checkout_root: None,
         model: runtime.state.model.clone(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Continue"),
         provider_conversation_id: Some("thread-permission".to_string()),
         reasoning_level: ReasoningLevel::default(),
         replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionResume,
+        request_kind: ag_contracts::AgentRequestKind::SessionResume,
         session_id: "session-1".to_string(),
         speed_mode: SpeedMode::default(),
     }

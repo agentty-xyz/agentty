@@ -2,11 +2,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{
-    AgentKind, AgentModel, AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ProviderCallBudget, ReasoningLevel, SessionStats, SpeedMode, diff_fence,
+use ag_contracts::{
+    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
+    ProviderCallBudget, ReasoningLevel, SessionStats, SpeedMode,
 };
-use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
+use ag_protocol::{
+    AgentResponse, FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion, diff_fence,
+};
+use ag_session::{AgentKind, AgentModel};
 use ag_worker::{MockRunClient, RunClient};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};

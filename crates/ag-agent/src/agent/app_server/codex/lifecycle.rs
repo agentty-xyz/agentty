@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{
     ProtocolRequestProfile, SchemaRequiredPolicy, TurnPrompt, TurnPromptContentPart,
     protocol_output_schema,
 };
+use ag_session::AgentKind;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -15,9 +17,6 @@ use super::{policy, stream_parser, usage};
 use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
-use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 use crate::model::{reasoning, session};
 
 /// Mutable runtime state required while a Codex app-server process is active.
@@ -62,7 +61,7 @@ pub(super) async fn start_runtime(
     ),
     AppServerError,
 > {
-    let request_kind = crate::channel::AgentRequestKind::SessionStart;
+    let request_kind = ag_contracts::AgentRequestKind::SessionStart;
     let command = agent::create_backend(AgentKind::Codex)
         .build_command(agent::BuildCommandRequest {
             attachments: &[],

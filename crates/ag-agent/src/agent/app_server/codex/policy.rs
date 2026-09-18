@@ -2,10 +2,10 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use ag_contracts::{PermissionMode, ReasoningLevel};
+use ag_session::{AgentKind, AgentModel};
 use serde_json::Value;
 
-use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
 use crate::model::reasoning;
 
 /// Canonical wire-level policy mapping for one [`PermissionMode`].

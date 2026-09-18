@@ -2,7 +2,7 @@ use std::future::{Future, poll_fn};
 use std::sync::Arc;
 use std::task::Poll;
 
-use ag_runtime::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 

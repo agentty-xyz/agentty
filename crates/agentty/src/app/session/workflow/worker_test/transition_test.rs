@@ -3,13 +3,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{
+use ag_contracts::{
     AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnContinuation, TurnRequest,
     TurnResult,
 };
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_worker::SessionRunClient;
 use tempfile::tempdir;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -78,7 +79,7 @@ async fn test_should_skip_worker_command_without_cancel_request() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -152,7 +153,7 @@ async fn test_should_skip_worker_command_when_cancel_is_requested() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -240,7 +241,7 @@ async fn test_should_skip_worker_command_allows_new_operation_after_cancel() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -321,21 +322,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
-    let project_id = db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session(
-            "sess1",
-            "gemini-3.8-flash",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+    insert_in_progress_test_session(&db).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
     let mut mock_git_client = MockGitClient::new();
@@ -363,7 +350,10 @@ async fn test_apply_turn_result_reports_background_push_failures() {
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -516,7 +506,7 @@ async fn test_run_channel_turn_finalizes_invalid_permission_setup_failure() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -607,7 +597,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::clone(&cancel_token),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -748,7 +738,7 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(stale_token)),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -849,7 +839,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -939,7 +929,7 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -1035,7 +1025,7 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -1107,7 +1097,10 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_channel),
+        session_run: SessionRunClient::from_channel(
+            "sess-preturn".to_string().clone(),
+            Arc::new(mock_channel),
+        ),
         child_pid: Arc::new(Mutex::new(Some(recycled_pid))),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: AppRepositories::in_memory().await.expect("db should open"),
@@ -1133,12 +1126,12 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
         folder: context.folder.clone(),
         main_checkout_root: None,
         model: "gemini-3.8-flash".to_string(),
-        permission_mode: ag_agent::PermissionMode::AutoEdit,
-        personality: ag_agent::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "test".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
-        response_style: ag_agent::ResponseStyle::default(),
+        response_style: ag_contracts::ResponseStyle::default(),
         speed_mode: crate::domain::agent::SpeedMode::default(),
     };
 
@@ -1217,7 +1210,10 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             app_event_tx: mpsc::unbounded_channel().0,
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-            channel: Arc::new(mock_channel),
+            session_run: SessionRunClient::from_channel(
+                "sess-timeout".to_string().clone(),
+                Arc::new(mock_channel),
+            ),
             child_pid: Arc::new(Mutex::new(Some(recycled_pid))),
             clock: Arc::new(crate::infra::clock::RealClock),
             db: AppRepositories::in_memory().await.expect("db should open"),
@@ -1243,12 +1239,12 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
             folder: context.folder.clone(),
             main_checkout_root: None,
             model: "gemini-3.8-flash".to_string(),
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
-            personality: ag_agent::PersonalityPrompt::default(),
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            personality: ag_contracts::PersonalityPrompt::default(),
             prompt: "test".into(),
             reasoning_level: ReasoningLevel::default(),
             request_kind: AgentRequestKind::SessionStart,
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             speed_mode: crate::domain::agent::SpeedMode::default(),
         };
 
@@ -1460,7 +1456,7 @@ async fn test_worker_waits_for_foreground_gate_and_skips_abandoned_command() {
             operation_id: "already-resolved-rebase".to_string(),
         }))
         .expect("following command");
-    SessionWorkerService::spawn_session_worker(
+    super::support::spawn_session_worker(
         context,
         auto_commit_run_client(),
         Arc::default(),
@@ -1704,11 +1700,11 @@ async fn test_resolve_turn_personality_reports_unavailable_profile_once_and_clea
     // Assert
     assert_eq!(
         first_resolution.prompt,
-        ag_agent::PersonalityPrompt::cleared(true)
+        ag_contracts::PersonalityPrompt::cleared(true)
     );
     assert_eq!(
         second_resolution.prompt,
-        ag_agent::PersonalityPrompt::cleared(false)
+        ag_contracts::PersonalityPrompt::cleared(false)
     );
     assert_eq!(
         second_resolution.persistence,
@@ -1741,13 +1737,16 @@ async fn test_resolve_turn_personality_defaults_when_session_state_is_unavailabl
     // Assert
     assert_eq!(
         missing_session.prompt,
-        ag_agent::PersonalityPrompt::default()
+        ag_contracts::PersonalityPrompt::default()
     );
     assert_eq!(
         missing_session.persistence,
         TurnPersonalityPersistence::default()
     );
-    assert_eq!(query_failure.prompt, ag_agent::PersonalityPrompt::default());
+    assert_eq!(
+        query_failure.prompt,
+        ag_contracts::PersonalityPrompt::default()
+    );
     assert_eq!(
         query_failure.persistence,
         TurnPersonalityPersistence::default()

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use ag_session::AgentKind;
+
 use crate::channel::factory::create_agent_channel;
-use crate::model::agent::AgentKind;
 
 #[test]
 fn create_agent_channel_returns_cli_channel_for_claude() {

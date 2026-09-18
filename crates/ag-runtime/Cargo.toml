@@ -4,22 +4,18 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Transport-independent agent execution contracts"
+description = "Agent runtime composition and provider lifecycle"
 repository.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
-ag-protocol.workspace = true
-async-trait.workspace = true
-thiserror.workspace = true
+ag-agent.workspace = true
+ag-contracts.workspace = true
+ag-session.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-mockall = { workspace = true, optional = true }
-
-[dev-dependencies]
-mockall.workspace = true
 
 [features]
-test-utils = ["dep:mockall"]
+test-utils = ["ag-agent/test-utils", "ag-contracts/test-utils"]

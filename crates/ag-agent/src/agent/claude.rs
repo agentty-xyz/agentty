@@ -117,8 +117,8 @@ fn append_claude_workspace_settings(
     command: &mut Command,
     workspace_folder: &Path,
     main_checkout_root: Option<&Path>,
-    permission_mode: crate::model::permission::PermissionMode,
-    speed_mode: crate::model::session::SpeedMode,
+    permission_mode: ag_contracts::PermissionMode,
+    speed_mode: ag_contracts::SpeedMode,
 ) {
     let mut deny_rules = Vec::new();
     let mut deny_write_paths = Vec::new();

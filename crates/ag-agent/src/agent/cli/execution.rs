@@ -5,12 +5,12 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::process::ExitStatus;
 use std::time::Duration;
 
+use ag_session::AgentKind;
 use rustix::process::{self, Pid, Signal, WaitId, WaitIdOptions};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
 
 use super::stdin;
 use crate::agent::{self as agent, AgentBackend, AgentBackendError, BuildCommandRequest};
-use crate::model::agent::AgentKind;
 
 /// Observer for execution details that are meaningful to a transport adapter.
 pub(crate) trait CliExecutionObserver: Send + Sync {

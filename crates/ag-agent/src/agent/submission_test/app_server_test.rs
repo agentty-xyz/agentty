@@ -1,16 +1,14 @@
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_session::{AgentKind, AgentModel};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::submission::{
-    OneShotRequest, attempt_one_shot_app_server_repair, submit_one_shot_with_app_server_client,
+    attempt_one_shot_app_server_repair, submit_one_shot_with_app_server_client,
 };
 use crate::app_server::{AppServerError, AppServerTurnResponse, MockAppServerClient};
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 #[tokio::test]
 /// Verifies app-server-backed one-shot execution returns the parsed

@@ -1,4 +1,4 @@
-use ag_agent::AgentSelectionMetadata;
+use ag_session::AgentSelectionMetadata;
 
 use super::super::SessionTaskService;
 use super::support::insert_review_session;

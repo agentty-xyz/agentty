@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use ag_protocol::{ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment};
+use ag_contracts::ResponseStyle;
+use ag_protocol::{ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment, diff_fence};
 
 use super::support::normalize_prompt;
-use crate::agent::prompt::{apply_response_style_prompt, build_resume_prompt, diff_fence};
-use crate::model::session::ResponseStyle;
+use crate::agent::prompt::{apply_response_style_prompt, build_resume_prompt};
 
 #[test]
 fn response_style_prompt_wraps_session_turns_and_preserves_attachments() {

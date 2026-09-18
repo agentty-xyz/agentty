@@ -1,12 +1,12 @@
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::TurnPromptAttachment;
+use ag_session::AgentModel;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
 use crate::agent::antigravity::{ANTIGRAVITY_PRINT_TIMEOUT, AntigravityBackend};
 use crate::agent::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use crate::agent::prompt::{CliPromptAccessRootMode, cli_prompt_access_directories};
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentModel, ReasoningLevel};
 use crate::model::reasoning;
 
 fn session_start_request_kind() -> AgentRequestKind {
@@ -47,12 +47,12 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
             main_checkout_root: None,
             replay_transcript: None,
             model: requested_model,
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Write tests",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -109,12 +109,12 @@ fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
             main_checkout_root: None,
             replay_transcript: None,
             model: AgentModel::Gemini31Pro.provider_model_str(),
-            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_prompt: None,
             prompt: "Inspect the architecture",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -152,12 +152,12 @@ fn test_antigravity_build_command_passes_supported_effort() {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: AgentModel::Gemini31Pro.provider_model_str(),
-                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Write tests",
                 reasoning_level,
                 request_kind: &session_start_request_kind(),
-                speed_mode: crate::model::session::SpeedMode::default(),
+                speed_mode: ag_contracts::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -202,12 +202,12 @@ fn test_antigravity_build_command_uses_hidden_session_folder_directly() {
             main_checkout_root: None,
             replay_transcript: None,
             model: requested_model,
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Write tests",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -278,12 +278,12 @@ fn test_antigravity_build_command_rejects_cached_cli_error() {
             main_checkout_root: None,
             replay_transcript: None,
             model: AgentModel::Gemini31Pro.provider_model_str(),
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Write tests",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect_err("unsupported Antigravity should fail the turn");
@@ -318,12 +318,12 @@ fn test_antigravity_build_command_adds_workspace_directories() {
             main_checkout_root: None,
             replay_transcript: None,
             model: requested_model,
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Review [Image #1]",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");

@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::ProtocolRequestProfile;
+use ag_session::AgentModel;
 use mockall::Sequence;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -13,8 +15,6 @@ use super::support::{
 use crate::agent::app_server::codex::{lifecycle, policy};
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
 use crate::app_server::AppServerStreamEvent;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::session::SpeedMode;
 
 #[test]
 fn compaction_timeout_error_includes_timeout_seconds() {

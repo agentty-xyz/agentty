@@ -4,16 +4,17 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use ag_agent::{AgentBackend, AppServerClient, MockAgentBackend};
+use ag_contracts::{OneShotError, OneShotSubmission};
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
 use ag_git as git;
 use ag_protocol::AgentResponse;
 use ag_worker::MockRunClient;
+use ag_worker::test_support::{AgentBackend, AppServerClient, MockAgentBackend};
 
 use super::super::{SessionDefaults, SessionManager, session_folder};
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
@@ -579,17 +580,17 @@ pub(super) fn auto_commit_run_client() -> Arc<dyn ag_worker::RunClient> {
             .prompt
             .contains("Generate a concise, commit-style title")
         {
-            return Err(ag_agent::OneShotError::new(
+            return Err(OneShotError::new(
                 "title generation is disabled in this fixture",
             ));
         }
 
-        Ok(ag_agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain("Existing session commit"),
-            stats: ag_agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: ag_agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -803,7 +804,7 @@ pub(super) fn test_session_manager_with_clock(
 /// Registers a CLI adapter for the ordinary reply path.
 pub(super) fn register_session_backend(
     app: &App,
-    channels: &TestSessionChannelFactory,
+    channels: &TestSessionRunFactory,
     session_id: &str,
     backend: Arc<dyn AgentBackend>,
 ) {
@@ -813,8 +814,8 @@ pub(super) fn register_session_backend(
         .expect("session")
         .agent
         .kind();
-    let channel = ag_agent::create_cli_agent_channel_with_backend(backend, kind);
-    channels.register(session_id, channel);
+    let channel = ag_worker::test_support::cli_session(session_id.to_string(), backend, kind);
+    channels.register_run(session_id, channel);
 }
 
 /// Helper: creates a session and starts it with the given prompt (two-step
@@ -825,7 +826,7 @@ pub(super) async fn create_and_start_session(app: &mut App, prompt: &str) {
         .await
         .expect("failed to create session");
     let start_backend = create_mock_backend();
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     register_session_backend(app, &channels, &session_id, Arc::new(start_backend));
     app.sessions.reply(&app.services, &session_id, prompt).await;
 }

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ag_runtime::OneShotError;
+use ag_contracts::OneShotError;
 use async_trait::async_trait;
 
 /// Durable identity and ownership of one isolated model execution.

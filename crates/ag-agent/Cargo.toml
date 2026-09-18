@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 ag-protocol.workspace = true
-ag-runtime.workspace = true
+ag-contracts.workspace = true
 ag-session.workspace = true
 agent-client-protocol.workspace = true
 askama.workspace = true
@@ -27,11 +27,11 @@ uuid.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
-ag-runtime = { workspace = true, features = ["test-utils"] }
+ag-contracts = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 
 [features]
-test-utils = ["dep:mockall", "ag-runtime/test-utils"]
+test-utils = ["dep:mockall"]
 
 [lints]
 workspace = true

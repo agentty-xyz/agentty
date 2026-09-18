@@ -1,8 +1,8 @@
+use ag_contracts::AgentRequestKind;
 use tempfile::tempdir;
 
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
 use crate::agent::codex::CodexBackend;
-use crate::channel::AgentRequestKind;
 
 fn session_start_request_kind() -> AgentRequestKind {
     AgentRequestKind::SessionStart
@@ -28,12 +28,12 @@ fn build_command_builds_app_server_runtime_for_start_requests() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gpt-5.6-sol",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Run checks",
-            reasoning_level: crate::model::agent::ReasoningLevel::High,
+            reasoning_level: ag_contracts::ReasoningLevel::High,
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command build should succeed");
@@ -61,12 +61,12 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gpt-5.6-sol",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Continue edits",
-            reasoning_level: crate::model::agent::ReasoningLevel::High,
+            reasoning_level: ag_contracts::ReasoningLevel::High,
             request_kind: &session_resume_request_kind(Some("previous assistant output")),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("resume command build should succeed");
@@ -105,13 +105,13 @@ fn build_command_accepts_gpt_56_luna_model() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: crate::model::agent::AgentModel::Gpt56Luna.as_str(),
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            model: ag_session::AgentModel::Gpt56Luna.as_str(),
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Run a quick edit",
-            reasoning_level: crate::model::agent::ReasoningLevel::Medium,
+            reasoning_level: ag_contracts::ReasoningLevel::Medium,
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("luna model command build should succeed");
@@ -151,12 +151,12 @@ fn build_command_builds_app_server_runtime_for_utility_prompts() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "gpt-5.6-sol",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",
-            reasoning_level: crate::model::agent::ReasoningLevel::Low,
+            reasoning_level: ag_contracts::ReasoningLevel::Low,
             request_kind: &AgentRequestKind::UtilityPrompt,
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("utility command build should succeed");

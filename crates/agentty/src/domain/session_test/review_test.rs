@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use ag_agent::{SessionStats, SpeedMode};
+use ag_contracts::{SessionStats, SpeedMode};
 use ag_session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
     SessionStatus as Status,

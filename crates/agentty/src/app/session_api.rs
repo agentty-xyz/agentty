@@ -3,7 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use ag_agent::{ReasoningLevel, ResponseStyle, SpeedMode, parse_persisted_session_agent_model};
+use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
 use ag_orchestration::{OrchestrationApprovalOutcome, child_session_is_stopped};
 use ag_protocol::QuestionItem;
 use ag_session::{
@@ -11,6 +11,7 @@ use ag_session::{
     CreateSessionMode, CreateSessionRequest, QuestionAnswer, ReviewRequest, ReviewRequestState,
     SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
     SessionRole, SessionService, SessionSettings, SessionStatus,
+    parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 use tokio::sync::oneshot;
@@ -1045,7 +1046,7 @@ fn build_api_session(
         .unwrap_or_default();
     let permission_mode = row
         .permission_mode
-        .parse::<ag_agent::PermissionMode>()
+        .parse::<ag_contracts::PermissionMode>()
         .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?;
     let role = row
         .role

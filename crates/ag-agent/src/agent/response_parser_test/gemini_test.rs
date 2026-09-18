@@ -1,5 +1,6 @@
+use ag_contracts::SessionDiffState;
+
 use crate::agent::response_parser::parse_gemini_response_with_fallback;
-use crate::model::session::SessionDiffState;
 
 #[test]
 fn test_gemini_parse_response_reads_legacy_usage() {

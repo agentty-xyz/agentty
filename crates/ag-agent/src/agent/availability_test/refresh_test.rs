@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use std::{env, fs};
 
+use ag_session::AgentKind;
 use tempfile::tempdir;
 
 use crate::agent::availability::{
@@ -14,7 +15,7 @@ use crate::agent::availability::{
     parse_agent_cli_version_output, refresh_agent_cli_version, refresh_agent_cli_versions,
     run_agent_cli_update_with_timeout,
 };
-use crate::model::agent::{AgentCliInfo, AgentKind};
+use crate::model::agent::AgentCliInfo;
 
 #[test]
 /// Ensures available CLI metadata includes parsed command versions.

@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use ag_session::AgentModel;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AGENT_METHOD_NAMES, CLIENT_METHOD_NAMES, InitializeResponse, NewSessionResponse,
@@ -19,9 +21,6 @@ use crate::agent::app_server::gemini::lifecycle::{
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
 use crate::app_server::AppServerTurnRequest;
 use crate::app_server_transport;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
     AppServerTurnRequest {
@@ -32,12 +31,12 @@ fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTu
         model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Inspect the architecture"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,
         replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionStart,
+        request_kind: ag_contracts::AgentRequestKind::SessionStart,
         session_id: "session-1".to_string(),
         speed_mode: SpeedMode::Normal,
     }
@@ -46,8 +45,8 @@ fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTu
 #[test]
 fn utility_prompts_receive_long_running_bootstrap_timeout() {
     // Arrange
-    let utility_request_kind = crate::channel::AgentRequestKind::UtilityPrompt;
-    let session_request_kind = crate::channel::AgentRequestKind::SessionStart;
+    let utility_request_kind = ag_contracts::AgentRequestKind::UtilityPrompt;
+    let session_request_kind = ag_contracts::AgentRequestKind::SessionStart;
 
     // Act
     let utility_timeout = bootstrap_response_timeout(&utility_request_kind);

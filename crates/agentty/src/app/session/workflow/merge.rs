@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{self as agent};
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_worker::RunClient;
@@ -576,15 +575,15 @@ impl RealSyncAssistClient {
     ) -> Result<(), SessionError> {
         // Success payload unused; run for side effects only.
         let _ = run_client
-            .submit(agent::OneShotRequest {
+            .submit(ag_contracts::OneShotRequest {
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
                 folder,
                 model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_agent::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 prompt,
-                request_kind: ag_agent::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
             })

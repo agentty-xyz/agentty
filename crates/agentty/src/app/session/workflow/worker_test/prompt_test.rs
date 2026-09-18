@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use ag_agent::{AgentRequestKind, MockAgentChannel};
+use ag_contracts::{AgentRequestKind, MockAgentChannel};
 use tokio::sync::mpsc;
 
 use super::super::super::post_turn::TurnPersonalityPersistence;
 use super::super::super::turn::resolve_turn_personality;
-use super::super::{SessionCommand, SessionWorkerHandle, SessionWorkerService};
+use super::super::{SessionCommand, SessionWorkerService};
 use super::support::{
     assert_first_prompt_remains_retryable, assert_first_prompt_was_accepted,
     assert_preparation_publication_failure_is_retryable, inject_handoff_failure,
@@ -124,11 +124,7 @@ async fn test_saved_first_prompt_retries_failed_handoffs_without_losing_attachme
         let (sender, mut receiver) = mpsc::unbounded_channel();
         app.sessions.worker_service_mut().workers.insert(
             session_id.clone().into(),
-            SessionWorkerHandle {
-                queued_work_sequence: Arc::default(),
-                sender,
-                wakeup: Arc::default(),
-            },
+            ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
         );
         app.retry_workspace_preparation(&session_id)
             .await
@@ -165,11 +161,7 @@ async fn test_first_prompt_handoff_preserves_a_terminal_status() {
     let (sender, mut receiver) = mpsc::unbounded_channel();
     app.sessions.worker_service_mut().workers.insert(
         session_id.clone().into(),
-        SessionWorkerHandle {
-            queued_work_sequence: Arc::default(),
-            sender,
-            wakeup: Arc::default(),
-        },
+        ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
 
     // Act: a terminal state must not be overwritten by foreground setup.
@@ -307,11 +299,11 @@ async fn test_resolve_turn_personality_marks_new_and_unchanged_prompts() {
     // Assert
     assert_eq!(
         changed.prompt,
-        ag_agent::PersonalityPrompt::active("Review carefully.".to_string(), true)
+        ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true)
     );
     assert_eq!(
         unchanged.prompt,
-        ag_agent::PersonalityPrompt::active("Review carefully.".to_string(), false)
+        ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), false)
     );
     assert_eq!(
         unchanged.persistence,

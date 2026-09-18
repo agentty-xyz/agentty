@@ -1,4 +1,4 @@
-use ag_runtime::ReasoningLevel;
+use ag_contracts::ReasoningLevel;
 
 use crate::model::reasoning;
 

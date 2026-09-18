@@ -3,9 +3,9 @@ use std::future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{AppServerTurnResponse, MockAppServerClient, RealOneShotClient};
+use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
-use ag_runtime::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient, RealOneShotClient};
 use ag_worker::{HeartbeatClock, RunWorker};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -421,7 +421,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
         let db = crate::infra::db::Database::open_in_memory()
             .await
             .expect("database");
-        app.services.run_worker = Arc::new(RunWorker::new(
+        app.services.run_worker = Arc::new(RunWorker::with_client(
             Arc::new(RealOneShotClient::new(Some(Arc::new(provider)))),
             db.runs(),
             Arc::new(HeartbeatClock),

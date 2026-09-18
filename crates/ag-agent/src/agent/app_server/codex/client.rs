@@ -1,6 +1,8 @@
 //! Codex app-server client orchestration.
 
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use super::super::client::{ProviderRuntimeClient, RuntimeClientProvider, RuntimeClientRuntime};
@@ -10,8 +12,6 @@ use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     BorrowedAppServerFuture,
 };
-use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::session::SpeedMode;
 use crate::{agent, app_server_transport};
 
 /// Production [`AppServerClient`] backed by `codex app-server` process

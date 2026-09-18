@@ -1,4 +1,4 @@
-use ag_agent as agent;
+use ag_worker::test_support::{self as agent, AgentBackend};
 
 use super::super::{session_branch, session_folder};
 use crate::app::SessionManager;
@@ -69,8 +69,10 @@ async fn retry_validates_owned_checkout_and_preserves_it_on_backend_failure() {
 
     // Act
     let inactive = SessionManager::prepare_reserved_session(&app.services, &id).await;
-    let failed =
-        SessionManager::prepare_workspace(&app.services, &preparation, &row, &backend).await;
+    let failed = SessionManager::prepare_workspace(&app.services, &preparation, &row, |folder| {
+        backend.setup(folder).map_err(|error| error.to_string())
+    })
+    .await;
     app.services
         .db()
         .sessions()

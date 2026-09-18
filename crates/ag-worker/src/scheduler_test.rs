@@ -1,10 +1,14 @@
 use std::collections::VecDeque;
+use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc};
+use tokio_util::sync::CancellationToken;
 
+use crate::scheduler::run_until_stopped;
 use crate::{ScheduledCommand, ScheduledWork, WorkQueue, WorkerHost, next_work, run};
 
 struct Command(Option<u64>, bool);
@@ -187,5 +191,96 @@ async fn closed_mailbox_drains_runnable_work_and_abandons_paused_work() {
     assert_eq!(*host.completed.lock().expect("completed"), [2]);
     assert_eq!(*host.abandoned.lock().expect("abandoned"), [1, 3, 4]);
     assert!(host.messages.lock().expect("messages").is_empty());
+    assert!(host.stopped.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn cancellation_interrupts_a_replenished_mailbox_before_any_work_starts() {
+    // Arrange: more ready input than one cooperative scheduling slice.
+    let host = Arc::new(Host::default());
+    host.paused.store(true, Ordering::SeqCst);
+    let (sender, receiver) = mpsc::unbounded_channel();
+    for order in 0..1_000 {
+        sender
+            .send(Command(Some(order), false))
+            .expect("queued command");
+    }
+    let stop = CancellationToken::new();
+    let mut worker = Box::pin(run_until_stopped(
+        host.clone(),
+        Arc::default(),
+        receiver,
+        stop.clone(),
+        Arc::default(),
+    ));
+
+    // Act: the drain must yield to its caller even though the receiver is
+    // ready.
+    poll_fn(|context| {
+        assert!(worker.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    for order in 1_000..2_000 {
+        sender
+            .send(Command(Some(order), false))
+            .expect("replenished command");
+    }
+    stop.cancel();
+    worker.await;
+
+    // Assert: all accepted work is settled exactly once, without execution,
+    // and a retained sender cannot delay cleanup.
+    assert_eq!(
+        *host.completed.lock().expect("completed"),
+        Vec::<u64>::new()
+    );
+    assert_eq!(
+        *host.abandoned.lock().expect("abandoned"),
+        (0..2_000).collect::<Vec<_>>()
+    );
+    assert!(host.stopped.load(Ordering::SeqCst));
+    assert!(sender.send(Command(Some(2_000), false)).is_err());
+}
+
+#[tokio::test]
+async fn continuously_replenished_mailbox_executes_commands_and_messages_in_order() {
+    // Arrange: messages on both sides of a command batch boundary.
+    let host = Arc::new(Host::default());
+    let messages = [1, 65, 129];
+    host.messages.lock().expect("messages").extend(messages);
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let stop = CancellationToken::new();
+    let mut worker = Box::pin(run_until_stopped(
+        host.clone(),
+        Arc::default(),
+        receiver,
+        stop.clone(),
+        Arc::default(),
+    ));
+    let mut next_order = 0;
+    let mut expected = Vec::new();
+
+    // Act: replenish faster than the worker drains, before every poll.
+    for order in (0..=140).filter(|order| order % 2 == 0 || messages.contains(order)) {
+        for _ in 0..128 {
+            sender
+                .send(Command(Some(next_order), false))
+                .expect("replenished command");
+            next_order += 2;
+        }
+        poll_fn(|context| {
+            assert!(worker.as_mut().poll(context).is_pending());
+            Poll::Ready(())
+        })
+        .await;
+
+        // Assert: each slice executes the next item despite unread commands.
+        expected.push(order);
+        assert_eq!(*host.completed.lock().expect("completed"), expected);
+        tokio::task::yield_now().await;
+    }
+    stop.cancel();
+    worker.await;
     assert!(host.stopped.load(Ordering::SeqCst));
 }

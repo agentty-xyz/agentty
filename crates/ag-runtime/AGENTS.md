@@ -1,27 +1,21 @@
 # ag-runtime
 
-Transport-independent contracts for session turns and isolated agent execution.
+Runtime composition, harness dispatch, and provider lifecycle.
 
 ## Boundaries
 
-- Keep provider implementations, persistence, scheduling, and frontend state out of this
-  crate. Adapters implement these contracts; hosts compose and schedule them.
-- Keep request settings, continuation state, events, and errors transport-neutral.
-  Provider-specific diagnostics must not require callers to depend on transport types.
-
-## Integration
-
-- `AgentChannel` and `OneShotClient` define runtime adapter contracts; implementation
-  factories belong in `ag-agent`. Within Agentty, the worker invokes these adapters and
-  application workflows submit through `ag-worker::RunClient`.
-- Derive protocol profiles from `AgentRequestKind`. Preserve adapter ownership of
-  cancellation, resource cleanup, usage aggregation, and per-attempt budget enforcement.
-- Use `test-utils` mocks when testing consumers without a provider process.
+- Only `ag-worker` may depend on this crate. Only this crate may depend on `ag-agent`.
+- Use `ag-contracts` for shared execution interfaces and data. Keep frontend policy,
+  mailbox scheduling, and persistence out of this crate.
+- Construct concrete adapters here and retain them behind runtime objects. Never return
+  provider transports to application workflows.
+- Preserve cancellation, cleanup, usage aggregation, and provider-call budgets when
+  forwarding admitted work to harness adapters.
+- Keep raw adapter fixtures behind `test-utils`; consumers use worker test facilities.
 
 ## Documentation
 
-Read the trait contracts in `crates/ag-runtime/src/contract.rs` and
-`crates/ag-runtime/src/one_shot.rs` when implementing an adapter. Keep
-`docs/site/content/docs/architecture/runtime-flow.md` aligned with execution-contract
-changes and `docs/site/content/docs/architecture/testability-boundaries.md` aligned with
-adapter responsibilities.
+Keep `docs/site/content/docs/core-components/execution.md`,
+`docs/site/content/docs/architecture/runtime-flow.md`, and
+`docs/site/content/docs/architecture/testability-boundaries.md` aligned with runtime
+ownership.

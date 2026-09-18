@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use ag_session::AgentModel;
 use mockall::Sequence;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -15,9 +17,6 @@ use crate::agent::app_server::codex::lifecycle::{
 };
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn start_runtime_omits_personality_from_the_process_command() {
@@ -30,12 +29,9 @@ async fn start_runtime_omits_personality_from_the_process_command() {
         main_checkout_root: None,
         model: AgentModel::Gpt56Sol.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::active(
-            "Review carefully.".to_string(),
-            true,
-        ),
+        personality: ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true),
         prompt: TurnPrompt::from("Run the turn"),
-        request_kind: crate::channel::AgentRequestKind::SessionStart,
+        request_kind: ag_contracts::AgentRequestKind::SessionStart,
         replay_transcript: None,
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
@@ -67,9 +63,9 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
         main_checkout_root: None,
         model: AgentModel::Gpt56Sol.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Run the turn"),
-        request_kind: crate::channel::AgentRequestKind::SessionStart,
+        request_kind: ag_contracts::AgentRequestKind::SessionStart,
         replay_transcript: None,
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,

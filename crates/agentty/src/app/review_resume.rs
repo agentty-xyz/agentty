@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use ag_agent::{
+use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, SessionStats,
     is_input_size_error,
 };

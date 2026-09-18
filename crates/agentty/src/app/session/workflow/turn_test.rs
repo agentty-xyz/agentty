@@ -61,7 +61,7 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: Some("OrchestrationResearcher"),
             speed_mode: crate::domain::agent::SpeedMode::Normal,
             status: "InProgress",

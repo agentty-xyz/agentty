@@ -1,6 +1,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::{AgentChannel, AgentError, TurnEvent};
+use ag_session::AgentKind;
 use rustix::process::{self, Pid, Signal};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -9,8 +11,6 @@ use tokio_util::sync::CancellationToken;
 use super::support::make_turn_request;
 use crate::agent::MockAgentBackend;
 use crate::channel::cli::{CliAgentChannel, CliTurnLease};
-use crate::channel::{AgentChannel, AgentError, TurnEvent};
-use crate::model::agent::AgentKind;
 
 #[tokio::test]
 async fn shutdown_cancels_only_the_owned_turn_and_releases_session() {

@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::{AgentAvailabilityProbe, AppServerClient};
 use ag_forge as forge;
 use ag_git::GitClient;
+use ag_session::AgentAvailabilityProbe;
+use ag_worker::test_support::AppServerClient;
 use app::review::ReviewCacheEntry;
-use app::service::{RealSessionChannelFactory, SessionChannelFactory};
+use app::service::{RealSessionRunFactory, SessionRunFactory};
 use app::sync;
 use session::{SyncMainOutcome, TurnAppliedState};
 use tempfile::tempdir;
@@ -599,21 +600,20 @@ impl AppClients {
         mut self,
         app_server_client_override: Arc<dyn AppServerClient>,
     ) -> Self {
-        self.session_channel_factory = Arc::new(RealSessionChannelFactory::new(Some(Arc::clone(
-            &app_server_client_override,
-        ))));
-        self.app_server_client_override = Some(app_server_client_override);
+        self.runtime_config = ag_worker::RuntimeConfig::with_app_server(app_server_client_override);
+        self.session_run_factory =
+            Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
 
         self
     }
 
     /// Replaces session-channel composition for deterministic app tests.
     #[must_use]
-    pub(crate) fn with_session_channel_factory(
+    pub(crate) fn with_session_run_factory(
         mut self,
-        session_channel_factory: Arc<dyn SessionChannelFactory>,
+        session_run_factory: Arc<dyn SessionRunFactory>,
     ) -> Self {
-        self.session_channel_factory = session_channel_factory;
+        self.session_run_factory = session_run_factory;
 
         self
     }

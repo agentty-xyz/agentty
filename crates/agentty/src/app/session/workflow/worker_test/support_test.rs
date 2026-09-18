@@ -3,14 +3,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent as agent;
-use ag_agent::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, TurnResult};
+use ag_contracts::{
+    AgentError, AgentRequestKind, MockAgentChannel, OneShotSubmission, PermissionMode, TurnResult,
+};
 use ag_forge as forge;
 use ag_git::{MockGitClient, RebaseStepResult};
 use ag_protocol::{
     AgentResponse, ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment,
 };
-use ag_worker::{MockRunClient, RunClient};
+use ag_worker::{MockRunClient, RunClient, SessionRunClient};
 use mockall::Sequence;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -20,14 +21,11 @@ use super::super::super::post_turn::{
     PostTurnContext, TurnPersonalityPersistence, apply_turn_result,
 };
 use super::super::super::published_branch;
-use super::super::{
-    ScheduledSessionCommand, SessionCommand, SessionWorkerContext, SessionWorkerHandle,
-    TurnMetadata,
-};
+use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerContext, TurnMetadata};
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::session::SessionError;
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{
     PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState, SessionStats,
@@ -110,11 +108,11 @@ pub(super) async fn insert_in_progress_research_session(db: &AppRepositories) {
             model: "gemini-3.8-flash",
             orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: Some("OrchestrationResearcher"),
             speed_mode: SpeedMode::Normal,
             status: "InProgress",
@@ -236,12 +234,12 @@ pub(super) fn research_title_run_client() -> Arc<dyn RunClient> {
                 && request.request_kind == AgentRequestKind::UtilityPrompt
         })
         .returning(|_| {
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: AgentResponse::plain("Inspect architecture boundaries"),
-                stats: agent::SessionStats {
+                stats: ag_contracts::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
+                    diff_state: ag_contracts::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },
@@ -266,12 +264,12 @@ pub(super) fn auto_commit_run_client() -> Arc<dyn RunClient> {
                 "Refine review metadata sync\n\n- Update the linked review request body."
             };
 
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: AgentResponse::plain(answer),
-                stats: agent::SessionStats {
+                stats: ag_contracts::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
+                    diff_state: ag_contracts::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },
@@ -313,7 +311,10 @@ pub(super) fn preparation_test_worker_context(
         app_event_tx: app.services.event_sender(),
         branch_operation_lock: runtime.branch_operation_lock,
         cancel_token: runtime.cancel_token,
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            (runtime.session_id).to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: runtime.child_pid,
         clock: app.services.clock(),
         db: app.services.db().clone(),
@@ -358,7 +359,7 @@ pub(super) async fn assert_preparation_publication_failure_is_retryable(trigger:
         .save_preparation_prompt(&session_id, &serde_json::to_string(&prompt).expect("JSON"))
         .await
         .expect("save");
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     channels.register(&session_id, Arc::new(MockAgentChannel::new()));
     sqlx::query(trigger).execute(&pool).await.expect("trigger");
 
@@ -491,11 +492,7 @@ pub(super) async fn queue_saved_stacked_prompt(
     let (sender, receiver) = mpsc::unbounded_channel();
     app.sessions.worker_service_mut().workers.insert(
         child_id.clone().into(),
-        SessionWorkerHandle {
-            queued_work_sequence: Arc::default(),
-            sender,
-            wakeup: Arc::default(),
-        },
+        ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
 
     app.retry_workspace_preparation(&child_id)
@@ -534,7 +531,7 @@ pub(super) async fn prepare_fork_with_saved_reply(app: &mut crate::app::App) -> 
     )
     .await
     .expect("non-app-server model");
-    assert!(!agent::transport_mode(AgentKind::Claude).uses_app_server());
+    assert!(!ag_worker::uses_persistent_session(AgentKind::Claude));
     for (kind, content) in [
         (SessionMessageKind::UserPrompt, "Original source question"),
         (SessionMessageKind::AssistantAnswer, "Copied source answer"),
@@ -571,11 +568,7 @@ pub(super) async fn capture_prepared_fork_reply(
     let (sender, mut receiver) = mpsc::unbounded_channel();
     app.sessions.worker_service_mut().workers.insert(
         session_id.into(),
-        SessionWorkerHandle {
-            queued_work_sequence: Arc::default(),
-            sender,
-            wakeup: Arc::default(),
-        },
+        ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
     app.retry_workspace_preparation(session_id)
         .await
@@ -618,11 +611,7 @@ pub(super) async fn inject_handoff_failure(
     };
     app.sessions.worker_service_mut().workers.insert(
         session_id.into(),
-        SessionWorkerHandle {
-            queued_work_sequence: Arc::default(),
-            sender,
-            wakeup: Arc::default(),
-        },
+        ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
     );
 
     rejected_receiver
@@ -1483,9 +1472,12 @@ pub(super) fn rebase_assist_worker_harness(
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(mock_existing_session_rebase_channel(
-            expected_main_checkout_root,
-        )),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(mock_existing_session_rebase_channel(
+                expected_main_checkout_root,
+            )),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -1589,7 +1581,7 @@ pub(super) async fn queue_test_context(
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(channel),
+        session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(channel)),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -1622,7 +1614,10 @@ pub(super) async fn queue_helper_context(
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess".to_string().clone(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: AppRepositories::in_memory().await.expect("db should open"),
@@ -1641,4 +1636,21 @@ pub(super) async fn queue_helper_context(
         ),
         status: Arc::new(Mutex::new(Status::InProgress)),
     }
+}
+
+/// Runs an injected mailbox for host-policy tests.
+pub(super) fn spawn_session_worker(
+    context: SessionWorkerContext,
+    run_client: Arc<dyn ag_worker::RunClient>,
+    wakeup: Arc<tokio::sync::Notify>,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<ScheduledSessionCommand>,
+) {
+    tokio::spawn(ag_worker::run(
+        super::super::SessionWorkerHost {
+            context,
+            run_client,
+        },
+        wakeup,
+        receiver,
+    ));
 }

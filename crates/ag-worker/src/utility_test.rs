@@ -4,11 +4,11 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_protocol::AgentResponse;
-use ag_runtime::{
+use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
     PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
 };
+use ag_protocol::AgentResponse;
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -122,7 +122,7 @@ fn fixture(
 ) {
     let (calls, receiver) = mpsc::unbounded_channel();
     let repository = Arc::new(Repository::default());
-    let worker = Arc::new(RunWorker::new(
+    let worker = Arc::new(RunWorker::with_client(
         Arc::new(Runtime(calls)),
         repository.clone(),
         Arc::new(HeartbeatClock),
@@ -492,7 +492,7 @@ async fn session_cancellation_waits_for_runtime_cleanup_before_terminal_state() 
         finish: CancellationToken::new(),
     });
     let repository = Arc::new(Repository::default());
-    let worker = Arc::new(RunWorker::new(
+    let worker = Arc::new(RunWorker::with_client(
         runtime.clone(),
         repository.clone(),
         Arc::new(HeartbeatClock),
@@ -533,14 +533,14 @@ async fn session_cancellation_waits_for_runtime_cleanup_before_terminal_state() 
 #[tokio::test]
 async fn worker_task_failure_releases_session_tracking_and_reaches_the_caller() {
     // Arrange
-    let mut runtime = ag_runtime::MockOneShotClient::new();
+    let mut runtime = ag_contracts::MockOneShotClient::new();
     runtime.expect_close().once().return_const(());
     runtime
         .expect_submit_cancellable()
         .once()
         .returning(|_, _| std::panic::resume_unwind(Box::new("runtime task failed")));
     let repository = Arc::new(Repository::default());
-    let worker = Arc::new(RunWorker::new(
+    let worker = Arc::new(RunWorker::with_client(
         Arc::new(runtime),
         repository.clone(),
         Arc::new(HeartbeatClock),
@@ -717,7 +717,7 @@ async fn forced_shutdown_releases_uncooperative_runs_without_waiting_for_persist
     let started = CancellationToken::new();
     let cleaning = CancellationToken::new();
     let repository = Arc::new(Repository::default());
-    let worker = Arc::new(RunWorker::new(
+    let worker = Arc::new(RunWorker::with_client(
         Arc::new(CleanupRuntime {
             started: started.clone(),
             cleaning: cleaning.clone(),

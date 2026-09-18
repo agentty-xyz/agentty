@@ -26,9 +26,7 @@ pub use availability::{
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::MockAgentBackend;
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
-pub use instruction::normalize_instruction_conversation_id;
 pub(crate) use instruction::{InstructionDeliveryMode, plan_app_server_instruction_delivery};
-pub use prompt::diff_fence;
 pub(crate) use prompt::{
     PromptPreparationRequest, apply_response_style_prompt, prepare_prompt_text,
 };
@@ -41,8 +39,4 @@ pub use replay::cleanup_session_worktree_artifacts;
 pub(crate) use response_parser::{
     ParsedResponse, compact_codex_progress_message, is_codex_completion_status_message,
 };
-#[cfg(any(test, feature = "test-utils"))]
-pub use submission::MockOneShotClient;
-pub use submission::{
-    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, RealOneShotClient,
-};
+pub use submission::RealOneShotClient;

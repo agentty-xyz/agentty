@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use ag_protocol::TurnPrompt;
-use ag_runtime::{
+use ag_contracts::{
     AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt,
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
+use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::run_turn;
+use crate::SessionRunClient;
 
 fn request() -> TurnRequest {
     TurnRequest {
@@ -44,33 +44,31 @@ async fn returns_runtime_output_and_errors() {
         })
     });
     // Act
-    let result = run_turn(
-        &channel,
-        "session".into(),
-        request(),
-        mpsc::unbounded_channel().0,
-        CancellationToken::new(),
-    )
-    .await
-    .expect("test operation succeeds");
+    let result = SessionRunClient::from_channel("session".into(), Arc::new(channel))
+        .submit(
+            request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("test operation succeeds");
     // Assert
     assert_eq!(result.output_tokens, 5);
-    channel.checkpoint();
+    let mut channel = MockAgentChannel::new();
     channel
         .expect_run_turn()
         .times(1)
         .returning(|_, _, _| Box::pin(async { Err(AgentError::Runtime("offline".into())) }));
     assert_eq!(
-        run_turn(
-            &channel,
-            "session".into(),
-            request(),
-            mpsc::unbounded_channel().0,
-            CancellationToken::new()
-        )
-        .await
-        .expect_err("runtime fails")
-        .to_string(),
+        SessionRunClient::from_channel("session".into(), Arc::new(channel))
+            .submit(
+                request(),
+                mpsc::unbounded_channel().0,
+                CancellationToken::new()
+            )
+            .await
+            .expect_err("runtime fails")
+            .to_string(),
         "offline"
     );
 }
@@ -86,14 +84,9 @@ async fn cancellation_before_submission_bounds_unresponsive_shutdown() {
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     // Act
-    let result = run_turn(
-        &channel,
-        "session".into(),
-        request(),
-        mpsc::unbounded_channel().0,
-        cancellation,
-    )
-    .await;
+    let result = SessionRunClient::from_channel("session".into(), Arc::new(channel))
+        .submit(request(), mpsc::unbounded_channel().0, cancellation)
+        .await;
     // Assert
     assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
 }
@@ -142,14 +135,9 @@ async fn cancellation_drops_started_turn_before_bounded_shutdown() {
         let started = tokio::time::Instant::now();
 
         // Act
-        let result = run_turn(
-            &channel,
-            "session".into(),
-            request(),
-            mpsc::unbounded_channel().0,
-            cancellation,
-        )
-        .await;
+        let result = SessionRunClient::from_channel("session".into(), Arc::new(channel))
+            .submit(request(), mpsc::unbounded_channel().0, cancellation)
+            .await;
 
         // Assert
         assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
@@ -185,16 +173,51 @@ async fn cancellation_between_construction_and_first_poll_never_starts_turn() {
         .returning(|_| Box::pin(async { Ok(()) }));
 
     // Act
-    let result = run_turn(
-        &channel,
-        "session".into(),
-        request(),
-        mpsc::unbounded_channel().0,
-        cancellation,
-    )
-    .await;
+    let result = SessionRunClient::from_channel("session".into(), Arc::new(channel))
+        .submit(request(), mpsc::unbounded_channel().0, cancellation)
+        .await;
 
     // Assert
     assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
     assert!(!polled.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn session_client_keeps_identity_across_clones_and_propagates_cleanup_failure() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .withf(|id, request, _| id == "owned-session" && request.model == "test-model")
+        .once()
+        .returning(|_, _, _| {
+            Box::pin(async { Err(AgentError::Runtime("provider failure".into())) })
+        });
+    channel
+        .expect_shutdown_session()
+        .withf(|id| id == "owned-session")
+        .once()
+        .returning(|_| Box::pin(async { Err(AgentError::Runtime("cleanup failure".into())) }));
+    let client = SessionRunClient::from_channel("owned-session".into(), Arc::new(channel));
+    let cloned = client.clone();
+
+    // Act
+    let result = cloned
+        .submit(
+            request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        )
+        .await;
+    let cleanup = client.shutdown().await;
+
+    // Assert
+    assert_eq!(
+        result.expect_err("provider error").to_string(),
+        "provider failure"
+    );
+    assert_eq!(
+        cleanup.expect_err("cleanup error").to_string(),
+        "cleanup failure"
+    );
 }

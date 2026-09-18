@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use ag_forge::ReviewRequestClient;
-use ag_git::GitClient;
-use ag_runtime::{
+use ag_contracts::{
     AgentChannel, AgentError, AgentFuture, SessionRef, StartSessionRequest, TurnEvent, TurnRequest,
     TurnResult,
 };
-use ag_worker::RunClient;
+use ag_forge::ReviewRequestClient;
+use ag_git::GitClient;
+use ag_worker::{RunClient, SessionRunClient};
 use tokio::sync::mpsc;
 
-use super::{AppServices, SessionChannelFactory};
+use super::{AppServices, SessionRunFactory};
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
 use crate::infra::clipboard_image::ClipboardImageClient;
@@ -19,17 +19,25 @@ use crate::infra::fs::FsClient;
 
 /// Supplies explicitly scripted worker channels, with an offline fallback.
 #[derive(Default)]
-pub(crate) struct TestSessionChannelFactory {
-    channels: Mutex<HashMap<SessionId, Arc<dyn AgentChannel>>>,
+pub(crate) struct TestSessionRunFactory {
+    channels: Mutex<HashMap<SessionId, SessionRunClient>>,
 }
 
-impl TestSessionChannelFactory {
+impl TestSessionRunFactory {
     /// Installs one shared registry before configuring any session scripts.
     pub(crate) fn install(services: &mut AppServices) -> Arc<Self> {
         let factory = Arc::new(Self::default());
-        services.session_channel_factory = factory.clone();
+        services.session_run_factory = factory.clone();
 
         factory
+    }
+
+    /// Registers a worker client backed by an injected transport.
+    pub(crate) fn register_run(&self, session_id: &str, run: SessionRunClient) {
+        self.channels
+            .lock()
+            .expect("session scripts")
+            .insert(SessionId::from(session_id), run);
     }
 
     /// Registers the next worker channel without removing other session
@@ -38,17 +46,25 @@ impl TestSessionChannelFactory {
         self.channels
             .lock()
             .expect("session channel scripts poisoned")
-            .insert(SessionId::from(session_id), channel);
+            .insert(
+                SessionId::from(session_id),
+                SessionRunClient::from_channel(session_id.to_string(), channel),
+            );
     }
 }
 
-impl SessionChannelFactory for TestSessionChannelFactory {
-    fn create(&self, session_id: &SessionId, _kind: AgentKind) -> Arc<dyn AgentChannel> {
+impl SessionRunFactory for TestSessionRunFactory {
+    fn create(&self, session_id: &SessionId, _kind: AgentKind) -> SessionRunClient {
         self.channels
             .lock()
             .expect("session channel scripts poisoned")
             .remove(session_id)
-            .unwrap_or_else(|| Arc::new(OfflineSessionChannel))
+            .unwrap_or_else(|| {
+                SessionRunClient::from_channel(
+                    session_id.to_string(),
+                    Arc::new(OfflineSessionChannel),
+                )
+            })
     }
 }
 

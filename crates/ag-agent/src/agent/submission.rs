@@ -10,14 +10,15 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
+use ag_contracts::{
+    OneShotClient, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
+    SessionDiffState, SessionStats,
+};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt,
     format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
-#[cfg(any(test, feature = "test-utils"))]
-pub use ag_runtime::MockOneShotClient;
-use ag_runtime::PermissionMode;
-pub use ag_runtime::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
+use ag_session::AgentKind;
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -27,8 +28,6 @@ use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliEx
 use super::submission_pool::{SubmissionLease, SubmissionPool};
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
-use crate::model::agent::AgentKind;
-use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Production [`OneShotClient`] that routes through the selected provider.
 pub struct RealOneShotClient {
@@ -245,7 +244,7 @@ async fn execute_one_shot_app_server_turns(
         main_checkout_root: None,
         model: request.model.clone(),
         permission_mode: request.permission_mode,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(request.prompt.clone()),
         request_kind: request.request_kind.clone(),
         replay_transcript: None,
@@ -406,7 +405,7 @@ async fn attempt_one_shot_app_server_repair(
         main_checkout_root: None,
         model: request.model.clone(),
         permission_mode: request.permission_mode,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
         request_kind: request.request_kind,
         replay_transcript: None,

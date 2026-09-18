@@ -2,10 +2,9 @@
 
 use std::ffi::OsStr;
 
-use ag_agent::{
-    AgentKind, AgentRequestKind, BuildCommandRequest, PermissionMode, ReasoningLevel, SpeedMode,
-    create_backend,
-};
+use ag_agent::{BuildCommandRequest, create_backend};
+use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_session::AgentKind;
 use tempfile::tempdir;
 
 #[test]

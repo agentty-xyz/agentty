@@ -1,16 +1,20 @@
 //! Public execution contract exercised without Agentty or provider binaries.
+use std::future::{Future, poll_fn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
-use ag_protocol::{AgentResponse, TurnPrompt};
-use ag_runtime::{
-    AgentChannel, AgentError, AgentRequestKind, MockAgentChannel, PermissionMode,
-    PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
-    TurnResult,
+use ag_contracts::{
+    AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt,
+    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
-use ag_worker::{ScheduledCommand, ScheduledWork, SessionOperationRow, WorkQueue, WorkerHost};
+use ag_protocol::{AgentResponse, TurnPrompt};
+use ag_worker::{
+    ScheduledCommand, ScheduledWork, SessionOperationRow, SessionRunClient, SessionWorkerHandle,
+    WorkQueue, WorkerHost,
+};
 use async_trait::async_trait;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 struct Run {
@@ -30,7 +34,7 @@ impl ScheduledCommand for Run {
 
 struct Host {
     results: mpsc::UnboundedSender<Result<TurnResult, AgentError>>,
-    runtime: Arc<dyn AgentChannel>,
+    runtime: SessionRunClient,
 }
 
 impl WorkQueue for Host {
@@ -67,14 +71,10 @@ impl WorkerHost for Host {
             response_style: ResponseStyle::default(),
             speed_mode: SpeedMode::default(),
         };
-        let result = ag_worker::run_turn(
-            self.runtime.as_ref(),
-            "session".into(),
-            request,
-            mpsc::unbounded_channel().0,
-            run.cancellation,
-        )
-        .await;
+        let result = self
+            .runtime
+            .submit(request, mpsc::unbounded_channel().0, run.cancellation)
+            .await;
         assert!(self.results.send(result).is_ok());
     }
 
@@ -89,12 +89,7 @@ impl WorkerHost for Host {
     }
 
     async fn shutdown(&self) {
-        assert!(
-            self.runtime
-                .shutdown_session("session".into())
-                .await
-                .is_ok()
-        );
+        assert!(self.runtime.shutdown().await.is_ok());
     }
 }
 
@@ -121,33 +116,34 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
         .expect_shutdown_session()
         .times(2)
         .returning(|_| Box::pin(async { Ok(()) }));
-    let (sender, receiver) = mpsc::unbounded_channel();
     let (results, mut observed) = mpsc::unbounded_channel();
+    let sender = SessionWorkerHandle::spawn(
+        Host {
+            runtime: SessionRunClient::from_channel("session".into(), Arc::new(runtime)),
+            results,
+        },
+        Arc::default(),
+    );
     let canceled = CancellationToken::new();
     canceled.cancel();
+    // Act
     sender
-        .send(Run {
+        .submit(Run {
             order: 1,
             cancellation: CancellationToken::new(),
         })
         .expect("submit");
     sender
-        .send(Run {
+        .submit(Run {
             order: 2,
             cancellation: canceled,
         })
         .expect("submit canceled");
     drop(sender);
-    // Act
-    ag_worker::run(
-        Host {
-            runtime: Arc::new(runtime),
-            results,
-        },
-        Arc::new(Notify::new()),
-        receiver,
-    )
-    .await;
+    let completed = observed.recv().await.expect("first result");
+    let canceled = observed.recv().await.expect("second result");
+    // Recovery begins only after the previous worker has released its runtime.
+    assert!(observed.recv().await.is_none());
     let store = RecoveryStore(AtomicBool::new(false), Mutex::new(None));
     let recovery: Result<(), String> =
         ag_worker::recover(&store, "restart", |operations| async move {
@@ -157,22 +153,66 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
         .await;
     // Assert
     assert_eq!(
-        observed
-            .recv()
-            .await
-            .expect("first result")
-            .expect("completed")
-            .assistant_message
-            .answer,
+        completed.expect("completed").assistant_message.answer,
         "done"
     );
-    assert!(matches!(
-        observed.recv().await,
-        Some(Err(AgentError::InterruptedByUser(_)))
-    ));
-    assert!(observed.recv().await.is_none());
+    assert!(matches!(canceled, Err(AgentError::InterruptedByUser(_))));
     assert!(recovery.is_ok());
     assert!(store.0.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn retiring_a_paused_host_releases_its_runtime_and_closes_retained_handles() {
+    // Arrange
+    let mut runtime = MockAgentChannel::new();
+    runtime.expect_shutdown_session().once().returning(|id| {
+        Box::pin(async move {
+            assert_eq!(id, "retiring");
+            Ok(())
+        })
+    });
+    let (results, mut observed) = mpsc::unbounded_channel();
+    let worker = SessionWorkerHandle::spawn(
+        Host {
+            runtime: SessionRunClient::from_channel("retiring".into(), Arc::new(runtime)),
+            results,
+        },
+        Arc::default(),
+    );
+    let retained = worker.clone();
+
+    // Act
+    let pause = worker.pause().await;
+    drop(pause); // A failed host update resumes the existing mailbox.
+    let mut retirement = Box::pin(worker.pause().await.shutdown());
+    poll_fn(|context| {
+        assert!(retirement.as_mut().poll(context).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+
+    // Assert: cancellation closes admission before the worker can poll its
+    // receiver or release the runtime.
+    assert!(
+        retained
+            .submit(Run {
+                order: 0,
+                cancellation: CancellationToken::new()
+            })
+            .is_err()
+    );
+    retirement.await;
+
+    // Assert
+    assert!(observed.recv().await.is_none());
+    assert!(
+        retained
+            .submit(Run {
+                order: 0,
+                cancellation: CancellationToken::new(),
+            })
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -285,5 +325,17 @@ impl ag_worker::OperationRepository<String> for RecoveryStore {
 
     async fn request_cancel_for_session_operations(&self, _session: &str) -> Result<(), String> {
         Err("unexpected call".into())
+    }
+}
+
+#[tokio::test]
+async fn configured_session_workers_construct_and_release_inert_provider_runtimes() {
+    // Arrange
+    let config = ag_worker::RuntimeConfig::default();
+    for kind in ag_session::AgentKind::ALL {
+        // Act
+        let worker = SessionRunClient::new("configured".into(), *kind, &config);
+        // Assert
+        assert!(worker.shutdown().await.is_ok());
     }
 }

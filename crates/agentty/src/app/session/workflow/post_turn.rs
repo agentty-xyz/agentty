@@ -4,8 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
-use ag_agent::{AgentError, TurnResult};
+use ag_contracts::{AgentError, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_orchestration as orchestration;
@@ -204,13 +203,13 @@ impl TurnPersistence<'_> {
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
-            diff_state: agent::SessionDiffState::Unknown,
+            diff_state: ag_contracts::SessionDiffState::Unknown,
             input_tokens,
             output_tokens,
         };
         let instruction_conversation_id =
-            if agent::transport_mode(self.session_agent.kind()).uses_app_server() {
-                agent::normalize_instruction_conversation_id(provider_conversation_id)
+            if ag_worker::uses_persistent_session(self.session_agent.kind()) {
+                ag_contracts::normalize_instruction_conversation_id(provider_conversation_id)
             } else {
                 None
             };

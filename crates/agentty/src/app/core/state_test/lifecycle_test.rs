@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::{AppServerError, MockAppServerClient};
+use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_forge::MockReviewRequestClient;
 use ag_git::MockGitClient;
-use ag_runtime::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_worker::test_support::{AppServerError, MockAppServerClient};
 use app::sync;
 use tempfile::tempdir;
 use tokio::sync::oneshot;

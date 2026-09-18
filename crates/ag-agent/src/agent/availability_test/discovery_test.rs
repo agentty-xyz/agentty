@@ -2,10 +2,10 @@
 use std::os::unix::fs::PermissionsExt;
 use std::{env, fs};
 
+use ag_session::AgentKind;
 use tempfile::tempdir;
 
 use crate::agent::availability::{available_agent_kinds_from_path, executable_name};
-use crate::model::agent::AgentKind;
 
 #[test]
 /// Ensures executable names stay aligned with provider command names.
@@ -52,8 +52,5 @@ fn test_real_agent_availability_probe_ignores_non_executable_files() {
     let available_agent_kinds = available_agent_kinds_from_path(Some(path_value.as_os_str()));
 
     // Assert
-    assert_eq!(
-        available_agent_kinds,
-        [] as [crate::model::agent::AgentKind; 0]
-    );
+    assert_eq!(available_agent_kinds, [] as [ag_session::AgentKind; 0]);
 }

@@ -1,11 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
-use ag_agent::{AgentRequestKind, MockAgentChannel, TurnResult};
+use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_worker::SessionRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -58,7 +58,10 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -162,7 +165,10 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -244,7 +250,10 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         app_event_tx: mpsc::unbounded_channel().0,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -300,7 +309,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
     assert_eq!(status, Status::Review);
     assert_eq!(
         instruction_conversation_id,
-        agent::normalize_instruction_conversation_id(Some("thread-123"))
+        ag_contracts::normalize_instruction_conversation_id(Some("thread-123"))
     );
 }
 
@@ -392,7 +401,7 @@ async fn test_send_persisted_command_marks_failed_when_worker_receiver_is_closed
         .send_persisted_command(
             database.operations(),
             &SessionId::from("sess1"),
-            sender,
+            ag_worker::test_session_worker_handle(Arc::default(), sender, Arc::default()),
             ScheduledSessionCommand::immediate(resume_command("rollup-failed")),
         )
         .await;

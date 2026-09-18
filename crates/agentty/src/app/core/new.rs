@@ -301,7 +301,7 @@ impl App {
     /// CLI version task.
     fn startup_agent_cli_version_probe(
         clients: &AppClients,
-    ) -> Option<Arc<dyn ag_agent::AgentAvailabilityProbe>> {
+    ) -> Option<Arc<dyn ag_session::AgentAvailabilityProbe>> {
         clients
             .agent_cli_version_task_enabled
             .then(|| Arc::clone(&clients.agent_availability_probe))
@@ -385,10 +385,7 @@ impl App {
             clock,
             event_tx,
             AppServiceDeps {
-                app_server_client_override: clients
-                    .app_server_client_override
-                    .as_ref()
-                    .map(Arc::clone),
+                runtime_config: clients.runtime_config.clone(),
                 available_agent_kinds,
                 clipboard_image_client_override: None,
                 fs_client: Arc::clone(&clients.fs_client),
@@ -399,7 +396,7 @@ impl App {
                 )),
                 repositories,
                 review_request_client: Arc::clone(&clients.review_request_client),
-                session_channel_factory: Arc::clone(&clients.session_channel_factory),
+                session_run_factory: Arc::clone(&clients.session_run_factory),
             },
             available_agent_clis,
         ))

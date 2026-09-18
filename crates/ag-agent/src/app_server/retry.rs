@@ -265,7 +265,7 @@ async fn run_cancellable_turn_attempt<Runtime, RunTurn, ShutdownRuntime>(
     active_turn: &ActiveAppServerTurn,
     runtime: &mut Runtime,
     prompt: &TurnPrompt,
-    provider_call_budget: Option<&crate::ProviderCallBudget>,
+    provider_call_budget: Option<&ag_contracts::ProviderCallBudget>,
     run_turn_with_runtime: &mut RunTurn,
     shutdown_runtime: &mut ShutdownRuntime,
 ) -> Result<(String, u64, u64), AppServerError>

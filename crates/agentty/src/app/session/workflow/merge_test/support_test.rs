@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::GitClient;
@@ -71,12 +71,12 @@ pub(super) fn test_fs_client() -> Arc<dyn FsClient> {
 pub(super) fn test_run_client() -> Arc<dyn RunClient> {
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().times(0..).returning(|_| {
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: ag_protocol::AgentResponse::plain("Existing session commit"),
-            stats: agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -505,11 +505,11 @@ pub(super) fn metadata_sync_review_request_client(
 pub(super) fn metadata_sync_run_client() -> Arc<dyn RunClient> {
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().once().returning(|_| {
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain(
                     r#"{"title":"Old title","description":"Old details.\n\n- Preserve sync details.","is_title_change_significant":false}"#,
                 ),
-                stats: agent::SessionStats::default(),
+                stats: ag_contracts::SessionStats::default(),
             })
         });
 

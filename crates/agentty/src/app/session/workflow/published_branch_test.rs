@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_forge::{MockReviewRequestClient, ReviewCommentAnchorSide, ReviewCommentThread};
 use ag_git::{GitError, MockGitClient};
@@ -81,11 +82,11 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
     run_client.expect_submit().once().returning(|request| {
             assert!(request.prompt.contains("https://example.com/issues/42"));
 
-            Ok(ag_agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: ag_protocol::AgentResponse::plain(
                     r#"{"title":"Manual stable title","description":"Tracks #42: https://example.com/issues/42\n\nNew body.","is_title_change_significant":false}"#,
                 ),
-                stats: ag_agent::SessionStats::default(),
+                stats: ag_contracts::SessionStats::default(),
             })
         });
     let (input, transcript) = metadata_sync_test_input(db.clone(), git_client);

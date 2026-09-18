@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ag_agent::{
+use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
     ReasoningLevel, SessionStats, SpeedMode,
 };

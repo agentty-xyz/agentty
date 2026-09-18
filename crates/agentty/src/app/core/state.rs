@@ -5,9 +5,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ag_agent::{AgentAvailabilityProbe, AppServerClient, RealAgentAvailabilityProbe};
 use ag_forge::{RealReviewRequestClient, ReviewRequestClient};
 use ag_git::{GitClient, GitError, RealGitClient};
+use ag_session::AgentAvailabilityProbe;
+use ag_worker::{RealAgentAvailabilityProbe, RuntimeConfig};
 use app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_queued_label,
     run_branch_publish_action,
@@ -18,7 +19,7 @@ use app::review::{
     FocusedReviewPersistence, ReviewCacheEntry, mark_session_agent_review, review_failure_message,
     review_loading_message, review_view_text, start_review_assist as spawn_review_assist,
 };
-use app::service::{AppServices, RealSessionChannelFactory, SessionChannelFactory};
+use app::service::{AppServices, RealSessionRunFactory, SessionRunFactory};
 use app::session::SessionManager;
 use app::session_runtime::SessionRuntime;
 use app::setting::SettingsManager;
@@ -110,14 +111,14 @@ pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     /// Whether startup should spawn background CLI version detection.
     pub(super) agent_cli_version_task_enabled: bool,
-    pub(super) app_server_client_override: Option<Arc<dyn AppServerClient>>,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
     pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
-    pub(super) session_channel_factory: Arc<dyn SessionChannelFactory>,
+    pub(super) runtime_config: RuntimeConfig,
+    pub(super) session_run_factory: Arc<dyn SessionRunFactory>,
     pub(super) sync_main_runner: Option<Arc<dyn SyncMainRunner>>,
     pub(super) tmux_client: Arc<dyn TmuxClient>,
     pub(super) version_task_runner: Arc<dyn task::VersionTaskRunner>,
@@ -130,14 +131,14 @@ impl AppClients {
         Self {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: true,
-            app_server_client_override: None,
+            runtime_config: RuntimeConfig::default(),
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
             is_tmux_session: tmux::is_tmux_session(),
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
-            session_channel_factory: Arc::new(RealSessionChannelFactory::new(None)),
+            session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),
             sync_main_runner: None,
             tmux_client: Arc::new(RealTmuxClient),
             version_task_runner: Arc::new(task::RealVersionTaskRunner),

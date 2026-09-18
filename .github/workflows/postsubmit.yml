@@ -30,6 +30,8 @@ jobs:
             hook: test-ag-agent-src
           - member: ag-clipboard
             hook: test-ag-clipboard-src
+          - member: ag-contracts
+            hook: test-ag-contracts-src
           - member: ag-forge
             hook: test-ag-forge-src
           - member: ag-git

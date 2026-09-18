@@ -3,6 +3,9 @@
 #[path = "lifecycle_test/support_test.rs"]
 pub(crate) mod support;
 
+#[path = "lifecycle_test/backend_test.rs"]
+mod backend;
+
 #[path = "lifecycle_test/display_test.rs"]
 mod display;
 

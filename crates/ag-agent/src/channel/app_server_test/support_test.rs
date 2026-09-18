@@ -1,24 +1,23 @@
 use std::path::PathBuf;
 
+use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerTurnResponse;
-use crate::channel::contract::{AgentRequestKind, TurnEvent, TurnRequest};
-use crate::model::agent::ReasoningLevel;
 
 pub(super) fn make_turn_request() -> TurnRequest {
     TurnRequest {
-        continuation: crate::channel::TurnContinuation::fresh(),
+        continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
         model: "gpt-5.6-sol".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do something".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
-        response_style: crate::ResponseStyle::default(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        response_style: ag_contracts::ResponseStyle::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     }
 }
 

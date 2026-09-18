@@ -1,8 +1,6 @@
 //! Provider-managed instruction bootstrap planning for app-server sessions.
 
-pub use ag_runtime::normalize_instruction_conversation_id;
-
-use crate::channel::AgentRequestKind;
+use ag_contracts::{AgentRequestKind, normalize_instruction_conversation_id};
 
 /// Prompt-shaping mode used for one app-server turn attempt.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

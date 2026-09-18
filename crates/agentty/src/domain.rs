@@ -27,10 +27,10 @@ pub(crate) mod transient_message;
 
 /// Agent provider and model metadata used by the domain layer.
 pub mod agent {
-    pub use ag_agent::{
+    pub use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
+    pub use ag_session::{
         AgentCliInfo, AgentCliVersion, AgentKind, AgentModel, AgentSelection,
-        AgentSelectionMetadata, ReasoningLevel, ResponseStyle, SpeedMode,
-        parse_persisted_session_agent_model, resolve_agent_kind_for_model,
+        AgentSelectionMetadata, parse_persisted_session_agent_model, resolve_agent_kind_for_model,
         resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
         resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
     };
@@ -38,7 +38,7 @@ pub mod agent {
 
 /// Agent permission mode metadata.
 pub mod permission {
-    pub use ag_agent::PermissionMode;
+    pub use ag_contracts::PermissionMode;
 }
 
 /// Canonical turn prompt payload types.

@@ -1,21 +1,24 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{
-    AgentKind, AgentModel, AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission,
-    PermissionMode, ReasoningLevel, SessionStats, SpeedMode, diff_fence, is_input_size_error,
+use ag_contracts::{
+    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
+    ReasoningLevel, SessionStats, SpeedMode, is_input_size_error,
 };
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, diff_fence};
+use ag_session::{AgentKind, AgentModel};
 use ag_worker::MockRunClient;
 
 use super::{
-    MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, submit, summarize,
-    summary_with_repair,
+    MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, render_result, submit,
+    summarize, summary_with_repair,
 };
+use crate::app::AppError;
+use crate::app::session::SessionError;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
-        provider_call_budget: Some(ag_agent::ProviderCallBudget::new(MAX_PROVIDER_CALLS)),
+        provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(MAX_PROVIDER_CALLS)),
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
@@ -417,7 +420,7 @@ async fn summary_repair_respects_prompt_and_shared_call_budgets() {
     ] {
         let mut request = request();
         request.prompt = "x".repeat(prompt_size);
-        let budget = ag_agent::ProviderCallBudget::new(budget_size);
+        let budget = ag_contracts::ProviderCallBudget::new(budget_size);
         request.provider_call_budget = Some(budget.clone());
         let mut client = MockRunClient::new();
         client.expect_submit().once().returning(|request| {
@@ -484,7 +487,7 @@ async fn rejects_unbudgetable_template_and_render_failure() {
     })
     .await;
     let invalid = submit(&client, request(), "", "", |_, _| {
-        Err(OneShotError::new("render"))
+        render_result(Err(AppError::Workflow("render".to_string())))
     })
     .await;
 
@@ -643,7 +646,9 @@ async fn render_failure_after_summarization_propagates() {
         "",
         |diff, context| {
             if diff.contains("Summarized input") {
-                return Err(OneShotError::new("summary render failed"));
+                return render_result(Err(SessionError::Workflow(
+                    "summary render failed".to_string(),
+                )));
             }
             Ok(render(diff, context))
         },

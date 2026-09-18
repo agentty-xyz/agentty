@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use ag_contracts::{AgentChannel, AgentRequestKind, TurnEvent};
+use ag_session::{AgentKind, AgentModel};
 use tokio::sync::mpsc;
 
 use super::support::{collect_pid_updates, make_ok_response, make_turn_request};
 use crate::app_server::{AppServerStreamEvent, MockAppServerClient};
 use crate::channel::app_server::AppServerAgentChannel;
-use crate::channel::contract::{AgentChannel, AgentRequestKind, TurnEvent};
-use crate::model::agent::{AgentKind, AgentModel};
 
 #[tokio::test]
 async fn repair_forwards_live_pid_and_publishes_retained_or_cleared_response_pid() {
@@ -180,7 +180,7 @@ async fn repair_preserves_permissions_for_the_next_session_turn() {
         (AgentKind::Gemini, AgentModel::Gemini31Pro),
         (AgentKind::Antigravity, AgentModel::Gemini31Pro),
     ] {
-        for permission_mode in crate::model::permission::PermissionMode::ALL {
+        for permission_mode in ag_contracts::PermissionMode::ALL {
             // Arrange
             let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
             let mut client = MockAppServerClient::new();
@@ -212,7 +212,7 @@ async fn repair_preserves_permissions_for_the_next_session_turn() {
                 .await
                 .expect("repair succeeds");
             request.request_kind = AgentRequestKind::SessionResume;
-            request.continuation = crate::channel::TurnContinuation::provider(
+            request.continuation = ag_contracts::TurnContinuation::provider(
                 None,
                 None,
                 repaired.provider_conversation_id.clone(),

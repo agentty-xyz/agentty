@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use ag_agent::AgentSelectionMetadata;
+use ag_session::AgentSelectionMetadata;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 

@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
+use ag_contracts::{AgentChannel, TurnEvent};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use super::support::{make_ok_response, make_turn_request};
 use crate::app_server::{AppServerStreamEvent, MockAppServerClient};
 use crate::channel::app_server::AppServerAgentChannel;
-use crate::channel::contract::{AgentChannel, TurnEvent};
-use crate::model::agent::AgentKind;
 
 #[tokio::test]
 /// Verifies non-thought assistant deltas are withheld from the unified
@@ -41,7 +41,7 @@ async fn test_run_turn_suppresses_non_thought_assistant_delta_streaming() {
     // Assert
     assert!(result.is_ok());
     let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-    assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
+    assert_ne!(events, [] as [ag_contracts::TurnEvent; 0]);
     assert!(
         events
             .iter()
@@ -82,7 +82,7 @@ async fn test_run_turn_suppresses_non_delta_assistant_messages() {
     // Assert
     assert!(result.is_ok());
     let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-    assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
+    assert_ne!(events, [] as [ag_contracts::TurnEvent; 0]);
     assert!(
         events
             .iter()
@@ -123,7 +123,7 @@ async fn test_run_turn_suppresses_non_delta_structured_json_streaming() {
     // Assert
     assert!(result.is_ok());
     let events = std::iter::from_fn(|| events_rx.try_recv().ok()).collect::<Vec<_>>();
-    assert_ne!(events, [] as [crate::channel::contract::TurnEvent; 0]);
+    assert_ne!(events, [] as [ag_contracts::TurnEvent; 0]);
     assert!(
         events
             .iter()

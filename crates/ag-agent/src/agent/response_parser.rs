@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
+use ag_contracts::{SessionDiffState, SessionStats};
 use ag_protocol::FocusedReview;
 use serde::Deserialize;
-
-use crate::model::session::{SessionDiffState, SessionStats};
 
 /// Parsed agent response including content text and usage statistics.
 pub(crate) struct ParsedResponse {
