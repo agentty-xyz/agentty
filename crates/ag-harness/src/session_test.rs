@@ -15,3 +15,6 @@ mod write_journal;
 
 #[path = "session_test/store_test.rs"]
 mod store;
+
+#[path = "session_test/recovery_test.rs"]
+mod recovery;

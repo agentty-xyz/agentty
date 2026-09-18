@@ -10,8 +10,8 @@ use super::support::{
 };
 use crate::model::{ModelError, ModelMessage};
 use crate::session::{
-    Database, EncodedMessage, NewSession, SessionError, TURN_LEASE_SECONDS, TimestampSource,
-    connect_options, interrupt_owned_turn,
+    Database, EncodedMessage, NewSession, Reservation, SessionError, TURN_LEASE_SECONDS,
+    TimestampSource, connect_options, interrupt_owned_turn,
 };
 use crate::store::SessionStore as _;
 use crate::turn::TurnError;
@@ -251,7 +251,7 @@ async fn reserving_a_turn_rejects_a_stale_acquisition_snapshot() {
             &message,
             &acquisition,
             &turn_options(),
-            true,
+            None,
         )
         .await
         .expect("reservation should be checked");
@@ -263,7 +263,7 @@ async fn reserving_a_turn_rejects_a_stale_acquisition_snapshot() {
     .expect("active turn count should load");
 
     // Assert
-    assert!(reserved.is_none());
+    assert!(matches!(reserved, Reservation::Retry));
     assert_eq!(active_turns, 0);
 }
 
@@ -296,7 +296,7 @@ async fn reserving_a_turn_for_a_removed_session_reports_not_found() {
             &message,
             &acquisition,
             &turn_options(),
-            true,
+            None,
         )
         .await;
 

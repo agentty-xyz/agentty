@@ -9,6 +9,8 @@ use std::task::{Context as TaskContext, Poll};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
 
 /// Stream-local identifier that correlates lifecycle events for one operation.
@@ -162,7 +164,7 @@ pub enum LifecycleEventKind {
 }
 
 /// Observable outcome of one provider-neutral model request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ModelResponseType {
     /// Terminal, schema-validated structured output.

@@ -6,6 +6,10 @@
 //! remain behind injectable boundaries.
 
 #[cfg(test)]
+#[path = "../tests/support/recovery.rs"]
+mod recovery_test;
+
+#[cfg(test)]
 extern crate self as ag_harness;
 
 #[cfg(test)]
@@ -34,6 +38,7 @@ mod model;
 mod policy;
 mod provider;
 mod read;
+mod recovery;
 mod repository;
 mod schema_contract;
 mod session;
@@ -69,6 +74,9 @@ pub use provider::{
     QwenConfig,
 };
 pub use read::{ReadError, ReadOutput};
+pub use recovery::{
+    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
+};
 pub use repository::{Repository, RepositoryError};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::{

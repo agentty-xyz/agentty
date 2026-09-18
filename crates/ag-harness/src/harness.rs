@@ -4,25 +4,26 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use serde_json::json;
 use tokio::sync::OnceCell;
 
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
-use crate::lifecycle::{
-    LifecycleEmitter, LifecycleId, LifecycleObserver, TurnErrorType, TurnLifecycle,
-};
+use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
 use crate::model::{Model, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::policy::ToolPolicy;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
 use crate::store::SessionStore;
-use crate::store_coordinator;
 use crate::tool::Tool;
 use crate::turn::{TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
+use crate::{
+    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, store_coordinator,
+};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 
@@ -91,7 +92,7 @@ impl Session {
         prompt: impl Into<String>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, SessionError> {
-        self.send_observed(prompt.into(), options, None).await
+        self.send_observed(prompt.into(), options, None, None).await
     }
 
     /// Prepares a turn with explicit options and a retained cancellation
@@ -123,8 +124,110 @@ impl Session {
         };
 
         ControlledTurn::new(move |control| async move {
-            session.send_observed(prompt, options, Some(control)).await
+            session
+                .send_observed(prompt, options, Some(control), None)
+                .await
         })
+    }
+
+    /// Submits a host request once. Matching completed retries return the
+    /// original output and activity; active or stopped retries return typed
+    /// errors containing recovery records. New attempts require new IDs.
+    ///
+    /// # Errors
+    /// Returns a conflict for changed effective configuration, an identity
+    /// error if the harness is unidentified, or an execution/store error.
+    pub async fn submit(
+        &mut self,
+        host_id: impl Into<String>,
+        prompt: impl Into<String>,
+        options: TurnOptions,
+    ) -> Result<TurnOutcome, SessionError> {
+        let prompt = prompt.into();
+        let request = self.host_request(host_id.into(), &prompt, &options)?;
+
+        self.send_observed(prompt, options, None, Some(request))
+            .await
+    }
+
+    /// Prepares a host request with the existing retained cancellation control.
+    /// Cancellation can race a terminal commit; use `recover` after settlement.
+    ///
+    /// # Errors
+    /// Returns identity validation errors before execution. The future returns
+    /// the same execution, duplicate, and persistence errors as `submit`.
+    pub fn submit_controlled(
+        &mut self,
+        host_id: impl Into<String>,
+        prompt: impl Into<String>,
+        options: TurnOptions,
+    ) -> Result<ControlledTurn<'_, SessionError>, SessionError> {
+        let prompt = prompt.into();
+        let request = self.host_request(host_id.into(), &prompt, &options)?;
+        let mut session = Self {
+            database: Arc::clone(&self.database),
+            harness: self.harness.snapshot(),
+            history: SessionHistory::new(self.history.max_bytes),
+            id: self.id.clone(),
+            provider_session_id: None,
+            schema: self.schema.clone(),
+            system_prompt: self.system_prompt.clone(),
+        };
+
+        Ok(ControlledTurn::new(move |control| async move {
+            session
+                .send_observed(prompt, options, Some(control), Some(request))
+                .await
+        }))
+    }
+
+    /// Loads recorded status, complete output, and known writes without model
+    /// or tool execution. This does not establish that pending effects stopped.
+    ///
+    /// # Errors
+    /// Returns an error for invalid identifiers or unavailable/corrupt storage.
+    pub async fn recover(&self, host_id: &str) -> Result<Option<HostTurnRecord>, SessionError> {
+        crate::recovery::validate_identifier(host_id)?;
+        self.database.load_request(&self.id, host_id).await
+    }
+
+    fn host_request(
+        &self,
+        id: String,
+        prompt: &str,
+        options: &TurnOptions,
+    ) -> Result<HostRequest, SessionError> {
+        let identity = self
+            .harness
+            .execution_identity
+            .as_ref()
+            .ok_or(SessionError::ExecutionIdentityRequired)?;
+        let metadata = self.harness.model.metadata();
+        let repository = self.harness.repository.as_ref().map(|repository| {
+            json!({
+                "root": repository.root().as_os_str().as_encoded_bytes(),
+                "git": repository.git_executable().as_os_str().as_encoded_bytes(),
+            })
+        });
+        HostRequest::from_configuration(
+            id,
+            json!({
+                "version": 1,
+                "input": prompt,
+                "options": {
+                    "schema": options.schema().value(),
+                    "permissions": options.tool_policy(),
+                    "max_tool_calls": options.limits().max_tool_calls(),
+                    "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
+                },
+                "repository": repository,
+                "system_prompt": self.system_prompt,
+                "reasoning": self.harness.model_reasoning_effort,
+                "execution_identity": identity,
+                "model": metadata.as_ref().map(|metadata| (metadata.provider(), metadata.model())),
+                "max_history_bytes": self.history.max_bytes,
+            }),
+        )
     }
 
     async fn send_observed(
@@ -132,14 +235,26 @@ impl Session {
         prompt: String,
         options: TurnOptions,
         control: Option<TurnControl>,
+        request: Option<HostRequest>,
     ) -> Result<TurnOutcome, SessionError> {
         let started_at = Instant::now();
-        let turn = self.harness.lifecycle.start_turn();
-        let turn_id = turn.as_ref().map(TurnLifecycle::id);
+        let mut turn = if request.is_none() {
+            self.harness.lifecycle.start_turn()
+        } else {
+            None
+        };
         let mut result = self
-            .send_turn(prompt, &options, turn_id, control.as_ref())
+            .send_turn(
+                prompt,
+                &options,
+                &mut turn,
+                control.as_ref(),
+                request.as_ref(),
+            )
             .await;
-        if let Ok(outcome) = &mut result {
+        if request.is_none()
+            && let Ok(outcome) = &mut result
+        {
             outcome.set_duration(started_at.elapsed());
         }
         if let Some(turn) = turn {
@@ -161,28 +276,55 @@ impl Session {
         &mut self,
         prompt: String,
         options: &TurnOptions,
-        turn_id: Option<LifecycleId>,
+        turn: &mut Option<TurnLifecycle>,
         control: Option<&TurnControl>,
+        request: Option<&HostRequest>,
     ) -> Result<TurnOutcome, SessionError> {
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
-        let acquisition = store_coordinator::acquire(
-            Arc::clone(&self.database),
-            self.id.clone(),
-            prompt.clone(),
-            options.clone(),
-            control.map(|control| control.settlement.clone()),
-            effects.clone(),
-        );
-        let AcquiredTurn {
-            mut guard,
-            provider_session_id,
-            turns,
-        } = tokio::select! {
+        let acquisition = async {
+            if let Some(request) = request {
+                store_coordinator::acquire_request(
+                    Arc::clone(&self.database),
+                    self.id.clone(),
+                    prompt.clone(),
+                    options.clone(),
+                    request.clone(),
+                    control.map(|control| control.settlement.clone()),
+                    effects.clone(),
+                )
+                .await
+            } else {
+                store_coordinator::acquire(
+                    Arc::clone(&self.database),
+                    self.id.clone(),
+                    prompt.clone(),
+                    options.clone(),
+                    control.map(|control| control.settlement.clone()),
+                    effects.clone(),
+                )
+                .await
+                .map(HostTurnAcquisition::Acquired)
+            }
+        };
+        let acquired = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
             result = acquisition => result?,
         };
+        let AcquiredTurn {
+            mut guard,
+            provider_session_id,
+            turns,
+        } = match acquired {
+            HostTurnAcquisition::Acquired(acquired) => acquired,
+            HostTurnAcquisition::Recorded(record) => return record.into_outcome(),
+        };
+        let host_request = request.is_some();
+        if host_request {
+            *turn = self.harness.lifecycle.start_turn();
+        }
+        let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
         let mut messages = self.history.messages();
@@ -223,9 +365,15 @@ impl Session {
             }
         };
         let turn = messages.split_off(retained_messages);
-        let persistence = guard
-            .complete(&turn[1..], provider_session_id.as_deref())
-            .await;
+        let persistence = if host_request {
+            guard
+                .complete_request(&turn[1..], provider_session_id.as_deref(), &outcome)
+                .await
+        } else {
+            guard
+                .complete(&turn[1..], provider_session_id.as_deref())
+                .await
+        };
         if let Err(error) = persistence {
             guard.mark_interrupted();
 
@@ -349,6 +497,7 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
 pub struct Harness {
     database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
+    execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
     limits: TurnLimits,
@@ -366,6 +515,7 @@ impl Harness {
         Self {
             database: Arc::new(OnceCell::new()),
             database_path: None,
+            execution_identity: None,
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
             limits: TurnLimits::default(),
@@ -376,6 +526,16 @@ impl Harness {
             repository: None,
             store: None,
         }
+    }
+
+    /// Identifies all execution configuration not captured by explicit options.
+    /// Required for host-ID submission, including injected models/filesystems.
+    /// Hosts must revise it when their behavior or configuration changes.
+    #[must_use]
+    pub fn execution_identity(mut self, identity: ExecutionIdentity) -> Self {
+        self.execution_identity = Some(identity);
+
+        self
     }
 
     /// Configures the SQLite database used by durable sessions.
@@ -598,6 +758,7 @@ impl Harness {
         Self {
             database: Arc::clone(&self.database),
             database_path: self.database_path.clone(),
+            execution_identity: self.execution_identity.clone(),
             file_system: Arc::clone(&self.file_system),
             lifecycle: self.lifecycle.clone(),
             limits: self.limits,

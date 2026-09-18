@@ -184,6 +184,27 @@ the rejected identifier. Failed or cancelled turns and expired leases also inval
 continuation, because the remote conversation may have advanced. Delayed cleanup cannot
 clear a newer turn's continuation.
 
+## Host request recovery
+
+`Session::submit` atomically binds a session-scoped host ID and effective-request
+fingerprint to acquisition. Completed duplicates return the stored output and activity;
+active, failed, and interrupted requests return typed recorded states. Different input
+or effective execution configuration conflicts. `Session::recover` reads canonical
+status and the turn's write journal, including pending outcomes, without execution.
+
+The fingerprint includes host-declared execution identity/revision as well as input,
+options, repository scope, system prompt, reasoning settings, and history budget. Hosts
+must revise their identity when injected model or filesystem behavior changes. This
+contract is separate from stored-options continuation compatibility. Legacy turns remain
+readable without host IDs. SQLite retains full terminal outcomes after reopen; memory
+storage provides the same contract without restart durability.
+
+Local duplicate classification precedes admission rejection. Backends enforce duplicate
+classification and acquisition atomically across independent handles. Cancellation can
+race terminal commit, so recovery reports the committed outcome even when the original
+waiter returned cancellation. New execution requires a new ID; this does not guarantee
+exactly-once external effects or prove that pending effects stopped.
+
 ## Concurrency
 
 Sessions and builders share lazy initialization of a bounded SQLite connection pool.
@@ -201,18 +222,24 @@ to OpenTelemetry without storing prompts or tool output in telemetry.
 
 `run_once` owns terminal events for ephemeral turns. `Session::send` owns them for
 durable turns and emits `TurnCompleted` only after committing messages and updating
-session state. Durable turn durations include acquisition and persistence. Session
-coordination or persistence failures emit `TurnFailed` with `session_error`; model or
-tool failures retain their original classification even if recording the failure also
-fails. Dropping either operation emits cancellation once.
+session state. Legacy durable turn durations include acquisition and persistence.
+Host-ID turns retain the engine duration captured before terminal persistence so retries
+return the identical activity report. Their execution observation starts only after new
+turn acquisition; recorded retries, rejected acquisition, and recovery lookups emit no
+execution events. Within an observed turn, session coordination or persistence failures
+emit `TurnFailed` with `session_error`; model or tool failures retain their original
+classification even if recording the failure also fails. Dropping an observed operation
+emits cancellation once.
 
 ## Next iterations
 
-1. **Stores and recovery**
+Owned session handles, injected transactional stores, memory storage, observable
+cancellation, and host-turn recovery are delivered library capabilities.
 
-   Add separately observable turn cancellation and persistence settlement, then host
-   turn IDs for idempotent recovery across SQLite and memory stores. Managed filesystem
-   effect settlement remains separate from persistence settlement.
+1. **Managed filesystem-effect settlement**
+
+   Track filesystem operations through actual completion independently of persistence
+   settlement. Retain local admission while managed effects remain outstanding.
 
 1. **Model switching**
 

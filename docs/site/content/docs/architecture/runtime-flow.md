@@ -1107,16 +1107,21 @@ identity. A host-validated comparison OID stays fixed throughout execution; work
 Independent handles share local admission by backing-store and session identity, held
 through acquisition and abandoned-owner cleanup. Failed cleanup retains admission until
 reconciliation succeeds; cross-process fencing remains the backend's responsibility.
-Controlled durable and one-shot turns expose a separately retained `TurnControl`.
-Cancellation stops the waiter while acquisition, terminal acknowledgment, and cleanup
-retain their owners. `settled()` observes persistence completion after caller drop;
-failed cleanup can be retried for that owner without affecting a successor. Hosts keep
-the runtime driven until settlement, which does not establish filesystem-effect
-completion. Finalization excludes renewal and enforces the last confirmed lease
-deadline; abandoned reservation commits retain cleanup ownership through
-acknowledgement. The session emits completion only after persisting the result; one-shot
-execution uses the same engine without opening SQLite. These are library boundaries for
-the planned Agentty adapters, not a replacement for the current Agentty runtime.
+Host-ID submissions classify duplicates before local admission rejection, while the
+store atomically binds new IDs and effective-request fingerprints to reservations.
+Completed retries return recorded outcomes; active, failed, or interrupted requests
+remain inspectable without re-execution. Recovery includes the turn's write intents and
+outcomes, independently of bounded context replay. Controlled durable and one-shot turns
+expose a separately retained `TurnControl`. Cancellation stops the waiter while
+acquisition, terminal acknowledgment, and cleanup retain their owners. `settled()`
+observes persistence completion after caller drop; failed cleanup can be retried for
+that owner without affecting a successor. Hosts keep the runtime driven until
+settlement, which does not establish filesystem-effect completion. Finalization excludes
+renewal and enforces the last confirmed lease deadline; abandoned reservation commits
+retain cleanup ownership through acknowledgement. The session emits completion only
+after persisting the result; one-shot execution uses the same engine without opening
+SQLite. These are library boundaries for the planned Agentty adapters, not a replacement
+for the current Agentty runtime.
 
 Its cancellation control exposes persistence settlement and managed filesystem-effect
 settlement independently. Once admitted, write replacement and journal recording run

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_turn\nSET status = 'completed', error_type = NULL, lease_expires_at = NULL, updated_at = ?, terminal_outcome = ?\nWHERE session_id = ? AND turn_position = ? AND status = 'running'\n  AND owner_token = ? AND lease_expires_at > ?\n  AND (host_id IS NULL OR ? IS NOT NULL)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "c3b5b1a452bcb63d837c9bb2d0c9f4f9c806d2dfd8edfb0847a8128f8a08c6d9"
+}

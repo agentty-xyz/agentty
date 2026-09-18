@@ -4,6 +4,7 @@ use std::fmt;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -94,7 +95,7 @@ impl Default for TurnLimits {
 }
 
 /// Successful model turn paired with observable execution activity.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TurnOutcome {
     output: Value,
     report: TurnReport,
@@ -126,7 +127,7 @@ impl TurnOutcome {
 }
 
 /// Observable, content-free activity from one successful model turn.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TurnReport {
     duration: Duration,
     model_requests: Vec<ModelRequestActivity>,
@@ -135,7 +136,9 @@ pub struct TurnReport {
 
 impl TurnReport {
     /// Returns the complete elapsed turn time, including persistence for
-    /// durable session turns.
+    /// legacy durable session turns. Host-ID submissions retain the engine
+    /// duration captured before persistence so recovered reports stay
+    /// identical.
     pub fn duration(&self) -> Duration {
         self.duration
     }
@@ -164,7 +167,7 @@ impl TurnReport {
 }
 
 /// Observable facts about one provider request in a successful turn.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ModelRequestActivity {
     completion: Option<CompletionMetadata>,
     duration: Duration,
@@ -202,7 +205,7 @@ impl ModelRequestActivity {
 }
 
 /// Sanitized details about one built-in tool operation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ToolActivity {
     /// A bounded repository file read.

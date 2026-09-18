@@ -99,8 +99,11 @@ Persistent `ag-harness` execution uses a public object-safe transactional store.
 independent external test implementation exercises public construction, reservation,
 options compatibility, and actual turns. Shared conformance cases run against it and
 SQLite and `MemoryStore`, covering admission, bounded history, terminal states, and
-journal ownership. Memory clones share state; tests verify independent instances, expiry
-recovery, comparison compatibility, and canonical records outside replay budgets.
+journal ownership. Host-request conformance also covers atomic duplicates, effective
+configuration conflicts, stopped outcomes, pending effects, and SQLite reopen.
+Controlled request tests retain cancellation/commit races and lost acknowledgments.
+Memory clones share state; tests verify independent instances, expiry recovery,
+comparison compatibility, and canonical records outside replay budgets.
 Barrier-controlled store fixtures exercise stalled renewal and terminal persistence,
 acknowledgement loss, and finalization races. SQLite tests verify owner fencing, expired
 leases, journal settlement, and reopen behavior. The backend also injects a timestamp

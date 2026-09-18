@@ -29,6 +29,7 @@ use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
     ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{
@@ -37,7 +38,7 @@ use crate::session::{
 use crate::store::SessionStore;
 use crate::telemetry;
 use crate::tool::{ReadArguments, Tool, ToolCall};
-use crate::turn::{TurnError, TurnOptions};
+use crate::turn::{TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::{WriteRecord, WriteStatus};
 
 static TRACE_PROVIDER_LOCK: TestMutex<()> = TestMutex::const_new(());
@@ -807,6 +808,39 @@ impl SessionStore for TracedWriteStore {
         options: &TurnOptions,
     ) -> Result<AcquiredTurn, SessionError> {
         self.store.begin_turn(store, id, prompt, options).await
+    }
+
+    async fn begin_request(
+        &self,
+        store: Arc<dyn SessionStore>,
+        id: &str,
+        prompt: &str,
+        options: &TurnOptions,
+        request: &HostRequest,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        self.store
+            .begin_request(store, id, prompt, options, request)
+            .await
+    }
+
+    async fn load_request(
+        &self,
+        id: &str,
+        host_id: &str,
+    ) -> Result<Option<HostTurnRecord>, SessionError> {
+        self.store.load_request(id, host_id).await
+    }
+
+    async fn complete_request(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+        continuation: Option<&str>,
+        outcome: &TurnOutcome,
+    ) -> Result<(), SessionError> {
+        self.store
+            .complete_request(owner, messages, continuation, outcome)
+            .await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {

@@ -3,7 +3,7 @@ use std::error::Error;
 use std::ops::Deref;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -635,7 +635,7 @@ impl Deref for ModelCompletion {
 }
 
 /// Provider-reported facts about one completed model request.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CompletionMetadata {
     finish_reason: String,
     response_id: Option<String>,
@@ -689,7 +689,7 @@ impl CompletionMetadata {
 }
 
 /// Provider-reported token counts for one completed model request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct CompletionUsage {
     cache_hit: Option<u64>,
     cache_miss: Option<u64>,
