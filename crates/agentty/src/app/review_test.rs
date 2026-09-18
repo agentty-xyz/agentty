@@ -108,6 +108,7 @@ fn loading_review_cache(
     HashMap::from([(
         session_id.clone(),
         ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash,
             review_agent: test_review_agent(),
@@ -120,14 +121,15 @@ fn successful_review_update(
     session_id: &SessionId,
     diff_hash: u64,
     review_text: &str,
-) -> HashMap<SessionId, ReviewUpdate> {
-    HashMap::from([(
+) -> Vec<(SessionId, ReviewUpdate)> {
+    vec![(
         session_id.clone(),
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             result: Ok(review_text.to_string()),
         },
-    )])
+    )]
 }
 
 /// Builds one review-ready session with stale focused-review display text.
@@ -258,6 +260,7 @@ fn review_view_text_hides_cached_review_generation() {
     review_cache.insert(
         "session-id".into(),
         ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash: 7,
             review_agent: test_review_agent(),
@@ -288,21 +291,25 @@ fn review_view_text_hides_suppressed_auto_review() {
 fn review_cache_matches_only_current_persistence_state() {
     // Arrange
     let update = |status| FocusedReviewPersistence {
+        request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-id".into(),
         status,
         text: None,
     };
     let loading = ReviewCacheEntry::Loading {
+        request_id: uuid::Uuid::nil(),
         progress: None,
         diff_hash: 42,
         review_agent: test_review_agent(),
     };
     let ready = ReviewCacheEntry::Ready {
+        request_id: uuid::Uuid::nil(),
         diff_hash: 42,
         text: "review".to_string(),
     };
     let failed = ReviewCacheEntry::Failed {
+        request_id: uuid::Uuid::nil(),
         diff_hash: 42,
         error: "failed".to_string(),
     };
@@ -315,6 +322,11 @@ fn review_cache_matches_only_current_persistence_state() {
     assert!(
         !ReviewCacheEntry::Suppressed.matches_persistence(&update(FocusedReviewStatus::Failed))
     );
+    assert_eq!(ReviewCacheEntry::Suppressed.request_id(), None);
+    let mut old_request = update(FocusedReviewStatus::Ready);
+    old_request.request_id = uuid::Uuid::new_v4();
+    assert!(!ready.matches_persistence(&old_request));
+
     let mut stale = update(FocusedReviewStatus::Ready);
     stale.diff_hash = Some(41);
     assert!(!ready.matches_persistence(&stale));
@@ -324,6 +336,7 @@ fn review_cache_matches_only_current_persistence_state() {
 fn focused_review_persistence_retry_stops_after_limit() {
     // Arrange
     let persistence_update = FocusedReviewPersistence {
+        request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-id".into(),
         status: FocusedReviewStatus::Ready,
@@ -358,7 +371,7 @@ fn review_cache_from_rows_restores_persisted_ready_review() {
     // Assert
     assert!(matches!(
         review_cache.get("session-id"),
-        Some(ReviewCacheEntry::Ready { diff_hash: 42, text })
+        Some(ReviewCacheEntry::Ready { diff_hash: 42, text , .. })
             if text == "## Review\nPersisted finding."
     ));
 }
@@ -381,6 +394,7 @@ fn hydrate_review_transients_retracts_terminal_session_review() {
     let review_cache = HashMap::from([(
         session_id,
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "persisted review".to_string(),
         },
@@ -450,6 +464,7 @@ fn hydrate_review_transient_restores_failed_review() {
     let review_cache = HashMap::from([(
         session_id.clone(),
         ReviewCacheEntry::Failed {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             error: "provider unavailable".to_string(),
         },
@@ -493,6 +508,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
         (
             active_session_id.clone(),
             ReviewCacheEntry::Ready {
+                request_id: uuid::Uuid::nil(),
                 diff_hash: 1,
                 text: "active review".to_string(),
             },
@@ -500,6 +516,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
         (
             "inactive-ready".into(),
             ReviewCacheEntry::Ready {
+                request_id: uuid::Uuid::nil(),
                 diff_hash: 2,
                 text: "inactive review".to_string(),
             },
@@ -507,6 +524,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
         (
             "inactive-failed".into(),
             ReviewCacheEntry::Failed {
+                request_id: uuid::Uuid::nil(),
                 diff_hash: 3,
                 error: "failed review".to_string(),
             },
@@ -515,6 +533,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
         (
             loading_session_id.clone(),
             ReviewCacheEntry::Loading {
+                request_id: uuid::Uuid::nil(),
                 progress: None,
                 diff_hash: 4,
                 review_agent: test_review_agent(),
@@ -524,6 +543,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
     let pending_persistence = HashMap::from([(
         pending_session_id.clone(),
         FocusedReviewPersistence {
+            request_id: uuid::Uuid::nil(),
             diff_hash: Some(2),
             session_id: pending_session_id.clone(),
             status: FocusedReviewStatus::Ready,
@@ -563,6 +583,7 @@ fn apply_review_updates_retains_inactive_success_until_persistence() {
     assert_eq!(
         persistence_updates,
         vec![FocusedReviewPersistence {
+            request_id: uuid::Uuid::nil(),
             diff_hash: Some(diff_hash),
             session_id: session_id.clone(),
             status: FocusedReviewStatus::Ready,
@@ -571,7 +592,7 @@ fn apply_review_updates_retains_inactive_success_until_persistence() {
     );
     assert!(matches!(
         review_cache.get(&session_id),
-        Some(ReviewCacheEntry::Ready { diff_hash: 19, text }) if text == review_text
+        Some(ReviewCacheEntry::Ready { diff_hash: 19, text , .. }) if text == review_text
     ));
 }
 
@@ -582,13 +603,14 @@ fn apply_review_updates_returns_clear_for_failed_regeneration() {
     let diff_hash = 29;
     let mut review_cache = loading_review_cache(&session_id, diff_hash);
     let mut session_state = empty_session_state();
-    let review_updates = HashMap::from([(
+    let review_updates = vec![(
         session_id.clone(),
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash,
             result: Err("provider failed".to_string()),
         },
-    )]);
+    )];
 
     // Act
     let persistence_updates =
@@ -598,6 +620,7 @@ fn apply_review_updates_returns_clear_for_failed_regeneration() {
     assert_eq!(
         persistence_updates,
         vec![FocusedReviewPersistence {
+            request_id: uuid::Uuid::nil(),
             diff_hash: Some(diff_hash),
             session_id,
             status: FocusedReviewStatus::Failed,
@@ -687,4 +710,28 @@ fn apply_review_updates_ignores_suppressed_auto_review_entry() {
         review_cache.get(session_id.as_str()),
         Some(ReviewCacheEntry::Suppressed)
     ));
+}
+
+#[test]
+fn partial_review_persists_structured_status_and_retains_display_text() {
+    // Arrange
+    let id = SessionId::from("partial");
+    let mut cache = loading_review_cache(&id, 42);
+    let mut state = empty_session_state();
+    let text =
+        "## Review\n### Suggestions\n- None\n### Coverage\n\nPartial review: deadline exceeded";
+    let updates = vec![(
+        id.clone(),
+        ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
+            diff_hash: 42,
+            result: Ok(text.into()),
+        },
+    )];
+    // Act
+    let persistence = apply_review_updates(&mut cache, &mut state, updates);
+    // Assert
+    assert_eq!(persistence[0].status, FocusedReviewStatus::Partial);
+    assert!(cache[&id].matches_persistence(&persistence[0]));
+    assert_eq!(review_view_text(&cache, &id), Some(text));
 }

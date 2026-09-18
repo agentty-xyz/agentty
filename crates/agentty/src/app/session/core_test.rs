@@ -35,3 +35,6 @@ mod transition;
 
 #[path = "core_test/deletion_test.rs"]
 mod deletion;
+
+#[path = "core_test/rebase_review_test.rs"]
+mod rebase_review;

@@ -290,6 +290,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
     app.review_cache.insert(
         loading_session_id.into(),
         ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash: 43,
             review_agent: loading_review_agent,
@@ -298,6 +299,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
     app.review_cache.insert(
         failed_session_id.into(),
         ReviewCacheEntry::Failed {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 44,
             error: review_error.to_string(),
         },

@@ -233,3 +233,17 @@ See [Execution](@/docs/core-components/execution.md) for the execution contract.
 Focused-review tests inject a short total deadline around `RunClient` to verify
 cancellation and retained partial findings. App-server fixtures verify fresh
 conversation context on reused processes, restart fallbacks, and explicit scope cleanup.
+
+Focused-review retry tests exercise durable call checkpoints through `SessionRepository`
+and SQLite, including atomic completion cleanup, failed persistence, generation pruning,
+and rejection of late writes. Tests with reversed submission order verify that
+generation activation follows review creation order. Reducer tests cover same-diff
+request replacement, reordered completions, and stale persistence retries. Repository
+and worker tests verify that rebase invalidation discards prior evidence even when the
+next review has identical inputs, while preserving reuse on ordinary retries. Rejected
+rebase admission retains completed and partial reviews; invalidation failure stops Git
+mutation. PTY coverage verifies that a rejected sync leaves the review visible.
+Production-composition tests verify that the worker uses isolated pooled runtime
+submissions and closes retained runtimes after draining calls. Provider-size regressions
+exercise adaptive cross-file prompts and whole-finding consolidation through
+`RunClient`; PTY coverage verifies that retrying a partial review skips completed work.

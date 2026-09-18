@@ -3,7 +3,7 @@ use std::future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{MockAppServerClient, RealOneShotClient};
+use ag_agent::{AppServerTurnResponse, MockAppServerClient, RealOneShotClient};
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
 use ag_runtime::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_worker::{HeartbeatClock, RunWorker};
@@ -124,6 +124,7 @@ fn app_event_label_names_focused_review_persistence_retries() {
         retry: crate::app::review::FocusedReviewPersistenceRetry {
             attempt: 1,
             persistence_update: crate::app::review::FocusedReviewPersistence {
+                request_id: uuid::Uuid::nil(),
                 diff_hash: Some(42),
                 session_id: "session-id".into(),
                 status: crate::domain::review::FocusedReviewStatus::Ready,
@@ -662,16 +663,19 @@ fn session_event_labels_preserve_variant_identity() {
             session_id: session_id.clone(),
         },
         AppEvent::ReviewProgressUpdated {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 1,
             progress: crate::app::review::ReviewProgress::CrossFile,
             session_id: session_id.clone(),
         },
         AppEvent::ReviewPrepared {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 1,
             review_text: "Review".to_string(),
             session_id: session_id.clone(),
         },
         AppEvent::ReviewPreparationFailed {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 1,
             error: "offline".to_string(),
             session_id: session_id.clone(),
@@ -724,4 +728,63 @@ fn assert_event_labels(events: impl IntoIterator<Item = AppEvent>) {
         // Assert
         assert_eq!(label, expected);
     }
+}
+
+#[tokio::test]
+async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
+    // Arrange
+    let ids = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&ids);
+    let mut provider = MockAppServerClient::new();
+    provider
+        .expect_run_isolated_turn()
+        .times(2)
+        .returning(move |request, _| {
+            observed.lock().expect("ids").push(request.session_id);
+            Box::pin(async {
+                Ok(AppServerTurnResponse {
+                    assistant_message: r#"{"project_impact":[],"suggestions":[]}"#.into(),
+                    context_reset: false,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    provider
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async {}));
+    let clients =
+        crate::test_support::test_app_clients().with_app_server_client_override(Arc::new(provider));
+    let (app, directory) = crate::test_support::new_test_app_with_clients(clients).await;
+    let request = OneShotRequest {
+        child_pid: None,
+        folder: directory.path().into(),
+        harness: "codex".into(),
+        model: "model".into(),
+        permission_mode: PermissionMode::ReadOnly,
+        prompt: "review".into(),
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::default(),
+        request_kind: AgentRequestKind::FocusedReview,
+        speed_mode: SpeedMode::default(),
+    };
+    // Act
+    app.services
+        .run_client()
+        .submit(request.clone())
+        .await
+        .expect("first batch");
+    app.services
+        .run_client()
+        .submit(request)
+        .await
+        .expect("second batch");
+    app.services.run_worker.shutdown().await;
+    // Assert
+    let ids = ids.lock().expect("ids");
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], ids[1]);
 }

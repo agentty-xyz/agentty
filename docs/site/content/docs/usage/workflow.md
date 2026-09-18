@@ -468,18 +468,23 @@ limit, auto-commit stops without invoking code-repair assistance. Empty or overs
 summaries get a bounded repair attempt before their source fragments are split again.
 Small fragments are kept verbatim.
 
-Focused review checks large diffs in batches of original changes, then checks cross-file
-interactions. A final consolidation pass reconciles duplicate or conflicting findings,
-reassesses severity, and produces one review. Session history may be summarized, with
-limited context coverage disclosed. If a later batch, cross-file check, or consolidation
-fails, completed findings remain available under an explicit partial-review notice
-identifying the unfinished work. Consolidation receives all candidate findings; if they
-exceed the prompt limit, the original findings remain available with a notice that they
-have not been reconciled. Press `f` and confirm regeneration to retry. The complete
-review has a 15-minute deadline shared by history preparation, all batches, the
-cross-file check, and consolidation. Reaching that deadline or the provider-call limit
-stops further work and preserves completed findings. Summaries use low reasoning effort;
-review findings use your configured review profile.
+Focused review checks original diff batches, cross-file interactions, and then
+consolidates supported findings. Large candidate sets are reconciled in groups without
+truncating individual findings. Final passes adapt to smaller provider input limits; if
+distinct findings still cannot fit, the review remains explicitly partial.
+
+Each attempt shares a 64-provider-call budget and a 15-minute deadline. A partial review
+retains completed findings and identifies unfinished checks. Press `f` and confirm
+regeneration to resume: successful calls for the same diff, conversation, and review
+profile are reused, including after restart. Completed reviews regenerate from scratch.
+Changed input requires fresh evidence. Accepted session sync (`r`) clears saved review
+evidence before rebasing, so a later review starts fresh even if the diff and
+conversation are unchanged. Rejected sync requests preserve the existing review.
+Summarized session history is disclosed.
+
+Partial reviews remain marked `Partial` in orchestration and require controller
+verification; an empty suggestions list does not mean coverage completed. `/apply` still
+verifies retained suggestions before changing code.
 
 Auto-commit waits up to five seconds in total for a busy Git index to become available.
 If an index lock still blocks auto-commit, Agentty stops and records a `[Commit Error]`

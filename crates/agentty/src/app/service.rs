@@ -77,7 +77,7 @@ impl AppServices {
             ))
         });
         let run_worker = Arc::new(RunWorker::new(
-            Arc::new(RealOneShotClient::new(
+            Arc::new(RealOneShotClient::pooled(
                 app_server_client_override.as_ref().map(Arc::clone),
             )),
             repositories.runs(),

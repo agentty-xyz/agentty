@@ -88,6 +88,7 @@ impl RunWorker {
     pub async fn shutdown(&self) {
         self.close_admission();
         self.tasks.wait().await;
+        self.execution.runtime.close().await;
     }
 
     /// Stops waiting for graceful cleanup after the host deadline. Drops

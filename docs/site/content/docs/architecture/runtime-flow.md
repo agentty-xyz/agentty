@@ -447,23 +447,23 @@ flowchart LR
    twice before settling as failed. Cascade cancellation moves the campaign to
    `Canceling` before inspection, so stale snapshots cannot fan out another worker.
    Review-ready workers with diffs park in `Reviewing` until their focused review is
-   durably `Ready` or `Failed`. Actionable suggestions are atomically claimed as a
-   `ReviewApplying` continuation using the same verification-gated prompt as `/apply`;
-   operation IDs make delivery restart-safe, and the persisted iteration counter caps
-   remediation at three worker turns. Focused-review persistence uses three stale-safe
-   reducer retries with exponential backoff. If those writes remain unavailable, the
-   durable managed-task and child-session state restarts an incomplete `Reviewing` task
-   on the next launch. `ContinuationPending` and `ReviewApplying` tasks resume their
-   outstanding continuation instead of reviewing the pre-continuation diff. Diff
-   preparation failures persist `Failed` immediately. Each completed remediation
+   durably `Ready`, `Partial`, or `Failed`. Actionable suggestions are atomically
+   claimed as a `ReviewApplying` continuation using the same verification-gated prompt
+   as `/apply`; operation IDs make delivery restart-safe, and the persisted iteration
+   counter caps remediation at three worker turns. Focused-review persistence uses three
+   stale-safe reducer retries with exponential backoff. If those writes remain
+   unavailable, the durable managed-task and child-session state restarts an incomplete
+   `Reviewing` task on the next launch. `ContinuationPending` and `ReviewApplying` tasks
+   resume their outstanding continuation instead of reviewing the pre-continuation diff.
+   Diff preparation failures persist `Failed` immediately. Each completed remediation
    re-enters focused review, including work continued after controller verification. A
-   failed review or unresolved suggestions at the cap settle with explicit evidence for
-   controller verification instead of blocking fan-in. A research child bypasses focused
-   review: turn finalization archives its observed diff, then reconciliation captures
-   its latest full assistant answer into a bounded `research_report`, cancels the
-   managed child to reclaim its worktree and branch, and settles the task as `Reported`.
-   Any observed diff becomes durable inspection evidence plus a discard warning and is
-   never eligible for integration.
+   partial or failed review or unresolved suggestions at the cap settle with explicit
+   evidence for controller verification instead of blocking fan-in. A research child
+   bypasses focused review: turn finalization archives its observed diff, then
+   reconciliation captures its latest full assistant answer into a bounded
+   `research_report`, cancels the managed child to reclaim its worktree and branch, and
+   settles the task as `Reported`. Any observed diff becomes durable inspection evidence
+   plus a discard warning and is never eligible for integration.
 1. Once every task settles, the campaign claims `Verifying`, increments its verification
    generation, and submits one hidden, idempotent coordinator operation keyed by that
    generation. Its structured envelope carries the campaign goal, criteria, branch,
@@ -905,24 +905,41 @@ their triggers:
   into read-only review batches, preserving all source fragments. Each review runs up to
   three batches concurrently in bounded waves and merges results in source order,
   including subdivisions retried after input-size rejection, with findings sorted by
-  severity. A review-scoped runtime pool reuses idle Codex and Gemini processes with
+  severity. A worker-owned runtime pool reuses idle Codex and Gemini processes with
   fresh conversation context for each submission; other transports retain their isolated
   startup behavior. Protocol repair continues the same conversation and retains pooled
   runtimes until the next submission resets their context. Summary calls use low
   reasoning effort, while review calls preserve the selected profile. All calls share a
-  15-minute deadline, including transport retries and protocol repair. Completion,
-  failure, and timeout close the pool. Progress events carry the session and diff hash;
-  only the matching loading generation updates its transient display. The cross-file
-  pass starts after all batches finish. A final reduction then receives all merged batch
-  and cross-file findings, changed-file headers, and session context through the same
-  worker client. It reconciles duplicates and contradictions, reassesses severity, and
-  replaces the candidate review with its complete structured result. Candidates are
-  never summarized or truncated for reduction; input-size, budget, or provider failures
-  preserve the candidates with an explicit consolidation-failure notice. Single-batch
-  and incomplete reviews skip reduction. A failed batch stops new waves while its
-  running peers finish; successful findings survive and unreviewed fragments appear in a
-  separate coverage section with retry guidance. Incomplete reviews reuse the existing
-  `f` regeneration flow.
+  15-minute deadline, including transport retries and protocol repair. Failed or
+  canceled calls discard their runtime; worker shutdown drains calls and closes idle
+  pooled runtimes. Progress events carry the session and diff hash; only the matching
+  loading generation updates its transient display. The cross-file pass starts after all
+  batches finish. A final reduction then receives all merged batch and cross-file
+  findings, changed-file headers, and session context through the same worker client. It
+  reconciles duplicates and contradictions, reassesses severity, and replaces the
+  candidate review with its complete structured result. Oversized candidate groups are
+  split on whole findings and reconciled in successive bounded passes, with headers and
+  history reduced as needed. Candidates are never truncated; failure to fit distinct
+  evidence preserves the original candidates with an explicit consolidation-failure
+  notice. Single-batch and incomplete reviews skip reduction. A failed batch stops new
+  waves while its running peers finish; successful findings survive and unreviewed
+  fragments appear in a separate coverage section with retry guidance. Incomplete
+  reviews persist `Partial` status and reach controller verification with coverage
+  evidence. The `f` regeneration flow reuses validated successful calls from
+  `session_review_fragment`, keyed by session, diff/history generation, and full request
+  profile. Replays consume no provider budget. Checkpoints are cleared atomically with
+  successful completed-review persistence, so interrupted handoffs remain resumable. The
+  foreground review-creation path activates each generation before spawning its
+  background work, so delayed submissions cannot reactivate older generations. Each
+  invocation also carries a unique request token through progress, completion, and
+  persistence retries. The reducer accepts only the current token, retaining
+  same-session events until validation so stale completions cannot hide current results.
+  Activation prunes superseded evidence. Explicit invalidation atomically clears review
+  output and checkpoints; invocation fencing rejects late writes even if identical
+  diff/history inputs are activated again. Rejected rebase admission preserves the
+  review. Accepted rebases clear the display, and their worker invalidates durable
+  evidence before any Git mutation; invalidation failure stops execution. Session
+  deletion cascades to stored fragments.
 
   Commit-message preparation and review history use the shared bounded summary reducer.
   Small fragments stay verbatim; empty or oversized summaries receive one corrective

@@ -242,7 +242,7 @@ async fn runtime_backend_starts_regular_and_staged_draft_messages() {
     let (turn_started_tx, mut turn_started_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app_server = MockAppServerClient::new();
     app_server
-        .expect_run_turn()
+        .expect_run_isolated_turn()
         .times(2)
         .returning(move |_, _| {
             let turn_started_tx = turn_started_tx.clone();
@@ -331,22 +331,25 @@ async fn runtime_backend_loads_inherited_creation_before_acknowledging_event_bac
     // Arrange
     let (turn_started_tx, mut turn_started_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app_server = MockAppServerClient::new();
-    app_server.expect_run_turn().once().returning(move |_, _| {
-        let turn_started_tx = turn_started_tx.clone();
+    app_server
+        .expect_run_isolated_turn()
+        .once()
+        .returning(move |_, _| {
+            let turn_started_tx = turn_started_tx.clone();
 
-        Box::pin(async move {
-            let _ = turn_started_tx.send(());
+            Box::pin(async move {
+                let _ = turn_started_tx.send(());
 
-            Ok(AppServerTurnResponse {
-                assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
-                context_reset: false,
-                input_tokens: 0,
-                output_tokens: 0,
-                pid: None,
-                provider_conversation_id: None,
+                Ok(AppServerTurnResponse {
+                    assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
             })
-        })
-    });
+        });
     app_server
         .expect_shutdown_session()
         .times(0..)

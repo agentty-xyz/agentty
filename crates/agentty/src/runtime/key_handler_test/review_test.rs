@@ -490,6 +490,7 @@ async fn test_handle_confirmation_decision_confirm_regenerates_review() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             text: "Old review".to_string(),
             diff_hash: 99,
         },

@@ -153,6 +153,7 @@ pub(super) fn insert_test_ready_review(app: &mut App, session_id: &str) {
     app.review_cache.insert(
         session_id.into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 1,
             text: "inactive review".to_string(),
         },
@@ -162,6 +163,7 @@ pub(super) fn insert_test_ready_review(app: &mut App, session_id: &str) {
 /// Builds one loading focused-review entry with a stable test profile.
 pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
     ReviewCacheEntry::Loading {
+        request_id: uuid::Uuid::nil(),
         progress: None,
         diff_hash,
         review_agent: (

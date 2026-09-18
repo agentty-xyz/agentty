@@ -16,6 +16,7 @@ mod reducer;
 mod review;
 mod review_prompt;
 mod review_request;
+mod review_resume;
 mod service;
 pub(crate) mod session;
 mod session_api;

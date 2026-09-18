@@ -503,6 +503,7 @@ async fn test_open_or_regenerate_shows_confirmation_when_review_output_exists() 
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             text: "Old review".to_string(),
             diff_hash: 123,
         },
@@ -602,6 +603,7 @@ async fn test_open_review_output_mode_leaves_existing_cache_unchanged() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 123,
             text: "Cached review".to_string(),
         },
@@ -680,7 +682,7 @@ async fn test_open_review_output_mode_shows_no_diff_message_when_diff_empty() {
         Some(ReviewCacheEntry::Ready {
             diff_hash,
             text,
-        }) if *diff_hash == diff_content_hash("") && text == REVIEW_NO_DIFF_MESSAGE
+         .. }) if *diff_hash == diff_content_hash("") && text == REVIEW_NO_DIFF_MESSAGE
     ));
 }
 
@@ -710,6 +712,7 @@ async fn test_open_review_output_mode_uses_ready_cache_entry() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 123,
             text: cached_text.to_string(),
         },
@@ -741,6 +744,7 @@ async fn test_open_review_output_mode_shows_loading_for_cache_loading_entry() {
     app.review_cache.insert(
         session_id.clone().into(),
         ReviewCacheEntry::Loading {
+            request_id: uuid::Uuid::nil(),
             progress: None,
             diff_hash: 456,
             review_agent,

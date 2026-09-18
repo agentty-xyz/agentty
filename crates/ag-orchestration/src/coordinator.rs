@@ -1467,8 +1467,20 @@ impl OrchestrationCoordinator {
                 self.update_task_status(task, OrchestrationTaskStatus::Reviewing, None)
                     .await?;
             }
-            Some(FocusedReviewStatus::Failed) => self.complete_task_review(task).await?,
+            Some(FocusedReviewStatus::Failed | FocusedReviewStatus::Partial) => {
+                self.complete_task_review(task).await?;
+            }
             Some(FocusedReviewStatus::Ready) => {
+                if task
+                    .child_focused_review_text
+                    .as_deref()
+                    .is_some_and(|text| {
+                        FocusedReviewStatus::for_text(text) == FocusedReviewStatus::Partial
+                    })
+                {
+                    self.complete_task_review(task).await?;
+                    return Ok(());
+                }
                 let suggestions = task
                     .child_focused_review_text
                     .as_deref()
@@ -2253,6 +2265,11 @@ fn campaign_task_evidence(task: &SessionOrchestrationTaskRow) -> String {
             task.review_iteration, MAX_AUTOMATED_REVIEW_ITERATIONS
         ),
         (_, Some(OrchestrationTaskStatus::Ready))
+            if task.child_focused_review_status.as_deref() == Some("Partial") =>
+        {
+            "; focused review incomplete".to_string()
+        }
+        (_, Some(OrchestrationTaskStatus::Ready))
             if task.child_focused_review_status.as_deref() == Some("Failed") =>
         {
             "; focused review failed".to_string()
@@ -2378,6 +2395,23 @@ fn rollup_review_evidence(task: &SessionOrchestrationTaskRow) -> String {
         .child_focused_review_status
         .as_deref()
         .and_then(|status| status.parse::<FocusedReviewStatus>().ok());
+    if review_status == Some(FocusedReviewStatus::Partial)
+        || task
+            .child_focused_review_text
+            .as_deref()
+            .is_some_and(|text| FocusedReviewStatus::for_text(text) == FocusedReviewStatus::Partial)
+    {
+        return format!(
+            "incomplete; controller verification is required. {}",
+            task.child_focused_review_text
+                .as_deref()
+                .and_then(|text| text.rsplit_once("\n### Coverage\n"))
+                .map_or(
+                    "Coverage details unavailable".to_string(),
+                    |(_, coverage)| bounded_summary(coverage)
+                )
+        );
+    }
     match review_status {
         Some(FocusedReviewStatus::Ready) => {
             if let Some(suggestions) = task
@@ -2402,7 +2436,7 @@ fn rollup_review_evidence(task: &SessionOrchestrationTaskRow) -> String {
 
             "completed with no actionable suggestions".to_string()
         }
-        Some(FocusedReviewStatus::Failed) => {
+        Some(FocusedReviewStatus::Failed | FocusedReviewStatus::Partial) => {
             "generation failed; controller verification is still required".to_string()
         }
         Some(FocusedReviewStatus::Pending) => "generation still pending".to_string(),

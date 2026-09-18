@@ -979,16 +979,18 @@ impl App {
     }
 
     /// Stores completed focused-review text and posts it to the stable review
-    /// display slot.
+    /// display slot, returning the invocation token for subsequent persistence.
     pub(crate) fn set_review_ready_output(
         &mut self,
         session_id: &str,
         diff_hash: u64,
         text: String,
-    ) {
+    ) -> uuid::Uuid {
+        let request_id = uuid::Uuid::new_v4();
         self.review_cache.insert(
             SessionId::from(session_id),
             ReviewCacheEntry::Ready {
+                request_id,
                 diff_hash,
                 text: text.clone(),
             },
@@ -1003,6 +1005,8 @@ impl App {
                 turn_position: session.latest_user_prompt_position(),
             });
         }
+
+        request_id
     }
 
     /// Suppresses automatic focused review and removes any previous review
@@ -1520,32 +1524,18 @@ impl App {
 
     /// Starts or queues a session branch rebase onto its base branch.
     ///
-    /// If the session is currently generating focused review output, starting
-    /// sync cancels the pending review cache and persisted review entries so
-    /// late review-assist completions cannot overwrite the rebased view state
-    /// and startup cannot hydrate stale review text.
+    /// Successful admission clears displayed review output. The worker clears
+    /// durable review evidence before changing the worktree; rejected requests
+    /// preserve both the displayed review and resumable checkpoints.
     ///
     /// # Errors
-    /// Returns an error if focused-review persistence cannot be cleared before
-    /// sync starts, or if session sync cannot start.
+    /// Returns an error if session sync cannot be admitted.
     pub async fn rebase_session(&mut self, session_id: &str) -> Result<(), AppError> {
         self.ensure_project_checkout_available(self.projects.active_project_id())?;
-        let should_clear_pending_review = matches!(
-            self.review_cache.get(session_id),
-            Some(ReviewCacheEntry::Loading { .. })
-        );
-        if should_clear_pending_review {
-            self.services
-                .db()
-                .sessions()
-                .update_session_focused_review(session_id, None, None, None)
-                .await?;
-            self.clear_review_output(session_id);
-        }
-
         self.sessions
             .rebase_session(&self.services, session_id)
             .await?;
+        self.clear_review_output(session_id);
 
         Ok(())
     }
@@ -1726,14 +1716,6 @@ impl App {
         review_agent: app::review::ReviewAgent,
     ) {
         let review_agent = app::review::normalize_review_agent(review_agent);
-        self.review_cache.insert(
-            SessionId::from(session_id),
-            ReviewCacheEntry::Loading {
-                progress: None,
-                diff_hash,
-                review_agent,
-            },
-        );
         let session_chat_history = self.session_chat_history(session_id).await;
 
         mark_session_agent_review(self.sessions.state_mut(), session_id);
@@ -1747,7 +1729,7 @@ impl App {
             });
         }
 
-        spawn_review_assist(
+        let request_id = spawn_review_assist(
             &self.services,
             review_agent,
             session_id,
@@ -1755,6 +1737,16 @@ impl App {
             diff_hash,
             review_diff,
             session_chat_history.as_deref(),
+        )
+        .await;
+        self.review_cache.insert(
+            SessionId::from(session_id),
+            ReviewCacheEntry::Loading {
+                request_id,
+                progress: None,
+                diff_hash,
+                review_agent,
+            },
         );
     }
 

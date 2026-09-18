@@ -36,6 +36,7 @@ async fn test_handle_apply_command_rejects_when_session_not_in_review_status() {
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 0,
             text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
         },
@@ -72,6 +73,7 @@ async fn test_handle_prompt_submit_key_clears_cached_review_output() {
     app.review_cache.insert(
         session_id.clone(),
         crate::app::ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 7,
             text: "Focused review".to_string(),
         },

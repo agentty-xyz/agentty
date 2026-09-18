@@ -489,10 +489,10 @@ impl App {
                 self.review_cache
                     .get(&session_id)
                     .and_then(|entry| match entry {
-                        ReviewCacheEntry::Ready { diff_hash, text } => {
-                            review::review_suggestions(text)
-                                .map(|suggestions| (*diff_hash, suggestions))
-                        }
+                        ReviewCacheEntry::Ready {
+                            diff_hash, text, ..
+                        } => review::review_suggestions(text)
+                            .map(|suggestions| (*diff_hash, suggestions)),
                         ReviewCacheEntry::Loading { .. }
                         | ReviewCacheEntry::Failed { .. }
                         | ReviewCacheEntry::Suppressed => None,
@@ -584,20 +584,22 @@ impl App {
             return PromptApplyOutcome::ClearComposer;
         }
 
-        let (cached_hash, cached_text) = if let Some(ReviewCacheEntry::Ready { diff_hash, text }) =
-            self.review_cache.get(session_id.as_str())
-        {
-            (*diff_hash, text.clone())
-        } else {
-            self.append_prompt_status_line(
-                session_id,
-                TranscriptNotice::Apply,
-                "No actionable suggestions available. Run a focused review first (f key).",
-            )
-            .await;
+        let (cached_hash, cached_text) =
+            if let Some(ReviewCacheEntry::Ready {
+                diff_hash, text, ..
+            }) = self.review_cache.get(session_id.as_str())
+            {
+                (*diff_hash, text.clone())
+            } else {
+                self.append_prompt_status_line(
+                    session_id,
+                    TranscriptNotice::Apply,
+                    "No actionable suggestions available. Run a focused review first (f key).",
+                )
+                .await;
 
-            return PromptApplyOutcome::ClearComposer;
-        };
+                return PromptApplyOutcome::ClearComposer;
+            };
 
         let Some(suggestions) = review::review_suggestions(&cached_text) else {
             self.append_prompt_status_line(

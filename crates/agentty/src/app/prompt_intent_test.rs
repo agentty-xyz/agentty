@@ -577,6 +577,7 @@ async fn test_apply_focused_review_returns_validation_outcomes() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: diff_content_hash(&current_diff),
             text: "## Review\n### Suggestions\n- None".to_string(),
         },
@@ -585,6 +586,7 @@ async fn test_apply_focused_review_returns_validation_outcomes() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: diff_content_hash(&current_diff),
             text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
         },
@@ -618,6 +620,7 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
         },
@@ -632,6 +635,7 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "## Review\n### Suggestions\n- None".to_string(),
         },
@@ -640,6 +644,7 @@ async fn auto_address_focused_reviews_starts_apply_turns_and_stops_at_limit() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "## Review\n### Suggestions\n- Fix the typo.".to_string(),
         },

@@ -171,7 +171,7 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
     // Assert
     assert!(matches!(
         app.review_cache.get(second_session_id),
-        Some(ReviewCacheEntry::Ready { diff_hash: 42, text }) if text == review_text
+        Some(ReviewCacheEntry::Ready { diff_hash: 42, text , .. }) if text == review_text
     ));
     assert!(matches!(
         app.review_cache.get(loading_session_id),
@@ -315,6 +315,7 @@ async fn auto_start_reviews_skips_when_diff_hash_unchanged() {
     app.review_cache.insert(
         session_id.to_string().into(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: hash,
             text: "existing review".to_string(),
         },
@@ -532,6 +533,7 @@ async fn apply_review_update_stores_success_in_cache() {
     app.apply_review_update(
         session_id,
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 123,
             result: Ok(review_text.to_string()),
         },
@@ -540,7 +542,7 @@ async fn apply_review_update_stores_success_in_cache() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Ready { text, diff_hash }) if text == review_text && *diff_hash == 123
+        Some(ReviewCacheEntry::Ready { text, diff_hash , .. }) if text == review_text && *diff_hash == 123
     ));
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
     assert_eq!(
@@ -576,6 +578,7 @@ async fn apply_review_update_stores_failure_in_cache() {
     app.apply_review_update(
         session_id,
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 456,
             result: Err(error_message.to_string()),
         },
@@ -584,7 +587,7 @@ async fn apply_review_update_stores_failure_in_cache() {
     // Assert
     assert!(matches!(
         app.review_cache.get(session_id),
-        Some(ReviewCacheEntry::Failed { error, diff_hash }) if error == error_message && *diff_hash == 456
+        Some(ReviewCacheEntry::Failed { error, diff_hash , .. }) if error == error_message && *diff_hash == 456
     ));
 }
 
@@ -603,6 +606,7 @@ async fn apply_review_update_ignores_stale_diff_hash() {
     app.apply_review_update(
         session_id,
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 111,
             result: Ok("stale review".to_string()),
         },
@@ -640,6 +644,7 @@ async fn apply_review_update_keeps_non_agent_review_status_unchanged() {
     app.apply_review_update(
         session_id,
         ReviewUpdate {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 222,
             result: Ok("## Review\nBackground review".to_string()),
         },
@@ -1927,7 +1932,7 @@ async fn review_request_enqueue_failure_replaces_queued_status_with_error() {
 }
 
 #[test]
-fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
+fn app_event_batch_collect_event_preserves_reviews_for_request_validation() {
     // Arrange
     let mut event_batch = AppEventBatch::default();
 
@@ -1936,16 +1941,19 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
         diff_hash: 11,
         review_text: "first review".to_string(),
         session_id: "session-a".into(),
+        request_id: uuid::Uuid::nil(),
     });
     event_batch.collect_event(AppEvent::ReviewPreparationFailed {
         diff_hash: 12,
         error: "latest failure".to_string(),
         session_id: "session-a".into(),
+        request_id: uuid::Uuid::nil(),
     });
     event_batch.collect_event(AppEvent::ReviewPrepared {
         diff_hash: 21,
         review_text: "stable review".to_string(),
         session_id: "session-b".into(),
+        request_id: uuid::Uuid::nil(),
     });
     event_batch.collect_event(AppEvent::BranchPublishActionCompleted {
         result: Box::new(Ok(test_pushed_branch_result("feature/first"))),
@@ -1967,18 +1975,33 @@ fn app_event_batch_collect_event_keeps_publish_results_and_latest_reviews() {
 
     // Assert
     assert_eq!(
-        event_batch.review_updates.get("session-a"),
-        Some(&ReviewUpdate {
-            diff_hash: 12,
-            result: Err("latest failure".to_string()),
-        })
-    );
-    assert_eq!(
-        event_batch.review_updates.get("session-b"),
-        Some(&ReviewUpdate {
-            diff_hash: 21,
-            result: Ok("stable review".to_string()),
-        })
+        event_batch.review_updates,
+        vec![
+            (
+                "session-a".into(),
+                ReviewUpdate {
+                    diff_hash: 11,
+                    request_id: uuid::Uuid::nil(),
+                    result: Ok("first review".to_string())
+                }
+            ),
+            (
+                "session-a".into(),
+                ReviewUpdate {
+                    diff_hash: 12,
+                    request_id: uuid::Uuid::nil(),
+                    result: Err("latest failure".to_string())
+                }
+            ),
+            (
+                "session-b".into(),
+                ReviewUpdate {
+                    diff_hash: 21,
+                    request_id: uuid::Uuid::nil(),
+                    result: Ok("stable review".to_string())
+                }
+            ),
+        ]
     );
     assert_eq!(
         event_batch.branch_publish_action_updates,
@@ -2391,6 +2414,7 @@ async fn delete_selected_session_clears_review_cache() {
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
             diff_hash: 42,
             text: "cached review".to_string(),
         },
