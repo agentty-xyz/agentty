@@ -18,3 +18,6 @@ mod store;
 
 #[path = "session_test/recovery_test.rs"]
 mod recovery;
+
+#[path = "session_test/model_switch_test.rs"]
+mod model_switch;

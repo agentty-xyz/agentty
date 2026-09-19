@@ -31,6 +31,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
                 "session",
                 "lost",
                 &turn_options(),
+                0,
             )
             .await
     });
@@ -51,6 +52,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
             "session",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement");
@@ -98,6 +100,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
             "session",
             "rejected",
             &turn_options(),
+            0,
         )
         .await;
     sqlx::query("DROP TRIGGER reject_commit")
@@ -110,6 +113,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
             "session",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement");
@@ -152,6 +156,7 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
                 "session",
                 "abandoned",
                 &turn_options(),
+                0,
             )
             .await
     });
@@ -184,6 +189,7 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
             "session",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement");
@@ -214,6 +220,7 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
                 "session",
                 "failed",
                 &turn_options(),
+                0,
             )
             .await
     });
@@ -229,6 +236,7 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
             "session",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement");
@@ -261,6 +269,7 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
                 "session",
                 "expired",
                 &turn_options(),
+                0,
             )
             .await
     });
@@ -278,6 +287,7 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
             "session",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement");

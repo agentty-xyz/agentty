@@ -22,7 +22,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
 
     // Act
     let mut first = database
-        .begin_turn(Arc::new(database.clone()), "session", "failed", &options)
+        .begin_turn(Arc::new(database.clone()), "session", "failed", &options, 0)
         .await
         .expect("reservation");
     let running: (String, String) =
@@ -45,6 +45,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
             "session",
             "interrupted",
             &options,
+            0,
         )
         .await
         .expect("second reservation");
@@ -97,6 +98,7 @@ async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuratio
             "session-a",
             "new",
             &turn_options(),
+            0,
         )
         .await
         .expect("new turn");
@@ -127,6 +129,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
             "session",
             "first",
             &turn_options(),
+            0,
         )
         .await
         .expect("reservation");
@@ -181,6 +184,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
                 "session",
                 "second",
                 &turn_options(),
+                0,
             )
             .await
             .err()
@@ -223,7 +227,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .await
         .expect("session");
     let mut first = database
-        .begin_turn(Arc::new(database.clone()), "session", "first", &options)
+        .begin_turn(Arc::new(database.clone()), "session", "first", &options, 0)
         .await
         .expect("first turn");
     database
@@ -252,7 +256,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .await
         .expect("legacy history");
     let acquired = reopened
-        .begin_turn(Arc::new(reopened.clone()), "session", "next", &options)
+        .begin_turn(Arc::new(reopened.clone()), "session", "next", &options, 0)
         .await
         .expect("next turn");
     let snapshot: String =

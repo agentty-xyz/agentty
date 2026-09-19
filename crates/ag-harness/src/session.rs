@@ -100,6 +100,7 @@ ORDER BY w.turn_position, w.id
 struct HostTurnRow {
     error_type: Option<String>,
     host_request: Option<String>,
+    model_snapshot: Option<String>,
     status: String,
     terminal_outcome: Option<String>,
     turn_position: i64,
@@ -125,6 +126,7 @@ struct SessionMessageRow {
 struct SessionRow {
     max_history_bytes: i64,
     model: Option<String>,
+    model_generation: i64,
     output_schema: String,
     provider: Option<String>,
     provider_session_id: Option<String>,
@@ -137,6 +139,7 @@ struct SessionRow {
 #[derive(Eq, PartialEq)]
 struct TurnConfigurationRow {
     max_history_bytes: i64,
+    model_generation: i64,
     provider_session_id: Option<String>,
     turn_options: Option<String>,
 }
@@ -207,7 +210,7 @@ impl NewSession {
         self
     }
 
-    /// Sets the immutable model registration captured when the session is
+    /// Sets the initial model registration captured when the session is
     /// created. `None` denotes direct construction, including legacy
     /// sessions.
     #[must_use]
@@ -296,9 +299,10 @@ impl StoreIdentity {
     }
 }
 
-/// Observes reservation commit submission and acknowledgement boundaries.
+/// Observes reservation and model-selection transaction boundaries.
 #[async_trait]
 trait ReservationObserver: Send + Sync {
+    async fn model_validated(&self) {}
     async fn committing(&self) {}
     async fn committed(&self);
 }
@@ -411,6 +415,7 @@ impl Database {
             .session_context("load persistent session turn acquisition")?;
 
         Ok(TurnAcquisition {
+            expected_generation: configuration.model_generation,
             configuration,
             latest_completed_turn,
             turn_position,
@@ -425,6 +430,7 @@ impl Database {
         prompt: &str,
         options: &TurnOptions,
         request: Option<&HostRequest>,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         if store.identity() != self.identity() {
             return Err(SessionError::InvalidData {
@@ -434,7 +440,8 @@ impl Database {
         let message = EncodedMessage::from_message(&ModelMessage::User(prompt.to_string()))?;
 
         loop {
-            let acquisition = self.load_turn_acquisition(session_id).await?;
+            let mut acquisition = self.load_turn_acquisition(session_id).await?;
+            acquisition.expected_generation = generation;
             let previous_options = acquisition
                 .configuration
                 .turn_options
@@ -581,13 +588,7 @@ WHERE id = ?
 
             return Ok(Reservation::Recorded(record));
         }
-        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
-        let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        if configuration != acquisition.configuration
-            || turn_position != acquisition.turn_position
-            || latest_completed_turn != acquisition.latest_completed_turn
-        {
+        if !acquisition.is_current(&mut transaction, session_id).await? {
             transaction.commit().await.session_context(operation)?;
 
             return Ok(Reservation::Retry);
@@ -602,9 +603,12 @@ WHERE id = ?
             r#"
 INSERT INTO session_turn (
     session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,
-    owner_token, turn_options, host_id, host_request
+    owner_token, turn_options, host_id, host_request, model_snapshot
 )
-VALUES (?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?, ?, ?)
+SELECT ?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?, ?, ?,
+       json_object('generation', model_generation, 'key', registration_key,
+                   'revision', registration_revision, 'provider', provider, 'model', model)
+FROM session WHERE id = ?
 RETURNING owner_token AS "owner_token!: Vec<u8>"
 "#,
             session_id,
@@ -614,7 +618,8 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             reservation_now,
             snapshot,
             host_id,
-            host_request
+            host_request,
+            session_id
         )
         .fetch_one(&mut *transaction)
         .await;
@@ -797,7 +802,7 @@ ON CONFLICT(id) DO NOTHING
         let row = sqlx::query_as!(
             SessionRow,
             r#"
-SELECT provider,
+SELECT model_generation AS "model_generation!: i64", provider,
        model,
        registration_key,
        registration_revision,
@@ -838,6 +843,7 @@ WHERE id = ?
         };
 
         Ok(LoadedSession {
+            model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
             provider: row.provider,
@@ -849,15 +855,84 @@ WHERE id = ?
         })
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        let next = crate::session_model::next_generation(generation)?;
+        let operation = "switch session model";
+        loop {
+            // Validate canonical history outside the writer transaction, then
+            // revalidate its completed-turn boundary under the admission lock.
+            let mut snapshot = self.pool.begin().await.session_context(operation)?;
+            let configuration = load_turn_configuration(&mut snapshot, id).await?;
+            crate::session_model::check_generation(id, configuration.model_generation, generation)?;
+            let revision = latest_completed_turn(&mut snapshot, id).await?;
+            check_switch_history(&mut snapshot, id, capabilities).await?;
+            snapshot.commit().await.session_context(operation)?;
+            self.reservation_observer.model_validated().await;
+            let mut transaction = self
+                .pool
+                .begin_with("BEGIN IMMEDIATE")
+                .await
+                .session_context(operation)?;
+            let now = self.timestamp_source.now_timestamp_seconds();
+            recover_stale_turns(&mut transaction, id, now).await?;
+            let current = load_turn_configuration(&mut transaction, id).await?;
+            crate::session_model::check_generation(id, current.model_generation, generation)?;
+            let active = sqlx::query_scalar!(
+                "SELECT COUNT(*) FROM session_turn WHERE session_id = ? AND status IN ('pending', \
+                 'running')",
+                id
+            )
+            .fetch_one(&mut *transaction)
+            .await
+            .session_context(operation)?;
+            if active != 0 {
+                return Err(SessionError::Busy { id: id.to_string() });
+            }
+            if latest_completed_turn(&mut transaction, id).await? != revision {
+                transaction.commit().await.session_context(operation)?;
+                continue;
+            }
+            let key = identity.key();
+            let registration_revision = identity.revision();
+            let provider = metadata.as_ref().map(ModelMetadata::provider);
+            let model = metadata.as_ref().map(ModelMetadata::model);
+            sqlx::query!(
+                "UPDATE session SET model_generation = ?, registration_key = ?, \
+                 registration_revision = ?, provider = ?, model = ?, provider_session_id = NULL, \
+                 updated_at = ? WHERE id = ?",
+                next,
+                key,
+                registration_revision,
+                provider,
+                model,
+                now,
+                id
+            )
+            .execute(&mut *transaction)
+            .await
+            .session_context(operation)?;
+            transaction.commit().await.session_context(operation)?;
+            return Ok(next);
+        }
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         let HostTurnAcquisition::Acquired(acquired) = self
-            .acquire(store, session_id, prompt, options, None)
+            .acquire(store, session_id, prompt, options, None, generation)
             .await?
         else {
             return Err(SessionError::HostTurnConflict);
@@ -873,9 +948,17 @@ WHERE id = ?
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, session_id, prompt, options, Some(request))
-            .await
+        self.acquire(
+            store,
+            session_id,
+            prompt,
+            options,
+            Some(request),
+            generation,
+        )
+        .await
     }
 
     async fn load_request(
@@ -1130,7 +1213,22 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
 /// Error returned by persistent session operations.
 #[derive(Debug, Error)]
 pub enum SessionError {
-    /// The harness's registration differs from the session's immutable
+    /// The handle predates a committed model switch, including A-to-B-to-A.
+    #[error("session `{id}` model selection changed; resume a fresh handle")]
+    StaleModel {
+        /// Session whose selection changed.
+        id: String,
+    },
+    /// Historical content cannot be replayed by the selected model.
+    #[error("cannot switch session model: {reason}")]
+    UnsupportedModelHistory {
+        /// Content-free explanation of the unsupported capability.
+        reason: &'static str,
+    },
+    /// The host selected a key absent from its registry.
+    #[error(transparent)]
+    Registry(#[from] crate::ModelRegistryError),
+    /// The harness's registration differs from the session's current
     /// selection.
     #[error("persistent session `{id}` has a different model registration")]
     RegistrationMismatch {
@@ -1326,11 +1424,13 @@ pub struct LoadedSession {
     pub max_history_bytes: usize,
     /// Stable model name, paired with `provider`, or both absent.
     pub model: Option<String>,
+    /// Monotonic model selection generation used to reject stale handles.
+    pub model_generation: i64,
     /// Provider paired with the stored model name.
     pub provider: Option<String>,
     /// Optional provider continuation, cleared on failure or interruption.
     pub provider_session_id: Option<String>,
-    /// Immutable registration key/revision, or `None` for direct/legacy
+    /// Current registration key/revision, or `None` for direct/legacy
     /// sessions.
     pub registration_identity: Option<ExecutionIdentity>,
     /// Session's default output schema.
@@ -1342,11 +1442,45 @@ pub struct LoadedSession {
     pub turns: Vec<Vec<ModelMessage>>,
 }
 
+impl LoadedSession {
+    /// Returns the current selection for immutable turn provenance.
+    pub fn recorded_model(&self) -> crate::RecordedModel {
+        crate::RecordedModel {
+            generation: self.model_generation,
+            model: self.model.clone(),
+            provider: self.provider.clone(),
+            registration_identity: self.registration_identity.clone(),
+        }
+    }
+}
+
 struct TurnAcquisition {
     configuration: TurnConfigurationRow,
+    expected_generation: i64,
     latest_completed_turn: Option<i64>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
+}
+
+impl TurnAcquisition {
+    async fn is_current(
+        &self,
+        transaction: &mut Transaction<'_, sqlx::Sqlite>,
+        session_id: &str,
+    ) -> Result<bool, SessionError> {
+        let configuration = load_turn_configuration(transaction, session_id).await?;
+        crate::session_model::check_generation(
+            session_id,
+            configuration.model_generation,
+            self.expected_generation,
+        )?;
+        let turn_position = next_turn_position(transaction, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
+
+        Ok(configuration == self.configuration
+            && turn_position == self.turn_position
+            && latest_completed_turn == self.latest_completed_turn)
+    }
 }
 
 /// Owner token identifying one reservation, independent of a storage engine.
@@ -1953,7 +2087,7 @@ async fn load_request_from(
     host_id: &str,
 ) -> Result<Option<HostTurnRecord>, SessionError> {
     let row = sqlx::query_as!(HostTurnRow,
-        r#"SELECT error_type, host_request, status, terminal_outcome, turn_position AS "turn_position!: i64"
+        r#"SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_position AS "turn_position!: i64"
            FROM session_turn WHERE session_id = ? AND host_id = ?"#, session_id, host_id)
         .fetch_optional(&mut *connection).await.session_context("load host request")?;
     let Some(row) = row else {
@@ -1997,11 +2131,48 @@ async fn load_request_from(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(Some(HostTurnRecord {
+        model: row
+            .model_snapshot
+            .as_deref()
+            .map(crate::RecordedModel::decode)
+            .transpose()?,
         request,
         status,
         turn_position: position,
         writes,
     }))
+}
+
+struct SwitchMessageRow {
+    id: i64,
+    kind: String,
+    payload: String,
+}
+
+async fn check_switch_history(
+    connection: &mut SqliteConnection,
+    id: &str,
+    capabilities: crate::ModelCapabilities,
+) -> Result<(), SessionError> {
+    let mut after = 0;
+    loop {
+        let rows = sqlx::query_as!(SwitchMessageRow,
+            r#"SELECT message.id AS "id!: i64", message.kind AS "kind!: String", message.payload AS "payload!: String"
+               FROM session_message AS message JOIN session_turn AS turn
+                 ON turn.session_id = message.session_id AND turn.turn_position = message.turn_position
+               WHERE message.session_id = ? AND turn.status = 'completed' AND message.id > ?
+                 AND message.kind NOT IN ('user', 'assistant')
+               ORDER BY message.id LIMIT 64"#, id, after)
+            .fetch_all(&mut *connection).await.session_context("validate model switch history")?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for row in rows {
+            let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
+            crate::session_model::check_history(std::iter::once(&message), capabilities)?;
+            after = row.id;
+        }
+    }
 }
 
 async fn load_turn_configuration(
@@ -2011,7 +2182,7 @@ async fn load_turn_configuration(
     sqlx::query_as!(
         TurnConfigurationRow,
         r#"
-SELECT max_history_bytes AS "max_history_bytes!: i64", provider_session_id,
+SELECT model_generation AS "model_generation!: i64", max_history_bytes AS "max_history_bytes!: i64", provider_session_id,
        (SELECT turn_options FROM session_turn
         WHERE session_id = session.id AND status = 'completed'
         ORDER BY turn_position DESC LIMIT 1) AS "turn_options?: String"

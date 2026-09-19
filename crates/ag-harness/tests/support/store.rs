@@ -121,6 +121,7 @@ impl ExternalStore {
         prompt: &str,
         options: &TurnOptions,
         request: Option<&HostRequest>,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions
@@ -133,6 +134,9 @@ impl ExternalStore {
             record.check_request(request)?;
 
             return Ok(HostTurnAcquisition::Recorded(record));
+        }
+        if session.loaded.model_generation != generation {
+            return Err(SessionError::StaleModel { id: id.to_string() });
         }
         if session.owner.is_some() {
             return Err(SessionError::Busy { id: id.to_string() });
@@ -165,6 +169,7 @@ impl ExternalStore {
         )?;
         if let Some(request) = request {
             session.requests.push(HostTurnRecord {
+                model: Some(session.loaded.recorded_model()),
                 request: request.clone(),
                 status: HostTurnStatus::InProgress,
                 turn_position: position,
@@ -242,6 +247,7 @@ impl SessionStore for ExternalStore {
             config.id().to_string(),
             Record {
                 loaded: LoadedSession {
+                    model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
@@ -273,14 +279,79 @@ impl SessionStore for ExternalStore {
         Ok(session.bounded())
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &ag_harness::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: ag_harness::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        session.recover();
+        if session.loaded.model_generation != generation {
+            return Err(SessionError::StaleModel { id: id.to_string() });
+        }
+        if session.owner.is_some() {
+            return Err(SessionError::Busy { id: id.to_string() });
+        }
+        for message in session.loaded.turns.iter().flatten() {
+            match message {
+                ModelMessage::AssistantToolCall(_)
+                | ModelMessage::AssistantToolCalls(_)
+                | ModelMessage::ToolResult { .. }
+                    if !capabilities.tool_calls =>
+                {
+                    return Err(SessionError::UnsupportedModelHistory {
+                        reason: "tool history",
+                    });
+                }
+                ModelMessage::AssistantReasoning { .. } => {
+                    return Err(SessionError::UnsupportedModelHistory {
+                        reason: "provider reasoning",
+                    });
+                }
+                ModelMessage::AssistantToolCall(call) if call.reasoning_content().is_some() => {
+                    return Err(SessionError::UnsupportedModelHistory {
+                        reason: "provider reasoning",
+                    });
+                }
+                ModelMessage::AssistantToolCalls(calls)
+                    if calls.iter().any(|call| call.reasoning_content().is_some()) =>
+                {
+                    return Err(SessionError::UnsupportedModelHistory {
+                        reason: "provider reasoning",
+                    });
+                }
+                _ => {}
+            }
+        }
+        let next = generation
+            .checked_add(1)
+            .ok_or_else(|| SessionError::InvalidData {
+                reason: "generation overflow".into(),
+            })?;
+        session.loaded.model_generation = next;
+        session.loaded.registration_identity = Some(identity.clone());
+        session.loaded.provider = metadata.as_ref().map(|value| value.provider().to_string());
+        session.loaded.model = metadata.as_ref().map(|value| value.model().to_string());
+        session.loaded.provider_session_id = None;
+        Ok(next)
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
-        let HostTurnAcquisition::Acquired(turn) = self.acquire(store, id, prompt, options, None)?
+        let HostTurnAcquisition::Acquired(turn) =
+            self.acquire(store, id, prompt, options, None, generation)?
         else {
             std::panic::resume_unwind(Box::new("legacy acquisition"))
         };
@@ -295,8 +366,9 @@ impl SessionStore for ExternalStore {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, id, prompt, options, Some(request))
+        self.acquire(store, id, prompt, options, Some(request), generation)
     }
 
     async fn load_request(

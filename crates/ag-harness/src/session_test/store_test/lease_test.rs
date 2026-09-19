@@ -113,6 +113,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
             "session",
             "next",
             &turn_options(),
+            0,
         )
         .await
         .expect("successor");

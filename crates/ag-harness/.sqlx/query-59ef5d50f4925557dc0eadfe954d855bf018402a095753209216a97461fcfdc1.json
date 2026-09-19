@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT error_type, host_request, status, terminal_outcome, turn_position AS \"turn_position!: i64\"\n           FROM session_turn WHERE session_id = ? AND host_id = ?",
+  "query": "SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_position AS \"turn_position!: i64\"\n           FROM session_turn WHERE session_id = ? AND host_id = ?",
   "describe": {
     "columns": [
       {
-        "name": "error_type",
+        "name": "model_snapshot",
         "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "model_snapshot"
+          }
+        }
+      },
+      {
+        "name": "error_type",
+        "ordinal": 1,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "host_request",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "status",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "terminal_outcome",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "turn_position!: i64",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -65,10 +76,11 @@
     "nullable": [
       true,
       true,
+      true,
       false,
       true,
       false
     ]
   },
-  "hash": "11e3f913d78dff407989a38dfd2d153e80abeec93643927c688fda991aaa781d"
+  "hash": "59ef5d50f4925557dc0eadfe954d855bf018402a095753209216a97461fcfdc1"
 }

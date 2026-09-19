@@ -247,8 +247,8 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
 
         // Act
         let (left, right) = tokio::join!(
-            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request),
-            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request)
+            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request, 0),
+            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request, 0)
         );
         let ((HostTurnAcquisition::Acquired(acquired), HostTurnAcquisition::Recorded(duplicate))
         | (HostTurnAcquisition::Recorded(duplicate), HostTurnAcquisition::Acquired(acquired))) =
@@ -290,7 +290,7 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
         let changed: HostRequest = serde_json::from_value(changed).expect("request");
         assert!(matches!(
             store
-                .begin_request(Arc::clone(&store), "race", "changed", &options, &changed)
+                .begin_request(Arc::clone(&store), "race", "changed", &options, &changed, 0)
                 .await,
             Err(SessionError::HostTurnConflict)
         ));

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session SET model_generation = ?, registration_key = ?, registration_revision = ?, provider = ?, model = ?, provider_session_id = NULL, updated_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "5018fab600fc04b189916f7b3ecb8241ac377b16ca612191173650b3423cb6ab"
+}

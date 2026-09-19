@@ -30,7 +30,7 @@ flowchart LR
   construction remains available. Stores retain each session's registration key and
   revision. Resume rejects a different or absent registration, independently of provider
   metadata. Legacy and directly created sessions retain no registration and resume
-  through direct construction.
+  through direct construction until explicitly switched.
 - One internal engine prepares requests, runs provider attempts and tools, retries
   rejected native continuations, and validates output for both entry points.
 - Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`,
@@ -88,6 +88,23 @@ output, and cleanup. Cancellation and deadlines apply throughout the lifecycle, 
 retained control survives dropped callers. Completion includes descendant cleanup;
 cleanup failures remain separate from execution results. Production backends remain
 unavailable.
+
+## Session model switching
+
+`Session::switch_model` selects an existing registration for an idle session. Switching
+shares admission with turns and managed-effect settlement. Stores atomically fence the
+captured model generation, persist the new identity, and clear native continuation.
+Older handles cannot execute new work, including after switching back to their model;
+resume captures the current generation. Each new turn retains immutable model
+provenance. Recovery lookup and matching recorded retries remain available across
+switches without running a model or tool again.
+
+Completed normalized messages and tool groups remain canonical. Targets must support
+historical tool calls. Provider-specific reasoning currently rejects switching rather
+than silently discarding content; validation includes history outside the replay budget.
+SQLite validates paginated history outside its writer transaction and rechecks the
+source revision before mutation. A cancelled waiter retains admission until the switch
+finishes; hosts resume to observe an uncertain acknowledgment.
 
 ## Repository comparisons
 
@@ -244,12 +261,7 @@ emits cancellation once.
 
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, and registry-based
-model construction are delivered library capabilities.
-
-1. **Model switching**
-
-   Switch an idle durable session between registered models atomically without
-   discarding its normalized history.
+model construction and idle-session model switching are delivered library capabilities.
 
 1. **Rich input and images**
 

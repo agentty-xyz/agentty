@@ -88,6 +88,8 @@ pub enum HostTurnAcquisition {
 /// Pending writes remain unknown; this is not proof that effects have stopped.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostTurnRecord {
+    /// Immutable model provenance; absent for turns predating model switching.
+    pub model: Option<crate::RecordedModel>,
     /// Immutable request identity.
     pub request: HostRequest,
     /// Recorded lifecycle state and terminal result, when available.

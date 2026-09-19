@@ -1,11 +1,22 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT max_history_bytes AS \"max_history_bytes!: i64\", provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id AND status = 'completed'\n        ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session WHERE id = ?\n",
+  "query": "\nSELECT model_generation AS \"model_generation!: i64\", max_history_bytes AS \"max_history_bytes!: i64\", provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id AND status = 'completed'\n        ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session WHERE id = ?\n",
   "describe": {
     "columns": [
       {
-        "name": "max_history_bytes!: i64",
+        "name": "model_generation!: i64",
         "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "model_generation"
+          }
+        }
+      },
+      {
+        "name": "max_history_bytes!: i64",
+        "ordinal": 1,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -16,7 +27,7 @@
       },
       {
         "name": "provider_session_id",
-        "ordinal": 1,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -27,7 +38,7 @@
       },
       {
         "name": "turn_options?: String",
-        "ordinal": 2,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -42,9 +53,10 @@
     },
     "nullable": [
       false,
+      false,
       true,
       true
     ]
   },
-  "hash": "1e761f5e068a65d258edfb6eb5ce5a4d90646dd557891a4919d4a1ffa1528219"
+  "hash": "ce4bc6b1a4d31f5e5b14b0fb366de195199f98c6422188870a8ac3b617fafeff"
 }

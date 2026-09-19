@@ -6,6 +6,10 @@
 //! remain behind injectable boundaries.
 
 #[cfg(test)]
+#[path = "../tests/support/model_switch.rs"]
+mod model_switch_test;
+
+#[cfg(test)]
 #[path = "../tests/support/recovery.rs"]
 mod recovery_test;
 
@@ -46,6 +50,7 @@ mod recovery;
 mod repository;
 mod schema_contract;
 mod session;
+mod session_model;
 mod store;
 mod store_coordinator;
 mod telemetry;
@@ -88,6 +93,7 @@ pub use session::{
     AcquiredTurn, Database as SqliteStore, LoadedSession, NewSession, SessionError, SessionInfo,
     StoreIdentity, TurnOwner,
 };
+pub use session_model::RecordedModel;
 pub use store::SessionStore;
 pub use telemetry::LifecycleMetrics;
 pub use tool::{

@@ -27,8 +27,8 @@ async fn recovery_acquisition_is_atomic_across_independent_sqlite_pools() {
 
     // Act
     let (first, second) = tokio::join!(
-        left.begin_request(left.clone(), "session", "hello", &options, &request),
-        right.begin_request(right.clone(), "session", "hello", &options, &request),
+        left.begin_request(left.clone(), "session", "hello", &options, &request, 0),
+        right.begin_request(right.clone(), "session", "hello", &options, &request, 0),
     );
 
     // Assert
@@ -65,6 +65,7 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
             "hello",
             &turn_options(),
             &request,
+            0,
         )
         .await
         .expect("turn")
@@ -139,6 +140,7 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
             "hello",
             &turn_options(),
             &request,
+            0,
         )
         .await
         .expect("turn");
@@ -162,6 +164,7 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
             "hello",
             &turn_options(),
             &request,
+            0,
         )
         .await
         .expect("duplicate");

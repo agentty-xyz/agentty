@@ -17,7 +17,20 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
         });
 
         // Act / Assert
-        lifecycle(decorated).await;
+        lifecycle(Arc::clone(&decorated)).await;
+        decorated
+            .switch_model(
+                "session",
+                0,
+                &crate::ExecutionIdentity::new("next", "1").expect("identity"),
+                None,
+                crate::ModelCapabilities {
+                    native_continuation: true,
+                    tool_calls: true,
+                },
+            )
+            .await
+            .expect("switch through decorator");
     }
 }
 
@@ -47,6 +60,7 @@ async fn admission_decorator_forwards_host_recovery() {
                 "prompt",
                 &options(),
                 &request,
+                0,
             )
             .await
             .expect("turn");

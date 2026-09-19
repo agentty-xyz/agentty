@@ -45,6 +45,7 @@ impl MemoryStore {
         prompt: &str,
         options: &TurnOptions,
         request: Option<&HostRequest>,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         if store.identity() != self.identity() {
             return Err(SessionError::InvalidData {
@@ -66,6 +67,11 @@ impl MemoryStore {
 
             return Ok(HostTurnAcquisition::Recorded(record));
         }
+        crate::session_model::check_generation(
+            session_id,
+            session.configuration.model_generation,
+            generation,
+        )?;
         if session
             .turns
             .last()
@@ -110,6 +116,7 @@ impl MemoryStore {
             continuation.clone(),
         )?;
         session.turns.push(TurnRecord {
+            model: session.configuration.recorded_model(),
             deadline,
             error_type: None,
             messages: vec![ModelMessage::User(prompt.to_string())],
@@ -198,6 +205,7 @@ impl SessionStore for MemoryStore {
             config.id().to_string(),
             Record {
                 configuration: LoadedSession {
+                    model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
@@ -229,15 +237,61 @@ impl SessionStore for MemoryStore {
         Ok(loaded)
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &crate::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        session.recover();
+        crate::session_model::check_generation(
+            id,
+            session.configuration.model_generation,
+            generation,
+        )?;
+        if session
+            .turns
+            .last()
+            .is_some_and(|turn| turn.status == Status::Running)
+        {
+            return Err(SessionError::Busy { id: id.to_string() });
+        }
+        crate::session_model::check_history(
+            session
+                .turns
+                .iter()
+                .filter(|turn| turn.status == Status::Completed)
+                .flat_map(|turn| turn.messages.iter()),
+            capabilities,
+        )?;
+        let next = crate::session_model::next_generation(generation)?;
+        session.configuration.model_generation = next;
+        session.configuration.registration_identity = Some(identity.clone());
+        session.configuration.provider =
+            metadata.as_ref().map(|value| value.provider().to_string());
+        session.configuration.model = metadata.as_ref().map(|value| value.model().to_string());
+        session.configuration.provider_session_id = None;
+
+        Ok(next)
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         let HostTurnAcquisition::Acquired(acquired) =
-            self.acquire(store, session_id, prompt, options, None)?
+            self.acquire(store, session_id, prompt, options, None, generation)?
         else {
             return Err(SessionError::HostTurnConflict);
         };
@@ -252,8 +306,16 @@ impl SessionStore for MemoryStore {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, session_id, prompt, options, Some(request))
+        self.acquire(
+            store,
+            session_id,
+            prompt,
+            options,
+            Some(request),
+            generation,
+        )
     }
 
     async fn load_request(
@@ -445,6 +507,7 @@ impl Record {
         let turn_position = turn.owner.turn_position();
 
         Some(HostTurnRecord {
+            model: Some(turn.model.clone()),
             request,
             status,
             turn_position,
@@ -507,6 +570,7 @@ struct TurnRecord {
     deadline: Instant,
     error_type: Option<String>,
     messages: Vec<ModelMessage>,
+    model: crate::RecordedModel,
     options: String,
     outcome: Option<TurnOutcome>,
     owner: TurnOwner,

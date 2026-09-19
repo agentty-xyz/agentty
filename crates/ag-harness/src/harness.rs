@@ -37,12 +37,61 @@ pub struct Session {
     harness: Harness,
     history: SessionHistory,
     id: String,
+    model_generation: i64,
     provider_session_id: Option<String>,
     schema: OutputSchema,
     system_prompt: Option<String>,
 }
 
 impl Session {
+    /// Selects a registered model for subsequent turns of an idle session.
+    ///
+    /// Clears native continuation and fences older handles, including when
+    /// switching back to a previous registration. Historical provider reasoning
+    /// is not portable and causes an explicit rejection. Ordinary completed
+    /// messages and tool groups remain intact. Recovery lookup remains usable
+    /// on stale handles; new execution requires a fresh handle.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown key, active turn or unsettled effect,
+    /// stale handle, unsupported history, or persistence failure. A dropped
+    /// waiter can still commit the switch; resume to observe its result.
+    pub async fn switch_model(
+        &mut self,
+        registry: &ModelRegistry,
+        key: &str,
+    ) -> Result<(), SessionError> {
+        let registration = registry.resolve(key)?.clone();
+        registration
+            .model()
+            .validate_schema(&self.schema)
+            .map_err(TurnError::from)?;
+        let generation = store_coordinator::switch_model(
+            Arc::clone(&self.database),
+            self.id.clone(),
+            self.model_generation,
+            registration.clone(),
+        )
+        .await?;
+        self.harness.model = registration.model();
+        if self.harness.execution_identity.is_none()
+            || self
+                .harness
+                .model_registration
+                .as_ref()
+                .is_some_and(|previous| {
+                    self.harness.execution_identity.as_ref() == Some(previous.identity())
+                })
+        {
+            self.harness.execution_identity = Some(registration.identity().clone());
+        }
+        self.harness.model_registration = Some(registration);
+        self.model_generation = generation;
+        self.provider_session_id = None;
+
+        Ok(())
+    }
+
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
@@ -119,6 +168,7 @@ impl Session {
             harness: self.harness.snapshot(),
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
+            model_generation: self.model_generation,
             provider_session_id: None,
             schema: self.schema.clone(),
             system_prompt: self.system_prompt.clone(),
@@ -170,6 +220,7 @@ impl Session {
             harness: self.harness.snapshot(),
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
+            model_generation: self.model_generation,
             provider_session_id: None,
             schema: self.schema.clone(),
             system_prompt: self.system_prompt.clone(),
@@ -294,7 +345,7 @@ impl Session {
             if let Some(request) = request {
                 store_coordinator::acquire_request(
                     Arc::clone(&self.database),
-                    self.id.clone(),
+                    (self.id.clone(), self.model_generation),
                     prompt.clone(),
                     options.clone(),
                     request.clone(),
@@ -305,7 +356,7 @@ impl Session {
             } else {
                 store_coordinator::acquire(
                     Arc::clone(&self.database),
-                    self.id.clone(),
+                    (self.id.clone(), self.model_generation),
                     prompt.clone(),
                     options.clone(),
                     control.map(|control| control.settlement.clone()),
@@ -444,6 +495,7 @@ impl SessionBuilder {
             harness: self.harness,
             history,
             id: config.id().to_string(),
+            model_generation: 0,
             provider_session_id: None,
             schema: config.schema().clone(),
             system_prompt: config.system_prompt().map(str::to_string),
@@ -751,6 +803,7 @@ impl Harness {
             harness: self.snapshot(),
             history,
             id: id.to_string(),
+            model_generation: loaded.model_generation,
             provider_session_id: loaded.provider_session_id,
             schema: loaded.schema,
             system_prompt: loaded.system_prompt,

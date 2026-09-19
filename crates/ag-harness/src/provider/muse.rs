@@ -80,6 +80,10 @@ impl Model for Muse {
         Some(self.client.metadata().clone())
     }
 
+    fn validate_schema(&self, schema: &crate::OutputSchema) -> Result<(), ModelError> {
+        self.client.validate_schema(schema)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.client.complete(request).await
     }
