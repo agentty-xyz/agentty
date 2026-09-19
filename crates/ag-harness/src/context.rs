@@ -241,6 +241,9 @@ pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
     if options.tool_policy().allows(Tool::Write) {
         tools.push(ToolDefinition::write());
     }
+    if options.tool_policy().allows(Tool::Bash) {
+        tools.push(ToolDefinition::bash());
+    }
 
     tools
 }

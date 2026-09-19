@@ -11,6 +11,11 @@ path = "junit.xml"
 
 [test-groups]
 agentty-e2e = { max-threads = 4 }
+harness-sandbox = { max-threads = 1 }
+
+[[profile.ci.overrides]]
+filter = 'package(=ag-harness) and binary(=sandbox)'
+test-group = 'harness-sandbox'
 
 [[profile.ci.overrides]]
 filter = 'package(agentty) and kind(test) and binary(e2e)'

@@ -85,7 +85,8 @@ impl<E> Drop for ControlledTurn<'_, E> {
 /// Cancellation stops the waiter promptly. A terminal commit already in
 /// progress can still succeed. Keep the Tokio runtime driven until settlement.
 /// Neither cancellation nor persistence settlement proves filesystem effects
-/// have stopped; observe [`Self::effects_settled`] separately.
+/// have stopped; observe [`Self::effects_settled`] and
+/// [`Self::commands_settled`] separately.
 #[derive(Clone)]
 pub struct TurnControl {
     pub(crate) effects: Effects,
@@ -94,6 +95,33 @@ pub struct TurnControl {
 }
 
 impl TurnControl {
+    /// Snapshots observed command outcomes in invocation order. `None` means no
+    /// outcome has been observed, including a still-running invocation. Content
+    /// may contain secrets; this is host inspection data, never telemetry.
+    pub fn command_outcomes(&self) -> Vec<Option<crate::CommandOutcome>> {
+        self.effects.commands().outcomes()
+    }
+
+    /// Observes retained command cleanup and outcome recording separately from
+    /// persistence and filesystem replacements. macOS success covers only
+    /// best-effort process-group cleanup; detached descendants may remain.
+    ///
+    /// # Errors
+    /// Returns an error for unresolved cleanup or command outcome recording.
+    pub async fn commands_settled(&self) -> Result<(), crate::CommandSettlementError> {
+        self.effects.commands().settled().await
+    }
+
+    /// Retries this turn's retained cleanup and recording, never its commands.
+    /// Keep the runtime driven. Persistence settlement must finish first.
+    ///
+    /// # Errors
+    /// Returns an error when execution is still active or cleanup/recording
+    /// fails.
+    pub async fn retry_commands(&self) -> Result<(), crate::CommandSettlementError> {
+        self.effects.commands().retry().await
+    }
+
     /// Requests cancellation without waiting for storage. Repeated calls and
     /// calls after completion cannot affect another turn.
     pub fn cancel(&self) {

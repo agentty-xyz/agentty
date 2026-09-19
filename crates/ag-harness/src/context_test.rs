@@ -105,11 +105,13 @@ fn advertised_tools_follow_the_turn_policy() {
     let denied = options_with(ToolPolicy::default());
     let read_only = options_with(ToolPolicy::default().allow(Tool::Read));
     let read_write = options_with(ToolPolicy::default().allow(Tool::Read).allow(Tool::Write));
+    let bash_only = options_with(ToolPolicy::default().allow(Tool::Bash));
 
     // Act
     let none = advertised_tools(&denied);
     let read = advertised_tools(&read_only);
     let both = advertised_tools(&read_write);
+    let bash = advertised_tools(&bash_only);
 
     // Assert
     assert_eq!(none.len(), 0);
@@ -120,6 +122,10 @@ fn advertised_tools_follow_the_turn_policy() {
     assert_eq!(
         both.iter().map(ToolDefinition::name).collect::<Vec<_>>(),
         ["read", "write"]
+    );
+    assert_eq!(
+        bash.iter().map(ToolDefinition::name).collect::<Vec<_>>(),
+        ["bash"]
     );
 }
 

@@ -65,6 +65,10 @@ jobs:
         if: ${{ inputs['cargo-machete'] }}
         run: prek run cargo-machete --all-files --hook-stage manual
 
+      - name: Install native sandbox test dependency
+        if: ${{ inputs['workspace-tests'] }}
+        uses: $/.github/actions/setup-native-sandbox
+
       - name: Full test suite
         id: workspace-tests
         if: ${{ inputs['workspace-tests'] }}

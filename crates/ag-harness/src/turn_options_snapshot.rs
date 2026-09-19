@@ -15,6 +15,8 @@ use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
 #[serde(deny_unknown_fields)]
 pub struct StoredTurnOptions {
     #[serde(default)]
+    bash: Option<crate::bash::BashPolicySnapshot>,
+    #[serde(default)]
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
     fingerprint: Option<String>,
@@ -28,6 +30,7 @@ impl StoredTurnOptions {
     /// Encodes effective options with the current version and fingerprint.
     pub fn encode(options: &TurnOptions) -> String {
         let stored = Self {
+            bash: options.bash().map(|config| config.snapshot.clone()),
             comparison_base: options
                 .comparison_base()
                 .map(|base| base.identity().clone()),
@@ -35,7 +38,7 @@ impl StoredTurnOptions {
             max_tool_calls: options.limits().max_tool_calls(),
             output_schema: options.schema().value().clone(),
             tool_policy: options.tool_policy(),
-            version: 3,
+            version: if options.bash().is_some() { 4 } else { 3 },
         };
         let mut snapshot = stored.effective_options();
         snapshot["fingerprint"] = json!(stored.fingerprint());
@@ -50,7 +53,7 @@ impl StoredTurnOptions {
     /// schemas, comparison identities, or fingerprints.
     pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
-        if !matches!(stored.version, 1..=3) {
+        if !matches!(stored.version, 1..=4) || (stored.version < 4 && stored.bash.is_some()) {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
             });
@@ -78,7 +81,8 @@ impl StoredTurnOptions {
     /// Legacy v1 snapshots cannot establish compatibility; budget alone does
     /// not invalidate a continuation. This is not a host-request fingerprint.
     pub fn continuation_compatible(&self, options: &TurnOptions) -> bool {
-        matches!(self.version, 2 | 3)
+        matches!(self.version, 2..=4)
+            && self.bash.as_ref() == options.bash().map(|config| &config.snapshot)
             && self.output_schema == *options.schema().value()
             && self.tool_policy == options.tool_policy()
             && self.comparison_base.as_ref()
@@ -86,18 +90,23 @@ impl StoredTurnOptions {
     }
 
     fn effective_options(&self) -> Value {
-        json!({
+        let mut value = json!({
             "comparison_base": self.comparison_base,
             "max_tool_calls": self.max_tool_calls,
             "output_schema": self.output_schema,
             "tool_policy": self.tool_policy,
             "version": self.version,
-        })
+        });
+        if self.version >= 4 {
+            value["bash"] = json!(self.bash);
+        }
+
+        value
     }
 
     fn fingerprint(&self) -> String {
         let mut options = self.effective_options();
-        if self.version == 3 {
+        if self.version >= 3 {
             options.sort_all_objects();
         }
 
