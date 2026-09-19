@@ -1,0 +1,28 @@
+name: Setup Native Linux Sandbox
+description: Provision Bubblewrap with scoped AppArmor permissions and verify unprivileged startup.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Linux isolation tooling
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes bubblewrap apparmor
+
+    - name: Load Bubblewrap AppArmor profile
+      shell: bash
+      env:
+        NATIVE_SANDBOX_ACTION_PATH: ${{ github.action_path }}
+      run: sudo apparmor_parser --replace --skip-cache "$NATIVE_SANDBOX_ACTION_PATH/bwrap.apparmor"
+
+    - name: Verify unprivileged namespace startup
+      shell: bash
+      run: |
+        bwrap --version
+        timeout 10s bwrap --unshare-all --uid 0 --gid 0 --cap-drop ALL \
+          --as-pid-1 --ro-bind / / --proc /proc -- /bin/sh -ec '
+            test "$(id -u)" = 0
+            grep -Eq "^CapEff:[[:space:]]+0+$" /proc/self/status
+            grep -F unpriv_bwrap /proc/self/attr/current
+          '

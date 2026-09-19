@@ -92,6 +92,41 @@ impl Session {
         Ok(())
     }
 
+    /// Loads all command intents and outcomes, including interrupted turns.
+    ///
+    /// # Errors
+    /// Returns a store failure if command records cannot be loaded.
+    pub async fn commands(&self) -> Result<Vec<crate::CommandRecord>, SessionError> {
+        self.database.load_commands(&self.id).await
+    }
+
+    /// Explicitly asserts that a stopped turn's command no longer prevents safe
+    /// execution. The host must first stop or otherwise account for its
+    /// effects. This never runs a command, erases its unknown outcome, or
+    /// rolls back writes. Prefer retained `TurnControl::retry_commands`
+    /// while a control is available.
+    ///
+    /// # Errors
+    /// Rejects another session/store/owner or a still-live turn.
+    pub async fn reconcile_command(
+        &self,
+        record: &crate::CommandRecord,
+    ) -> Result<(), SessionError> {
+        if record.owner().session_id() != self.id
+            || record.owner().store_identity() != self.database.identity()
+        {
+            return Err(SessionError::InvalidData {
+                reason: "command belongs to another session".into(),
+            });
+        }
+        self.database
+            .reconcile_command(record.owner(), record.id)
+            .await?;
+        crate::command_settlement::Commands::reconcile(record);
+
+        Ok(())
+    }
+
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
@@ -284,6 +319,9 @@ impl Session {
                 "native_continuation": capabilities.native_continuation,
                 "tool_calls": capabilities.tool_calls,
             });
+        }
+        if let Some(bash) = options.bash() {
+            configuration["options"]["bash"] = bash.fingerprint();
         }
 
         HostRequest::from_configuration(id, configuration)

@@ -81,6 +81,15 @@ impl MemoryStore {
                 id: session_id.to_string(),
             });
         }
+        if session
+            .commands
+            .iter()
+            .any(crate::CommandRecord::blocks_admission)
+        {
+            return Err(SessionError::Busy {
+                id: session_id.into(),
+            });
+        }
         let previous = session
             .turns
             .iter()
@@ -180,6 +189,90 @@ impl Default for MemoryStore {
 
 #[async_trait]
 impl SessionStore for MemoryStore {
+    async fn load_commands(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+        self.lock()
+            .sessions
+            .get(session_id)
+            .map(|session| session.commands.clone())
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.into(),
+            })
+    }
+
+    async fn command_intent(
+        &self,
+        owner: &TurnOwner,
+        intent: &crate::CommandIntent,
+    ) -> Result<i64, SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let id = state
+            .next_command
+            .checked_add(1)
+            .ok_or_else(|| lost(owner))?;
+        state.next_command = id;
+        let session = state.owned_session(owner)?;
+        session.live_turn(owner)?;
+        session.commands.push(crate::CommandRecord::pending(
+            id,
+            owner.clone(),
+            intent.clone(),
+        ));
+
+        Ok(id)
+    }
+
+    async fn finish_command(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        outcome: &crate::CommandOutcome,
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let session = state.owned_session(owner)?;
+        let command = session
+            .commands
+            .iter_mut()
+            .find(|command| command.id == id && command.owner == *owner)
+            .ok_or_else(|| lost(owner))?;
+        if command
+            .outcome
+            .as_ref()
+            .is_some_and(|previous| previous != outcome)
+        {
+            return Err(lost(owner));
+        }
+        command.outcome = Some(outcome.clone());
+
+        Ok(())
+    }
+
+    async fn reconcile_command(&self, owner: &TurnOwner, id: i64) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let session = state.owned_session(owner)?;
+        session.recover();
+        if session
+            .turns
+            .iter()
+            .any(|turn| turn.owner == *owner && turn.status == Status::Running)
+        {
+            return Err(lost(owner));
+        }
+        let command = session
+            .commands
+            .iter_mut()
+            .find(|command| command.id == id && command.owner == *owner)
+            .ok_or_else(|| lost(owner))?;
+        command.reconciled = true;
+
+        Ok(())
+    }
+
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }
@@ -204,6 +297,7 @@ impl SessionStore for MemoryStore {
         state.sessions.insert(
             config.id().to_string(),
             Record {
+                commands: Vec::new(),
                 configuration: LoadedSession {
                     model_generation: 0,
                     max_history_bytes,
@@ -260,6 +354,10 @@ impl SessionStore for MemoryStore {
             .turns
             .last()
             .is_some_and(|turn| turn.status == Status::Running)
+            || session
+                .commands
+                .iter()
+                .any(crate::CommandRecord::blocks_admission)
         {
             return Err(SessionError::Busy { id: id.to_string() });
         }
@@ -467,6 +565,7 @@ impl SessionStore for MemoryStore {
 
 #[derive(Default)]
 struct State {
+    next_command: i64,
     next_write: i64,
     sessions: HashMap<String, Record>,
 }
@@ -480,6 +579,7 @@ impl State {
 }
 
 struct Record {
+    commands: Vec<crate::CommandRecord>,
     configuration: LoadedSession,
     next_turn: i64,
     turns: Vec<TurnRecord>,
@@ -507,6 +607,12 @@ impl Record {
         let turn_position = turn.owner.turn_position();
 
         Some(HostTurnRecord {
+            commands: self
+                .commands
+                .iter()
+                .filter(|command| command.owner.turn_position() == turn_position)
+                .cloned()
+                .collect(),
             model: Some(turn.model.clone()),
             request,
             status,

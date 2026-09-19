@@ -1,5 +1,5 @@
 //! Platform-independent ownership and lifecycle orchestration. Only injected
-//! backends can supply process operations; no production backend is available.
+//! backends supply native process operations and state their cleanup scope.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,17 +34,20 @@ pub(super) trait Process: Send {
     async fn start(&mut self) -> Result<(), ExecutionError>;
     /// Read into the supplied bounded buffer, without an unbounded internal
     /// queue. Output lengths cannot exceed the buffer. EOF is per pipe;
-    /// quiescence independently confirms that no descendants can remain or
-    /// appear. Deliver the main exit separately, even if it is unavailable.
+    /// completion independently acknowledges the backend scope: Linux namespace
+    /// descendants, or best-effort macOS process-group observation. Deliver the
+    /// main exit separately, even if unavailable.
     async fn next_event(&mut self, buffer: &mut [u8]) -> Result<Event, ExecutionError>;
-    /// Idempotently stop/reap descendants and release even partially prepared
-    /// resources. Success positively confirms cleanup; a dropped attempt must
-    /// leave the owner usable for another bounded attempt. This operation owns
-    /// any remaining pipe draining/disposal and cannot depend on a consumer.
+    /// Idempotently clean up within the documented backend scope and release
+    /// even partially prepared resources. macOS cannot confirm escaped
+    /// descendants; a dropped attempt must leave the owner usable for
+    /// another bounded attempt. This operation owns any remaining pipe
+    /// draining/disposal and cannot depend on a consumer.
     async fn cleanup(&mut self) -> Result<(), ExecutionError>;
 }
 
 pub(super) enum Event {
+    Progress,
     Output(Stream, usize),
     Eof(Stream),
     MainExit(MainExit),
@@ -294,6 +297,7 @@ impl Worker {
             )
             .await;
             match event {
+                Ok(Ok(Event::Progress)) => {}
                 Ok(Ok(Event::Output(stream, length))) if length <= buffer.len() => {
                     outcome.output.capture(stream, &buffer[..length]);
                 }

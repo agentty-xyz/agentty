@@ -69,25 +69,36 @@ read content; they govern current tool execution.
 The future Agentty adapters will resolve new options from each request's protocol
 profile, permission mode, and host-selected comparison context. Agentty owns review-loop
 behavior. Mutable counters, cancellation, and shared provider-call budget accounting
-remain execution state rather than configuration. Sandboxed Bash and Agentty permission
-mapping remain later work.
+remain execution state rather than configuration. Agentty permission mapping remains
+later work.
 
-Private execution contracts define immutable command and sandbox policy values, explicit
-workspace-write, external-read, environment, and host-information grants, and deny-only
-networking. Git metadata remains read-only, including linked-worktree administration. A
-shared stdout/stderr byte budget and monotonic deadline bound the execution contract;
-retained cancellation and cleanup control survives a dropped execution future. Results
-keep the main exit, execution error, termination reason, output truncation, and cleanup
-failure separate. Applied writes are not rolled back; aggregate memory, process-count,
-and disk quotas are excluded. These contracts have no production executor or public
-entry point. Future backends must enforce the policy against hostile commands,
-descendants, and repository contents before launching anything.
+Sandboxed Bash consumes the shared private execution supervisor through explicit
+per-turn host policy and a separate tool permission. Workspace reads are the default;
+writes, runtime reads, environment values, and host-information exposure require grants.
+Git metadata stays read-only, networking is deny-only, and unsupported policy fails
+closed. Linux currently rejects workspace write grants before execution, because static
+Bubblewrap mounts cannot protect Git metadata created later beneath a writable
+directory; macOS enforces write grants through Seatbelt metadata denials. A dedicated
+trusted launcher clears inherited descriptors before running untrusted code. Linux uses
+Bubblewrap, seccomp, and a PID namespace. macOS uses Seatbelt and reports best-effort
+process-group cleanup: escaped descendants may remain alive under the inherited sandbox.
+Neither pipe EOF nor the main shell exit establishes completion of the backend's cleanup
+scope.
 
-Private platform-independent supervision uses injected backends to bound execution,
-output, and cleanup. Cancellation and deadlines apply throughout the lifecycle, and
-retained control survives dropped callers. Completion includes descendant cleanup;
-cleanup failures remain separate from execution results. Production backends remain
-unavailable.
+A combined stdout/stderr budget and the original monotonic deadline bound preparation,
+execution, and capture. The supervisor retains cleanup after caller drop and preserves
+main exit, termination, output truncation, execution failure, and cleanup failure
+separately. Applied writes survive failure; aggregate memory, process-count, and disk
+quotas are excluded.
+
+Both stores commit command intent before spawning and record outcomes separately from
+patch writes. Pending or unresolved commands block admission atomically; duplicate host
+IDs return their recorded status without spawning. `commands_settled()` and
+`retry_commands()` observe and retry retained cleanup/recording independently of
+persistence and filesystem replacement settlement. Explicit owner-scoped reconciliation
+can unblock a stopped command after the host accounts for its effects without
+fabricating a missing outcome. Policy fingerprints include a host revision for secrets
+and executable configuration, but snapshots and telemetry exclude environment values.
 
 ## Session model switching
 
@@ -267,15 +278,16 @@ model construction and idle-session model switching are delivered library capabi
 
    Replace text-only user messages with ordered, bounded text and image content blocks.
 
-1. **Sandboxed Bash**
-
-   Add a cancellable command tool with fixed workspace scope, timeouts, output limits,
-   and explicit network policy.
-
 1. **Context management**
 
    Preserve the durable log while projecting model-aware recent history and structured
    compaction checkpoints.
+
+1. **Linux Bash write access**
+
+   Restore Linux workspace write grants behind filesystem enforcement that keeps newly
+   created Git metadata read-only beneath writable directories, matching the macOS
+   contract.
 
 1. **Agentty runtime adapters**
 

@@ -23,9 +23,13 @@ STUB = """#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 tool = Path(sys.argv[0]).name
+if tool == "uname":
+    print(os.environ.get("STUB_UNAME", "Linux"))
+    sys.exit(0)
 report = Path("coverage.lcov")
 with Path("calls.jsonl").open("a", encoding="utf-8") as calls:
     calls.write(json.dumps({
@@ -34,6 +38,7 @@ with Path("calls.jsonl").open("a", encoding="utf-8") as calls:
         "report": report.read_text() if report.exists() else None,
         "gif_mode": os.environ.get("TESTTY_GIF_MODE"),
         "coverage_base": os.environ.get("AGENTTY_COVERAGE_BASE"),
+        "rustflags": os.environ.get("RUSTFLAGS"),
     }) + "\\n")
 if tool == "cargo":
     status = int(os.environ.get("STUB_CARGO_EXIT", "0"))
@@ -43,6 +48,10 @@ if tool == "cargo":
             report.write_text("fresh report" if mode == "fresh" else "")
 elif tool == "diff-cover":
     status = int(os.environ.get("STUB_DIFF_EXIT", "0"))
+elif tool in ("sudo", "bwrap"):
+    status = 47 if os.environ.get("STUB_NATIVE_FAILURE") in sys.argv[1:] else 0
+elif tool == "timeout":
+    status = subprocess.call(sys.argv[2:])
 else:
     status = int(os.environ.get("STUB_PREK_EXIT", "0"))
 sys.exit(status)
@@ -58,7 +67,7 @@ class ValidationHookTests(unittest.TestCase):
         self.directory = Path(directory.name)
         self.bin = self.directory / "bin"
         self.bin.mkdir()
-        for name in ("cargo", "diff-cover", "prek"):
+        for name in ("cargo", "diff-cover", "prek", "uname", "sudo", "bwrap", "timeout"):
             command = self.bin / name
             command.write_text(STUB, encoding="utf-8")
             command.chmod(0o755)
@@ -126,7 +135,7 @@ class ValidationHookTests(unittest.TestCase):
     def test_coverage_generates_once_before_checking_all_thresholds(self):
         (self.directory / "coverage.lcov").write_text("stale report")
 
-        result = self.run_hook("coverage", AGENTTY_TEST_FILTER="none()")
+        result = self.run_hook("coverage", AGENTTY_TEST_FILTER="none()", RUSTFLAGS="-C debuginfo=1")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         generation, comparison = self.calls()
@@ -147,6 +156,11 @@ class ValidationHookTests(unittest.TestCase):
             path.stem for path in (ROOT / "crates/ag-xtask/tests").glob("*.rs")
         }
         self.assertTrue(utility_suites <= cli_targets)
+        self.assertTrue({"sandbox", "public_api", "lifecycle", "telemetry", "benchmark_summary"} <= cli_targets)
+        self.assertEqual(
+            generation["rustflags"],
+            "-C debuginfo=1 -C llvm-args=-runtime-counter-relocation",
+        )
         self.assertNotIn("-E", args)
         self.assertEqual(comparison["tool"], "diff-cover")
         self.assertEqual(comparison["report"], "fresh report")
@@ -158,6 +172,17 @@ class ValidationHookTests(unittest.TestCase):
         ):
             self.assertIn(flag, comparison["args"])
 
+    def test_macos_coverage_aligns_all_continuous_profile_sections(self):
+        # Arrange / Act
+        result = self.run_hook("coverage", STUB_UNAME="Darwin", RUSTFLAGS="-C debuginfo=1")
+
+        # Assert
+        self.assertEqual(result.returncode, 0, result.stderr)
+        flags = self.calls()[0]["rustflags"]
+        self.assertTrue(flags.startswith("-C debuginfo=1 -C llvm-args=-runtime-counter-relocation"))
+        for section in ("cnts", "bits", "data"):
+            self.assertIn(f"-C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_{section},0x4000", flags)
+
     def test_generation_failure_cannot_reuse_an_old_report(self):
         report = self.directory / "coverage.lcov"
         report.write_text("stale report")
@@ -167,6 +192,24 @@ class ValidationHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 12)
         self.assertEqual(len(self.calls()), 1)
         self.assertFalse(report.exists())
+
+    def test_native_coverage_includes_the_instrumented_sandbox_target(self):
+        # Arrange / Act
+        result = self.run_hook("coverage-ag-harness-sandbox", AGENTTY_TEST_FILTER="none()", RUSTFLAGS="")
+
+        # Assert
+        self.assertEqual(result.returncode, 0, result.stderr)
+        generation, = self.calls()
+        args = generation["args"]
+        self.assertEqual(args[:2], ["llvm-cov", "nextest"])
+        self.assertEqual(args[args.index("-p") + 1], "ag-harness")
+        self.assertEqual(args[args.index("--test") + 1], "sandbox")
+        self.assertIn("--lib", args)
+        targets = {args[index + 1] for index, argument in enumerate(args) if argument == "--test"}
+        self.assertEqual(targets, {"sandbox", "public_api", "lifecycle", "telemetry", "benchmark_summary"})
+        self.assertIn("--lcov", args)
+        self.assertNotIn("-E", args)
+        self.assertIn("-runtime-counter-relocation", generation["rustflags"])
 
     def test_generation_must_produce_a_nonempty_report(self):
         for mode in ("missing", "empty"):
@@ -259,6 +302,91 @@ class ValidationHookTests(unittest.TestCase):
                 ),
             },
         )
+
+    def test_ci_installs_native_isolation_before_coverage(self):
+        # Arrange
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/run-coverage/action.yml").read_text(encoding="utf-8")
+        )
+        steps = action["runs"]["steps"]
+
+        # Act
+        installation = next(
+            step for step in steps if step.get("name") == "Install native sandbox coverage dependency"
+        )
+
+        # Assert
+        self.assertEqual(installation["if"], "runner.os == 'Linux'")
+        self.assertEqual(installation["uses"], "$/.github/actions/setup-native-sandbox")
+        self.assertLess(steps.index(installation), steps.index(self.coverage_step()))
+
+    def test_native_setup_precedes_every_linux_sandbox_suite(self):
+        # Arrange
+        cases = (
+            ("harness-sandbox.yml", "native", "runner.os == 'Linux'",
+             "Native sandbox public contract and launcher coverage"),
+            ("workspace-validation.yml", "validate", "${{ inputs['workspace-tests'] }}",
+             "Full test suite"),
+        )
+
+        # Act / Assert
+        for filename, job, condition, suite in cases:
+            with self.subTest(workflow=filename):
+                workflow = yaml.safe_load(
+                    (ROOT / ".github/workflows" / filename).read_text(encoding="utf-8")
+                )
+                steps = workflow["jobs"][job]["steps"]
+                setup = next(step for step in steps if step.get("uses") ==
+                             "$/.github/actions/setup-native-sandbox")
+                tests = next(step for step in steps if step.get("name") == suite)
+                self.assertEqual(setup["if"], condition)
+                self.assertLess(steps.index(setup), steps.index(tests))
+
+    def native_setup_command(self):
+        action = yaml.safe_load(
+            (ROOT / ".github/actions/setup-native-sandbox/action.yml").read_text(encoding="utf-8")
+        )
+        script = "\n".join(step["run"] for step in action["runs"]["steps"])
+        return ["bash", "-eu", "-o", "pipefail", "-c", script + "\nprek run coverage"]
+
+    def test_native_setup_loads_scoped_policy_then_probes_without_sudo(self):
+        # Arrange
+        action_path = self.directory / "action with spaces"
+
+        # Act
+        result = self.run_command(
+            self.native_setup_command(), NATIVE_SANDBOX_ACTION_PATH=str(action_path)
+        )
+
+        # Assert
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertEqual([call["tool"] for call in calls],
+                         ["sudo", "sudo", "sudo", "bwrap", "timeout", "bwrap", "prek"])
+        self.assertEqual(calls[1]["args"], ["apt-get", "install", "--yes", "bubblewrap", "apparmor"])
+        self.assertEqual(calls[2]["args"],
+                         ["apparmor_parser", "--replace", "--skip-cache", str(action_path / "bwrap.apparmor")])
+        self.assertEqual(calls[4]["args"][:2], ["10s", "bwrap"])
+        self.assertEqual(calls[5]["args"][:7],
+                         ["--unshare-all", "--uid", "0", "--gid", "0", "--cap-drop", "ALL"])
+        self.assertIn("CapEff:", calls[5]["args"][-1])
+        self.assertIn("unpriv_bwrap /proc/self/attr/current", calls[5]["args"][-1])
+
+    def test_native_setup_failure_prevents_test_execution(self):
+        # Arrange
+        for failure in ("update", "install", "apparmor_parser", "--version", "--unshare-all"):
+            with self.subTest(failure=failure):
+                (self.directory / "calls.jsonl").write_text("")
+
+                # Act
+                result = self.run_command(
+                    self.native_setup_command(), NATIVE_SANDBOX_ACTION_PATH="fixture",
+                    STUB_NATIVE_FAILURE=failure,
+                )
+
+                # Assert
+                self.assertEqual(result.returncode, 47, result.stderr)
+                self.assertNotIn("prek", [call["tool"] for call in self.calls()])
 
     def test_ci_selects_the_merge_group_or_pull_request_or_default_base(self):
         generation = self.coverage_step()
