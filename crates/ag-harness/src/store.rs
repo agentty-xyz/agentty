@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
+use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{
     AcquiredTurn, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
@@ -67,12 +68,14 @@ pub trait SessionStore: Send + Sync {
     /// atomically, using [`crate::StoredTurnOptions`]. Return only completed
     /// history bounded by the stored payload budget, revalidated at
     /// acquisition. Validate `generation` atomically before reserving a turn;
-    /// persist the selected model as immutable turn provenance.
+    /// persist the selected model as immutable turn provenance. Persist the
+    /// validated input through the shared message codec, preserving block
+    /// order and image content.
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError>;
@@ -86,7 +89,7 @@ pub trait SessionStore: Send + Sync {
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,

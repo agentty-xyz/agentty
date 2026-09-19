@@ -2,7 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::store_conformance_test::{lifecycle, options, schema, stores};
 use crate::store_coordinator::{AdmittedStore, admission};
-use crate::{HostRequest, HostTurnAcquisition, HostTurnStatus, NewSession, SessionStore};
+use crate::{
+    HostRequest, HostTurnAcquisition, HostTurnStatus, NewSession, SessionStore, TurnInput,
+};
 
 #[tokio::test]
 async fn admission_decorator_forwards_the_complete_store_contract() {
@@ -25,6 +27,7 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
                 &crate::ExecutionIdentity::new("next", "1").expect("identity"),
                 None,
                 crate::ModelCapabilities {
+                    image_input: false,
                     native_continuation: true,
                     tool_calls: true,
                 },
@@ -57,7 +60,7 @@ async fn admission_decorator_forwards_host_recovery() {
             .begin_request(
                 Arc::clone(&decorated),
                 "session",
-                "prompt",
+                &TurnInput::from("prompt"),
                 &options(),
                 &request,
                 0,

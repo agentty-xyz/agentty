@@ -41,6 +41,19 @@ DASHSCOPE_BASE_URL=... \
 cargo test --locked -p ag-harness --test e2e qwen::test_qwen -- --exact --ignored --nocapture
 ```
 
+## Images
+
+The `image` checks send ordered PNG and JPEG blocks through one-shot and durable turns
+for every built-in configuration that enables image input. Each follow-up must answer
+from replayed image history. They also confirm that `qwen3-max`, which accepts image
+parts but invents their content, is rejected before any request, and that image history
+switches from Qwen VL to Muse but not to a text-only registration. They use the provider
+variables above; run the Kimi checks one at a time when the account rate limit is low:
+
+```sh
+cargo test --locked -p ag-harness --test e2e image:: -- --test-threads=1 --ignored --nocapture
+```
+
 Run all live-provider checks together only when every provider credential is configured:
 
 ```sh

@@ -10,6 +10,7 @@ use tokio::time::Instant;
 
 use crate::cancellation::{Settlement, SettlementLease};
 use crate::effect::Effects;
+use crate::input::TurnInput;
 use crate::session::{
     AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner, recover_abandoned,
 };
@@ -36,7 +37,7 @@ pub(crate) async fn switch_model(
                 generation,
                 registration.identity(),
                 registration.metadata(),
-                registration.capabilities(),
+                registration.history_capabilities(),
             )
             .await
     })
@@ -50,7 +51,7 @@ pub(crate) async fn switch_model(
 pub(crate) async fn acquire(
     store: Arc<dyn SessionStore>,
     selection: (String, i64),
-    prompt: String,
+    input: TurnInput,
     options: TurnOptions,
     settlement: Option<Settlement>,
     effects: Effects,
@@ -73,7 +74,7 @@ pub(crate) async fn acquire(
             .begin_turn(
                 Arc::clone(&store),
                 &session_id,
-                &prompt,
+                &input,
                 &options,
                 generation,
             )
@@ -89,7 +90,7 @@ pub(crate) async fn acquire(
 pub(crate) async fn acquire_request(
     store: Arc<dyn SessionStore>,
     selection: (String, i64),
-    prompt: String,
+    input: TurnInput,
     options: TurnOptions,
     request: HostRequest,
     settlement: Option<Settlement>,
@@ -128,7 +129,7 @@ pub(crate) async fn acquire_request(
             .begin_request(
                 Arc::clone(&store),
                 &session_id,
-                &prompt,
+                &input,
                 &options,
                 &request,
                 generation,
@@ -240,12 +241,12 @@ impl SessionStore for AdmittedStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         self.store
-            .begin_turn(store, id, prompt, options, generation)
+            .begin_turn(store, id, input, options, generation)
             .await
     }
 
@@ -253,13 +254,13 @@ impl SessionStore for AdmittedStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request, generation)
+            .begin_request(store, id, input, options, request, generation)
             .await
     }
 

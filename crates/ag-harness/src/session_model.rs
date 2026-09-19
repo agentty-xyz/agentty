@@ -91,6 +91,11 @@ pub(crate) fn check_history<'a>(
                     reason: "provider reasoning cannot be transferred between model selections",
                 });
             }
+            ModelMessage::UserInput(input) if input.has_images() && !capabilities.image_input => {
+                return Err(SessionError::UnsupportedModelHistory {
+                    reason: "target does not support image history",
+                });
+            }
             _ => {}
         }
     }

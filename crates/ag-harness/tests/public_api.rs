@@ -27,17 +27,20 @@ mod store_conformance_test;
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
+use std::num::NonZeroUsize;
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    ComparisonBase, CompletionMetadata, CompletionUsage, FileSystem, Harness, LifecycleEventKind,
-    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, MemoryStore,
-    Model, ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata,
-    ModelProvider, ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError,
-    Repository, RepositoryError, Session, SessionBuilder, SessionError, SessionInfo, Tool,
-    ToolCall, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteStatus,
+    ComparisonBase, CompletionMetadata, CompletionUsage, ExecutionIdentity, FileSystem, Harness,
+    ImageContent, ImageMediaType, InputBlock, LifecycleEventKind, LifecycleMetrics,
+    LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, MemoryStore, Model,
+    ModelCapabilities, ModelCompletion, ModelConfiguration, ModelError, ModelMessage,
+    ModelMetadata, ModelProvider, ModelRegistry, ModelRequest, ModelResponse, ModelResponseType,
+    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
+    SessionError, SessionInfo, SessionStore, Tool, ToolCall, ToolPolicy, TurnError, TurnInput,
+    TurnInputError, TurnLimits, TurnOptions, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -908,6 +911,316 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
     assert_eq!(base, validated);
     assert_eq!(once.output(), &json!({"name":base.oid()}));
     assert_eq!(durable.output(), once.output());
+
+    Ok(())
+}
+
+struct ImageEchoModel {
+    calls: Arc<Mutex<usize>>,
+    messages: Arc<Mutex<Vec<Vec<ModelMessage>>>>,
+}
+
+#[async_trait]
+impl Model for ImageEchoModel {
+    fn validate_input(&self, _input: &TurnInput) -> Result<(), ModelError> {
+        Ok(())
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        *self.calls.lock().map_err(poisoned)? += 1;
+        self.messages
+            .lock()
+            .map_err(poisoned)?
+            .push(request.messages().to_vec());
+
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({ "name": request.prompt() }),
+        )))
+    }
+}
+
+fn poisoned<Guard>(_error: std::sync::PoisonError<Guard>) -> ModelError {
+    ModelError::request(io::Error::other("image model state poisoned"))
+}
+
+fn external_image_input(payload: &[u8]) -> Result<TurnInput, TurnInputError> {
+    let png = ImageContent::new(
+        ImageMediaType::Png,
+        [
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A].as_slice(),
+            payload,
+        ]
+        .concat(),
+    )?;
+
+    TurnInput::from_blocks(vec![
+        InputBlock::Text("look at".to_string()),
+        InputBlock::Image(png),
+        InputBlock::Text("this image".to_string()),
+    ])
+}
+
+#[tokio::test]
+async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let harness = Harness::new(ImageEchoModel {
+        calls: Arc::default(),
+        messages: Arc::clone(&messages),
+    })
+    .database(directory.path().join("images.db"));
+    let mut session = harness
+        .session("images", request()?.schema().clone())
+        .create()
+        .await?;
+    let input = external_image_input(b"payload")?;
+
+    // Act
+    session.send(input.clone()).await?;
+    drop(session);
+    drop(harness);
+    let reopened_messages = Arc::new(Mutex::new(Vec::new()));
+    let harness = Harness::new(ImageEchoModel {
+        calls: Arc::default(),
+        messages: Arc::clone(&reopened_messages),
+    })
+    .database(directory.path().join("images.db"));
+    let mut reopened = harness.resume("images").await?;
+    reopened.send("recall").await?;
+
+    // Assert
+    let sent = messages.lock().expect("messages");
+    assert_eq!(
+        sent[0].last(),
+        Some(&ModelMessage::UserInput(input.clone()))
+    );
+    let replayed = reopened_messages.lock().expect("replayed");
+    assert!(
+        replayed[0].contains(&ModelMessage::UserInput(input)),
+        "reopened history must preserve image blocks and their order"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_input_beyond_the_history_budget_is_rejected_before_acquisition()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let store = MemoryStore::new();
+    let calls = Arc::new(Mutex::new(0));
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let harness = Harness::new(ImageEchoModel {
+        calls: Arc::clone(&calls),
+        messages: Arc::clone(&messages),
+    })
+    .store(Arc::new(store.clone()))
+    .max_history_bytes(NonZeroUsize::new(512).ok_or("budget")?);
+    let mut session = harness
+        .session("budget", request()?.schema().clone())
+        .create()
+        .await?;
+    let oversized = external_image_input(&[0; 512])?;
+    let retained = external_image_input(b"payload")?;
+
+    // Act
+    let rejected = session.send(oversized).await;
+    session.send(retained.clone()).await?;
+    session.send("recall").await?;
+
+    // Assert
+    assert!(
+        matches!(
+            rejected,
+            Err(SessionError::ImageInputExceedsHistory {
+                max_history_bytes: 512,
+                ..
+            })
+        ),
+        "an image the budget would evict immediately must fail loudly"
+    );
+    assert_eq!(*calls.lock().expect("calls"), 2);
+    assert_eq!(
+        store.load_session("budget").await?.turns.len(),
+        2,
+        "rejected image input must not reserve or persist a turn"
+    );
+    assert!(
+        messages.lock().expect("messages")[1].contains(&ModelMessage::UserInput(retained)),
+        "an image inside the budget must reach the follow-up request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn registered_models_reject_image_input_without_capability() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let registry = |image_input: bool| {
+        let mut registry = ModelRegistry::new();
+        registry
+            .register(
+                ExecutionIdentity::new("echo", "1").expect("identity"),
+                ImageEchoModel {
+                    calls: Arc::default(),
+                    messages: Arc::default(),
+                },
+                ModelCapabilities {
+                    image_input,
+                    native_continuation: false,
+                    tool_calls: false,
+                },
+            )
+            .expect("register");
+
+        registry
+    };
+    let store = MemoryStore::new();
+    let text_registry = registry(false);
+    let harness = Harness::from_registry(&text_registry, "echo")?.store(Arc::new(store.clone()));
+    let mut session = harness
+        .session("no-images", request()?.schema().clone())
+        .create()
+        .await?;
+
+    // Act
+    let durable = session.send(external_image_input(b"payload")?).await;
+    let ephemeral = harness
+        .run_once(
+            external_image_input(b"payload")?,
+            request()?.schema().clone(),
+        )
+        .await;
+
+    // Assert
+    assert!(matches!(
+        durable,
+        Err(SessionError::Turn(TurnError::Model(
+            ModelError::UnsupportedImageInput { .. }
+        )))
+    ));
+    assert!(matches!(
+        ephemeral,
+        Err(TurnError::Model(ModelError::UnsupportedImageInput { .. }))
+    ));
+    let store: Arc<dyn SessionStore> = Arc::new(store);
+    assert!(
+        store.load_session("no-images").await?.turns.is_empty(),
+        "rejected image input must not reserve or persist a turn"
+    );
+    let vision_registry = registry(true);
+    let capable = Harness::from_registry(&vision_registry, "echo")?;
+    capable
+        .run_once(
+            external_image_input(b"payload")?,
+            request()?.schema().clone(),
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let store = MemoryStore::new();
+    let harness = Harness::new(ExternalModel).store(Arc::new(store.clone()));
+    let mut session = harness
+        .session("unregistered", request()?.schema().clone())
+        .create()
+        .await?;
+    let mut registry = ModelRegistry::new();
+    registry.register(
+        ExecutionIdentity::new("text", "1")?,
+        ExternalModel,
+        ModelCapabilities {
+            image_input: true,
+            native_continuation: false,
+            tool_calls: false,
+        },
+    )?;
+    let registered = Harness::from_registry(&registry, "text")?;
+
+    // Act
+    let durable = session.send(external_image_input(b"payload")?).await;
+    let ephemeral = harness
+        .run_once(
+            external_image_input(b"payload")?,
+            request()?.schema().clone(),
+        )
+        .await;
+    let declared = registered
+        .run_once(
+            external_image_input(b"payload")?,
+            request()?.schema().clone(),
+        )
+        .await;
+
+    // Assert
+    assert!(matches!(
+        durable,
+        Err(SessionError::Turn(TurnError::Model(
+            ModelError::UnsupportedImageInput { .. }
+        )))
+    ));
+    assert!(matches!(
+        ephemeral,
+        Err(TurnError::Model(ModelError::UnsupportedImageInput { .. }))
+    ));
+    assert!(
+        matches!(
+            declared,
+            Err(TurnError::Model(ModelError::UnsupportedImageInput { .. }))
+        ),
+        "a registration declaration must not bypass the model's own input check"
+    );
+    let store: Arc<dyn SessionStore> = Arc::new(store);
+    assert!(
+        store.load_session("unregistered").await?.turns.is_empty(),
+        "rejected image input must not reserve or persist a turn"
+    );
+    session.send("text still works").await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let calls = Arc::new(Mutex::new(0));
+    let harness = Harness::new(ImageEchoModel {
+        calls: Arc::clone(&calls),
+        messages: Arc::default(),
+    })
+    .store(Arc::new(MemoryStore::new()))
+    .execution_identity(ExecutionIdentity::new("echo", "1").expect("identity"));
+    let schema = request()?.schema().clone();
+    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let mut session = harness
+        .session("host-images", schema.clone())
+        .create()
+        .await?;
+
+    // Act
+    let first = session
+        .submit("job", external_image_input(b"one")?, options())
+        .await?;
+    let retried = session
+        .submit("job", external_image_input(b"one")?, options())
+        .await?;
+    let changed = session
+        .submit("job", external_image_input(b"two")?, options())
+        .await;
+
+    // Assert
+    assert_eq!(retried.output(), first.output());
+    assert!(matches!(changed, Err(SessionError::HostTurnConflict)));
+    assert_eq!(
+        *calls.lock().expect("calls"),
+        1,
+        "repeating an image host ID must never rerun the model"
+    );
 
     Ok(())
 }

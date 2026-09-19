@@ -12,6 +12,7 @@ use super::{
 use crate::model::{CompletionMetadata, Model, ReasoningEffort};
 use crate::provider::catalog::ModelConfigurationError;
 use crate::schema_contract::OutputSchema;
+use crate::store_conformance_test::image_input;
 use crate::{model, tool};
 
 fn person_schema_value() -> Value {
@@ -566,4 +567,16 @@ fn wrapper_preserves_adapter_schema_preflight() {
         model.validate_schema(&scalar),
         Err(model::ModelError::UnsupportedOutputSchema { .. })
     ));
+}
+
+#[test]
+fn wrapper_preserves_adapter_input_preflight() {
+    // Arrange
+    let model = Muse::from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
+
+    // Act
+    let result = model.validate_input(&image_input("look", b"payload", "closely"));
+
+    // Assert
+    assert!(result.is_ok());
 }

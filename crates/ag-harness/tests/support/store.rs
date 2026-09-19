@@ -9,7 +9,8 @@ use std::time::Duration;
 use ag_harness::{
     AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,
     ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
-    StoredTurnOptions, TurnError, TurnOptions, TurnOutcome, TurnOwner, WriteRecord, WriteStatus,
+    StoredTurnOptions, TurnError, TurnInput, TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
+    WriteStatus,
 };
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
@@ -118,7 +119,7 @@ impl ExternalStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: Option<&HostRequest>,
         generation: i64,
@@ -178,7 +179,7 @@ impl ExternalStore {
         }
         session.next_turn += 1;
         session.owner = Some((owner, deadline));
-        session.pending = vec![ModelMessage::User(prompt.to_string())];
+        session.pending = vec![input.clone().into_user_message()];
         session.snapshot = Some(StoredTurnOptions::encode(options));
         session.loaded.provider_session_id = continuation;
 
@@ -326,6 +327,13 @@ impl SessionStore for ExternalStore {
                         reason: "provider reasoning",
                     });
                 }
+                ModelMessage::UserInput(input)
+                    if input.has_images() && !capabilities.image_input =>
+                {
+                    return Err(SessionError::UnsupportedModelHistory {
+                        reason: "image history",
+                    });
+                }
                 _ => {}
             }
         }
@@ -346,12 +354,12 @@ impl SessionStore for ExternalStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         let HostTurnAcquisition::Acquired(turn) =
-            self.acquire(store, id, prompt, options, None, generation)?
+            self.acquire(store, id, input, options, None, generation)?
         else {
             std::panic::resume_unwind(Box::new("legacy acquisition"))
         };
@@ -363,12 +371,12 @@ impl SessionStore for ExternalStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, id, prompt, options, Some(request), generation)
+        self.acquire(store, id, input, options, Some(request), generation)
     }
 
     async fn load_request(

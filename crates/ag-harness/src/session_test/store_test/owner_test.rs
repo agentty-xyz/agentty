@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::tempdir;
 
 use super::support::{GatedStore, PauseAt};
+use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, SessionError, StoreIdentity, TURN_LEASE_SECONDS};
@@ -30,7 +31,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -128,7 +129,13 @@ async fn failed_drop_cleanup_remains_registered_for_owner_scoped_recovery() {
         .await
         .expect("remove fault");
     let replacement = store
-        .begin_turn(store.clone(), "session", "replacement", &turn_options(), 0)
+        .begin_turn(
+            store.clone(),
+            "session",
+            &TurnInput::from("replacement"),
+            &turn_options(),
+            0,
+        )
         .await
         .expect("recover owner");
 
@@ -167,7 +174,13 @@ async fn recovery_without_a_retained_handle_uses_the_current_store() {
         Vec::<crate::TurnOwner>::new()
     );
     let successor = store
-        .begin_turn(store.clone(), "session", "successor", &turn_options(), 0)
+        .begin_turn(
+            store.clone(),
+            "session",
+            &TurnInput::from("successor"),
+            &turn_options(),
+            0,
+        )
         .await
         .expect("successor is admitted");
 

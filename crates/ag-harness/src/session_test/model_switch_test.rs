@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 
+use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, ReservationObserver};
 use crate::{
@@ -44,7 +45,13 @@ async fn switch_revalidates_history_completed_during_validation() {
         .await
         .expect("session");
     let acquired = store
-        .begin_turn(Arc::clone(&store), "switch", "first", &turn_options(), 0)
+        .begin_turn(
+            Arc::clone(&store),
+            "switch",
+            &TurnInput::from("first"),
+            &turn_options(),
+            0,
+        )
         .await
         .expect("acquire");
     let switching = {

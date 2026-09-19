@@ -5,6 +5,7 @@ use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use super::support::{AcquisitionGate, CommitGate};
+use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, SessionError};
 use crate::store::SessionStore;
@@ -29,7 +30,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
             .begin_turn(
                 Arc::new(database.clone()),
                 "session",
-                "lost",
+                &TurnInput::from("lost"),
                 &turn_options(),
                 0,
             )
@@ -50,7 +51,7 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -98,7 +99,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "rejected",
+            &TurnInput::from("rejected"),
             &turn_options(),
             0,
         )
@@ -111,7 +112,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -154,7 +155,7 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
             .begin_turn(
                 Arc::new(gated.clone()),
                 "session",
-                "abandoned",
+                &TurnInput::from("abandoned"),
                 &turn_options(),
                 0,
             )
@@ -187,7 +188,7 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -218,7 +219,7 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
             .begin_turn(
                 Arc::new(gated.clone()),
                 "session",
-                "failed",
+                &TurnInput::from("failed"),
                 &turn_options(),
                 0,
             )
@@ -234,7 +235,7 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -267,7 +268,7 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
             .begin_turn(
                 Arc::new(gated.clone()),
                 "session",
-                "expired",
+                &TurnInput::from("expired"),
                 &turn_options(),
                 0,
             )
@@ -285,7 +286,7 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )

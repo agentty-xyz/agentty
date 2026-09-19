@@ -6,8 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ag_harness::{
     AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, LoadedSession, ModelMessage,
-    ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError, TurnOptions,
-    TurnOutcome, TurnOwner, WriteRecord,
+    ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError, TurnInput,
+    TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
 };
 use async_trait::async_trait;
 use tokio::sync::Notify;
@@ -93,7 +93,7 @@ impl SessionStore for Gate {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
@@ -105,7 +105,7 @@ impl SessionStore for Gate {
         }
         let acquired = self
             .store
-            .begin_turn(store, id, prompt, options, generation)
+            .begin_turn(store, id, input, options, generation)
             .await?;
         if self.after_commit {
             self.pause().await;
@@ -118,13 +118,13 @@ impl SessionStore for Gate {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request, generation)
+            .begin_request(store, id, input, options, request, generation)
             .await
     }
 

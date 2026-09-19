@@ -187,9 +187,12 @@ fn ownership_rejects_paths_without_a_managed_parent() {
     let context = ReplayContext::archive(folder.path(), &"history".repeat(INLINE_HISTORY_BYTES))
         .expect("registered archive");
     let lease = context.lease.as_ref().expect("archive lease");
-    let root = folder.path().ancestors().last().expect("filesystem root");
-    let root_child = folder
-        .path()
+    // Ownership resolution canonicalizes paths, so derive the root ancestors
+    // from the canonical workspace; a symlinked temporary directory would
+    // otherwise resolve outside the lexical ancestor chain.
+    let workspace = folder.path().canonicalize().expect("canonical workspace");
+    let root = workspace.ancestors().last().expect("filesystem root");
+    let root_child = workspace
         .ancestors()
         .find(|path| path.parent() == Some(root))
         .expect("directory directly below root");

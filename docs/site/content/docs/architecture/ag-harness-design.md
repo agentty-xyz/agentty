@@ -39,6 +39,8 @@ flowchart LR
 - `Session` is the only multi-turn abstraction. It persists and restores bounded
   history. Sessions and builders own their runtime resources and can outlive the
   creating `Harness` or move into spawned tasks.
+- `TurnInput` is the shared user-input type for one-shot and durable turns: ordered,
+  bounded text and image blocks with plain-string conversion for text-only input.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
   optional metadata, and an optional native continuation identifier.
 - `run_once` executes a turn without durable history.
@@ -89,6 +91,31 @@ retained control survives dropped callers. Completion includes descendant cleanu
 cleanup failures remain separate from execution results. Production backends remain
 unavailable.
 
+## Turn input
+
+`TurnInput` validates image content at construction: nonempty PNG or JPEG bytes whose
+container signature matches the declared media type, bounded per image, per input count,
+in aggregate, and by deterministic encoded size. Invalid input fails before acquisition
+or provider execution. Text-only input normalizes to one text message, keeping legacy
+stored strings and recorded text host-request fingerprints unchanged; image-bearing
+input keeps exact block order through storage, replay, and a versioned message codec.
+Image-bearing fingerprints cover each image's media type and content digest plus the
+registration's image capability. Decoding stored input checks integrity only, never the
+current new-input bounds, and images count toward the whole-turn replay budget at their
+data-URL length. Durable turns reject image-bearing input that alone exceeds the
+session's replay budget before acquisition, rather than silently evicting it together
+with all earlier history.
+
+Image support is opt-in at the `Model` boundary: `Model::validate_input` rejects
+image-bearing input by default, and registered models must also declare `image_input` in
+`ModelCapabilities`. Both checks run before acquisition. Built-in providers translate
+image blocks to Chat Completions `image_url` data URLs only for configurations whose
+support is documented or qualified by the live provider checks; some providers accept
+image parts for text-only models and invent their content, so support is never inferred
+from a model family. Other configurations reject current and replayed image content with
+a typed error before network access. Image payloads stay out of telemetry and bounded
+diagnostics.
+
 ## Session model switching
 
 `Session::switch_model` selects an existing registration for an idle session. Switching
@@ -100,11 +127,12 @@ provenance. Recovery lookup and matching recorded retries remain available acros
 switches without running a model or tool again.
 
 Completed normalized messages and tool groups remain canonical. Targets must support
-historical tool calls. Provider-specific reasoning currently rejects switching rather
-than silently discarding content; validation includes history outside the replay budget.
-SQLite validates paginated history outside its writer transaction and rechecks the
-source revision before mutation. A cancelled waiter retains admission until the switch
-finishes; hosts resume to observe an uncertain acknowledgment.
+historical tool calls, and image-bearing user history requires a target that declares
+image input and whose adapter accepts it. Provider-specific reasoning currently rejects
+switching rather than silently discarding content; validation includes history outside
+the replay budget. SQLite validates paginated history outside its writer transaction and
+rechecks the source revision before mutation. A cancelled waiter retains admission until
+the switch finishes; hosts resume to observe an uncertain acknowledgment.
 
 ## Repository comparisons
 
@@ -260,12 +288,9 @@ emits cancellation once.
 ## Next iterations
 
 Owned session handles, injected transactional stores, memory storage, observable
-cancellation and filesystem-effect settlement, host-turn recovery, and registry-based
-model construction and idle-session model switching are delivered library capabilities.
-
-1. **Rich input and images**
-
-   Replace text-only user messages with ordered, bounded text and image content blocks.
+cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
+construction and idle-session model switching, and ordered text/image input are
+delivered library capabilities.
 
 1. **Sandboxed Bash**
 
@@ -275,7 +300,8 @@ model construction and idle-session model switching are delivered library capabi
 1. **Context management**
 
    Preserve the durable log while projecting model-aware recent history and structured
-   compaction checkpoints.
+   compaction checkpoints. Model-aware image accounting replaces the byte-based replay
+   budget and its image-input rejection.
 
 1. **Agentty runtime adapters**
 

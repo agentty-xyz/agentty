@@ -38,20 +38,23 @@ For file-level detail, read the module docstrings directly.
   handling, and squash-merge workflows behind the `GitClient` boundary.
 - `crates/ag-harness/`: Provider-neutral structured model turns with a shared engine for
   durable sessions and one-shot calls. Immutable `TurnOptions` define output schemas,
-  permissions, budgets, and optional comparison bases. Owned sessions and builders
-  capture harness configuration and share lazy SQLite initialization. The library owns a
-  host model registry used by harness construction; registrations carry capability
-  declarations and the recovery contract's execution identity. It also owns history,
-  leases, terminal transitions, and write journals through a public transactional
-  `SessionStore` with SQLite and process-local `MemoryStore` backends. The store also
-  owns atomic host-request deduplication and complete result recovery. Hosts can inject
-  stores; shared local admission retains acquisition and cleanup ownership. Controlled
-  turn futures expose turn-scoped cancellation with independent persistence and managed
-  filesystem-effect settlement after caller drop. Retained write workers own replacement
-  completion and journal recording; local admission remains protected until both settle,
-  with unacknowledged completion blocking admission for the process lifetime. Its
-  `SqliteStore` implementation encapsulates pool access and row decoding. Bounded tools
-  use validated `Repository` and injectable `FileSystem` boundaries. Hosts own prompts,
+  permissions, budgets, and optional comparison bases. Ordered `TurnInput` carries
+  bounded text and image blocks for both entry points, validated before acquisition and
+  translated only for provider configurations with declared image support. Owned
+  sessions and builders capture harness configuration and share lazy SQLite
+  initialization. The library owns a host model registry used by harness construction;
+  registrations carry capability declarations and the recovery contract's execution
+  identity. It also owns history, leases, terminal transitions, and write journals
+  through a public transactional `SessionStore` with SQLite and process-local
+  `MemoryStore` backends. The store also owns atomic host-request deduplication and
+  complete result recovery. Hosts can inject stores; shared local admission retains
+  acquisition and cleanup ownership. Controlled turn futures expose turn-scoped
+  cancellation with independent persistence and managed filesystem-effect settlement
+  after caller drop. Retained write workers own replacement completion and journal
+  recording; local admission remains protected until both settle, with unacknowledged
+  completion blocking admission for the process lifetime. Its `SqliteStore`
+  implementation encapsulates pool access and row decoding. Bounded tools use validated
+  `Repository` and injectable `FileSystem` boundaries. Hosts own prompts,
   comparison-base selection, permissions, and telemetry setup; the engine enforces a
   validated, pinned commit for comparisons. Private execution contracts and
   platform-independent supervision own bounded preparation, process-tree completion,

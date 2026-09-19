@@ -5,6 +5,7 @@ use sha2::{Digest as _, Sha256};
 use tempfile::tempdir;
 
 use super::support::{create_version_one_database, schema, turn_options};
+use crate::input::TurnInput;
 use crate::session::{Database, NewSession, SessionError};
 use crate::store::SessionStore as _;
 use crate::turn_options_snapshot::StoredTurnOptions;
@@ -22,7 +23,13 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
 
     // Act
     let mut first = database
-        .begin_turn(Arc::new(database.clone()), "session", "failed", &options, 0)
+        .begin_turn(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from("failed"),
+            &options,
+            0,
+        )
         .await
         .expect("reservation");
     let running: (String, String) =
@@ -43,7 +50,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "interrupted",
+            &TurnInput::from("interrupted"),
             &options,
             0,
         )
@@ -96,7 +103,7 @@ async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuratio
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "new",
+            &TurnInput::from("new"),
             &turn_options(),
             0,
         )
@@ -127,7 +134,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
         .begin_turn(
             Arc::new(database.clone()),
             "session",
-            "first",
+            &TurnInput::from("first"),
             &turn_options(),
             0,
         )
@@ -182,7 +189,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
             .begin_turn(
                 Arc::new(database.clone()),
                 "session",
-                "second",
+                &TurnInput::from("second"),
                 &turn_options(),
                 0,
             )
@@ -227,7 +234,13 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .await
         .expect("session");
     let mut first = database
-        .begin_turn(Arc::new(database.clone()), "session", "first", &options, 0)
+        .begin_turn(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from("first"),
+            &options,
+            0,
+        )
         .await
         .expect("first turn");
     database
@@ -256,7 +269,13 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .await
         .expect("legacy history");
     let acquired = reopened
-        .begin_turn(Arc::new(reopened.clone()), "session", "next", &options, 0)
+        .begin_turn(
+            Arc::new(reopened.clone()),
+            "session",
+            &TurnInput::from("next"),
+            &options,
+            0,
+        )
         .await
         .expect("next turn");
     let snapshot: String =
