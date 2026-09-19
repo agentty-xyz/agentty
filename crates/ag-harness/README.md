@@ -15,7 +15,12 @@ let mut models = ModelRegistry::new();
 models.register(
     ExecutionIdentity::new("review-model", "config-v1")?,
     Muse::from_env(MUSE_SPARK_1_3)?,
-    ModelCapabilities { image_input: true, native_continuation: false, tool_calls: true },
+    ModelCapabilities {
+        context_budget: None,
+        image_input: true,
+        native_continuation: false,
+        tool_calls: true,
+    },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
 let result = harness.run_once("Review this proposal", output_schema).await?;
@@ -51,6 +56,23 @@ atomically. Other handles become stale, including after switching back to their 
 model; resume a fresh handle before executing another turn. Existing host requests can
 still be recovered, and matching retries return recorded outcomes without execution.
 Explicit host execution-identity overrides survive switching.
+
+A registration may declare an approximate `ContextBudget` to enable model-aware context
+projection. Budgeted requests keep the most recent complete turns that fit after the
+system prompt, current input, advertised tool definitions, and reserved output are
+weighed by an injectable `ContextEstimator` (`Harness::context_estimator`, a byte-ratio
+heuristic by default). Estimates are deterministic approximations, never exact provider
+token counts, and images weigh their encoded data-URL length. Whole turns are dropped so
+tool groups stay intact; mandatory content that cannot fit fails with
+`TurnError::ContextBudgetExceeded` before acquisition. The budget covers every provider
+request of a turn: tool traffic grows the request between model calls, and a grown
+request that no longer fits fails with the same typed error instead of overflowing at
+the provider. Budgeted registrations always replay projected normalized history and
+never reuse native continuation, because the provider-side conversation can retain turns
+the replay budget already evicted. Projection changes only the outgoing request —
+canonical history, host requests, provenance, and write journals stay intact, and the
+byte-based replay budget still bounds loading. Revise the registration identity when the
+declared budget changes.
 
 Switching preserves ordinary completed messages and tool-call/result groups. A target
 without tool capability rejects tool history. Provider-specific reasoning is currently

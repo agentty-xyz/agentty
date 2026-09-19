@@ -170,3 +170,22 @@ fn repository_required_error_has_stable_classification() {
     // Assert
     assert_eq!(error_type, TurnErrorType::RepositoryRequired);
 }
+
+#[test]
+fn context_budget_error_has_stable_classification() {
+    // Arrange
+    let error = TurnError::ContextBudgetExceeded {
+        budget: 8,
+        required: 21,
+    };
+
+    // Act
+    let error_type = error.error_type();
+
+    // Assert
+    assert_eq!(error_type, TurnErrorType::ContextBudget);
+    assert_eq!(
+        error.to_string(),
+        "mandatory request content weighs 21 but the model context budget is 8"
+    );
+}

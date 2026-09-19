@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio::sync::OnceCell;
 
 use crate::cancellation::{ControlledTurn, TurnControl};
+use crate::context::{self, ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
@@ -370,6 +371,20 @@ impl Session {
     ) -> Result<TurnOutcome, SessionError> {
         self.harness.check_input_capability(&input)?;
         self.check_image_history_budget(&input)?;
+        let available_history_weight = self
+            .harness
+            .context_budget()
+            .map(|budget| {
+                context::admit_mandatory_content(
+                    self.harness.context_estimator.as_ref(),
+                    budget,
+                    self.system_prompt.as_deref(),
+                    &input,
+                    options,
+                )
+            })
+            .transpose()
+            .map_err(SessionError::from)?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
         let acquisition = self.acquire_turn(&input, options, control, request, &effects);
@@ -393,13 +408,8 @@ impl Session {
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
-        let mut messages = self.history.messages();
-        if let Some(system_prompt) = &self.system_prompt {
-            messages.insert(0, ModelMessage::System(system_prompt.clone()));
-        }
-        let retained_messages = messages.len();
-        let mut request = ModelRequest::with_history(messages, input, options.schema().clone());
-        request.set_provider_session_id(self.provider_session_id.clone());
+        let (request, retained_messages) =
+            self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
         engine.effects = effects;
@@ -449,6 +459,39 @@ impl Session {
         self.history.push(turn);
 
         Ok(outcome)
+    }
+
+    /// Projects loaded history into one request under the effective context
+    /// budget, keeping the count of retained messages that precede new output.
+    fn build_request(
+        &self,
+        input: TurnInput,
+        options: &TurnOptions,
+        available_history_weight: Option<u64>,
+    ) -> (ModelRequest, usize) {
+        let mut messages = match available_history_weight {
+            Some(available_weight) => context::select_recent_turns(
+                self.harness.context_estimator.as_ref(),
+                self.history.turns(),
+                available_weight,
+            ),
+            None => self.history.messages(),
+        };
+        if let Some(system_prompt) = &self.system_prompt {
+            messages.insert(0, ModelMessage::System(system_prompt.clone()));
+        }
+        let retained_messages = messages.len();
+        let mut request = ModelRequest::with_history(messages, input, options.schema().clone());
+        // A continuation's provider-side conversation can hold turns that the
+        // byte replay budget already evicted from loading, so a budgeted
+        // registration always replays the projected normalized history.
+        request.set_provider_session_id(if available_history_weight.is_some() {
+            None
+        } else {
+            self.provider_session_id.clone()
+        });
+
+        (request, retained_messages)
     }
 
     /// Rejects image input that the replay budget would evict immediately,
@@ -580,6 +623,10 @@ impl SessionHistory {
             .collect()
     }
 
+    pub(crate) fn turns(&self) -> &VecDeque<Vec<ModelMessage>> {
+        &self.turns
+    }
+
     pub(crate) fn push(&mut self, turn: Vec<ModelMessage>) {
         self.bytes = self.bytes.saturating_add(retained_bytes(&turn));
         self.turns.push_back(turn);
@@ -616,6 +663,7 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
 /// Session builders and resumed sessions capture this configuration; later
 /// reconfiguration affects only newly obtained handles.
 pub struct Harness {
+    context_estimator: Arc<dyn ContextEstimator>,
     database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
     execution_identity: Option<ExecutionIdentity>,
@@ -764,6 +812,21 @@ impl Harness {
         self
     }
 
+    /// Replaces the approximate content estimator used by context projection.
+    ///
+    /// Projection activates when the effective registration declares a
+    /// [`ContextBudget`] in its capabilities: requests keep the most recent
+    /// complete turns that fit the remaining weight, and mandatory content
+    /// that cannot fit fails with [`TurnError::ContextBudgetExceeded`] before
+    /// acquisition. Estimates are deterministic approximations, never exact
+    /// provider token counts.
+    #[must_use]
+    pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
+        self.context_estimator = Arc::new(estimator);
+
+        self
+    }
+
     /// Runs one input without creating durable session history.
     ///
     /// Plain strings remain the text-only path; ordered text/image content
@@ -870,6 +933,7 @@ impl Harness {
 
     fn from_shared_model(model: Arc<dyn Model>) -> Self {
         Self {
+            context_estimator: Arc::new(HeuristicContextEstimator),
             database: Arc::new(OnceCell::new()),
             database_path: None,
             execution_identity: None,
@@ -893,6 +957,15 @@ impl Harness {
         effects: Effects,
     ) -> Result<TurnOutcome, TurnError> {
         self.check_input_capability(&input)?;
+        if let Some(budget) = self.context_budget() {
+            context::admit_mandatory_content(
+                self.context_estimator.as_ref(),
+                budget,
+                None,
+                &input,
+                &options,
+            )?;
+        }
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.schema().clone());
         let turn = self.lifecycle.start_turn();
@@ -913,6 +986,7 @@ impl Harness {
 
     fn snapshot(&self) -> Self {
         Self {
+            context_estimator: Arc::clone(&self.context_estimator),
             database: Arc::clone(&self.database),
             database_path: self.database_path.clone(),
             execution_identity: self.execution_identity.clone(),
@@ -985,6 +1059,12 @@ impl Harness {
         Ok(())
     }
 
+    fn context_budget(&self) -> Option<ContextBudget> {
+        self.model_registration
+            .as_ref()
+            .and_then(|registration| registration.capabilities().context_budget)
+    }
+
     fn check_input_capability(&self, input: &TurnInput) -> Result<(), TurnError> {
         self.model.validate_input(input)?;
         if input.has_images()
@@ -1005,6 +1085,8 @@ impl Harness {
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
         Engine {
+            context_budget: self.context_budget(),
+            context_estimator: self.context_estimator.as_ref(),
             effects: Effects::default(),
             file_system: &self.file_system,
             lifecycle: &self.lifecycle,

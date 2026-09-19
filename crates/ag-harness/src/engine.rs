@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::context;
 use crate::effect::Effects;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{LifecycleEmitter, LifecycleId, ToolErrorType, ToolLifecycle};
@@ -11,9 +12,7 @@ use crate::model::{
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
 use crate::session::WriteJournal;
-use crate::tool::{
-    ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
-};
+use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
 use crate::turn::{
     ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOptions, TurnOutcome,
     TurnReport, sanitize_report_text, sanitized_completion_metadata,
@@ -22,6 +21,8 @@ use crate::write::{WriteError, WriteTool};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
+    pub(crate) context_budget: Option<context::ContextBudget>,
+    pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
@@ -124,6 +125,12 @@ impl Engine<'_> {
                     request.record_tool_results(calls, results);
                 }
             }
+            // Tool traffic grows the request between model calls; a grown
+            // request that no longer fits fails typed here instead of
+            // overflowing the provider context.
+            if let Some(budget) = self.context_budget {
+                context::admit_grown_request(self.context_estimator, budget, &request)?;
+            }
         }
     }
 
@@ -156,12 +163,10 @@ impl Engine<'_> {
             .repository
             .as_ref()
             .ok_or(TurnError::RepositoryRequired)?;
+        for tool in context::advertised_tools(self.options) {
+            request = request.with_tool(tool);
+        }
         let read_tool = read_allowed.then(|| {
-            request = request
-                .clone()
-                .with_tool(ToolDefinition::read_with_comparison_base(
-                    self.options.comparison_base(),
-                ));
             ReadTool::with_git(
                 Arc::clone(self.file_system),
                 repository.root().to_path_buf(),
@@ -170,7 +175,6 @@ impl Engine<'_> {
             )
         });
         let write_tool = write_allowed.then(|| {
-            request = request.clone().with_tool(ToolDefinition::write());
             let mut tool = WriteTool::new(
                 Arc::clone(self.file_system),
                 repository.root().to_path_buf(),

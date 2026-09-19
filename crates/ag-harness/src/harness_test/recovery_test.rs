@@ -104,6 +104,7 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model(),
                 ModelCapabilities {
+                    context_budget: None,
                     image_input: image_capable,
                     native_continuation: false,
                     tool_calls: false,
@@ -204,6 +205,7 @@ async fn registered_capability_gates_image_input_before_execution() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model,
                 ModelCapabilities {
+                    context_budget: None,
                     image_input: image_capable,
                     native_continuation: false,
                     tool_calls: false,
