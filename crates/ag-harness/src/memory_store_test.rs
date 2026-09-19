@@ -12,7 +12,7 @@ use crate::store_conformance_test::{harness, options, schema};
 use crate::{
     ComparisonBase, HostRequest, HostTurnAcquisition, HostTurnStatus, MemoryStore, ModelError,
     ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError,
-    TurnOwner, WriteRecord, WriteStatus,
+    TurnInput, TurnOwner, WriteRecord, WriteStatus,
 };
 
 #[tokio::test]
@@ -107,7 +107,13 @@ async fn creation_and_unknown_owner_errors_leave_state_unchanged() {
     );
     assert!(matches!(
         store
-            .begin_turn(store.clone(), "missing", "prompt", &options(), 0)
+            .begin_turn(
+                store.clone(),
+                "missing",
+                &TurnInput::from("prompt"),
+                &options(),
+                0
+            )
             .await,
         Err(SessionError::NotFound { .. })
     ));
@@ -141,12 +147,24 @@ async fn foreign_owners_cannot_mutate_and_foreign_acquisition_does_not_reserve()
     // Act / Assert
     assert!(matches!(
         store
-            .begin_turn(foreign_store, "session", "wrong", &options(), 0)
+            .begin_turn(
+                foreign_store,
+                "session",
+                &TurnInput::from("wrong"),
+                &options(),
+                0
+            )
             .await,
         Err(SessionError::InvalidData { .. })
     ));
     let turn = store
-        .begin_turn(store.clone(), "session", "right", &options(), 0)
+        .begin_turn(
+            store.clone(),
+            "session",
+            &TurnInput::from("right"),
+            &options(),
+            0,
+        )
         .await
         .expect("not reserved");
     let foreign = TurnOwner::new(
@@ -196,7 +214,13 @@ async fn journal_ids_are_store_wide_and_paths_and_terminal_prompts_are_retained(
             .await
             .expect("create");
         let turn = store
-            .begin_turn(store.clone(), name, "retained prompt", &options(), 0)
+            .begin_turn(
+                store.clone(),
+                name,
+                &TurnInput::from("retained prompt"),
+                &options(),
+                0,
+            )
             .await
             .expect("turn");
 
@@ -254,7 +278,13 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
         .expect("create");
     for prompt in ["one", "oversized prompt", "last"] {
         let turn = store
-            .begin_turn(store.clone(), "session", prompt, &options(), 0)
+            .begin_turn(
+                store.clone(),
+                "session",
+                &TurnInput::from(prompt),
+                &options(),
+                0,
+            )
             .await
             .expect("turn");
         store
@@ -307,7 +337,13 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
     // Act / Assert
     assert!(matches!(
         store
-            .begin_turn(store.clone(), "session", "exhausted", &options(), 0)
+            .begin_turn(
+                store.clone(),
+                "session",
+                &TurnInput::from("exhausted"),
+                &options(),
+                0
+            )
             .await,
         Err(SessionError::InvalidData { .. })
     ));
@@ -318,7 +354,13 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
         .expect("session")
         .next_turn = 0;
     let turn = store
-        .begin_turn(store.clone(), "session", "available", &options(), 0)
+        .begin_turn(
+            store.clone(),
+            "session",
+            &TurnInput::from("available"),
+            &options(),
+            0,
+        )
         .await
         .expect("not reserved");
     store.lock().next_write = i64::MAX;
@@ -352,7 +394,13 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
         .options = "invalid".to_string();
     assert!(
         store
-            .begin_turn(store.clone(), "session", "invalid snapshot", &options(), 0)
+            .begin_turn(
+                store.clone(),
+                "session",
+                &TurnInput::from("invalid snapshot"),
+                &options(),
+                0
+            )
             .await
             .is_err()
     );
@@ -380,7 +428,13 @@ async fn comparison_compatibility_matches_sqlite_without_live_repository_access(
             (&options(), None),
         ] {
             let turn = store
-                .begin_turn(store.clone(), "comparison", "prompt", current, 0)
+                .begin_turn(
+                    store.clone(),
+                    "comparison",
+                    &TurnInput::from("prompt"),
+                    current,
+                    0,
+                )
                 .await
                 .expect("acquire");
             assert_eq!(turn.provider_session_id.as_deref(), expected);
@@ -397,12 +451,17 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
     // Arrange
     for recover_on_load in [false, true] {
         for ExpiringStore { store, expire } in expiring_stores().await {
+            let (first_input, expired_input, next_input) = (
+                TurnInput::from("first"),
+                TurnInput::from("expired"),
+                TurnInput::from("next"),
+            );
             store
                 .create_session(&NewSession::new("expiry", schema()), None, 100)
                 .await
                 .expect("create");
             let first = store
-                .begin_turn(store.clone(), "expiry", "first", &options(), 0)
+                .begin_turn(store.clone(), "expiry", &first_input, &options(), 0)
                 .await
                 .expect("first");
             store
@@ -410,7 +469,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("complete first");
             let old = store
-                .begin_turn(store.clone(), "expiry", "expired", &options(), 0)
+                .begin_turn(store.clone(), "expiry", &expired_input, &options(), 0)
                 .await
                 .expect("old");
             let write = store
@@ -452,7 +511,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 );
             }
             let next = store
-                .begin_turn(store.clone(), "expiry", "next", &options(), 0)
+                .begin_turn(store.clone(), "expiry", &next_input, &options(), 0)
                 .await
                 .expect("recover acquisition");
             store
@@ -542,7 +601,14 @@ async fn host_recovery_requires_atomic_terminal_output() {
     let request =
         HostRequest::from_configuration("id".into(), serde_json::json!({})).expect("request");
     let HostTurnAcquisition::Acquired(turn) = store
-        .begin_request(store.clone(), "host", "prompt", &options(), &request, 0)
+        .begin_request(
+            store.clone(),
+            "host",
+            &TurnInput::from("prompt"),
+            &options(),
+            &request,
+            0,
+        )
         .await
         .expect("acquire")
     else {

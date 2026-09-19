@@ -1,9 +1,127 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
 use super::support::{max_as_xhigh, native_schema_backend};
 use crate::chat_completion::{
-    ChatCompletionBackend, ChatCompletionProviderPolicy, ReasoningFormat, StructuredOutputMode,
+    ChatCompletion, ChatCompletionBackend, ChatCompletionClient, ChatCompletionError,
+    ChatCompletionProviderPolicy, ChatCompletionRequest, ReasoningFormat, StructuredOutputMode,
     default_client, endpoint,
 };
-use crate::{model, schema_contract, tool};
+use crate::store_conformance_test::image_input;
+use crate::{model, provider, schema_contract, tool};
+
+struct UnreachableClient;
+
+#[async_trait]
+impl ChatCompletionClient for UnreachableClient {
+    async fn complete(
+        &self,
+        _request: ChatCompletionRequest<'_>,
+    ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
+        std::panic::resume_unwind(Box::new(
+            "image validation must reject the request before network access",
+        ));
+    }
+}
+
+fn provider_backend(model: &str, policy: ChatCompletionProviderPolicy) -> ChatCompletionBackend {
+    ChatCompletionBackend::with_client(
+        "test-key".to_string(),
+        "https://example.com/v1".to_string(),
+        model.to_string(),
+        policy,
+        Arc::new(UnreachableClient),
+    )
+}
+
+#[test]
+fn activates_image_input_only_for_qualified_configurations() {
+    // Arrange / Act / Assert
+    assert!(provider::kimi_policy("kimi-k2.6").image_input);
+    assert!(provider::kimi_policy("kimi-k2.7-code").image_input);
+    assert!(provider::kimi_policy("kimi-k2.7-code-highspeed").image_input);
+    assert!(provider::kimi_policy("kimi-k3").image_input);
+    assert!(!provider::kimi_policy("kimi-legacy").image_input);
+    assert!(provider::qwen_policy("qwen-vl-plus").image_input);
+    assert!(provider::qwen_policy("qwen3-vl-plus").image_input);
+    assert!(provider::qwen_policy("qwen-plus").image_input);
+    assert!(provider::qwen_policy("qwen3.8-max").image_input);
+    assert!(!provider::qwen_policy("qwen3.8-2.4t-a95b").image_input);
+    assert!(!provider::qwen_policy("qwen3-max").image_input);
+    assert!(provider::muse_policy("muse-spark-1.3").image_input);
+    assert!(provider::muse_policy("muse-spark-1.3-contributor").image_input);
+    assert!(!provider::muse_policy("muse-legacy").image_input);
+}
+
+#[test]
+fn serializes_ordered_image_content_as_data_url_parts() {
+    // Arrange
+    let schema = schema_contract::OutputSchema::new(serde_json::json!({"type": "object"}))
+        .expect("schema should be valid");
+    let backend = provider_backend("muse-spark-1.3", provider::muse_policy("muse-spark-1.3"));
+    let request = model::ModelRequest::new(image_input("before", &[0x2A], "after"), schema);
+
+    // Act
+    let messages = serde_json::to_value(
+        backend
+            .messages(&request)
+            .expect("image content should serialize"),
+    )
+    .expect("messages should encode as JSON");
+
+    // Assert
+    assert_eq!(
+        messages,
+        serde_json::json!([
+            {
+                "content": [
+                    {"type": "text", "text": "before"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgoq"}
+                    },
+                    {"type": "text", "text": "after"}
+                ],
+                "role": "user"
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn rejects_image_content_for_unsupported_configurations_before_network() {
+    // Arrange
+    let schema = schema_contract::OutputSchema::new(serde_json::json!({"type": "object"}))
+        .expect("schema should be valid");
+    let current = model::ModelRequest::new(image_input("look", &[0x2A], "here"), schema.clone());
+    let history = model::ModelRequest::with_history(
+        vec![model::ModelMessage::UserInput(image_input(
+            "earlier",
+            &[0x2A],
+            "image",
+        ))],
+        "text follow-up",
+        schema,
+    );
+    let backends = [
+        provider_backend("qwen3-max", provider::qwen_policy("qwen3-max")),
+        provider_backend("kimi-legacy", provider::kimi_policy("kimi-legacy")),
+        provider_backend("muse-legacy", provider::muse_policy("muse-legacy")),
+    ];
+
+    // Act / Assert
+    for backend in backends {
+        for request in [&current, &history] {
+            let result = backend.generate(request).await;
+            assert!(matches!(
+                &result,
+                Err(model::ModelError::UnsupportedImageInput { reason })
+                    if reason.contains("does not accept image content")
+            ));
+        }
+    }
+}
 
 #[test]
 fn builds_endpoint_from_base_url() {
@@ -28,6 +146,7 @@ fn maps_reasoning_effort_to_each_provider_wire_format() {
             "model".to_string(),
             ChatCompletionProviderPolicy {
                 display_name: "Provider",
+                image_input: false,
                 reasoning_format,
                 response_format_with_tools: true,
                 structured_output: StructuredOutputMode::JsonSchema,

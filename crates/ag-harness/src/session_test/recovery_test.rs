@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, SessionError};
 use crate::{
@@ -26,9 +27,10 @@ async fn recovery_acquisition_is_atomic_across_independent_sqlite_pools() {
     let options = turn_options();
 
     // Act
+    let input = TurnInput::from("hello");
     let (first, second) = tokio::join!(
-        left.begin_request(left.clone(), "session", "hello", &options, &request, 0),
-        right.begin_request(right.clone(), "session", "hello", &options, &request, 0),
+        left.begin_request(left.clone(), "session", &input, &options, &request, 0),
+        right.begin_request(right.clone(), "session", &input, &options, &request, 0),
     );
 
     // Assert
@@ -62,7 +64,7 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
         .begin_request(
             database.clone(),
             "session",
-            "hello",
+            &TurnInput::from("hello"),
             &turn_options(),
             &request,
             0,
@@ -137,7 +139,7 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
         .begin_request(
             database.clone(),
             "session",
-            "hello",
+            &TurnInput::from("hello"),
             &turn_options(),
             &request,
             0,
@@ -161,7 +163,7 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
         .begin_request(
             Arc::new(reopened.clone()),
             "session",
-            "hello",
+            &TurnInput::from("hello"),
             &turn_options(),
             &request,
             0,

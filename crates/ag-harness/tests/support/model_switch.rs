@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use ag_harness::{
     ExecutionIdentity, Harness, Model, ModelCapabilities, ModelCompletion, ModelError,
     ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse, NewSession,
-    SessionError, SqliteStore, ToolCall,
+    SessionError, SqliteStore, ToolCall, TurnInput,
 };
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::store_conformance_test::{Gate, options, schema, stores};
+use crate::store_conformance_test::{Gate, image_input, options, schema, stores};
 
 struct RecordingModel {
     name: &'static str,
@@ -21,6 +21,16 @@ struct RecordingModel {
 impl Model for RecordingModel {
     fn metadata(&self) -> Option<ModelMetadata> {
         Some(ModelMetadata::new(self.name, self.name).expect("metadata"))
+    }
+
+    fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
+        if input.has_images() && self.name != "vision" {
+            return Err(ModelError::UnsupportedImageInput {
+                reason: "recording model reads text only".to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -34,7 +44,7 @@ impl Model for RecordingModel {
 
 fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
     let mut registry = ModelRegistry::new();
-    for name in ["a", "b", "no-tools"] {
+    for name in ["a", "b", "claims-vision", "no-tools", "vision"] {
         registry
             .register(
                 ExecutionIdentity::new(name, "1").expect("identity"),
@@ -43,6 +53,7 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                     requests: Arc::clone(requests),
                 },
                 ModelCapabilities {
+                    image_input: name.ends_with("vision"),
                     native_continuation: true,
                     tool_calls: name != "no-tools",
                 },
@@ -184,7 +195,13 @@ async fn switch_rejections_preserve_selection_and_continuation() {
             Err(SessionError::Registry(_))
         ));
         let acquired = store
-            .begin_turn(Arc::clone(&store), "switch", "active", &options(), 0)
+            .begin_turn(
+                Arc::clone(&store),
+                "switch",
+                &TurnInput::from("active"),
+                &options(),
+                0,
+            )
             .await
             .expect("acquire");
         assert!(matches!(
@@ -266,7 +283,13 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
                 .await
                 .expect("create");
             let acquired = store
-                .begin_turn(Arc::clone(&store), &id, "original", &options(), 0)
+                .begin_turn(
+                    Arc::clone(&store),
+                    &id,
+                    &TurnInput::from("original"),
+                    &options(),
+                    0,
+                )
                 .await
                 .expect("acquire");
             store
@@ -306,6 +329,85 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
             }
         }
         assert!(requests.lock().expect("requests").is_empty());
+    }
+}
+
+#[tokio::test]
+async fn switches_validate_image_history_against_target_capabilities() {
+    // Arrange
+    for store in stores().await {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let registry = registry(&requests);
+        let config = NewSession::new("images", schema())
+            .with_registration_identity(Some(ExecutionIdentity::new("a", "1").expect("identity")));
+        store
+            .create_session(
+                &config,
+                Some(ModelMetadata::new("a", "a").expect("metadata")),
+                1,
+            )
+            .await
+            .expect("create");
+        let acquired = store
+            .begin_turn(
+                Arc::clone(&store),
+                "images",
+                &image_input("look", b"payload", "closely"),
+                &options(),
+                0,
+            )
+            .await
+            .expect("acquire");
+        store
+            .complete_turn(
+                acquired.owner(),
+                &[ModelMessage::Assistant("described".into())],
+                Some("old"),
+            )
+            .await
+            .expect("complete");
+        drop(acquired);
+        let harness = Harness::from_registry(&registry, "a")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness.resume("images").await.expect("resume");
+
+        // Act
+        let rejected = session.switch_model(&registry, "b").await;
+        let mismatched = session.switch_model(&registry, "claims-vision").await;
+
+        // Assert
+        assert!(matches!(
+            rejected,
+            Err(SessionError::UnsupportedModelHistory { .. })
+        ));
+        assert!(
+            matches!(
+                mismatched,
+                Err(SessionError::UnsupportedModelHistory { .. })
+            ),
+            "a declaration the adapter rejects must not admit image history"
+        );
+        let loaded = store.load_session("images").await.expect("unchanged");
+        assert_eq!(loaded.model_generation, 0);
+        assert_eq!(loaded.registration_identity.expect("identity").key(), "a");
+        assert_eq!(loaded.provider_session_id.as_deref(), Some("old"));
+        assert!(
+            loaded.turns.is_empty(),
+            "validation must include budget-evicted image history"
+        );
+        session
+            .switch_model(&registry, "vision")
+            .await
+            .expect("image-capable target");
+        assert_eq!(
+            store
+                .load_session("images")
+                .await
+                .expect("switched")
+                .model_generation,
+            1
+        );
     }
 }
 
@@ -488,6 +590,7 @@ async fn independent_store_admission_checks_generation_atomically() {
     for store in stores().await {
         let identity = ExecutionIdentity::new("b", "1").expect("identity");
         let capabilities = ModelCapabilities {
+            image_input: false,
             native_continuation: true,
             tool_calls: true,
         };
@@ -499,7 +602,8 @@ async fn independent_store_admission_checks_generation_atomically() {
                 .expect("session");
             let turn_options = options();
             let switch = store.switch_model(&id, 0, &identity, None, capabilities);
-            let acquire = store.begin_turn(Arc::clone(&store), &id, "prompt", &turn_options, 0);
+            let input = TurnInput::from("prompt");
+            let acquire = store.begin_turn(Arc::clone(&store), &id, &input, &turn_options, 0);
 
             // Act
             let (switched, acquired) = if switch_first {
@@ -542,6 +646,7 @@ async fn switching_checks_adapter_schema_without_network_access() {
             })
             .expect("client"),
             ModelCapabilities {
+                image_input: false,
                 native_continuation: false,
                 tool_calls: true,
             },
@@ -627,7 +732,7 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
             .begin_turn(
                 Arc::clone(&store),
                 "tool-history",
-                "original",
+                &TurnInput::from("original"),
                 &options(),
                 0,
             )

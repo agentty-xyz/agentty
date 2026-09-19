@@ -12,7 +12,8 @@ use ag_harness::{
     LoadedSession, LocalFileSystem, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
     ModelMetadata, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError,
     SessionStore, SqliteStore, StoreIdentity, Tool, ToolCall, ToolPolicy, TurnControl, TurnError,
-    TurnErrorType, TurnLimits, TurnOptions, TurnOutcome, TurnOwner, WriteRecord, WriteStatus,
+    TurnErrorType, TurnInput, TurnLimits, TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
+    WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -182,14 +183,14 @@ impl SessionStore for Gate {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         self.pause(Phase::Acquire).await;
         let turn = self
             .store
-            .begin_turn(store, id, prompt, options, generation)
+            .begin_turn(store, id, input, options, generation)
             .await?;
         self.pause(Phase::AcquireAck).await;
         Ok(turn)
@@ -199,7 +200,7 @@ impl SessionStore for Gate {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
@@ -210,7 +211,7 @@ impl SessionStore for Gate {
         self.pause(Phase::Acquire).await;
         let turn = self
             .store
-            .begin_request(store, id, prompt, options, request, generation)
+            .begin_request(store, id, input, options, request, generation)
             .await?;
         self.pause(Phase::AcquireAck).await;
 

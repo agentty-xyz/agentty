@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::input::TurnInput;
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
 use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
@@ -32,6 +33,23 @@ pub trait Model: Send + Sync {
     /// Returns an unsupported-schema error before committing a model switch.
     fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
         let _ = schema;
+
+        Ok(())
+    }
+
+    /// Checks adapter-specific turn-input requirements without execution.
+    /// Image content is opt-in: the default rejects image-bearing input, so
+    /// implementations that read images must override this method.
+    ///
+    /// # Errors
+    /// Returns [`ModelError::UnsupportedImageInput`] before turn acquisition
+    /// when the adapter cannot accept the input.
+    fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
+        if input.has_images() {
+            return Err(ModelError::UnsupportedImageInput {
+                reason: "model does not declare image input support".to_string(),
+            });
+        }
 
         Ok(())
     }
@@ -77,12 +95,9 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
-        Self::chat_completion(
-            config.api_key,
-            config.base_url,
-            config.model,
-            provider::MUSE_POLICY,
-        )
+        let policy = provider::muse_policy(&config.model);
+
+        Self::chat_completion(config.api_key, config.base_url, config.model, policy)
     }
 
     /// Creates a client backed by Alibaba Cloud Model Studio's Qwen API.
@@ -216,6 +231,10 @@ impl Model for ModelClient {
         self.backend.validate_schema(schema)
     }
 
+    fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
+        self.backend.validate_input(input)
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         ModelClient::complete(self, request).await
     }
@@ -286,28 +305,22 @@ pub struct ModelRequest {
 
 impl ModelRequest {
     /// Creates a model request whose response must match `schema`.
-    pub fn new(prompt: impl Into<String>, schema: OutputSchema) -> Self {
-        let prompt = prompt.into();
-
-        Self {
-            lifecycle_observed: false,
-            messages: vec![ModelMessage::User(prompt.clone())],
-            model_reasoning_effort: None,
-            prompt,
-            provider_session_id: None,
-            schema,
-            tools: Vec::new(),
-        }
+    ///
+    /// Plain strings remain the text-only construction path; ordered
+    /// text/image content uses an explicit [`TurnInput`].
+    pub fn new(input: impl Into<TurnInput>, schema: OutputSchema) -> Self {
+        Self::with_history(Vec::new(), input, schema)
     }
 
     pub(crate) fn with_history(
         messages: Vec<ModelMessage>,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         schema: OutputSchema,
     ) -> Self {
-        let prompt = prompt.into();
+        let input = input.into();
+        let prompt = input.joined_text();
         let mut messages = messages;
-        messages.push(ModelMessage::User(prompt.clone()));
+        messages.push(input.into_user_message());
 
         Self {
             lifecycle_observed: false,
@@ -338,7 +351,7 @@ impl ModelRequest {
         self
     }
 
-    /// Returns the request prompt.
+    /// Returns the current input's text content, excluding image blocks.
     pub fn prompt(&self) -> &str {
         &self.prompt
     }
@@ -514,11 +527,16 @@ pub enum ModelMessage {
     },
     /// User prompt for a retained or current turn.
     User(String),
+    /// Ordered image-bearing user input for a retained or current turn.
+    ///
+    /// Text-only input is normalized to [`Self::User`]; this variant always
+    /// carries at least one image block.
+    UserInput(TurnInput),
 }
 
 impl ModelMessage {
     /// Payload bytes used by bounded session history, independent of storage
-    /// encoding.
+    /// encoding. Images count their base64 data-URL length.
     pub fn retained_bytes(&self) -> usize {
         match self {
             Self::Assistant(content) | Self::System(content) | Self::User(content) => content.len(),
@@ -556,6 +574,7 @@ impl ModelMessage {
                 .len()
                 .saturating_add(content.len())
                 .saturating_add(name.len()),
+            Self::UserInput(input) => input.retained_bytes(),
         }
     }
 }
@@ -855,6 +874,12 @@ pub enum ModelError {
         /// Provider-specific reason the schema cannot be represented.
         reason: String,
     },
+    /// The model configuration cannot accept image input content.
+    #[error("model does not support image input: {reason}")]
+    UnsupportedImageInput {
+        /// Provider-specific reason image content cannot be translated.
+        reason: String,
+    },
     /// The decoded provider response content exceeds the harness safety limit.
     #[error("model response content exceeds the size limit")]
     ResponseContentTooLarge,
@@ -937,6 +962,7 @@ impl ModelError {
                 ModelErrorType::ResponseTooLarge
             }
             Self::UnsupportedOutputSchema { .. } => ModelErrorType::UnsupportedOutput,
+            Self::UnsupportedImageInput { .. } => ModelErrorType::UnsupportedInput,
             Self::InvalidJson { .. } | Self::SchemaViolation { .. } => {
                 ModelErrorType::InvalidOutput
             }
@@ -1010,6 +1036,8 @@ pub enum ModelErrorType {
     InvalidResponse,
     /// The provider cannot satisfy the requested output contract.
     UnsupportedOutput,
+    /// The provider cannot accept the requested input content.
+    UnsupportedInput,
     /// The response exceeded a configured safety bound.
     ResponseTooLarge,
     /// Terminal output failed JSON parsing or local schema validation.
@@ -1028,6 +1056,7 @@ impl ModelErrorType {
             Self::InvalidProviderResponse => telemetry::ERROR_INVALID_PROVIDER_RESPONSE,
             Self::InvalidResponse => telemetry::ERROR_INVALID_RESPONSE,
             Self::UnsupportedOutput => telemetry::ERROR_UNSUPPORTED_OUTPUT,
+            Self::UnsupportedInput => telemetry::ERROR_UNSUPPORTED_INPUT,
             Self::ResponseTooLarge => telemetry::ERROR_RESPONSE_TOO_LARGE,
             Self::InvalidOutput => telemetry::ERROR_INVALID_OUTPUT,
             Self::InvalidToolCall => telemetry::ERROR_INVALID_TOOL_CALL,

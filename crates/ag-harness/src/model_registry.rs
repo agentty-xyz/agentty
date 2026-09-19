@@ -4,15 +4,17 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{ExecutionIdentity, Model, ModelMetadata};
+use crate::{ExecutionIdentity, Model, ModelMetadata, TurnInput};
 
 /// Host-declared capabilities of a registered adapter, not tool permissions.
 ///
 /// These describe the configured implementation; they do not enable features or
 /// replace provider request validation. Text and locally validated structured
-/// output are required by the model contract. Images are not supported.
+/// output are required by the model contract.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ModelCapabilities {
+    /// Whether the adapter accepts image-bearing user input and history.
+    pub image_input: bool,
     /// Whether the adapter can resume provider-native continuation identifiers.
     pub native_continuation: bool,
     /// Whether the adapter supports native tool calls and normalized tool
@@ -42,6 +44,16 @@ impl ModelRegistration {
     /// Returns the adapter's provider/model metadata, when available.
     pub fn metadata(&self) -> Option<ModelMetadata> {
         self.model.metadata()
+    }
+
+    /// Returns the declared capabilities narrowed by what the adapter accepts,
+    /// so a declaration alone never admits image history the adapter rejects.
+    pub(crate) fn history_capabilities(&self) -> ModelCapabilities {
+        let mut capabilities = self.capabilities;
+        capabilities.image_input = capabilities.image_input
+            && self.model.validate_input(&TurnInput::image_probe()).is_ok();
+
+        capabilities
     }
 
     pub(crate) fn model(&self) -> Arc<dyn Model> {

@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
+use crate::input::TurnInput;
 use crate::session::TURN_LEASE_SECONDS;
 use crate::write_journal::content_hash;
 use crate::{
@@ -42,7 +43,7 @@ impl MemoryStore {
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: Option<&HostRequest>,
         generation: i64,
@@ -119,7 +120,7 @@ impl MemoryStore {
             model: session.configuration.recorded_model(),
             deadline,
             error_type: None,
-            messages: vec![ModelMessage::User(prompt.to_string())],
+            messages: vec![input.clone().into_user_message()],
             options: StoredTurnOptions::encode(options),
             outcome: None,
             owner,
@@ -286,12 +287,12 @@ impl SessionStore for MemoryStore {
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         let HostTurnAcquisition::Acquired(acquired) =
-            self.acquire(store, session_id, prompt, options, None, generation)?
+            self.acquire(store, session_id, input, options, None, generation)?
         else {
             return Err(SessionError::HostTurnConflict);
         };
@@ -303,19 +304,12 @@ impl SessionStore for MemoryStore {
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(
-            store,
-            session_id,
-            prompt,
-            options,
-            Some(request),
-            generation,
-        )
+        self.acquire(store, session_id, input, options, Some(request), generation)
     }
 
     async fn load_request(

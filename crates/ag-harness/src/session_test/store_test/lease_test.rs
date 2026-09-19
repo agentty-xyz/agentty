@@ -6,6 +6,7 @@ use tokio::sync::Notify;
 
 use super::support::{GatedStore, PauseAt};
 use crate::TurnError;
+use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::session::SessionError;
 use crate::session::tests::support::turn_options;
@@ -111,7 +112,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
         .begin_turn(
             Arc::new(store.database.clone()),
             "session",
-            "next",
+            &TurnInput::from("next"),
             &turn_options(),
             0,
         )

@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{
@@ -62,7 +63,7 @@ impl GatedStore {
             .begin_turn(
                 Arc::clone(&backend),
                 "session",
-                "prompt",
+                &TurnInput::from("prompt"),
                 &turn_options(),
                 0,
             )
@@ -119,12 +120,12 @@ impl SessionStore for GatedStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         self.database
-            .begin_turn(store, id, prompt, options, generation)
+            .begin_turn(store, id, input, options, generation)
             .await
     }
 
@@ -132,13 +133,13 @@ impl SessionStore for GatedStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.database
-            .begin_request(store, id, prompt, options, request, generation)
+            .begin_request(store, id, input, options, request, generation)
             .await
     }
 

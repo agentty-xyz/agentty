@@ -55,6 +55,7 @@ fn normalizes_transport_error_classification() {
         "model".to_string(),
         ChatCompletionProviderPolicy {
             display_name: "Provider",
+            image_input: false,
             reasoning_format: ReasoningFormat::Effort(max_as_xhigh),
             response_format_with_tools: true,
             structured_output: StructuredOutputMode::JsonSchema,

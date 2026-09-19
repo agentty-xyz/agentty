@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, Harness, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
-    ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError, SessionStore, SqliteStore,
-    StoreIdentity, StoredTurnOptions, ToolPolicy, TurnError, TurnLimits, TurnOptions, TurnOwner,
-    WriteStatus,
+    AcquiredTurn, Harness, ImageContent, ImageMediaType, InputBlock, MemoryStore, Model,
+    ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse, NewSession,
+    OutputSchema, SessionError, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions,
+    ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions, TurnOwner, WriteStatus,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -32,6 +32,22 @@ pub(crate) fn schema() -> OutputSchema {
 
 pub(crate) fn options() -> TurnOptions {
     TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+}
+
+pub(crate) fn png_image(payload: &[u8]) -> ImageContent {
+    let mut bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    bytes.extend_from_slice(payload);
+
+    ImageContent::new(ImageMediaType::Png, bytes).expect("valid PNG image")
+}
+
+pub(crate) fn image_input(before: &str, payload: &[u8], after: &str) -> TurnInput {
+    TurnInput::from_blocks(vec![
+        InputBlock::Text(before.to_string()),
+        InputBlock::Image(png_image(payload)),
+        InputBlock::Text(after.to_string()),
+    ])
+    .expect("image input")
 }
 
 pub(crate) async fn stores() -> Vec<Arc<dyn SessionStore>> {
@@ -78,8 +94,12 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .create_session(&config, None, 256)
         .await
         .expect("create");
+    let inputs: Vec<TurnInput> = ["first", "busy", "second"]
+        .into_iter()
+        .map(TurnInput::from)
+        .collect();
     let acquired = store
-        .begin_turn(Arc::clone(&store), "session", "first", &options(), 0)
+        .begin_turn(Arc::clone(&store), "session", &inputs[0], &options(), 0)
         .await
         .expect("begin")
         .activate()
@@ -89,7 +109,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
     // Act
     assert!(matches!(
         store
-            .begin_turn(Arc::clone(&store), "session", "busy", &options(), 0)
+            .begin_turn(Arc::clone(&store), "session", &inputs[1], &options(), 0)
             .await,
         Err(SessionError::Busy { .. })
     ));
@@ -117,7 +137,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .await
         .expect("settle after terminal");
     let successor = store
-        .begin_turn(Arc::clone(&store), "session", "second", &options(), 0)
+        .begin_turn(Arc::clone(&store), "session", &inputs[2], &options(), 0)
         .await
         .expect("successor");
     store.interrupt(&owner).await.expect("stale interrupt");
@@ -181,6 +201,43 @@ async fn all_backends_satisfy_lifecycle_and_journal_contract() {
 }
 
 #[tokio::test]
+async fn all_backends_preserve_ordered_image_input_in_history() {
+    // Arrange
+    for store in stores().await {
+        let input = image_input("before", b"payload", "after");
+        store
+            .create_session(&NewSession::new("images", schema()), None, 4096)
+            .await
+            .expect("create");
+        let acquired = store
+            .begin_turn(Arc::clone(&store), "images", &input, &options(), 0)
+            .await
+            .expect("begin");
+
+        // Act
+        store
+            .complete_turn(
+                acquired.owner(),
+                &[ModelMessage::Assistant("described".to_string())],
+                None,
+            )
+            .await
+            .expect("complete");
+        drop(acquired);
+
+        // Assert
+        let loaded = store.load_session("images").await.expect("load");
+        assert_eq!(
+            loaded.turns,
+            vec![vec![
+                ModelMessage::UserInput(input),
+                ModelMessage::Assistant("described".to_string()),
+            ]]
+        );
+    }
+}
+
+#[tokio::test]
 async fn write_settlement_retries_preserve_terminal_outcomes() {
     // Arrange
     for store in stores().await {
@@ -191,7 +248,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .await
                 .expect("create");
             let turn = store
-                .begin_turn(store.clone(), &id, "first", &options(), 0)
+                .begin_turn(store.clone(), &id, &TurnInput::from("first"), &options(), 0)
                 .await
                 .expect("turn");
             let write = store
@@ -222,7 +279,13 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .await
                 .expect("complete");
             let successor = store
-                .begin_turn(store.clone(), &id, "successor", &options(), 0)
+                .begin_turn(
+                    store.clone(),
+                    &id,
+                    &TurnInput::from("successor"),
+                    &options(),
+                    0,
+                )
                 .await
                 .expect("successor");
             store
@@ -257,7 +320,13 @@ async fn conflicting_write_settlements_have_one_winner() {
             .await
             .expect("create");
         let turn = store
-            .begin_turn(store.clone(), "settlement-race", "prompt", &options(), 0)
+            .begin_turn(
+                store.clone(),
+                "settlement-race",
+                &TurnInput::from("prompt"),
+                &options(),
+                0,
+            )
             .await
             .expect("turn");
         let write = store
@@ -305,9 +374,11 @@ async fn concurrent_creation_and_acquisition_have_one_winner() {
             store.create_session(&config, None, 100),
         );
         let creations = [first, second];
+        let first_input = TurnInput::from("first");
+        let second_input = TurnInput::from("second");
         let (first, second) = tokio::join!(
-            store.begin_turn(store.clone(), "race", "first", &selected, 0),
-            store.begin_turn(store.clone(), "race", "second", &selected, 0),
+            store.begin_turn(store.clone(), "race", &first_input, &selected, 0),
+            store.begin_turn(store.clone(), "race", &second_input, &selected, 0),
         );
         let acquisitions = [first, second];
 
@@ -343,7 +414,13 @@ async fn owner_lookup_preserves_identity_across_activation() {
             .await
             .expect("create");
         let acquired = store
-            .begin_turn(Arc::clone(&store), "identity", "prompt", &options(), 0)
+            .begin_turn(
+                Arc::clone(&store),
+                "identity",
+                &TurnInput::from("prompt"),
+                &options(),
+                0,
+            )
             .await
             .expect("acquire");
         let active = acquired.owner();

@@ -9,6 +9,7 @@ use super::support::{
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
+use crate::store_conformance_test::image_input;
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {
@@ -422,6 +423,45 @@ async fn database_rejects_negative_persisted_byte_counts() {
         invalid_message_size,
         SessionError::InvalidData { .. }
     ));
+}
+
+#[test]
+fn message_codec_round_trips_versioned_image_input() {
+    // Arrange
+    let input = image_input("look", b"payload", "closely");
+    let message = ModelMessage::UserInput(input.clone());
+
+    // Act
+    let encoded = EncodedMessage::from_message(&message).expect("encode");
+    let decoded = EncodedMessage::into_message(encoded.kind, &encoded.payload).expect("decode");
+
+    // Assert
+    assert_eq!(encoded.kind, "user_input");
+    assert_eq!(
+        encoded.retained_bytes,
+        i64::try_from(input.retained_bytes()).expect("retained bytes")
+    );
+    assert_eq!(decoded, message);
+}
+
+#[test]
+fn message_decoder_rejects_invalid_stored_image_input() {
+    // Arrange
+    let stale_version = r#"{"version":9,"blocks":[]}"#;
+    let broken_signature =
+        r#"{"version":1,"blocks":[{"kind":"image","media_type":"image/png","bytes":"LzlqLw=="}]}"#;
+
+    // Act
+    let version = EncodedMessage::into_message("user_input", stale_version);
+    let signature = EncodedMessage::into_message("user_input", broken_signature);
+
+    // Assert
+    for error in [version, signature] {
+        assert!(matches!(
+            error.expect_err("invalid stored input"),
+            SessionError::InvalidData { reason } if reason.contains("invalid persistent user input")
+        ));
+    }
 }
 
 #[test]

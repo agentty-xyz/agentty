@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
@@ -427,7 +428,7 @@ impl Database {
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: Option<&HostRequest>,
         generation: i64,
@@ -437,7 +438,7 @@ impl Database {
                 reason: "acquisition store has a different backing identity".to_string(),
             });
         }
-        let message = EncodedMessage::from_message(&ModelMessage::User(prompt.to_string()))?;
+        let message = EncodedMessage::from_message(&input.clone().into_user_message())?;
 
         loop {
             let mut acquisition = self.load_turn_acquisition(session_id).await?;
@@ -927,12 +928,12 @@ WHERE id = ?
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         let HostTurnAcquisition::Acquired(acquired) = self
-            .acquire(store, session_id, prompt, options, None, generation)
+            .acquire(store, session_id, input, options, None, generation)
             .await?
         else {
             return Err(SessionError::HostTurnConflict);
@@ -945,20 +946,13 @@ WHERE id = ?
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(
-            store,
-            session_id,
-            prompt,
-            options,
-            Some(request),
-            generation,
-        )
-        .await
+        self.acquire(store, session_id, input, options, Some(request), generation)
+            .await
     }
 
     async fn load_request(
@@ -1224,6 +1218,20 @@ pub enum SessionError {
     UnsupportedModelHistory {
         /// Content-free explanation of the unsupported capability.
         reason: &'static str,
+    },
+    /// Image-bearing input alone exceeds the session's replay budget, so no
+    /// later turn could see it or any earlier history.
+    #[error(
+        "image input retains {input_bytes} bytes but session `{id}` replays at most \
+         {max_history_bytes}; create the session with a larger Harness::max_history_bytes"
+    )]
+    ImageInputExceedsHistory {
+        /// Session whose budget is too small.
+        id: String,
+        /// Retained size of the rejected input, with images at data-URL length.
+        input_bytes: usize,
+        /// Replay budget stored for the session.
+        max_history_bytes: usize,
     },
     /// The host selected a key absent from its registry.
     #[error(transparent)]
@@ -1926,6 +1934,10 @@ impl EncodedMessage {
                 }),
             ),
             ModelMessage::User(content) => ("user", serialize_payload(content)),
+            ModelMessage::UserInput(input) => (
+                "user_input",
+                serialize_payload(&StoredTurnInput::from(input)),
+            ),
         };
         let payload = payload?;
         let retained_bytes = i64::try_from(message.retained_bytes()).unwrap_or(i64::MAX);
@@ -1966,6 +1978,12 @@ impl EncodedMessage {
                 })
             }
             "user" => deserialize_payload(payload).map(ModelMessage::User),
+            "user_input" => deserialize_payload::<StoredTurnInput>(payload)?
+                .into_input()
+                .map(TurnInput::into_user_message)
+                .map_err(|error| SessionError::InvalidData {
+                    reason: format!("invalid persistent user input: {error}"),
+                }),
             _ => Err(SessionError::InvalidData {
                 reason: format!("unknown persistent message kind `{kind}`"),
             }),

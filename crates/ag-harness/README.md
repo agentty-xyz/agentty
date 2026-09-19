@@ -15,7 +15,7 @@ let mut models = ModelRegistry::new();
 models.register(
     ExecutionIdentity::new("review-model", "config-v1")?,
     Muse::from_env(MUSE_SPARK_1_3)?,
-    ModelCapabilities { native_continuation: false, tool_calls: true },
+    ModelCapabilities { image_input: true, native_continuation: false, tool_calls: true },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
 let result = harness.run_once("Review this proposal", output_schema).await?;
@@ -32,17 +32,19 @@ Use `ModelRegistry::register_shared` for an existing `Arc<dyn Model>`. A boxed m
 use the same method through `Arc::from(boxed_model)`.
 
 Capabilities are host declarations about the configured adapter, not tool permissions or
-automatic feature detection. They do not enable images or bypass provider validation.
-The registration supplies the `ExecutionIdentity` required for host-ID submissions.
-Revise it when configuration, endpoints, credential scope, capability declarations, or
-injected behavior changes; never include secrets. A host can override
-`Harness::execution_identity` for additional injected execution configuration, while the
-registration identity and capabilities remain part of the request fingerprint. Direct
-and registered construction have distinct request fingerprints. Recreate the same
-registration to recover a registered request after restart. Durable sessions persist the
-registration key and revision; resuming requires the same registration even when adapter
-metadata matches or is absent. Direct construction cannot resume registered sessions,
-and legacy or directly created sessions must resume through direct construction. Call
+automatic feature detection. They do not bypass provider validation. The `image_input`
+declaration additionally gates image-bearing turns before acquisition and image-bearing
+history during model switching. The registration supplies the `ExecutionIdentity`
+required for host-ID submissions. Revise it when configuration, endpoints, credential
+scope, capability declarations, or injected behavior changes; never include secrets. A
+host can override `Harness::execution_identity` for additional injected execution
+configuration, while the registration identity and capabilities remain part of the
+request fingerprint. Direct and registered construction have distinct request
+fingerprints. Recreate the same registration to recover a registered request after
+restart. Durable sessions persist the registration key and revision; resuming requires
+the same registration even when adapter metadata matches or is absent. Direct
+construction cannot resume registered sessions, and legacy or directly created sessions
+must resume through direct construction. Call
 `session.switch_model(&models, "other-model").await?` to select a registered model for
 an idle session. The switch commits its identity and clears native continuation
 atomically. Other handles become stale, including after switching back to their original
@@ -253,6 +255,51 @@ Use `run_once` when no resumable history is needed:
 ```rust
 let result = harness.run_once("Summarize Cargo.toml", output_schema).await?;
 ```
+
+## Text and image input
+
+Every entry point accepts `impl Into<TurnInput>`, so plain strings keep working. Ordered
+text and image content uses explicit blocks:
+
+```rust
+let input = TurnInput::from_blocks(vec![
+    InputBlock::Text("What changed in this screenshot?".into()),
+    InputBlock::Image(ImageContent::new(ImageMediaType::Png, png_bytes)?),
+])?;
+let result = session.send(input).await?;
+```
+
+`ImageContent` accepts nonempty PNG or JPEG bytes whose container signature matches the
+declared media type; signature checks do not decode the image. Construction enforces the
+per-image, image-count, aggregate, and encoded-request limits published as constants on
+`ImageContent` and `TurnInput`, so invalid input fails before any acquisition or
+provider request. Text-only input is normalized to one text message, which keeps legacy
+stored strings and recorded text host-request fingerprints unchanged. Image-bearing
+input preserves exact block order across persistence and replay, and its host-request
+fingerprint covers each image's media type and content digest. Stored input is restored
+with integrity checks only, so lowering a published limit keeps existing history
+readable.
+
+Images count toward the whole-turn replay budget at their base64 data-URL length. A turn
+larger than the budget leaves later replay together with every older turn, so durable
+turns reject image-bearing input that alone exceeds the session's budget with
+`SessionError::ImageInputExceedsHistory` before acquisition. Create sessions that accept
+images with `Harness::max_history_bytes` above the default 256 KiB.
+
+Built-in providers translate image blocks to Chat Completions `image_url` data URLs for
+configurations whose image support is documented or qualified by the live image checks:
+the Kimi K2.6, K2.7 Code, and K3 models, the Qwen VL families plus `qwen-plus` and the
+`qwen3.8-27b`, `qwen3.8-flash`, and `qwen3.8-max` models, and the Muse Spark 1.3 models.
+Other Qwen models accept image parts but ignore or invent their content, so support is
+never inferred from a model family. Other configurations, replay of image history
+included, fail with an explicit unsupported-image error before network access. Image
+payloads never enter telemetry or bounded diagnostics.
+
+Image support is opt-in for injected models. `Model::validate_input` rejects
+image-bearing input by default before acquisition; override it to accept the images a
+model reads from `ModelMessage::UserInput`. A registered model must also declare
+`image_input`. Switching a session with image history requires both: a declaration the
+target adapter rejects does not admit the switch.
 
 ## Permissions and models
 
