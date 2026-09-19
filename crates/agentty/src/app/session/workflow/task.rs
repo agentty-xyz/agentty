@@ -1437,9 +1437,8 @@ fn strip_agentty_coauthor_trailer(commit_message: &str) -> String {
 /// Prefers the first non-empty continuity line (without trailer noise) when
 /// available and otherwise falls back to a generic session-update title.
 fn fallback_session_commit_message(current_commit_message: Option<&str>) -> String {
-    let stripped_current_commit_message = current_commit_message
-        .map(strip_agentty_coauthor_trailer)
-        .unwrap_or_default();
+    let stripped_current_commit_message =
+        current_commit_message.map_or_default(strip_agentty_coauthor_trailer);
     if stripped_current_commit_message.trim().is_empty() {
         return "Apply session updates".to_string();
     }

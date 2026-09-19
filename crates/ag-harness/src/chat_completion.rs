@@ -670,8 +670,7 @@ fn rate_limit_retry_delay(headers: &reqwest::header::HeaderMap, retry: usize) ->
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or_default();
+        .map_or_default(Duration::from_secs);
     let backoff = RETRY_DELAY.saturating_mul(1_u32 << retry.min(31));
 
     provider_delay.max(backoff).min(MAX_RETRY_DELAY)

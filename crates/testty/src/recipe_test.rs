@@ -1,9 +1,9 @@
 use crate::frame::TerminalFrame;
 use crate::recipe::{
-    expect_instruction_visible, expect_not_visible, expect_selected_tab, expect_status_message,
-    expect_unselected_tab, match_dialog_title, match_footer_action, match_instruction_visible,
-    match_keybinding_hint, match_not_visible, match_selected_tab, match_status_message,
-    match_unselected_tab,
+    expect_dialog_title, expect_footer_action, expect_instruction_visible, expect_keybinding_hint,
+    expect_not_visible, expect_selected_tab, expect_status_message, expect_unselected_tab,
+    match_dialog_title, match_footer_action, match_instruction_visible, match_keybinding_hint,
+    match_not_visible, match_selected_tab, match_status_message, match_unselected_tab,
 };
 use crate::region::Region;
 
@@ -36,12 +36,62 @@ fn expect_unselected_tab_passes_for_plain_tab() {
 }
 
 #[test]
+#[should_panic(expected = "Text 'Projects' at (0, 0) is highlighted but should not be")]
+fn expect_unselected_tab_panics_when_highlighted() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"\x1b[1mProjects\x1b[0m");
+
+    // Act / Assert
+    expect_unselected_tab(&frame, "Projects");
+}
+
+#[test]
 fn expect_instruction_visible_finds_text() {
     // Arrange
     let frame = TerminalFrame::new(80, 24, b"\r\n\r\nPress Enter to continue");
 
     // Act / Assert
     expect_instruction_visible(&frame, "Press Enter");
+}
+
+#[test]
+#[should_panic(expected = "Text 'Press Enter' not found in region")]
+fn expect_instruction_visible_panics_when_absent() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Hello");
+
+    // Act / Assert
+    expect_instruction_visible(&frame, "Press Enter");
+}
+
+#[test]
+#[should_panic(expected = "Text 'Tab' not found in region")]
+fn expect_keybinding_hint_panics_when_absent_from_footer() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Tab");
+
+    // Act / Assert
+    expect_keybinding_hint(&frame, "Tab");
+}
+
+#[test]
+#[should_panic(expected = "Text 'Quit' not found in region")]
+fn expect_footer_action_panics_when_absent_from_footer() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Quit");
+
+    // Act / Assert
+    expect_footer_action(&frame, "Quit");
+}
+
+#[test]
+#[should_panic(expected = "Text 'Confirm Delete' not found in region")]
+fn expect_dialog_title_panics_when_absent() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Hello");
+
+    // Act / Assert
+    expect_dialog_title(&frame, "Confirm Delete");
 }
 
 #[test]
@@ -54,6 +104,16 @@ fn expect_not_visible_passes_when_absent() {
 }
 
 #[test]
+#[should_panic(expected = "Expected text 'Hello' to NOT be visible")]
+fn expect_not_visible_panics_when_present() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Hello World");
+
+    // Act / Assert
+    expect_not_visible(&frame, "Hello");
+}
+
+#[test]
 fn expect_status_message_finds_anywhere() {
     // Arrange
     let mut data = Vec::new();
@@ -62,6 +122,16 @@ fn expect_status_message_finds_anywhere() {
     }
     data.extend_from_slice(b"Status: OK");
     let frame = TerminalFrame::new(80, 24, &data);
+
+    // Act / Assert
+    expect_status_message(&frame, "Status: OK");
+}
+
+#[test]
+#[should_panic(expected = "Text 'Status: OK' not found in region")]
+fn expect_status_message_panics_when_absent() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"Hello");
 
     // Act / Assert
     expect_status_message(&frame, "Status: OK");

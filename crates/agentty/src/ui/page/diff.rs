@@ -1983,8 +1983,7 @@ impl Page for DiffPage<'_> {
             let rows = review_comments
                 .comment_snapshot
                 .as_ref()
-                .map(review_comment_selection::grouped_review_comment_rows)
-                .unwrap_or_default();
+                .map_or_default(review_comment_selection::grouped_review_comment_rows);
             let page =
                 review_comment::ReviewCommentPage::new(review_comment::ReviewCommentPageInput {
                     selected_comments: &review_comments.selected_comments,
@@ -2034,8 +2033,7 @@ impl Page for DiffPage<'_> {
                     let rows = review_comments
                         .comment_snapshot
                         .as_ref()
-                        .map(review_comment_selection::grouped_review_comment_rows)
-                        .unwrap_or_default();
+                        .map_or_default(review_comment_selection::grouped_review_comment_rows);
                     let can_reply = self.session.allows_review_comment_reply();
 
                     (

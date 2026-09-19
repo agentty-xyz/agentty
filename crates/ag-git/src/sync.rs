@@ -1332,8 +1332,8 @@ fn parse_branch_tracking_statuses(output: &str) -> BranchTrackingMap {
         else {
             continue;
         };
-        let upstream_ref = parts.next().map(str::trim).unwrap_or_default();
-        let track = parts.next().map(str::trim).unwrap_or_default();
+        let upstream_ref = parts.next().map_or_default(str::trim);
+        let track = parts.next().map_or_default(str::trim);
 
         let status = if upstream_ref.is_empty() {
             None

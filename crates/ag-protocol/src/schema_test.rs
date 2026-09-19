@@ -501,8 +501,7 @@ fn all_properties_in_required(value: &Value) -> bool {
                 let required_keys: Vec<&str> = object
                     .get("required")
                     .and_then(Value::as_array)
-                    .map(|array| array.iter().filter_map(Value::as_str).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|array| array.iter().filter_map(Value::as_str).collect());
 
                 for key in properties.keys() {
                     if !required_keys.contains(&key.as_str()) {

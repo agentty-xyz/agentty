@@ -1041,8 +1041,7 @@ fn open_publish_branch_input(
     let input = locked_upstream_ref
         .as_deref()
         .map(remote_branch_name_from_upstream_ref)
-        .map(InputState::with_text)
-        .unwrap_or_default();
+        .map_or_default(InputState::with_text);
 
     app.mode = AppMode::PublishBranchInput {
         default_branch_name,
@@ -1109,18 +1108,14 @@ pub(super) fn session_prompt_history_entries(
         return vec![session.prompt.clone()];
     }
 
-    session
-        .transcript
-        .as_ref()
-        .map(|transcript| {
-            transcript
-                .messages()
-                .iter()
-                .filter(|message| message.kind == SessionMessageKind::UserPrompt)
-                .map(|message| message.content.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    session.transcript.as_ref().map_or_default(|transcript| {
+        transcript
+            .messages()
+            .iter()
+            .filter(|message| message.kind == SessionMessageKind::UserPrompt)
+            .map(|message| message.content.clone())
+            .collect()
+    })
 }
 
 /// Opens review mode and serves cached review or loading status.

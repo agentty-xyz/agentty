@@ -1,7 +1,7 @@
 use crate::assertion::{
-    Expected, assert_span_is_highlighted, assert_span_is_not_highlighted, assert_text_has_fg_color,
-    match_span_is_highlighted, match_span_is_not_highlighted, match_text_has_bg_color,
-    match_text_has_fg_color,
+    Expected, assert_span_is_highlighted, assert_span_is_not_highlighted, assert_text_has_bg_color,
+    assert_text_has_fg_color, match_span_is_highlighted, match_span_is_not_highlighted,
+    match_text_has_bg_color, match_text_has_fg_color,
 };
 use crate::frame::{CellColor, TerminalFrame};
 
@@ -12,6 +12,16 @@ fn assert_span_is_highlighted_detects_bold() {
 
     // Act / Assert
     assert_span_is_highlighted(&frame, "Bold");
+}
+
+#[test]
+#[should_panic(expected = "Text 'plain' at (0, 0) is not highlighted")]
+fn assert_span_is_highlighted_panics_for_plain_text() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"plain text");
+
+    // Act / Assert
+    assert_span_is_highlighted(&frame, "plain");
 }
 
 #[test]
@@ -61,6 +71,16 @@ fn assert_span_is_not_highlighted_for_plain_text() {
 }
 
 #[test]
+#[should_panic(expected = "Text 'Bold' at (0, 0) is highlighted but should not be")]
+fn assert_span_is_not_highlighted_panics_for_bold() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"\x1b[1mBold\x1b[0m");
+
+    // Act / Assert
+    assert_span_is_not_highlighted(&frame, "Bold");
+}
+
+#[test]
 fn match_span_is_not_highlighted_returns_failure_for_bold() {
     // Arrange
     let frame = TerminalFrame::new(80, 24, b"\x1b[1mBold\x1b[0m");
@@ -93,6 +113,16 @@ fn assert_text_has_fg_color_panics_on_mismatch() {
 
     // Act / Assert
     assert_text_has_fg_color(&frame, "Red", &CellColor::new(0, 255, 0));
+}
+
+#[test]
+#[should_panic(expected = "background")]
+fn assert_text_has_bg_color_panics_on_mismatch() {
+    // Arrange
+    let frame = TerminalFrame::new(80, 24, b"\x1b[41mActive\x1b[0m");
+
+    // Act / Assert
+    assert_text_has_bg_color(&frame, "Active", &CellColor::new(0, 0, 128));
 }
 
 #[test]

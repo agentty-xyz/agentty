@@ -341,9 +341,8 @@ fn new_backend_uses_detected_linux_platform_backends() {
 
 #[cfg(target_os = "linux")]
 fn executable_search_path(test_executable_directory: &std::path::Path) -> OsString {
-    let system_paths = env::var_os("PATH")
-        .map(|path| env::split_paths(&path).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let system_paths =
+        env::var_os("PATH").map_or_default(|path| env::split_paths(&path).collect::<Vec<_>>());
 
     env::join_paths(std::iter::once(test_executable_directory.to_path_buf()).chain(system_paths))
         .expect("clipboard executable search path should be valid")

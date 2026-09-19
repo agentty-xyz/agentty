@@ -89,7 +89,7 @@ pub fn expect_selected_tab(frame: &TerminalFrame, label: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -148,7 +148,7 @@ pub fn expect_unselected_tab(frame: &TerminalFrame, label: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -179,7 +179,7 @@ pub fn expect_instruction_visible(frame: &TerminalFrame, instruction: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -207,7 +207,7 @@ pub fn expect_keybinding_hint(frame: &TerminalFrame, hint: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -235,7 +235,7 @@ pub fn expect_footer_action(frame: &TerminalFrame, action: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -266,7 +266,7 @@ pub fn expect_dialog_title(frame: &TerminalFrame, title: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -294,7 +294,7 @@ pub fn expect_status_message(frame: &TerminalFrame, message: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -320,7 +320,7 @@ pub fn expect_not_visible(frame: &TerminalFrame, text: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 

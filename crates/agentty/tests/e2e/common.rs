@@ -1170,8 +1170,7 @@ impl FeatureTest {
             } => {
                 let committed_error_detail = committed_error
                     .as_ref()
-                    .map(|err| format!(", committed sidecar error: {err}"))
-                    .unwrap_or_default();
+                    .map_or_default(|err| format!(", committed sidecar error: {err}"));
 
                 Err(std::io::Error::other(format!(
                     "Feature GIF is stale for {}: {} has current hash {current}, committed hash \

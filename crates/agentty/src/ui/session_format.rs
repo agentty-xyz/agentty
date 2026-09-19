@@ -204,11 +204,9 @@ fn session_metadata_base_text(
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
     let speed = session_speed_display(session)
-        .map(|speed_mode| format!("  Speed: {speed_mode}"))
-        .unwrap_or_default();
+        .map_or_default(|speed_mode| format!("  Speed: {speed_mode}"));
     let response_style = session_response_style_display(session)
-        .map(|response_style| format!("  Style: {response_style}"))
-        .unwrap_or_default();
+        .map_or_default(|response_style| format!("  Style: {response_style}"));
     format!(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
          {}  Reasoning: {}{speed}{response_style}  Tokens: {input_tokens}/{output_tokens}",

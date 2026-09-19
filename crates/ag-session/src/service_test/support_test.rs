@@ -29,8 +29,7 @@ impl FakeBackend {
     pub(super) fn calls(&self) -> Vec<String> {
         self.state
             .lock()
-            .map(|state| state.calls.clone())
-            .unwrap_or_default()
+            .map_or_default(|state| state.calls.clone())
     }
 }
 

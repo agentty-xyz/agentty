@@ -483,8 +483,7 @@ impl SessionManager {
             session_id,
             session_prompt: session_detail
                 .as_ref()
-                .map(|detail| detail.prompt.clone())
-                .unwrap_or_default(),
+                .map_or_default(|detail| detail.prompt.clone()),
             session_queued_actions,
             session_queued_messages,
             session_questions: questions,
@@ -538,14 +537,12 @@ impl SessionManager {
     fn loaded_queue_snapshots(
         handles: Option<&SessionHandles>,
     ) -> (Vec<QueuedMessage>, Vec<TransientMessage>) {
-        handles
-            .map(|handles| {
-                (
-                    handles.queued_message_snapshot(),
-                    handles.queued_action_snapshot(),
-                )
-            })
-            .unwrap_or_default()
+        handles.map_or_default(|handles| {
+            (
+                handles.queued_message_snapshot(),
+                handles.queued_action_snapshot(),
+            )
+        })
     }
 
     fn loaded_orchestration_metadata(

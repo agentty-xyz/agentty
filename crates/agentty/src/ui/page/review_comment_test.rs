@@ -134,9 +134,8 @@ fn render_review_comment_page_with_selections(
                 session: &session,
             });
             let areas = diff_util::diff_page_areas(frame.area());
-            let rows = snapshot
-                .map(review_comment_selection::grouped_review_comment_rows)
-                .unwrap_or_default();
+            let rows =
+                snapshot.map_or_default(review_comment_selection::grouped_review_comment_rows);
             page.render_comment_list(frame, areas.file_list_area, &rows, true);
             page.render_comment_detail(frame, areas.diff_area, &rows);
         })

@@ -2048,8 +2048,7 @@ impl App {
         let mut questions = self
             .sessions
             .session_for_id(&session_id)
-            .map(|session| session.questions.clone())
-            .unwrap_or_default();
+            .map_or_default(|session| session.questions.clone());
         if questions.is_empty() {
             // The list snapshot only carries persisted questions for the
             // active session, so reload detail before giving up, mirroring the
@@ -2068,8 +2067,7 @@ impl App {
             questions = self
                 .sessions
                 .session_for_id(&session_id)
-                .map(|session| session.questions.clone())
-                .unwrap_or_default();
+                .map_or_default(|session| session.questions.clone());
         }
         if questions.is_empty() {
             return;

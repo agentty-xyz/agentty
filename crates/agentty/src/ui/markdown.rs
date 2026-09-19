@@ -149,8 +149,7 @@ fn append_prompt_block_lines(
         prompt_block
             .raw_lines
             .first()
-            .map(String::as_str)
-            .unwrap_or_default(),
+            .map_or_default(String::as_str),
     ) {
         PromptBlockKind::Clarification => {
             rendered_lines.extend(render_shared_markdown(
