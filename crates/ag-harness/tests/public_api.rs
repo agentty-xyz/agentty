@@ -1,6 +1,10 @@
 //! External-consumer coverage for the `ag-harness` model traits.
 
 #[cfg(test)]
+#[path = "support/model_registry.rs"]
+mod model_registry_test;
+
+#[cfg(test)]
 #[path = "support/recovery.rs"]
 mod recovery_test;
 

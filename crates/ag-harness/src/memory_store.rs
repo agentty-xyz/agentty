@@ -202,6 +202,7 @@ impl SessionStore for MemoryStore {
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
                     provider_session_id: None,
+                    registration_identity: config.registration_identity().cloned(),
                     schema: config.schema().clone(),
                     system_prompt: config.system_prompt().map(str::to_string),
                     turns: Vec::new(),

@@ -35,6 +35,10 @@ mod harness;
 mod lifecycle;
 mod memory_store;
 mod model;
+mod model_registry;
+#[cfg(test)]
+#[path = "../tests/support/model_registry.rs"]
+mod model_registry_test;
 mod policy;
 mod provider;
 mod read;
@@ -67,6 +71,7 @@ pub use model::{
     ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
+pub use model_registry::{ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError};
 pub use policy::ToolPolicy;
 pub use provider::{
     KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,

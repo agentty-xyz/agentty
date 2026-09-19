@@ -162,6 +162,8 @@ available. Harness is not yet an Agentty backend.
 Library hosts can inject a transactional `SessionStore` with `Harness::store`; SQLite
 remains the default backend selected through `Harness::database`. Built-in `MemoryStore`
 provides process-local sessions and write journals without restart durability.
+`ModelRegistry` selects built-in or injected models by stable host keys through
+`Harness::from_registry`, retaining their execution identities for request recovery.
 
 ## Documentation
 

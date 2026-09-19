@@ -30,6 +30,16 @@ impl ExecutionIdentity {
 
         Ok(identity)
     }
+
+    /// Returns the stable host key, also used for model registry lookup.
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Returns the host revision of model and injected execution configuration.
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
 }
 
 /// Versioned request fingerprint supplied to atomic store acquisition.

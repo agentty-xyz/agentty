@@ -22,6 +22,15 @@ flowchart LR
 
 - `Harness` owns the model, validated repository, configured defaults, lifecycle
   observers, and selected session store with shared lazy SQLite initialization.
+- `ModelRegistry` resolves stable host keys for `Harness::from_registry`. Registrations
+  retain owned or shared injected models or built-in clients, host-declared
+  capabilities, and the same `ExecutionIdentity` key/revision contract used by
+  host-request recovery. Harnesses and sessions capture the registration independently
+  of the registry lifetime. Duplicate and unknown keys fail explicitly; direct model
+  construction remains available. Stores retain each session's registration key and
+  revision. Resume rejects a different or absent registration, independently of provider
+  metadata. Legacy and directly created sessions retain no registration and resume
+  through direct construction.
 - One internal engine prepares requests, runs provider attempts and tools, retries
   rejected native continuations, and validates output for both entry points.
 - Immutable `TurnOptions` fixes the required schema, effective `ToolPolicy`,
@@ -234,17 +243,13 @@ emits cancellation once.
 ## Next iterations
 
 Owned session handles, injected transactional stores, memory storage, observable
-cancellation, and host-turn recovery are delivered library capabilities.
-
-1. **Managed filesystem-effect settlement**
-
-   Track filesystem operations through actual completion independently of persistence
-   settlement. Retain local admission while managed effects remain outstanding.
+cancellation and filesystem-effect settlement, host-turn recovery, and registry-based
+model construction are delivered library capabilities.
 
 1. **Model switching**
 
-   Resolve models through a registry and switch a durable session without discarding its
-   normalized history.
+   Switch an idle durable session between registered models atomically without
+   discarding its normalized history.
 
 1. **Rich input and images**
 
