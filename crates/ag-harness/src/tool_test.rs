@@ -92,7 +92,7 @@ fn tool_call_from_json_preserves_read_and_write_payloads() {
 fn tool_call_from_json_rejects_unsupported_names_and_invalid_arguments() {
     // Arrange
     let inputs = [
-        ("bash", "{}"),
+        ("unknown-tool", "{}"),
         ("read", "{"),
         ("read", r#"{"path":"../secret"}"#),
         ("read", r#"{"path":"name.txt","limit":0}"#),

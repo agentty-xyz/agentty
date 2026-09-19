@@ -11,6 +11,20 @@ use crate::model::{CompletionMetadata, CompletionUsage, ModelError, ModelErrorTy
 use crate::tool::ReadAction;
 
 #[test]
+fn bash_activity_exposes_only_its_name_and_duration() {
+    // Arrange
+    let activity = ToolActivity::Bash {
+        duration: Duration::from_millis(12),
+    };
+
+    // Act / Assert
+    assert_eq!(activity.name(), "bash");
+    assert_eq!(activity.path(), "");
+    assert_eq!(activity.duration(), Duration::from_millis(12));
+    assert_eq!(activity.to_string(), "bash (12 ms)");
+}
+
+#[test]
 fn outcome_exposes_output_and_report() {
     // Arrange
     let completion = CompletionMetadata::new(

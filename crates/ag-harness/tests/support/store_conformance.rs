@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::{
-    AcquiredTurn, Harness, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
-    ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError, SessionStore, SqliteStore,
-    StoreIdentity, StoredTurnOptions, ToolPolicy, TurnError, TurnLimits, TurnOptions, TurnOwner,
-    WriteStatus,
+    AcquiredTurn, CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination, Harness,
+    MemoryStore, Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse,
+    NewSession, OutputSchema, SessionError, SessionStore, SqliteStore, StoreIdentity,
+    StoredTurnOptions, ToolPolicy, TurnError, TurnLimits, TurnOptions, TurnOwner, WriteStatus,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -68,6 +68,118 @@ pub(crate) fn harness(store: Arc<dyn SessionStore>) -> Harness {
         requests: Arc::default(),
     })
     .store(store)
+}
+
+#[tokio::test]
+async fn command_reconciliation_preserves_records_and_validates_session_and_store() {
+    // Arrange
+    for store in stores().await.into_iter().skip(1) {
+        let harness = harness(Arc::clone(&store));
+        let session = harness
+            .session("commands", schema())
+            .create()
+            .await
+            .expect("session");
+        let other_session = harness
+            .session("other", schema())
+            .create()
+            .await
+            .expect("other");
+        let independent = self::harness(Arc::new(MemoryStore::new()))
+            .session("commands", schema())
+            .create()
+            .await
+            .expect("independent");
+        let acquired = store
+            .begin_turn(Arc::clone(&store), "commands", "run", &options(), 0)
+            .await
+            .expect("owner");
+        let intent = CommandIntent {
+            call_id: "call".into(),
+            command: "effect".into(),
+            policy: json!({}),
+            workspace: "/workspace".into(),
+        };
+        store
+            .command_intent(acquired.owner(), &intent)
+            .await
+            .expect("intent");
+        let record = session.commands().await.expect("records").remove(0);
+
+        // Act / Assert
+        assert!(
+            session.reconcile_command(&record).await.is_err(),
+            "live owner"
+        );
+        assert!(
+            other_session.reconcile_command(&record).await.is_err(),
+            "other session"
+        );
+        assert!(
+            independent.reconcile_command(&record).await.is_err(),
+            "other store"
+        );
+        store.interrupt(acquired.owner()).await.expect("interrupt");
+        session
+            .reconcile_command(&record)
+            .await
+            .expect("reconcile stopped owner");
+        let records = session.commands().await.expect("records");
+        assert_eq!(records[0].intent, intent);
+        assert!(records[0].outcome.is_none());
+        assert!(records[0].reconciled);
+        assert!(!records[0].blocks_admission());
+    }
+}
+
+#[tokio::test]
+async fn external_store_without_command_support_fails_closed() {
+    // Arrange
+    let store: Arc<dyn SessionStore> = Arc::new(ExternalStore::new());
+    store
+        .create_session(&NewSession::new("unsupported", schema()), None, 1024)
+        .await
+        .expect("create");
+    let acquired = store
+        .begin_turn(Arc::clone(&store), "unsupported", "run", &options(), 0)
+        .await
+        .expect("owner");
+    let intent = CommandIntent {
+        call_id: "call".into(),
+        command: "effect".into(),
+        policy: json!({}),
+        workspace: "/workspace".into(),
+    };
+    let outcome = CommandOutcome {
+        cleanup_failed: false,
+        cleanup_scope: CommandCleanupScope::PidNamespace,
+        execution_failure: None,
+        exit_code: Some(0),
+        signal: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        termination: CommandTermination::Completed,
+        truncated: false,
+    };
+
+    // Act / Assert
+    assert!(matches!(
+        store.load_commands("unsupported").await,
+        Err(SessionError::InvalidData { .. })
+    ));
+    assert!(matches!(
+        store.command_intent(acquired.owner(), &intent).await,
+        Err(SessionError::InvalidData { .. })
+    ));
+    assert!(matches!(
+        store.finish_command(acquired.owner(), 1, &outcome).await,
+        Err(SessionError::InvalidData { .. })
+    ));
+    assert!(matches!(
+        store.reconcile_command(acquired.owner(), 1).await,
+        Err(SessionError::InvalidData { .. })
+    ));
+    store.interrupt(acquired.owner()).await.expect("interrupt");
 }
 
 pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
@@ -885,5 +997,88 @@ async fn temporary_sqlite_handles_share_one_database_until_dropped() {
             independent.load_session("temporary").await,
             Err(SessionError::NotFound { .. })
         ));
+    }
+}
+
+#[tokio::test]
+async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
+    // Arrange
+    for store in stores().await.into_iter().skip(1) {
+        store
+            .create_session(&NewSession::new("switch-commands", schema()), None, 1024)
+            .await
+            .expect("session");
+        let turn = store
+            .begin_turn(Arc::clone(&store), "switch-commands", "run", &options(), 0)
+            .await
+            .expect("turn");
+        let id = store
+            .command_intent(
+                turn.owner(),
+                &CommandIntent {
+                    call_id: "command".into(),
+                    command: "effect".into(),
+                    policy: json!({}),
+                    workspace: "/workspace".into(),
+                },
+            )
+            .await
+            .expect("intent");
+        store.interrupt(turn.owner()).await.expect("stop owner");
+        let identity = ag_harness::ExecutionIdentity::new("next", "1").expect("identity");
+        let capabilities = ag_harness::ModelCapabilities {
+            native_continuation: false,
+            tool_calls: true,
+        };
+
+        // Act / Assert
+        assert!(matches!(
+            store
+                .switch_model("switch-commands", 0, &identity, None, capabilities)
+                .await,
+            Err(SessionError::Busy { .. })
+        ));
+        let unchanged = store
+            .load_session("switch-commands")
+            .await
+            .expect("unchanged selection");
+        assert_eq!(unchanged.model_generation, 0);
+        assert_eq!(unchanged.registration_identity, None);
+        store
+            .reconcile_command(turn.owner(), id)
+            .await
+            .expect("owner reconciliation");
+        assert_eq!(
+            store
+                .switch_model("switch-commands", 0, &identity, None, capabilities)
+                .await
+                .expect("switch after reconciliation"),
+            1
+        );
+        assert!(matches!(
+            store
+                .begin_turn(
+                    Arc::clone(&store),
+                    "switch-commands",
+                    "stale",
+                    &options(),
+                    0
+                )
+                .await,
+            Err(SessionError::StaleModel { .. })
+        ));
+        let next = store
+            .begin_turn(Arc::clone(&store), "switch-commands", "next", &options(), 1)
+            .await
+            .expect("new model turn");
+        assert_ne!(next.owner(), turn.owner());
+        let records = store
+            .load_commands("switch-commands")
+            .await
+            .expect("records");
+        assert_eq!(records[0].owner(), turn.owner());
+        assert!(records[0].reconciled);
+        assert!(records[0].outcome.is_none());
+        store.interrupt(next.owner()).await.expect("stop successor");
     }
 }

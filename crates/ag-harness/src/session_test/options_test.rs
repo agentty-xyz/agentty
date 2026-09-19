@@ -145,7 +145,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     first.guard.disarm();
     let encoded = StoredTurnOptions::encode(&turn_options());
     let mut unsupported: Value = serde_json::from_str(&encoded).expect("snapshot");
-    unsupported["version"] = json!(4);
+    unsupported["version"] = json!(5);
     let invalid_schema = json!({"type": "invalid"});
     let schema_error = OutputSchema::new(invalid_schema.clone()).expect_err("invalid schema");
     let mut invalid: Value = serde_json::from_str(&encoded).expect("snapshot");
@@ -153,7 +153,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     let cases = [
         (
             unsupported.to_string(),
-            "invalid persistent session data: unsupported turn options version 4".to_string(),
+            "invalid persistent session data: unsupported turn options version 5".to_string(),
             false,
         ),
         (

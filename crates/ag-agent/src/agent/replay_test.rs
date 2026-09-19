@@ -187,9 +187,11 @@ fn ownership_rejects_paths_without_a_managed_parent() {
     let context = ReplayContext::archive(folder.path(), &"history".repeat(INLINE_HISTORY_BYTES))
         .expect("registered archive");
     let lease = context.lease.as_ref().expect("archive lease");
-    let root = folder.path().ancestors().last().expect("filesystem root");
-    let root_child = folder
-        .path()
+    // Symlinked temporary directories (macOS `/var`) must not defeat the
+    // root-ancestor selection that verification canonicalizes.
+    let base = folder.path().canonicalize().expect("canonical workspace");
+    let root = base.ancestors().last().expect("filesystem root");
+    let root_child = base
         .ancestors()
         .find(|path| path.parent() == Some(root))
         .expect("directory directly below root");

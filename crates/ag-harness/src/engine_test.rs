@@ -39,7 +39,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         .with_model_reasoning_effort(ReasoningEffort::High);
 
     // Act
-    let (request, read_tool, write_tool) = engine
+    let (request, tools) = engine
         .prepare_request(request, None)
         .expect("request preparation should succeed");
 
@@ -48,6 +48,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         request.model_reasoning_effort(),
         Some(ReasoningEffort::High)
     );
-    assert!(read_tool.is_none());
-    assert!(write_tool.is_none());
+    assert!(tools.read.is_none());
+    assert!(tools.write.is_none());
+    assert!(tools.bash.is_none());
 }

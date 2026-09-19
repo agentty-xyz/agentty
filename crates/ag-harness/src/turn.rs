@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::bash::{BashConfig, BashError};
 use crate::comparison::ComparisonBase;
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
@@ -24,6 +25,7 @@ use crate::write::WriteError;
 /// and conversation history belong to execution state, not this snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
+    bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
     limits: TurnLimits,
     schema: OutputSchema,
@@ -34,11 +36,26 @@ impl TurnOptions {
     /// Resolves a required schema, explicit permissions, and execution limits.
     pub fn new(schema: OutputSchema, tool_policy: ToolPolicy, limits: TurnLimits) -> Self {
         Self {
+            bash: None,
             comparison_base: None,
             limits,
             schema,
             tool_policy,
         }
+    }
+
+    /// Selects immutable Bash host policy for this turn. The separate Bash
+    /// tool permission must also be enabled. Does not change session defaults.
+    #[must_use]
+    pub fn with_bash(mut self, configuration: BashConfig) -> Self {
+        self.bash = Some(configuration);
+
+        self
+    }
+
+    /// Returns this turn's Bash host policy, if configured.
+    pub fn bash(&self) -> Option<&BashConfig> {
+        self.bash.as_ref()
     }
 
     /// Returns the execution bounds for this turn.
@@ -208,6 +225,11 @@ impl ModelRequestActivity {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub enum ToolActivity {
+    /// Content-free shell activity. Command text and output are never reported.
+    Bash {
+        /// Time spent executing and observing the sandbox.
+        duration: Duration,
+    },
     /// A bounded repository file read.
     Read {
         /// Elapsed tool-execution time.
@@ -269,7 +291,8 @@ impl ToolActivity {
     /// Returns the elapsed tool-execution time.
     pub fn duration(&self) -> Duration {
         match self {
-            Self::Read { duration, .. }
+            Self::Bash { duration }
+            | Self::Read { duration, .. }
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
@@ -286,12 +309,14 @@ impl ToolActivity {
             | Self::ReadInspectionRejected { .. }
             | Self::ReadRejected { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
+            Self::Bash { .. } => "bash",
         }
     }
 
     /// Returns the repository-relative target or bounded inspection summary.
     pub fn path(&self) -> &str {
         match self {
+            Self::Bash { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
@@ -306,6 +331,9 @@ impl ToolActivity {
 impl fmt::Display for ToolActivity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Bash { duration } => {
+                write!(formatter, "bash ({})", format_report_duration(*duration))
+            }
             Self::Read {
                 duration,
                 end_line,
@@ -377,6 +405,26 @@ impl fmt::Display for ToolActivity {
 /// Failure returned by a complete harness turn.
 #[derive(Debug, Error)]
 pub enum TurnError {
+    /// Sandbox preparation, execution, or cleanup failed. Retains all observed
+    /// diagnostics, including simultaneous execution and cleanup failures.
+    #[error("sandbox command failed")]
+    CommandFailed {
+        /// Normalized observed outcome; command content is never telemetry.
+        outcome: Box<crate::CommandOutcome>,
+    },
+    /// Command persistence failed; the observed execution result is retained
+    /// separately when available, including cleanup and main-exit diagnostics.
+    #[error("command journal failed: {source}")]
+    CommandJournal {
+        /// Observed result; absent when intent persistence prevented execution.
+        outcome: Option<Box<crate::CommandOutcome>>,
+        /// Underlying transactional store error.
+        #[source]
+        source: Box<crate::SessionError>,
+    },
+    /// A sandbox policy, execution, or cleanup failed.
+    #[error(transparent)]
+    Bash(#[from] BashError),
     /// Cancellation stopped the waiter; persistence may still be settling.
     #[error("turn cancelled")]
     Cancelled,
@@ -416,7 +464,11 @@ impl TurnError {
             Self::Cancelled => TurnErrorType::Cancelled,
             Self::Model(error) => TurnErrorType::Model(error.error_type()),
             Self::ToolDenied { .. } => TurnErrorType::ToolDenied,
-            Self::Read(_) | Self::Write(_) => TurnErrorType::Tool,
+            Self::Read(_)
+            | Self::Write(_)
+            | Self::Bash(_)
+            | Self::CommandJournal { .. }
+            | Self::CommandFailed { .. } => TurnErrorType::Tool,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,

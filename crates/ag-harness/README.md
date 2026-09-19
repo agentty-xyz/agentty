@@ -158,6 +158,60 @@ owner cleanup, not writes or outcome recording. Inspect durable history and writ
 records after cancellation. Neither boundary provides rollback, distributed workspace
 fencing, or proof that remote providers and unrelated processes have stopped.
 
+## Sandboxed Bash
+
+Bash requires both `ToolPolicy::allow(Tool::Bash)` and an explicit
+`TurnOptions::with_bash(BashConfig)` for each turn. The companion CLI does not enable
+it. Install the matching `ag-harness-sandbox` binary from this crate at a trusted
+location outside the execution workspace, then supply its absolute path and the trusted
+Bash executable to `BashConfig::new`. Both native backends require the explicit
+`with_host_information` grant: native commands cannot conceal all host details.
+
+Workspace access defaults to read-only. Grant writes to existing relative directories
+with `with_write`, external runtime reads with `with_read`, and individual environment
+values with `with_environment`. Native Linux execution currently rejects write grants
+before launch because its static mounts cannot protect Git metadata created later
+beneath a writable directory; macOS enforces them. Git metadata remains read-only,
+including linked worktree administration. Network enablement is unsupported.
+Configuration revisions must change when executable contents or environment values
+change; durable snapshots store environment names and the revision, never their values.
+Shell source and captured output are sensitive journal content and are excluded from
+lifecycle telemetry.
+
+Linux uses a host-selected `with_linux_bubblewrap` executable, user/PID/network
+namespaces, read-only mounts, and seccomp restrictions including keyring denial. Runtime
+libraries and executable paths must be readable through explicit grants. macOS uses
+Seatbelt through the system `sandbox-exec`. Its Bash runtime currently requires
+`with_host_information`, including root-directory enumeration and filesystem metadata;
+file contents still require separate grants. Unsupported policies fail closed. Workspace
+symlinks, multiply linked workspace files, special files, overlapping read grants, and
+oversized preparation trees are rejected. There is no unsandboxed or VM fallback.
+
+`CommandOutcome` preserves main exit, termination reason, combined output truncation,
+execution failure, and cleanup failure separately. `PidNamespace` cleanup includes Linux
+detached descendants. **macOS reports `ProcessGroupBestEffort`: detached descendants may
+remain alive under their inherited Seatbelt restrictions.** A completed command or
+successful cleanup on macOS does not prove that those descendants stopped. Applied
+writes are not rolled back; aggregate memory, process-count, and disk quotas are absent.
+
+Retain `TurnControl` and await `commands_settled()` independently of `settled()` and
+`effects_settled()`. `retry_commands()` retries retained cleanup and outcome recording,
+never command execution. `command_outcomes()` exposes observed results even after a
+caller drops its future. Both stores commit command intent before spawning and retain
+unknown outcomes across interruption. `Session::commands()` and host-request recovery
+expose these records separately from patch writes. Unknown or unresolved commands block
+new durable turns. After externally accounting for a stopped command, a host can
+explicitly call `Session::reconcile_command` with its original record; this preserves
+unknown history and cannot reconcile another owner.
+
+Native qualification tests are in `tests/sandbox.rs`; missing enforcement fails the
+suite. CI targets native Ubuntu 24.04 and macOS 15. Ubuntu's AppArmor policy must allow
+Bubblewrap's namespace setup capabilities. CI loads a profile scoped to `bwrap` that
+denies capabilities to executed children, then probes startup without `sudo`. It does
+not disable AppArmor or the host's user-namespace restrictions. A CI target is not a
+claim of a successful qualification run; validate the suite on the deployment
+environment.
+
 ## Custom session stores
 
 Implement `SessionStore` and pass a shared instance to `Harness::store`. SQLite remains

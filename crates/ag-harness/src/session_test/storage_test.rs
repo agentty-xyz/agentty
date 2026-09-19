@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use super::support::{
     SessionTimestampsRow, create_version_one_database, read_call, schema, turn, write_call,
 };
+use crate::ToolCall;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
@@ -446,4 +447,30 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     ));
     assert!(matches!(unknown, Err(SessionError::InvalidData { .. })));
     assert!(matches!(system, Err(SessionError::InvalidData { .. })));
+}
+
+#[test]
+fn persisted_bash_calls_preserve_arguments_reasoning_and_validate_input() {
+    // Arrange
+    let call = ToolCall::from_json(
+        "bash-call".into(),
+        "bash",
+        r#"{"command":"printf done"}"#,
+        Some("reasoning".into()),
+    )
+    .expect("Bash call");
+    for message in [
+        ModelMessage::AssistantToolCall(call.clone()),
+        ModelMessage::AssistantToolCalls(vec![call]),
+    ] {
+        // Act
+        let encoded = EncodedMessage::from_message(&message).expect("encode");
+        let decoded = EncodedMessage::into_message(encoded.kind, &encoded.payload).expect("decode");
+
+        // Assert
+        assert_eq!(decoded, message);
+    }
+    let invalid =
+        r#"{"id":"bash-call","name":"bash","arguments":{"command":""},"reasoning_content":null}"#;
+    assert!(EncodedMessage::into_message("assistant_tool_call", invalid).is_err());
 }

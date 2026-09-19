@@ -259,9 +259,18 @@ repos:
         description: Generate coverage once, enforce workspace and 100% changed-line thresholds, and write the CI LCOV report.
         entry: >-
           bash -eu -o pipefail -c 'rm -f coverage.lcov;
+          coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
+          case "$(uname -s)" in Darwin)
+          coverage_rustflags="$coverage_rustflags
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
           env CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
-          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false cargo llvm-cov nextest --workspace
-          --lib --bins --examples --test check_instruction --test check_migration
+          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          RUSTFLAGS="$coverage_rustflags"
+          cargo llvm-cov nextest --workspace
+          --lib --bins --examples --test check_instruction --test check_migration --test sandbox
+          --test public_api --test lifecycle --test telemetry --test benchmark_summary
           --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
           --no-default-ignore-filename-regex --ignore-filename-regex
@@ -271,6 +280,26 @@ repos:
           --fail-under=100 --include-untracked --show-uncovered'
         language: python
         additional_dependencies: [diff-cover==10.5.1]
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
+      - id: coverage-ag-harness-sandbox
+        name: native sandbox coverage
+        description: Cover ag-harness source and public contracts with native launcher profiling on qualified Linux and macOS hosts.
+        entry: >-
+          bash -eu -o pipefail -c 'coverage_rustflags="${RUSTFLAGS:-} -C llvm-args=-runtime-counter-relocation";
+          case "$(uname -s)" in Darwin)
+          coverage_rustflags="$coverage_rustflags
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
+          -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
+          env CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
+          RUSTFLAGS="$coverage_rustflags"
+          cargo llvm-cov nextest --locked --profile ci -p ag-harness --test sandbox
+          --lib --test public_api --test lifecycle --test telemetry --test benchmark_summary
+          --lcov --output-path target/harness-sandbox.lcov'
+        language: system
         always_run: true
         pass_filenames: false
         stages: [manual]
@@ -318,7 +347,7 @@ repos:
         entry: python .github/tests/test_validation_hooks.py
         language: python
         additional_dependencies: [PyYAML==6.0.3]
-        files: ^(\.pre-commit-config\.yaml|\.github/(actions/run-coverage/action\.yml|tests/test_validation_hooks\.py))$
+        files: ^(\.pre-commit-config\.yaml|\.github/(actions/(run-coverage|setup-native-sandbox)/|workflows/(harness-sandbox|workspace-validation)\.yml|tests/test_validation_hooks\.py))
         pass_filenames: false
       - id: check-instructions
         name: instruction integrity

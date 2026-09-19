@@ -19,6 +19,10 @@ runs:
         cargo-llvm-cov: "true"
         llvm-tools-preview: "true"
 
+    - name: Install native sandbox coverage dependency
+      if: runner.os == 'Linux'
+      uses: $/.github/actions/setup-native-sandbox
+
     - name: Generate and check coverage report
       shell: bash
       env:
