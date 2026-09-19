@@ -828,6 +828,13 @@ case "$prompt" in
   *"Repair a failed git commit"*)
     exit 91
     ;;
+  *"Generate a concise, commit-style title"*)
+    # The concurrent title utility must not fall through to the turn
+    # branch below: rewriting `large.txt` there races the auto-commit
+    # diff, which can catch the file mid-truncate and skip the
+    # input-limit fallback under test.
+    response='{"answer":"Session title"}'
+    ;;
   *)
     awk 'BEGIN { for (i = 0; i < 10000; i++) print "DIFF_ONLY_SENTINEL" }' > large.txt
     printf '%s' "$PWD" > "$AGENTTY_TEST_EVIDENCE/worktree"
@@ -881,7 +888,10 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Enter: reply", 30000)
                     .write_text("g")
-                    .wait_for_stable_frame(300, 5000)
+                    // A stable frame can occur before the committing loader
+                    // first paints, so wait for the commit notice instead of
+                    // frame stability.
+                    .wait_for_text("[Commit] committed with hash", 30000)
                     .capture_labeled(
                         "fallback_commit",
                         "Commit recovers from the diff input limit",

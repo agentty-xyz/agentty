@@ -76,9 +76,17 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
         run: |
           candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
+          # `cargo-nextest` creates its store dir under the workspace root
+          # (not `CARGO_TARGET_DIR`) whenever the profile configures JUnit
+          # output, so give it a discardable tmpfs above the read-only mount.
+          # The mountpoint must pre-exist inside the read-only bind source,
+          # and mode 1777 keeps the tmpfs writable for the image's
+          # unprivileged `agentty` user.
+          mkdir -p "$GITHUB_WORKSPACE/target"
           podman run --rm \
             --platform "$PLATFORM" \
             --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspace,readonly=true \
+            --mount type=tmpfs,destination=/workspace/target,tmpfs-mode=1777 \
             --env CARGO_TARGET_DIR=/tmp/target \
             "$candidate_image" \
             prek run test-agentty-e2e --all-files --hook-stage manual

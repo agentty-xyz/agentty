@@ -189,7 +189,7 @@ async fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat >/dev/null
-printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"fix: retain runtime resources","questions":[]},"usage":{"input_tokens":1,"output_tokens":1}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"fix: retain runtime resources"},"usage":{"input_tokens":1,"output_tokens":1}}'
 "#,
         ),
         (
@@ -341,12 +341,27 @@ exit 0
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
                     .press_key("Enter")
-                    .wait_for_text("Processes: --  CPU: --  Memory: --", 5000)
+                    .wait_for_text("Processes: --  CPU: --  Memory: --", 15000)
                     .write_text("Recover a failed commit and retain the chat runtime")
                     .press_key("Enter")
-                    .wait_for_text("Retained turn completed.", 15000)
+                    .wait_for_text("Retained turn completed.", 30000)
                     .wait_for_text("Commit assistance completed.", 30000)
                     .sleep_ms(2500)
+                    // Reattributing the retained root after the one-shot
+                    // cleanup takes up to one sampling period; a wrongly
+                    // cleared root stays unavailable, so this wait still
+                    // catches the guarded regression.
+                    .step(testty::step::Step::eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(50),
+                        |frame| {
+                            assertion::match_text_in_region(
+                                frame,
+                                "Processes: 1  CPU: 12.5%  Memory: 2.0 MiB",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )
+                        },
+                    ))
                     .capture_labeled(
                         "assisted",
                         "Retained runtime resources after commit assistance",
