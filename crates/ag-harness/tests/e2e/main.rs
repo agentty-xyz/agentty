@@ -4,7 +4,10 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 #[path = "support/greeting.rs"]
 mod greeting;
+mod image;
 mod kimi;
 mod muse;
 mod muse_read;
 mod qwen;
+#[path = "support/vision.rs"]
+mod vision;

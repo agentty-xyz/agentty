@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 
 use super::support::{AcquisitionGate, CommitGate, GatedStore, PauseAt};
 use crate::WriteStatus;
+use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, ReservationObserver, SessionError};
 use crate::store::SessionStore;
@@ -23,7 +24,13 @@ async fn acquisition_rejects_a_different_backing_store_before_reserving() {
 
     // Act
     let result = database
-        .begin_turn(other, "session", "prompt", &turn_options(), 0)
+        .begin_turn(
+            other,
+            "session",
+            &TurnInput::from("prompt"),
+            &turn_options(),
+            0,
+        )
         .await;
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session_turn")
         .fetch_one(&database.pool)
@@ -102,7 +109,7 @@ async fn cancelled_acquisition_retains_the_decorator_before_and_after_commit() {
                 .begin_turn(
                     Arc::clone(&backend),
                     "session",
-                    "prompt",
+                    &TurnInput::from("prompt"),
                     &turn_options(),
                     0,
                 )

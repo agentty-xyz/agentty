@@ -27,6 +27,7 @@ use crate::turn::TurnOutcome;
 pub(super) fn model() -> MockModel {
     let mut model = MockModel::new();
     model.expect_metadata().return_const(None);
+    model.expect_validate_input().returning(|_| Ok(()));
 
     model
 }

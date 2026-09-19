@@ -18,6 +18,7 @@ pub(super) fn native_schema_backend() -> ChatCompletionBackend {
         "native-schema-model".to_string(),
         ChatCompletionProviderPolicy {
             display_name: "Native schema provider",
+            image_input: false,
             reasoning_format: ReasoningFormat::Effort(max_as_xhigh),
             response_format_with_tools: true,
             structured_output: StructuredOutputMode::JsonSchema,

@@ -16,7 +16,9 @@ use crate::store::SessionStore as _;
 use crate::tool::WriteArguments;
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
-use crate::{ModelError, OutputSchema, ToolPolicy, TurnError, TurnLimits, TurnOptions, WriteError};
+use crate::{
+    ModelError, OutputSchema, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions, WriteError,
+};
 
 async fn fixture() -> (Database, TurnGuard) {
     let database = Database::open_in_memory().await.expect("database");
@@ -27,7 +29,13 @@ async fn fixture() -> (Database, TurnGuard) {
         .await
         .expect("session");
     let acquired = database
-        .begin_turn(Arc::new(database.clone()), "session", "write", &options, 0)
+        .begin_turn(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from("write"),
+            &options,
+            0,
+        )
         .await
         .expect("turn");
 

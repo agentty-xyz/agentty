@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{model, schema_contract, tool};
+use crate::{input, model, schema_contract, tool};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
@@ -63,6 +63,7 @@ impl StructuredOutputMode {
 #[derive(Clone, Copy)]
 pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) display_name: &'static str,
+    pub(crate) image_input: bool,
     pub(crate) reasoning_format: ReasoningFormat,
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
@@ -144,6 +145,20 @@ impl ChatCompletionBackend {
                 reason: self.policy.unsupported_schema_reason.to_string(),
             });
         }
+        Ok(())
+    }
+
+    /// Rejects image content unless this configuration documents support.
+    pub(crate) fn validate_input(&self, input: &input::TurnInput) -> Result<(), model::ModelError> {
+        if input.has_images() && !self.policy.image_input {
+            return Err(model::ModelError::UnsupportedImageInput {
+                reason: format!(
+                    "{} configuration `{}` does not accept image content",
+                    self.policy.display_name, self.model
+                ),
+            });
+        }
+
         Ok(())
     }
 
@@ -285,6 +300,9 @@ impl ChatCompletionBackend {
                         role: "user",
                     });
                 }
+                model::ModelMessage::UserInput(input) => {
+                    messages.push(self.user_input_message(input)?);
+                }
                 model::ModelMessage::AssistantToolCall(call) => {
                     messages.push(self.assistant_tool_call_message(std::slice::from_ref(call))?);
                 }
@@ -311,6 +329,34 @@ impl ChatCompletionBackend {
         }
 
         Ok(messages)
+    }
+
+    fn user_input_message(
+        &self,
+        input: &input::TurnInput,
+    ) -> Result<ChatCompletionMessagePayload, model::ModelError> {
+        self.validate_input(input)?;
+        let content = input
+            .blocks()
+            .iter()
+            .map(|block| match block {
+                input::InputBlock::Image(image) => ChatCompletionContentPart::ImageUrl {
+                    image_url: ChatCompletionImageUrl {
+                        url: image.to_data_url(),
+                    },
+                    kind: "image_url",
+                },
+                input::InputBlock::Text(text) => ChatCompletionContentPart::Text {
+                    kind: "text",
+                    text: text.clone(),
+                },
+            })
+            .collect();
+
+        Ok(ChatCompletionMessagePayload::Parts {
+            content,
+            role: "user",
+        })
     }
 
     fn assistant_tool_call_message(
@@ -810,6 +856,10 @@ enum ChatCompletionMessagePayload {
         content: String,
         role: &'static str,
     },
+    Parts {
+        content: Vec<ChatCompletionContentPart>,
+        role: &'static str,
+    },
     AssistantReasoning {
         content: String,
         reasoning_content: String,
@@ -829,6 +879,26 @@ enum ChatCompletionMessagePayload {
         role: &'static str,
         tool_call_id: String,
     },
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ChatCompletionContentPart {
+    Text {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        text: String,
+    },
+    ImageUrl {
+        #[serde(rename = "type")]
+        kind: &'static str,
+        image_url: ChatCompletionImageUrl,
+    },
+}
+
+#[derive(Serialize)]
+struct ChatCompletionImageUrl {
+    url: String,
 }
 
 #[derive(Serialize)]

@@ -21,15 +21,19 @@ pub const MUSE_SPARK_1_3: &str = "muse-spark-1.3";
 /// completions to train future models.
 pub const MUSE_SPARK_1_3_CONTRIBUTOR: &str = "muse-spark-1.3-contributor";
 
-pub(crate) const POLICY: chat_completion::ChatCompletionProviderPolicy =
+pub(crate) fn policy(model: &str) -> chat_completion::ChatCompletionProviderPolicy {
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Meta Model API",
+        // Meta documents base64 data-URL image parts for the Muse Spark 1.3
+        // configurations.
+        image_input: matches!(model, MUSE_SPARK_1_3 | MUSE_SPARK_1_3_CONTRIBUTOR),
         reasoning_format: chat_completion::ReasoningFormat::Effort(reasoning_effort_name),
         response_format_with_tools: true,
         structured_output: chat_completion::StructuredOutputMode::JsonSchema,
         telemetry_name: telemetry::PROVIDER_META,
         unsupported_schema_reason: "Muse structured output requires an explicit object root schema",
-    };
+    }
+}
 
 fn reasoning_effort_name(reasoning_effort: ReasoningEffort) -> &'static str {
     match reasoning_effort {
@@ -82,6 +86,10 @@ impl Model for Muse {
 
     fn validate_schema(&self, schema: &crate::OutputSchema) -> Result<(), ModelError> {
         self.client.validate_schema(schema)
+    }
+
+    fn validate_input(&self, input: &crate::TurnInput) -> Result<(), ModelError> {
+        self.client.validate_input(input)
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {

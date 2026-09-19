@@ -10,6 +10,12 @@ pub const KIMI_K2_6: &str = "kimi-k2.6";
 pub(crate) fn policy(model: &str) -> chat_completion::ChatCompletionProviderPolicy {
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Kimi",
+        // Moonshot documents base64 data-URL image parts for kimi-k2.6; the
+        // other names are qualified by the live image checks.
+        image_input: matches!(
+            model,
+            KIMI_K2_6 | "kimi-k2.7-code" | "kimi-k2.7-code-highspeed" | "kimi-k3"
+        ),
         reasoning_format: match model {
             "kimi-k2.6" => chat_completion::ReasoningFormat::Thinking {
                 disable_supported: true,

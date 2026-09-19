@@ -7,6 +7,7 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{SqlSafeStr as _, SqlitePool};
 
+use crate::input::TurnInput;
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
 use crate::schema_contract::OutputSchema;
 use crate::session::{
@@ -41,6 +42,7 @@ pub(super) fn schema() -> OutputSchema {
 pub(super) fn model() -> MockModel {
     let mut model = MockModel::new();
     model.expect_metadata().return_const(None);
+    model.expect_validate_input().returning(|_| Ok(()));
 
     model
 }
@@ -49,6 +51,7 @@ pub(super) fn metadata_model(provider: &'static str, model_name: &str) -> MockMo
     let mut model = MockModel::new();
     let metadata = ModelMetadata::new(provider, model_name).expect("metadata should be valid");
     model.expect_metadata().return_const(Some(metadata));
+    model.expect_validate_input().returning(|_| Ok(()));
 
     model
 }
@@ -90,7 +93,7 @@ pub(super) async fn complete_native_turn(database: &Database, provider_session_i
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "first",
+            &TurnInput::from("first"),
             &turn_options(),
             0,
         )

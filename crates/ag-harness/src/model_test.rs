@@ -14,6 +14,7 @@ use super::{
 use crate::lifecycle::LifecycleEventKind;
 use crate::provider::QwenConfig;
 use crate::schema_contract::{OutputSchema, OutputValidationError};
+use crate::store_conformance_test::image_input;
 use crate::tool;
 use crate::tool::{ReadArguments, ToolCall};
 
@@ -328,6 +329,42 @@ async fn client_supports_dynamic_model_dispatch() {
 }
 
 #[test]
+fn models_accept_text_and_reject_images_unless_they_opt_in() {
+    // Arrange
+    let text_only = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com".to_string(),
+        model: "qwen3-max".to_string(),
+    })
+    .expect("fixture configuration should be valid");
+    let vision = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com".to_string(),
+        model: "qwen-vl-max".to_string(),
+    })
+    .expect("fixture configuration should be valid");
+    let images = image_input("look", b"payload", "closely");
+
+    // Act
+    let default_text = ResponseOnlyModel.validate_input(&"text".into());
+    let default_images = ResponseOnlyModel.validate_input(&images);
+    let client_images = Model::validate_input(&text_only, &images);
+    let vision_images = Model::validate_input(&vision, &images);
+
+    // Assert
+    assert!(default_text.is_ok());
+    assert!(matches!(
+        default_images,
+        Err(ModelError::UnsupportedImageInput { .. })
+    ));
+    assert!(matches!(
+        client_images,
+        Err(ModelError::UnsupportedImageInput { .. })
+    ));
+    assert!(vision_images.is_ok());
+}
+
+#[test]
 fn metadata_rejects_empty_provider() {
     // Arrange and Act
     let error =
@@ -610,6 +647,22 @@ fn request_error_includes_source_message() {
 }
 
 #[test]
+fn classifies_unsupported_image_input_with_stable_telemetry_value() {
+    // Arrange
+    let error = ModelError::UnsupportedImageInput {
+        reason: "text-only configuration".to_string(),
+    };
+
+    // Act / Assert
+    assert_eq!(error.error_type(), ModelErrorType::UnsupportedInput);
+    assert!(error.http_status().is_none());
+    assert_eq!(
+        ModelErrorType::UnsupportedInput.as_str(),
+        "unsupported_input"
+    );
+}
+
+#[test]
 fn classifies_model_errors_with_stable_telemetry_values() {
     // Arrange
     let errors = [
@@ -703,6 +756,7 @@ fn classifies_model_errors_with_stable_telemetry_values() {
         ModelErrorType::UnsupportedOutput.as_str(),
         "unsupported_output"
     );
+
     assert_eq!(
         ModelErrorType::ResponseTooLarge.as_str(),
         "response_too_large"

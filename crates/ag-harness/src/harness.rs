@@ -11,8 +11,9 @@ use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
+use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
-use crate::model::{Model, ModelMessage, ModelRequest, ReasoningEffort};
+use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
 use crate::policy::ToolPolicy;
 use crate::repository::Repository;
@@ -111,18 +112,19 @@ impl Session {
         self.database.load_writes(&self.id).await
     }
 
-    /// Sends one prompt and durably records its lifecycle and messages.
+    /// Sends one input and durably records its lifecycle and messages.
     ///
-    /// Resolves the stored session schema and captured permission and
-    /// tool-limit defaults afresh; earlier explicit overrides are not
-    /// inherited.
+    /// Plain strings remain the text-only path; ordered text/image content
+    /// uses [`TurnInput`]. Resolves the stored session schema and captured
+    /// permission and tool-limit defaults afresh; earlier explicit overrides
+    /// are not inherited.
     ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when the model turn or persistence operation
     /// fails.
-    pub async fn send(&mut self, prompt: impl Into<String>) -> Result<TurnOutcome, SessionError> {
-        self.send_with_options(prompt, self.harness.default_options(self.schema.clone()))
+    pub async fn send(&mut self, input: impl Into<TurnInput>) -> Result<TurnOutcome, SessionError> {
+        self.send_with_options(input, self.harness.default_options(self.schema.clone()))
             .await
     }
 
@@ -139,10 +141,10 @@ impl Session {
     /// Returns [`SessionError`] if execution or persistence fails.
     pub async fn send_with_options(
         &mut self,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, SessionError> {
-        self.send_observed(prompt.into(), options, None, None).await
+        self.send_observed(input.into(), options, None, None).await
     }
 
     /// Prepares a turn with explicit options and a retained cancellation
@@ -159,10 +161,10 @@ impl Session {
     /// its waiter.
     pub fn send_controlled(
         &mut self,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> ControlledTurn<'_, SessionError> {
-        let prompt = prompt.into();
+        let input = input.into();
         let mut session = Self {
             database: Arc::clone(&self.database),
             harness: self.harness.snapshot(),
@@ -176,7 +178,7 @@ impl Session {
 
         ControlledTurn::new(move |control| async move {
             session
-                .send_observed(prompt, options, Some(control), None)
+                .send_observed(input, options, Some(control), None)
                 .await
         })
     }
@@ -191,13 +193,13 @@ impl Session {
     pub async fn submit(
         &mut self,
         host_id: impl Into<String>,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, SessionError> {
-        let prompt = prompt.into();
-        let request = self.host_request(host_id.into(), &prompt, &options)?;
+        let input = input.into();
+        let request = self.host_request(host_id.into(), &input, &options)?;
 
-        self.send_observed(prompt, options, None, Some(request))
+        self.send_observed(input, options, None, Some(request))
             .await
     }
 
@@ -210,11 +212,11 @@ impl Session {
     pub fn submit_controlled(
         &mut self,
         host_id: impl Into<String>,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> Result<ControlledTurn<'_, SessionError>, SessionError> {
-        let prompt = prompt.into();
-        let request = self.host_request(host_id.into(), &prompt, &options)?;
+        let input = input.into();
+        let request = self.host_request(host_id.into(), &input, &options)?;
         let mut session = Self {
             database: Arc::clone(&self.database),
             harness: self.harness.snapshot(),
@@ -228,7 +230,7 @@ impl Session {
 
         Ok(ControlledTurn::new(move |control| async move {
             session
-                .send_observed(prompt, options, Some(control), Some(request))
+                .send_observed(input, options, Some(control), Some(request))
                 .await
         }))
     }
@@ -246,7 +248,7 @@ impl Session {
     fn host_request(
         &self,
         id: String,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
     ) -> Result<HostRequest, SessionError> {
         let identity = self
@@ -261,9 +263,30 @@ impl Session {
                 "git": repository.git_executable().as_os_str().as_encoded_bytes(),
             })
         });
+        // Text-only input keeps the legacy string form so recorded text
+        // retries stay recognizable after image support.
+        let input_identity = if input.has_images() {
+            let blocks: Vec<_> = input
+                .blocks()
+                .iter()
+                .map(|block| match block {
+                    InputBlock::Image(image) => json!({
+                        "image": {
+                            "media_type": image.media_type().as_str(),
+                            "sha256": image.content_digest(),
+                        },
+                    }),
+                    InputBlock::Text(text) => json!({ "text": text }),
+                })
+                .collect();
+
+            json!({"version": 2, "blocks": blocks})
+        } else {
+            json!(input.joined_text())
+        };
         let mut configuration = json!({
             "version": 1,
-            "input": prompt,
+            "input": input_identity,
             "options": {
                 "schema": options.schema().value(),
                 "permissions": options.tool_policy(),
@@ -284,6 +307,12 @@ impl Session {
                 "native_continuation": capabilities.native_continuation,
                 "tool_calls": capabilities.tool_calls,
             });
+            // Only image-bearing requests depend on this capability; adding
+            // it to text requests would invalidate recorded text retries.
+            if input.has_images() {
+                configuration["model_registration"]["image_input"] =
+                    json!(capabilities.image_input);
+            }
         }
 
         HostRequest::from_configuration(id, configuration)
@@ -291,7 +320,7 @@ impl Session {
 
     async fn send_observed(
         &mut self,
-        prompt: String,
+        input: TurnInput,
         options: TurnOptions,
         control: Option<TurnControl>,
         request: Option<HostRequest>,
@@ -304,7 +333,7 @@ impl Session {
         };
         let mut result = self
             .send_turn(
-                prompt,
+                input,
                 &options,
                 &mut turn,
                 control.as_ref(),
@@ -333,39 +362,17 @@ impl Session {
 
     async fn send_turn(
         &mut self,
-        prompt: String,
+        input: TurnInput,
         options: &TurnOptions,
         turn: &mut Option<TurnLifecycle>,
         control: Option<&TurnControl>,
         request: Option<&HostRequest>,
     ) -> Result<TurnOutcome, SessionError> {
+        self.harness.check_input_capability(&input)?;
+        self.check_image_history_budget(&input)?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
-        let acquisition = async {
-            if let Some(request) = request {
-                store_coordinator::acquire_request(
-                    Arc::clone(&self.database),
-                    (self.id.clone(), self.model_generation),
-                    prompt.clone(),
-                    options.clone(),
-                    request.clone(),
-                    control.map(|control| control.settlement.clone()),
-                    effects.clone(),
-                )
-                .await
-            } else {
-                store_coordinator::acquire(
-                    Arc::clone(&self.database),
-                    (self.id.clone(), self.model_generation),
-                    prompt.clone(),
-                    options.clone(),
-                    control.map(|control| control.settlement.clone()),
-                    effects.clone(),
-                )
-                .await
-                .map(HostTurnAcquisition::Acquired)
-            }
-        };
+        let acquisition = self.acquire_turn(&input, options, control, request, &effects);
         let acquired = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -391,7 +398,7 @@ impl Session {
             messages.insert(0, ModelMessage::System(system_prompt.clone()));
         }
         let retained_messages = messages.len();
-        let mut request = ModelRequest::with_history(messages, prompt, options.schema().clone());
+        let mut request = ModelRequest::with_history(messages, input, options.schema().clone());
         request.set_provider_session_id(self.provider_session_id.clone());
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
@@ -442,6 +449,54 @@ impl Session {
         self.history.push(turn);
 
         Ok(outcome)
+    }
+
+    /// Rejects image input that the replay budget would evict immediately,
+    /// together with every earlier turn, instead of losing context silently.
+    fn check_image_history_budget(&self, input: &TurnInput) -> Result<(), SessionError> {
+        let input_bytes = input.retained_bytes();
+        if input.has_images() && input_bytes > self.history.max_bytes {
+            return Err(SessionError::ImageInputExceedsHistory {
+                id: self.id.clone(),
+                input_bytes,
+                max_history_bytes: self.history.max_bytes,
+            });
+        }
+
+        Ok(())
+    }
+
+    async fn acquire_turn(
+        &self,
+        input: &TurnInput,
+        options: &TurnOptions,
+        control: Option<&TurnControl>,
+        request: Option<&HostRequest>,
+        effects: &Effects,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        if let Some(request) = request {
+            store_coordinator::acquire_request(
+                Arc::clone(&self.database),
+                (self.id.clone(), self.model_generation),
+                input.clone(),
+                options.clone(),
+                request.clone(),
+                control.map(|control| control.settlement.clone()),
+                effects.clone(),
+            )
+            .await
+        } else {
+            store_coordinator::acquire(
+                Arc::clone(&self.database),
+                (self.id.clone(), self.model_generation),
+                input.clone(),
+                options.clone(),
+                control.map(|control| control.settlement.clone()),
+                effects.clone(),
+            )
+            .await
+            .map(HostTurnAcquisition::Acquired)
+        }
     }
 }
 
@@ -709,7 +764,10 @@ impl Harness {
         self
     }
 
-    /// Runs one prompt without creating durable session history.
+    /// Runs one input without creating durable session history.
+    ///
+    /// Plain strings remain the text-only path; ordered text/image content
+    /// uses [`TurnInput`].
     ///
     /// # Errors
     ///
@@ -717,10 +775,10 @@ impl Harness {
     /// exceeds the call limit, or a requested repository operation fails.
     pub async fn run_once(
         &self,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         schema: OutputSchema,
     ) -> Result<TurnOutcome, TurnError> {
-        self.run_once_with_options(prompt, self.default_options(schema))
+        self.run_once_with_options(input, self.default_options(schema))
             .await
     }
 
@@ -734,10 +792,10 @@ impl Harness {
     /// Returns [`TurnError`] when model execution, validation, or tools fail.
     pub async fn run_once_with_options(
         &self,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> Result<TurnOutcome, TurnError> {
-        self.run_once_observed(prompt.into(), options, Effects::default())
+        self.run_once_observed(input.into(), options, Effects::default())
             .await
     }
 
@@ -751,17 +809,17 @@ impl Harness {
     /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
     pub fn run_once_controlled(
         &self,
-        prompt: impl Into<String>,
+        input: impl Into<TurnInput>,
         options: TurnOptions,
     ) -> ControlledTurn<'_, TurnError> {
         let harness = self.snapshot();
-        let prompt = prompt.into();
+        let input = input.into();
 
         ControlledTurn::new(move |control| async move {
             tokio::select! {
                 biased;
                 () = control.cancelled() => Err(TurnError::Cancelled),
-                result = harness.run_once_observed(prompt, options, control.effects.clone()) => result,
+                result = harness.run_once_observed(input, options, control.effects.clone()) => result,
             }
         })
     }
@@ -830,12 +888,13 @@ impl Harness {
 
     async fn run_once_observed(
         &self,
-        prompt: String,
+        input: TurnInput,
         options: TurnOptions,
         effects: Effects,
     ) -> Result<TurnOutcome, TurnError> {
+        self.check_input_capability(&input)?;
         let _effects = effects.retain();
-        let request = ModelRequest::new(prompt, options.schema().clone());
+        let request = ModelRequest::new(input, options.schema().clone());
         let turn = self.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let mut engine = self.engine(&options);
@@ -921,6 +980,20 @@ impl Harness {
                 stored_model: stored_model.clone(),
                 stored_provider: stored_provider.clone(),
             });
+        }
+
+        Ok(())
+    }
+
+    fn check_input_capability(&self, input: &TurnInput) -> Result<(), TurnError> {
+        self.model.validate_input(input)?;
+        if input.has_images()
+            && let Some(registration) = &self.model_registration
+            && !registration.capabilities().image_input
+        {
+            return Err(TurnError::Model(ModelError::UnsupportedImageInput {
+                reason: "registered model does not declare image input support".to_string(),
+            }));
         }
 
         Ok(())

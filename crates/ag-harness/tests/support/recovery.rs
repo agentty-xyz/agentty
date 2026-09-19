@@ -10,7 +10,7 @@ use ag_harness::{
     ExecutionIdentity, Harness, HostRequest, HostTurnAcquisition, HostTurnStatus, LifecycleEvent,
     LifecycleEventKind, LifecycleObserver, Model, ModelCompletion, ModelError, ModelRequest,
     ModelResponse, NewSession, SessionError, SessionStore, SqliteStore, Tool, ToolPolicy,
-    TurnError, TurnLimits, TurnOptions, WriteStatus,
+    TurnError, TurnInput, TurnLimits, TurnOptions, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -246,9 +246,10 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
         let options = options();
 
         // Act
+        let input = TurnInput::from("hello");
         let (left, right) = tokio::join!(
-            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request, 0),
-            store.begin_request(Arc::clone(&store), "race", "hello", &options, &request, 0)
+            store.begin_request(Arc::clone(&store), "race", &input, &options, &request, 0),
+            store.begin_request(Arc::clone(&store), "race", &input, &options, &request, 0)
         );
         let ((HostTurnAcquisition::Acquired(acquired), HostTurnAcquisition::Recorded(duplicate))
         | (HostTurnAcquisition::Recorded(duplicate), HostTurnAcquisition::Acquired(acquired))) =
@@ -290,7 +291,14 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
         let changed: HostRequest = serde_json::from_value(changed).expect("request");
         assert!(matches!(
             store
-                .begin_request(Arc::clone(&store), "race", "changed", &options, &changed, 0)
+                .begin_request(
+                    Arc::clone(&store),
+                    "race",
+                    &TurnInput::from("changed"),
+                    &options,
+                    &changed,
+                    0
+                )
                 .await,
             Err(SessionError::HostTurnConflict)
         ));

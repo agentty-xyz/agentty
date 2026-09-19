@@ -8,6 +8,7 @@ use tempfile::tempdir;
 use super::support::{
     ReservationCommitControl, active_turn_owner, complete_native_turn, schema, turn, turn_options,
 };
+use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::session::{
     Database, EncodedMessage, NewSession, Reservation, SessionError, TURN_LEASE_SECONDS,
@@ -79,7 +80,7 @@ async fn beginning_a_turn_for_a_missing_session_reports_not_found() {
         .begin_turn(
             Arc::new(database.clone()),
             "missing",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -119,7 +120,7 @@ END
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -155,7 +156,7 @@ async fn beginning_a_turn_does_not_reserve_when_history_loading_fails() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "new prompt",
+            &TurnInput::from("new prompt"),
             &turn_options(),
             0,
         )
@@ -203,7 +204,7 @@ async fn beginning_a_turn_calculates_the_lease_when_reserving() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -335,7 +336,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
         database.begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "cancelled",
+            &TurnInput::from("cancelled"),
             &turn_options(),
             0,
         ),
@@ -349,7 +350,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -386,7 +387,7 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
         database.begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "cancelled",
+            &TurnInput::from("cancelled"),
             &turn_options(),
             0,
         ),
@@ -397,7 +398,7 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
         .begin_turn(
             Arc::new(replacement_database.clone()),
             "session-a",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -440,7 +441,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "abandoned",
+            &TurnInput::from("abandoned"),
             &turn_options(),
             0,
         )
@@ -456,7 +457,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -501,7 +502,7 @@ async fn stopped_ownership_monitor_reports_ownership_loss() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -555,7 +556,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
         .begin_turn(
             Arc::new(first_database.clone()),
             "session-a",
-            "first abandoned",
+            &TurnInput::from("first abandoned"),
             &turn_options(),
             0,
         )
@@ -565,7 +566,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
         .begin_turn(
             Arc::new(second_database.clone()),
             "session-a",
-            "second abandoned",
+            &TurnInput::from("second abandoned"),
             &turn_options(),
             0,
         )
@@ -591,7 +592,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
         .begin_turn(
             Arc::new(second_database.clone()),
             "session-a",
-            "second replacement",
+            &TurnInput::from("second replacement"),
             &turn_options(),
             0,
         )
@@ -604,7 +605,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
         .begin_turn(
             Arc::new(first_database.clone()),
             "session-a",
-            "first replacement",
+            &TurnInput::from("first replacement"),
             &turn_options(),
             0,
         )
@@ -631,7 +632,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_ownership_loss
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "prompt",
+            &TurnInput::from("prompt"),
             &turn_options(),
             0,
         )
@@ -690,7 +691,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "abandoned",
+            &TurnInput::from("abandoned"),
             &turn_options(),
             0,
         )
@@ -716,7 +717,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "replacement",
+            &TurnInput::from("replacement"),
             &turn_options(),
             0,
         )
@@ -758,7 +759,7 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .begin_turn(
                 Arc::new(database.clone()),
                 "session-a",
-                "abandoned",
+                &TurnInput::from("abandoned"),
                 &turn_options(),
                 0,
             )
@@ -833,7 +834,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .begin_turn(
             Arc::new(database.clone()),
             "session-a",
-            "pending",
+            &TurnInput::from("pending"),
             &turn_options(),
             0,
         )

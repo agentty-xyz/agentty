@@ -21,6 +21,7 @@ use super::{
 };
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
+use crate::input::TurnInput;
 use crate::lifecycle::{
     LifecycleEmitter, LifecycleEvent, ModelResponseType, ToolErrorType, TurnErrorType,
 };
@@ -817,12 +818,12 @@ impl SessionStore for TracedWriteStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         self.store
-            .begin_turn(store, id, prompt, options, generation)
+            .begin_turn(store, id, input, options, generation)
             .await
     }
 
@@ -830,13 +831,13 @@ impl SessionStore for TracedWriteStore {
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
-        prompt: &str,
+        input: &TurnInput,
         options: &TurnOptions,
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request, generation)
+            .begin_request(store, id, input, options, request, generation)
             .await
     }
 

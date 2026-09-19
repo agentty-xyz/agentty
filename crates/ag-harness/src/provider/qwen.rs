@@ -12,6 +12,15 @@ pub(crate) fn policy(model: &str) -> chat_completion::ChatCompletionProviderPoli
 
     chat_completion::ChatCompletionProviderPolicy {
         display_name: "Qwen",
+        // Model Studio documents image content parts for the Qwen-VL families;
+        // the exact names are qualified by the live image checks. Other Qwen
+        // models accept image parts but ignore or invent their content.
+        image_input: model.starts_with("qwen-vl-")
+            || model.starts_with("qwen3-vl-")
+            || matches!(
+                model,
+                QWEN_PLUS | "qwen3.8-27b" | "qwen3.8-flash" | "qwen3.8-max"
+            ),
         reasoning_format: if preserves_reasoning {
             chat_completion::ReasoningFormat::Effort(reasoning_effort_name)
         } else if model == QWEN_PLUS {

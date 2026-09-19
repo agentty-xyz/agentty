@@ -36,6 +36,7 @@ mod engine;
 mod execution;
 mod file_system;
 mod harness;
+mod input;
 mod lifecycle;
 mod memory_store;
 mod model;
@@ -66,6 +67,7 @@ pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use effect::EffectSettlementError;
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
+pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
 pub use lifecycle::{
     LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
     LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
