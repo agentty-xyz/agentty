@@ -3139,15 +3139,15 @@ impl SessionManager {
     /// Builds the title-generation instruction prompt from stable session
     /// context while retaining headroom for provider protocol envelopes.
     fn session_title_generation_prompt(context: &SessionTitleGenerationContext) -> String {
-        let current_title = Self::truncate_session_title_context(
+        let current_title = Self::encode_session_title_context(
             &context.current_title,
             SESSION_TITLE_CURRENT_TITLE_MAX_BYTES,
         );
-        let latest_request = Self::truncate_session_title_context(
+        let latest_request = Self::encode_session_title_context(
             &context.latest_request,
             SESSION_TITLE_LATEST_REQUEST_MAX_BYTES,
         );
-        let original_request = Self::truncate_session_title_context(
+        let original_request = Self::encode_session_title_context(
             &context.original_request,
             SESSION_TITLE_ORIGINAL_REQUEST_MAX_BYTES,
         );
@@ -3160,25 +3160,21 @@ impl SessionManager {
         template.render().unwrap_or_default()
     }
 
-    /// Truncates one title-context field at a UTF-8 boundary within its byte
-    /// budget.
-    fn truncate_session_title_context(value: &str, max_bytes: usize) -> String {
-        if value.len() <= max_bytes {
-            return value.to_string();
+    /// Keeps the largest encoded prefix, reserving space for a notice only
+    /// when truncation is necessary. Field budgets include JSON quotes/escapes.
+    fn encode_session_title_context(value: &str, max_bytes: usize) -> String {
+        let prefix = super::prompt_context::json_prefix(value, max_bytes);
+        if prefix.len() == value.len() {
+            return serde_json::json!(prefix).to_string();
         }
 
-        let content_budget =
-            max_bytes.saturating_sub(SESSION_TITLE_CONTEXT_TRUNCATION_MARKER.len());
-        let mut boundary = content_budget.min(value.len());
-        while !value.is_char_boundary(boundary) {
-            boundary = boundary.saturating_sub(1);
-        }
+        let notice_bytes = serde_json::json!(SESSION_TITLE_CONTEXT_TRUNCATION_MARKER)
+            .to_string()
+            .len()
+            - 2;
+        let prefix = super::prompt_context::json_prefix(value, max_bytes - notice_bytes);
 
-        format!(
-            "{}{}",
-            value[..boundary].trim_end(),
-            SESSION_TITLE_CONTEXT_TRUNCATION_MARKER
-        )
+        serde_json::json!(format!("{prefix}{SESSION_TITLE_CONTEXT_TRUNCATION_MARKER}")).to_string()
     }
 
     /// Returns whether a candidate merely repeats persisted request text.

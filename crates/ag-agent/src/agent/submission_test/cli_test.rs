@@ -113,11 +113,7 @@ async fn test_submit_one_shot_with_backend_returns_protocol_response() {
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
         assert_eq!(request.prompt, "Generate title");
 
-        Ok(mock_shell_command(
-            r#"{"answer":"Generated title","questions":[]}"#,
-            "",
-            0,
-        ))
+        Ok(mock_shell_command(r#"{"answer":"Generated title"}"#, "", 0))
     });
 
     // Act
@@ -158,7 +154,7 @@ async fn test_submit_one_shot_with_backend_writes_large_stdin_concurrently() {
         let mut command = Command::new("sh");
         command.arg("-c").arg(
             "printf 'warming up\\n' >&2; sleep 0.1; cat >/dev/null; printf '%s' \
-             '{\"answer\":\"done\",\"questions\":[]}'",
+             '{\"answer\":\"done\"}'",
         );
         command.stdout(std::process::Stdio::piped());
         command.stderr(std::process::Stdio::piped());

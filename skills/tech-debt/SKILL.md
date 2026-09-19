@@ -39,12 +39,15 @@ When no scope is given, sweep the full codebase.
      error context.
    - **Missing Documentation:** Note public types, traits, and functions lacking doc
      comments, especially in areas with complex logic.
-   - **Stale Dependencies:** Look for pinned dependency versions that lag behind current
-     releases, unused dependencies, or feature flags that are no longer needed.
+   - **Dependencies:** Require a concrete security, compatibility, support, or
+     maintenance cost before recommending an upgrade. Reproducibility pins and older
+     versions are not debt by themselves. Check release policy and actual usage;
+     identify unused dependencies or obsolete feature flags with evidence.
    - **Dead Code:** Identify unused functions, modules, imports, or feature gates that
      can be removed.
-   - **Test Gaps:** Flag critical logic paths that lack test coverage or tests that are
-     marked `#[ignore]`.
+   - **Test Gaps:** Identify critical behavior without suitable coverage. Inspect
+     ignored tests' reasons and deterministic boundary tests first: credential-dependent
+     or expensive live tests may be intentionally excluded from ordinary CI.
    - **Convention Violations:** Check code against the project conventions discovered in
      Step 1 (e.g., naming rules, module layout, import style, constructor patterns) and
      flag deviations.
@@ -52,6 +55,11 @@ When no scope is given, sweep the full codebase.
 1. **Return Findings as a Task List**
 
    - Structure your answer as a prioritized markdown task list.
+   - Require a triggering scenario or recurring maintenance cost, source evidence,
+     practical impact, and a specific action. Do not infer missing behavior from a diff
+     without inspecting unchanged code. Respect documented trade-offs.
+   - Return no findings when nothing actionable is supported; omit empty categories.
+     Keep optional polish separate from defects.
    - Use the format below for each finding.
 
 ### Task List Format
@@ -85,5 +93,5 @@ When no scope is given, sweep the full codebase.
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | **Critical** | Causes runtime failures, data loss, or blocks other work.                                                                  |
 | **High**     | Significant maintenance burden, outdated patterns actively causing confusion, or missing error handling in critical paths. |
-| **Medium**   | Style inconsistencies, missing documentation, minor dead code, or deferred TODOs with clear scope.                         |
+| **Medium**   | Concrete recurring maintenance cost or test gaps with a demonstrated affected path.                                        |
 | **Low**      | Cosmetic issues, minor naming improvements, or optional cleanup with no immediate impact.                                  |

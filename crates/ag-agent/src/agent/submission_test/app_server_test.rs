@@ -32,7 +32,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
 
             Box::pin(async {
                 Ok(AppServerTurnResponse {
-                    assistant_message: r#"{"answer":"Generated title","questions":[]}"#.to_string(),
+                    assistant_message: r#"{"answer":"Generated title"}"#.to_string(),
                     context_reset: false,
                     input_tokens: 11,
                     output_tokens: 7,
@@ -147,7 +147,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
 
                 Box::pin(async {
                     Ok(AppServerTurnResponse {
-                        assistant_message: r#"{"answer":"Repaired","questions":[]}"#.into(),
+                        assistant_message: r#"{"answer":"Repaired"}"#.into(),
                         context_reset: false,
                         input_tokens: 2,
                         output_tokens: 1,

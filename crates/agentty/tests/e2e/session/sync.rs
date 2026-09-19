@@ -103,7 +103,7 @@ while IFS= read -r prompt_event; do
       ;;
   esac
   printf '{"event":"step_update","step_update":{"conversation_id":"rebase-hook-test","step_index":%s,"state":"DONE","step_type":"agent_response","usage":{"input_tokens":4,"output_tokens":4}}}\n' "$turn"
-  printf '{"event":"result","result":{"conversation_id":"rebase-hook-test","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\",\\"questions\\":[],\\"review_comment_outcomes\\":[]}","structured_output":{"answer":"%s","questions":[],"review_comment_outcomes":[]},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":4,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8}}}\n' "$answer" "$answer" "$turn"
+  printf '{"event":"result","result":{"conversation_id":"rebase-hook-test","status":"SUCCESS","response":"{\\"answer\\":\\"%s\\"}","structured_output":{"answer":"%s"},"error":"","duration_seconds":0.1,"num_turns":%s,"usage":{"input_tokens":4,"output_tokens":4,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":8}}}\n' "$answer" "$answer" "$turn"
 done
 "#;
     std::fs::write(&antigravity_path, script)?;

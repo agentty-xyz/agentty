@@ -45,7 +45,7 @@ async fn cli_initial_turns_and_protocol_repairs_share_the_budget() {
                 let response = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
                     "malformed response"
                 } else {
-                    r#"{"answer":"summary","questions":[]}"#
+                    r#"{"answer":"summary"}"#
                 };
                 let mut command = Command::new("printf");
                 command.arg("%s").arg(response);
@@ -103,7 +103,7 @@ async fn app_server_initial_turns_restart_retries_and_protocol_repairs_share_the
                             let response = if attempt == usize::from(restart) {
                                 "malformed response"
                             } else {
-                                r#"{"answer":"summary","questions":[]}"#
+                                r#"{"answer":"summary"}"#
                             };
                             Ok((response.to_string(), 0, 0))
                         })

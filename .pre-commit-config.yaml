@@ -94,6 +94,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: prompt-evaluation
+        name: live prompt behavior evaluation
+        description: Run explicitly configured repeated provider cases through the production worker and runtime.
+        entry: cargo test --locked -p agentty --test prompt_evaluation live_prompt_evaluation -- --ignored --exact --nocapture
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-focused
         name: cargo nextest focused
         description: Run source and public integration tests selected by AGENTTY_TEST_FILTER, excluding the separately gated Agentty E2E targets.

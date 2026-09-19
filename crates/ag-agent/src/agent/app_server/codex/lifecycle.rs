@@ -193,6 +193,7 @@ pub(super) async fn start_or_resume_thread<Transport: AppServerRuntimeTransport>
     if let Some(provider_conversation_id) = provider_conversation_id
         && let Ok(thread_id) = resume_thread(
             transport,
+            folder,
             provider_conversation_id,
             model,
             permission_mode,
@@ -260,6 +261,7 @@ pub(super) async fn start_thread<Transport: AppServerRuntimeTransport>(
 /// Resumes one existing Codex thread and returns the active identifier.
 pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
+    folder: &Path,
     thread_id: &str,
     model: &str,
     permission_mode: PermissionMode,
@@ -268,6 +270,7 @@ pub(super) async fn resume_thread<Transport: AppServerRuntimeTransport>(
 ) -> Result<String, AppServerError> {
     let thread_resume_request_id = format!("thread-resume-{}", uuid::Uuid::new_v4());
     let thread_resume_payload = build_thread_resume_payload(
+        folder,
         &thread_resume_request_id,
         thread_id,
         model,
@@ -319,6 +322,7 @@ pub(super) fn build_thread_start_payload(
             "approvalPolicy": policy::approval_policy(permission_mode),
             "sandbox": policy::thread_sandbox_mode(permission_mode),
             "config": policy::thread_config(permission_mode, reasoning_level),
+            "developerInstructions": ag_protocol::workspace_instructions(folder),
             "experimentalRawEvents": false,
             "persistExtendedHistory": false
         }
@@ -327,6 +331,7 @@ pub(super) fn build_thread_start_payload(
 
 /// Builds one `thread/resume` request payload.
 pub(super) fn build_thread_resume_payload(
+    folder: &Path,
     thread_resume_request_id: &str,
     thread_id: &str,
     model: &str,
@@ -344,6 +349,7 @@ pub(super) fn build_thread_resume_payload(
             "approvalPolicy": policy::approval_policy(permission_mode),
             "sandbox": policy::thread_sandbox_mode(permission_mode),
             "config": policy::thread_config(permission_mode, reasoning_level),
+            "developerInstructions": ag_protocol::workspace_instructions(folder),
             "experimentalRawEvents": false,
             "persistExtendedHistory": false
         }

@@ -125,3 +125,16 @@ fn test_agent_request_kind_account_read_uses_utility_protocol_profile() {
     // Assert
     assert_eq!(protocol_profile, ProtocolRequestProfile::UtilityPrompt);
 }
+
+#[test]
+fn metadata_requests_select_the_direct_wire_profile() {
+    // Arrange
+    let kind = AgentRequestKind::ReviewMetadata;
+
+    // Act / Assert
+    assert_eq!(
+        kind.protocol_profile(),
+        ProtocolRequestProfile::ReviewMetadata
+    );
+    assert!(!kind.is_resume());
+}

@@ -19,4 +19,4 @@ Requirements:
   dependencies or dependents. If targeted coverage is unclear, run the full repository
   test/check suite.
 - Return the required protocol JSON object. Briefly summarize the resolution in `answer`
-  and leave `questions` empty.
+  and follow the response schema without adding fields.

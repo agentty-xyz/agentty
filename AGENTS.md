@@ -11,7 +11,9 @@ Agentty is a Rust workspace for an agent-management TUI and reusable support cra
   skill or clearly matches one.
 - For external library, framework, SDK, API, CLI, or cloud-service details, query
   Context7 before answering or coding; fall back to official documentation only when
-  Context7 is unavailable.
+  Context7 is unavailable. Documentation lookup is permitted during inspection-only
+  reviews; reuse already-fetched documentation when the version and question still
+  match.
 - On a non-`main` branch, inspect the complete diff from the fork point, including
   committed, uncommitted, and untracked changes, before deciding what changed.
 - Before editing, identify affected tests, documentation, dependencies, dependents, and
@@ -148,5 +150,5 @@ source routers and doc comments:
 - `docs/site/content/docs/architecture/testability-boundaries.md`: external boundaries.
 - `docs/site/content/docs/architecture/change-recipes.md`: contributor change paths.
 
-Agent prompt templates live under `crates/ag-agent/src/agent/template/`,
-`crates/agentty/src/app/template/`, and `crates/ag-protocol/src/template/`.
+Prompt changes follow `skills/development/references/prompts.md` for ownership routing,
+contract checks, and behavioral evaluation.

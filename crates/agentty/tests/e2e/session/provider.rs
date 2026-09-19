@@ -32,6 +32,7 @@ response='{"answer":"Preserve pending worktree change","questions":[],"review_co
 printf '%s\n' "$GIT_OPTIONAL_LOCKS" > "$AGENTTY_TEST_EVIDENCE/optional-locks"
 case "$prompt" in
   *"Generate the canonical session commit message"*)
+    response='{"answer":"Preserve pending worktree change"}'
     if [ "$AGENTTY_TEST_RELEASE_LOCK" = "1" ]; then
       printf 'release requested\n' > "$AGENTTY_TEST_EVIDENCE/release-lock"
     fi
@@ -101,8 +102,8 @@ case "$prompt" in
     ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
-printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","input":{"answer":"Created pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]}}]}}'
-printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"Created pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]},"usage":{"input_tokens":5,"output_tokens":9}}'
+printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"StructuredOutput","input":{"answer":"Created pending worktree change"}}]}}'
+printf '%s\n' '{"type":"result","subtype":"success","result":"","structured_output":{"answer":"Created pending worktree change"},"usage":{"input_tokens":5,"output_tokens":9}}'
 "#;
     std::fs::write(&claude_path, script)?;
     #[cfg(unix)]
@@ -816,10 +817,10 @@ prompt=$(cat)
 case "$prompt" in
   *"Use only the changed file list"*)
     printf '%s' "$prompt" > "$AGENTTY_TEST_EVIDENCE/fallback-prompt"
-    response='{"answer":"Recover commit from conversation","questions":[]}'
+    response='{"answer":"Recover commit from conversation"}'
     ;;
-  *"Summarize this fragment"*)
-    response='{"answer":"","questions":[]}'
+  *"Summarize the supplied fragment"*)
+    response='{"answer":""}'
     ;;
   *"Review the Git diff for display in a terminal UI."*)
     response='{"project_impact":[],"suggestions":[]}'

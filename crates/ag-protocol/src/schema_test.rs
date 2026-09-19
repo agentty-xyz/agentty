@@ -580,3 +580,32 @@ fn assert_schema_property_title_and_description(
         Some(expected_description)
     );
 }
+
+#[test]
+fn utility_schemas_require_only_task_fields_on_every_transport() {
+    // Arrange
+    for policy in [
+        crate::SchemaRequiredPolicy::AllProperties,
+        crate::SchemaRequiredPolicy::MinimumProtocolKeys,
+    ] {
+        for (profile, keys) in [
+            (crate::ProtocolRequestProfile::UtilityPrompt, vec!["answer"]),
+            (
+                crate::ProtocolRequestProfile::ReviewMetadata,
+                vec!["description", "is_title_change_significant", "title"],
+            ),
+        ] {
+            // Act
+            let schema = crate::protocol_output_schema(profile, policy);
+            let properties = schema["properties"].as_object().expect("properties");
+
+            // Assert
+            assert_eq!(
+                properties.keys().map(String::as_str).collect::<Vec<_>>(),
+                keys
+            );
+            assert_eq!(schema["required"], serde_json::json!(keys));
+            assert_eq!(schema["additionalProperties"], false);
+        }
+    }
+}

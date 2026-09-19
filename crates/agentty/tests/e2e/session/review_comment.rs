@@ -110,7 +110,13 @@ async fn seed_review_comment_agent_resolution(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+prompt=$(cat)
+case "$prompt" in
+  *"Generate the canonical session commit message"*)
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Address review comments\"}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
+esac
 sleep 10
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed the selected review threads."}]}}'
@@ -136,7 +142,13 @@ async fn seed_incomplete_review_comment_outcomes(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+prompt=$(cat)
+case "$prompt" in
+  *"Generate the canonical session commit message"*)
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Address review comments\"}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
+esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Processed only one selected review thread."}]}}'
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Processed only one selected review thread.\",\"questions\":[],\"review_comment_outcomes\":[{\"reply\":\"Added the explanation.\",\"resolution\":\"fixed\",\"thread_id\":\"thread-inline\"}]}","usage":{"input_tokens":5,"output_tokens":9}}'

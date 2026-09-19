@@ -1,1 +1,1 @@
-Return the bootstrapped one-shot JSON object shape.
+Return only `{"answer":"..."}` for this utility request.

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ag_contracts::{SessionDiffState, SessionStats};
-use ag_protocol::FocusedReview;
+use ag_protocol::{FocusedReview, ReviewMetadata, UtilityResponse};
 use serde::Deserialize;
 
 /// Parsed agent response including content text and usage statistics.
@@ -263,7 +263,10 @@ fn record_antigravity_payload(
 fn antigravity_protocol_payload(payload: &serde_json::Value) -> bool {
     let is_agent_response = payload.get("answer").is_some() && payload.get("questions").is_some();
 
-    is_agent_response || serde_json::from_value::<FocusedReview>(payload.clone()).is_ok()
+    is_agent_response
+        || serde_json::from_value::<FocusedReview>(payload.clone()).is_ok()
+        || serde_json::from_value::<UtilityResponse>(payload.clone()).is_ok()
+        || serde_json::from_value::<ReviewMetadata>(payload.clone()).is_ok()
 }
 
 /// Extracts string or structured content from an Antigravity event value.

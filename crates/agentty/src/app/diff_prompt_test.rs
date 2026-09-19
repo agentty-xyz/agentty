@@ -11,7 +11,7 @@ use ag_worker::MockRunClient;
 
 use super::{
     MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, render_result, submit,
-    summarize, summary_with_repair,
+    summarize, summarize_context, summary_with_repair,
 };
 use crate::app::AppError;
 use crate::app::session::SessionError;
@@ -833,4 +833,35 @@ async fn hidden_repair_turns_reduce_the_number_of_allowed_submissions() {
 
     // Assert
     assert!(error.to_string().contains("provider call limit reached"));
+}
+
+#[tokio::test]
+async fn history_reduction_preserves_verification_provenance_contract() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().returning(|request| {
+        assert!(request.prompt.contains("Completed; Remaining; Checks"));
+        assert!(request.prompt.contains("invalidating changes"));
+        assert!(request.prompt.contains("unverified claim"));
+        assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
+        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+        Ok(answer(
+            "Checks: cargo test passed before parser edit; rerun affected checks.",
+        ))
+    });
+    let budget = ag_contracts::ProviderCallBudget::new(MAX_PROVIDER_CALLS);
+
+    // Act
+    let summary = summarize_context(
+        &client,
+        &request(),
+        &"history line\n".repeat(800),
+        512,
+        &budget,
+    )
+    .await
+    .expect("checkpoint");
+
+    // Assert
+    assert!(summary.contains("rerun affected checks"));
 }

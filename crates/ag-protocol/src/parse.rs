@@ -2,7 +2,9 @@
 
 use serde_json::Value;
 
-use super::model::{AgentResponse, AgentResponseParseError, ProtocolRequestProfile};
+use super::model::{
+    AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
+};
 use super::review::{FocusedReview, FocusedReviewSeverity};
 
 /// Top-level keys the protocol recognizes in a structured response payload.
@@ -84,9 +86,9 @@ pub fn parse_agent_response_strict(raw: &str) -> Result<AgentResponse, AgentResp
 
 /// Parses one response against the schema selected for its request profile.
 ///
-/// Focused reviews arrive as direct [`FocusedReview`] objects so native
+/// Reviews and metadata arrive as direct task objects so native
 /// provider schemas can enforce their fields. The validated object is
-/// normalized back into `AgentResponse::answer` for existing application
+/// normalized into `AgentResponse::answer` for existing application
 /// consumers.
 ///
 /// # Errors
@@ -96,13 +98,32 @@ pub fn parse_protocol_response_strict(
     raw: &str,
     profile: ProtocolRequestProfile,
 ) -> Result<AgentResponse, AgentResponseParseError> {
-    if !matches!(profile, ProtocolRequestProfile::FocusedReview) {
+    if matches!(profile, ProtocolRequestProfile::SessionTurn) {
         return parse_agent_response_strict(raw);
     }
 
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(AgentResponseParseError::Empty);
+    }
+
+    if matches!(profile, ProtocolRequestProfile::UtilityPrompt) {
+        let response = parse_utility_response(trimmed).map_err(|error| {
+            AgentResponseParseError::InvalidFormat {
+                reason: format!("utility parse failed ({error})"),
+            }
+        })?;
+        return Ok(AgentResponse::plain(response.answer));
+    }
+    if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
+        let response = serde_json::from_str::<ReviewMetadata>(trimmed).map_err(|error| {
+            AgentResponseParseError::InvalidFormat {
+                reason: format!("review metadata parse failed ({error})"),
+            }
+        })?;
+        return Ok(AgentResponse::plain(
+            serde_json::json!(response).to_string(),
+        ));
     }
 
     let review = serde_json::from_str::<FocusedReview>(trimmed).map_err(|error| {
@@ -113,6 +134,17 @@ pub fn parse_protocol_response_strict(
     let answer = focused_review_answer(review);
 
     Ok(AgentResponse::plain(answer))
+}
+
+/// Retains utility wrapper recovery while enforcing the narrow wire fields.
+fn parse_utility_response(raw: &str) -> Result<UtilityResponse, serde_json::Error> {
+    let candidate = strip_markdown_code_fence(raw)
+        .or_else(|| find_embedded_code_fence_content(raw))
+        .unwrap_or(raw);
+    let value = serde_json::from_str::<Value>(candidate)
+        .or_else(|error| find_last_embedded_json_value(candidate).ok_or(error))?;
+
+    serde_json::from_value(value)
 }
 
 /// Serializes a validated focused review through infallible JSON values.

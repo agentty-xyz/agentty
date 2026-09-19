@@ -19,12 +19,12 @@ mod verification;
 
 pub use envelope::{
     ProtocolSchemaInstructionMode, build_protocol_repair_prompt, prepend_protocol_instructions,
-    prepend_protocol_refresh_reminder,
+    prepend_protocol_refresh_reminder, workspace_instructions,
 };
 pub use fence::diff_fence;
 pub use model::{
     AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewCommentOutcome,
-    ReviewCommentResolution,
+    ReviewCommentResolution, ReviewMetadata, UtilityResponse,
 };
 pub use parse::{
     format_protocol_parse_debug_details, parse_agent_response_strict,

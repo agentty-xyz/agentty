@@ -26,6 +26,7 @@ pub use availability::{
 #[cfg(any(test, feature = "test-utils"))]
 pub use backend::MockAgentBackend;
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
+pub use instruction::instruction_bootstrap_key;
 pub(crate) use instruction::{InstructionDeliveryMode, plan_app_server_instruction_delivery};
 pub(crate) use prompt::{
     PromptPreparationRequest, apply_response_style_prompt, prepare_prompt_text,

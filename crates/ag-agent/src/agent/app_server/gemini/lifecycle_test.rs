@@ -51,9 +51,12 @@ fn utility_prompts_receive_long_running_bootstrap_timeout() {
     // Act
     let utility_timeout = bootstrap_response_timeout(&utility_request_kind);
     let session_timeout = bootstrap_response_timeout(&session_request_kind);
+    let metadata_timeout =
+        bootstrap_response_timeout(&ag_contracts::AgentRequestKind::ReviewMetadata);
 
     // Assert
     assert_eq!(utility_timeout, app_server_transport::TURN_TIMEOUT);
+    assert_eq!(metadata_timeout, app_server_transport::TURN_TIMEOUT);
     assert_eq!(session_timeout, app_server_transport::STARTUP_TIMEOUT);
 }
 

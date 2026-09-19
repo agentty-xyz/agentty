@@ -117,10 +117,10 @@ case "$prompt" in
     esac
     ;;
   *"Generate a concise, commit-style title"*)
-    result='{{\"answer\":\"Cross-project focused review\",\"questions\":[]}}'
+    result='{{\"answer\":\"Cross-project focused review\"}}'
     ;;
   *"Generate the canonical session commit message"*)
-    result='{{\"answer\":\"test: exercise cross-project review\",\"questions\":[]}}'
+    result='{{\"answer\":\"test: exercise cross-project review\"}}'
     ;;
   *)
     sleep 3
@@ -367,7 +367,7 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 emit_answer() {{
   printf '%s\n' '{{"type":"system","subtype":"init"}}'
   printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"'"$1"'"}}]}}}}'
-  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
+  printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"'"$1"'\"}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 }}
 input=$(cat)
 case "$input" in

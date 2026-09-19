@@ -69,7 +69,7 @@ async fn canceled_one_shots_shutdown_active_and_repair_turns_before_returning() 
                             stopped.cancelled().await;
                             finish.cancelled().await;
                             completed.cancel();
-                            Ok(response(r#"{"answer":"done","questions":[]}"#))
+                            Ok(response(r#"{"answer":"done"}"#))
                         })
                     }
                 });
@@ -204,7 +204,7 @@ async fn cleanup_task_panic_is_returned_to_the_caller() {
     let mut mock = MockAppServerClient::new();
     mock.expect_run_turn()
         .once()
-        .returning(|_, _| Box::pin(async { Ok(response(r#"{"answer":"done","questions":[]}"#)) }));
+        .returning(|_, _| Box::pin(async { Ok(response(r#"{"answer":"done"}"#)) }));
     mock.expect_shutdown_session().once().returning(|_| {
         Box::pin(async { std::panic::resume_unwind(Box::new("shutdown task failed")) })
     });

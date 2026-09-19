@@ -9,7 +9,6 @@ use ag_forge as forge;
 use ag_git::{self as git, GitClient};
 use ag_worker::RunClient;
 use askama::Template;
-use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -61,6 +60,9 @@ struct SessionCommitMessagePromptTemplate<'a> {
     fallback: bool,
     /// Diff or fallback context wrapped in a fence sized for its content.
     fenced_diff: &'a str,
+    /// Bounded user requests that guide scope and message formatting, never
+    /// proof of completion.
+    user_requests: &'a str,
 }
 
 /// Askama view model for semantic review-request metadata reconciliation.
@@ -71,14 +73,6 @@ struct ReviewRequestMetadataPromptTemplate<'a> {
     current_metadata: &'a str,
     /// Serialized generated metadata from the cumulative session commit.
     generated_metadata: &'a str,
-}
-
-/// Structured answer returned by the metadata reconciliation utility prompt.
-#[derive(Deserialize)]
-struct ReviewRequestMetadataEvaluation {
-    description: String,
-    is_title_change_significant: bool,
-    title: String,
 }
 
 /// Bound context for applying status transitions to one live session.
@@ -629,22 +623,20 @@ impl SessionTaskService {
                 child_pid: None,
                 folder: folder.to_path_buf(),
                 model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_contracts::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::ReadOnly,
                 prompt,
-                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
+                request_kind: ag_contracts::AgentRequestKind::ReviewMetadata,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
             })
             .await?;
         let answer_text = submission.response.to_answer_display_text();
-        let evaluation = serde_json::from_str::<ReviewRequestMetadataEvaluation>(
-            answer_text.trim(),
-        )
-        .map_err(|error| {
-            SessionError::Workflow(format!(
-                "Failed to parse review-request metadata evaluation: {error}"
-            ))
-        })?;
+        let evaluation = serde_json::from_str::<ag_protocol::ReviewMetadata>(answer_text.trim())
+            .map_err(|error| {
+                SessionError::Workflow(format!(
+                    "Failed to parse review-request metadata evaluation: {error}"
+                ))
+            })?;
         let title = if evaluation.is_title_change_significant {
             let title = evaluation.title.trim();
             if title.is_empty() || title.lines().count() != 1 {
@@ -659,7 +651,10 @@ impl SessionTaskService {
         };
         Self::validate_preserved_review_content(&current_metadata.body, &evaluation.description)?;
         Ok(forge::ReviewRequestMetadata {
-            body: evaluation.description,
+            body: super::review_description::preserve_description(
+                &current_metadata.body,
+                &evaluation.description,
+            ),
             title,
         })
     }
@@ -792,8 +787,10 @@ impl SessionTaskService {
     /// # Errors
     /// Returns an error if Askama template rendering fails.
     fn auto_commit_assist_prompt(commit_error: &str) -> Result<String, SessionError> {
-        let commit_error = commit_error.trim();
-        let template = AutoCommitAssistPromptTemplate { commit_error };
+        let commit_error = serde_json::json!(commit_error.trim()).to_string();
+        let template = AutoCommitAssistPromptTemplate {
+            commit_error: &commit_error,
+        };
 
         template.render().map_err(|error| {
             SessionError::Workflow(format!(
@@ -814,6 +811,7 @@ impl SessionTaskService {
     fn session_commit_message_prompt(
         diff: &str,
         current_commit_message: Option<&str>,
+        user_requests: &str,
         fallback: bool,
     ) -> Result<String, SessionError> {
         let stripped_current_commit_message =
@@ -822,7 +820,9 @@ impl SessionTaskService {
         let language = if fallback { "text" } else { "diff" };
         let fenced_diff = format!("{fence}{language}\n{diff}\n{fence}");
         let template = SessionCommitMessagePromptTemplate {
-            current_commit_message: stripped_current_commit_message.trim(),
+            current_commit_message: &serde_json::json!(stripped_current_commit_message.trim())
+                .to_string(),
+            user_requests,
             fallback,
             fenced_diff: &fenced_diff,
         };
@@ -972,11 +972,12 @@ impl SessionTaskService {
         } else {
             None
         };
+        let user_requests = Self::commit_user_requests(transcript);
         let generated_commit_message = Self::generate_session_commit_message_with_client(
             folder.as_path(),
             (session_agent, reasoning_level, speed_mode),
             diff.as_str(),
-            current_commit_message.as_deref(),
+            (current_commit_message.as_deref(), &user_requests),
             run_client,
             include_coauthored_by_agentty,
             false,
@@ -1015,7 +1016,7 @@ impl SessionTaskService {
                     folder.as_path(),
                     (session_agent, reasoning_level, speed_mode),
                     &fallback_context,
-                    current_commit_message.as_deref(),
+                    (current_commit_message.as_deref(), &user_requests),
                     run_client,
                     include_coauthored_by_agentty,
                     true,
@@ -1042,6 +1043,35 @@ impl SessionTaskService {
         })
     }
 
+    /// Retains the original request and recent user steering within a fixed
+    /// budget. Assistant claims are deliberately excluded from this
+    /// preference context.
+    fn commit_user_requests(transcript: &Mutex<SessionTranscript>) -> String {
+        const MAX_REQUEST_BYTES: usize = 2_000;
+        const MAX_REQUESTS: usize = 5;
+        let transcript = transcript
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let requests = transcript
+            .messages()
+            .iter()
+            .filter(|message| message.kind == SessionMessageKind::UserPrompt)
+            .collect::<Vec<_>>();
+        let mut selected = Vec::new();
+        for (index, message) in requests.iter().enumerate() {
+            if index != 0 && index < requests.len().saturating_sub(MAX_REQUESTS - 1) {
+                continue;
+            }
+            let prefix = super::prompt_context::json_prefix(&message.content, MAX_REQUEST_BYTES);
+            selected.push(serde_json::json!({
+                "content": prefix,
+                "truncated": prefix.len() < message.content.len(),
+            }));
+        }
+
+        serde_json::json!({"user_requests": selected, "omitted_requests": requests.len().saturating_sub(MAX_REQUESTS)}).to_string()
+    }
+
     /// Renders the session commit-message prompt, submits it to the injected
     /// one-shot client, validates the returned text, and appends the optional
     /// coauthor trailer in code.
@@ -1057,12 +1087,13 @@ impl SessionTaskService {
             crate::domain::agent::SpeedMode,
         ),
         diff: &str,
-        current_commit_message: Option<&str>,
+        message_context: (Option<&str>, &str),
         run_client: &dyn RunClient,
         include_coauthored_by_agentty: bool,
         fallback: bool,
     ) -> Result<String, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
+        let (current_commit_message, user_requests) = message_context;
         let (submission, _) = crate::app::diff_prompt::submit(
             run_client,
             ag_contracts::OneShotRequest {
@@ -1083,6 +1114,7 @@ impl SessionTaskService {
                 crate::app::diff_prompt::render_result(Self::session_commit_message_prompt(
                     diff,
                     Some(context),
+                    user_requests,
                     fallback,
                 ))
             },

@@ -50,12 +50,12 @@ pub fn prepend_protocol_instructions(
     workspace_root: &Path,
 ) -> String {
     let protocol_usage_instructions = render_protocol_usage_instructions(profile);
-    let workspace_root = workspace_root.display().to_string();
+    let workspace_policy = workspace_instructions(workspace_root);
     if !schema_instruction_mode.includes_response_json_schema() {
         let template = ProtocolInstructionPolicyPromptTemplate {
             prompt,
             protocol_usage_instructions: &protocol_usage_instructions,
-            workspace_root: &workspace_root,
+            workspace_policy: &workspace_policy,
         };
 
         return render_template("protocol_instruction_policy_prompt.md", &template);
@@ -66,10 +66,29 @@ pub fn prepend_protocol_instructions(
         prompt,
         protocol_usage_instructions: &protocol_usage_instructions,
         response_json_schema: &response_json_schema,
-        workspace_root: &workspace_root,
+        workspace_policy: &workspace_policy,
     };
 
     render_template("protocol_instruction_prompt.md", &template)
+}
+
+/// Renders durable application policy for native developer/system instruction
+/// channels without replacing the provider's built-in coding instructions.
+#[must_use]
+pub fn workspace_instructions(workspace_root: &Path) -> String {
+    render_template(
+        "workspace_policy_prompt.md",
+        &WorkspacePolicyPromptTemplate {
+            workspace_root: &workspace_root_json(workspace_root),
+        },
+    )
+}
+
+/// Askama view model for the policy shared by native and prompt transports.
+#[derive(Template)]
+#[template(path = "workspace_policy_prompt.md", escape = "none")]
+struct WorkspacePolicyPromptTemplate<'a> {
+    workspace_root: &'a str,
 }
 
 /// Prepends a compact refresh reminder for providers that already received
@@ -85,7 +104,7 @@ pub fn prepend_protocol_refresh_reminder(
     workspace_root: &Path,
 ) -> String {
     let protocol_refresh_instructions = render_protocol_refresh_instructions(profile);
-    let workspace_root = workspace_root.display().to_string();
+    let workspace_root = workspace_root_json(workspace_root);
     let template = ProtocolRefreshPromptTemplate {
         prompt,
         protocol_refresh_instructions: &protocol_refresh_instructions,
@@ -162,6 +181,14 @@ fn encode_repair_parse_error(parse_error: &str) -> String {
     serde_json::json!(format!("{}{NOTICE}", &parse_error[..end])).to_string()
 }
 
+/// Encodes path data consistently across native, bootstrap, and refresh policy.
+/// Escaping backticks also keeps path text from opening Markdown code spans.
+fn workspace_root_json(workspace_root: &Path) -> String {
+    serde_json::json!(workspace_root.to_string_lossy())
+        .to_string()
+        .replace('`', "\\u0060")
+}
+
 /// Askama view model for protocol instructions when the transport enforces
 /// the response schema.
 #[derive(Template)]
@@ -169,7 +196,7 @@ fn encode_repair_parse_error(parse_error: &str) -> String {
 struct ProtocolInstructionPolicyPromptTemplate<'a> {
     prompt: &'a str,
     protocol_usage_instructions: &'a str,
-    workspace_root: &'a str,
+    workspace_policy: &'a str,
 }
 
 /// Askama view model for full protocol instructions with prompt-side schema.
@@ -179,7 +206,7 @@ struct ProtocolInstructionPromptTemplate<'a> {
     prompt: &'a str,
     protocol_usage_instructions: &'a str,
     response_json_schema: &'a str,
-    workspace_root: &'a str,
+    workspace_policy: &'a str,
 }
 
 /// Askama view model for compact refresh reminders.
@@ -229,6 +256,12 @@ struct ProtocolRefreshUtilityPromptInstructionTemplate;
 
 /// Renders the protocol usage instructions for one request profile.
 fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
+        return "Return the direct review metadata object with title, description, and \
+                is_title_change_significant. Do not nest it inside answer."
+            .to_string();
+    }
+
     if matches!(profile, ProtocolRequestProfile::FocusedReview) {
         return render_template(
             "protocol_instruction_focused_review_usage.md",
@@ -251,6 +284,12 @@ fn render_protocol_usage_instructions(profile: ProtocolRequestProfile) -> String
 
 /// Renders the compact protocol refresh instructions for one request profile.
 fn render_protocol_refresh_instructions(profile: ProtocolRequestProfile) -> String {
+    if matches!(profile, ProtocolRequestProfile::ReviewMetadata) {
+        return "Return the direct review metadata object with title, description, and \
+                is_title_change_significant. Do not nest it inside answer."
+            .to_string();
+    }
+
     if matches!(profile, ProtocolRequestProfile::FocusedReview) {
         return render_template(
             "protocol_instruction_focused_review_usage.md",

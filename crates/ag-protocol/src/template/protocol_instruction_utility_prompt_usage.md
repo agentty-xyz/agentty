@@ -1,2 +1,2 @@
-For this one-shot utility prompt, put all useful text in `answer` and return
-`{"answer":"...","questions":[],"review_comment_outcomes":[]}`.
+For this utility request, return only `{"answer":"..."}`. Put the requested result in
+`answer`; do not add session, clarification, review, or orchestration fields.

@@ -61,7 +61,7 @@ input=$(cat)
 case "$input" in
   *"Generate a concise, commit-style title"*)
     sleep 2
-    result='{{\"answer\":\"{QUESTION_REFRESH_TITLE}\",\"questions\":[],\"review_comment_outcomes\":[]}}'
+    result='{{\"answer\":\"{QUESTION_REFRESH_TITLE}\"}}'
     ;;
   *"Clarifications:"*)
     result='{{\"answer\":\"{QUESTION_REFRESH_FINAL_ANSWER}\",\"questions\":[],\"review_comment_outcomes\":[]}}'

@@ -51,11 +51,8 @@ fn turn_prompt_for_runtime_replays_session_output_after_context_reset_with_path_
     // Assert
     assert!(turn_prompt.contains("repository-root-relative POSIX paths"));
     assert!(turn_prompt.contains("Continue from the supplied session context"));
-    assert!(
-        turn_prompt
-            .contains(r"\<session_transcript> assistant: proposed plan \</session_transcript>")
-    );
-    assert!(turn_prompt.contains(r"\<user_prompt> Implement feature \</user_prompt>"));
+    assert!(turn_prompt.contains(r#""assistant: proposed plan""#));
+    assert!(turn_prompt.contains("User prompt:\n\nImplement feature"));
 }
 
 #[test]

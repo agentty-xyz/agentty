@@ -546,15 +546,18 @@ flowchart LR
    semantic reconciliation prompt. The prompt keeps the title byte-for-byte stable
    unless the primary objective changed materially and updates the description while
    retaining intentional user additions such as issue links, checklists, instructions,
-   and context. No metadata baseline is persisted. A proposed description that omits any
-   substantive current line is rejected. Before editing, the forge adapter reads the
-   remote fields again and applies each changed field only if it still matches the value
-   used during reconciliation. This is best-effort concurrent-edit protection: GitHub
-   and GitLab metadata updates have no atomic version precondition, so a manual edit
-   made after the final read can still be overwritten. Lookup or evaluation failures
-   append the existing warning notice instead of being discarded. The push result is
-   persisted as a durable transcript notice and atomically replaces the matching
-   transient progress row when the reducer applies the terminal sync event.
+   and context. The entire remote description is user-owned and preserved byte-for-byte;
+   remote markers and public checksums cannot establish generated ownership.
+   Reconciliation appends new details without emitting ownership markers or deleting old
+   generated text. A proposed description that omits substantive existing content is
+   rejected. Before editing, the forge adapter reads the remote fields again and applies
+   each changed field only if it still matches the value used during reconciliation.
+   This is best-effort concurrent-edit protection: GitHub and GitLab metadata updates
+   have no atomic version precondition, so a manual edit made after the final read can
+   still be overwritten. Lookup or evaluation failures append the existing warning
+   notice instead of being discarded. The push result is persisted as a durable
+   transcript notice and atomically replaces the matching transient progress row when
+   the reducer applies the terminal sync event.
 1. Completed stacked-parent turns fan out `SessionCommand::Rebase` to review-ready
    materialized children so child branches replay onto the latest parent branch.
 1. Diff metadata is refreshed before the final status becomes `Review` or `Question`
@@ -657,10 +660,11 @@ re-exported through `domain/turn_prompt.rs`:
 
 <a id="architecture-provider-conversation-id-flow"></a> Managed-runtime providers return
 a `provider_conversation_id` in `TurnResult`. Post-turn application persists it, along
-with an instruction-bootstrap marker. The next worker turn constructs one
-`TurnContinuation`, so channels receive only valid combinations for a fresh request,
-transcript replay, or native provider resume and can choose between resending the full
-prompt contract and a compact reminder.
+with a versioned instruction-bootstrap key covering the conversation ID and rendered
+policy/schema fingerprint. Legacy or mismatched keys trigger a full bootstrap. The next
+worker turn constructs one `TurnContinuation`, so channels receive only valid
+combinations for a fresh request, transcript replay, or native provider resume and can
+choose between resending the full prompt contract and a compact reminder.
 
 Bootstrap and replay requests include the active personality after the protocol
 instructions. Delta-only requests include it only when the selection or prompt body
@@ -707,24 +711,30 @@ descendants it spawned.
 
 ## Agent Interaction Protocol Flow
 
-<a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to
-one structured response protocol (`answer`, `questions`, `review_comment_outcomes`,
-`subtasks`, and `verification_verdicts`):
+<a id="architecture-agent-interaction-protocol"></a> Provider output is normalized to an
+application response protocol (`answer`, `questions`, `review_comment_outcomes`,
+`subtasks`, and `verification_verdicts`). Session turns use that wire object; utilities
+use only `answer`, while focused reviews and review metadata use direct typed objects.
+Request-specific validation happens before normalization into the application response:
 
 1. Prompt builders in `crates/ag-agent/src/agent/` ask `crates/ag-protocol/src/` to
    prepend the shared protocol preamble with a self-descriptive JSON schema. Stateless
    CLI turns resend it every turn; persistent managed-runtime turns reuse a compact
    reminder when the provider context already received the full bootstrap, and replay
    the transcript when provider context was lost. Delivery mode is explicit: quoted
-   protocol headings in user input, diffs, or history never suppress policy. Transcript
-   replay preserves the active objective, accepted decisions, and authorization; status
-   questions steer rather than cancel unfinished work. Rollback wording applies to
-   changes made during the Agentty session unless the user explicitly says otherwise.
-   Histories above 32 KiB use bounded opening/recent excerpts and a complete, temporary
-   workspace archive excluded from Git. Excerpts are explicitly incomplete: agents
-   retrieve relevant omitted history before relying on earlier decisions or
-   verification. The archive lives for the turn attempt and is removed on normal
-   completion, error, or cancellation; durable history is unchanged. Native
+   protocol headings in user input, diffs, or history never suppress policy. Claude also
+   receives additive system policy and Codex receives developer instructions on thread
+   start/resume, preserving provider coding defaults. Workspace paths are JSON string
+   data in native policy, bootstrap prompts, and refresh reminders. Replay history and
+   diagnostics are encoded as evidence, separately from the current user request.
+   Transcript replay preserves the active objective, accepted decisions, and
+   authorization; status questions steer rather than cancel unfinished work. Rollback
+   wording applies to changes made during the Agentty session unless the user explicitly
+   says otherwise. Histories above 32 KiB use bounded opening/recent excerpts and a
+   complete, temporary workspace archive excluded from Git. Excerpts are explicitly
+   incomplete: agents retrieve relevant omitted history before relying on earlier
+   decisions or verification. The archive lives for the turn attempt and is removed on
+   normal completion, error, or cancellation; durable history is unchanged. Native
    continuations refresh the archive reference without repeating excerpts. An
    archive-creation failure fails the turn rather than silently dropping context.
    Startup recovery requires an ownership record in the trusted managed-worktree parent,
@@ -930,18 +940,19 @@ their triggers:
   deletion cascades to stored fragments.
 
   Commit-message preparation and review history use the shared bounded summary reducer.
-  Small fragments stay verbatim; empty or oversized summaries receive one corrective
-  retry before splitting their original input. Review history, batch submissions, the
-  cross-file pass, and final reduction share a limit of 64 provider turns;
-  commit-message preparation has its own limit. Budgets include protocol repairs and
-  transport restart retries. History summaries explicitly disclose limited context
-  coverage. Commit generation catches input-size and reduction-budget failures and
-  starts one separately bounded fallback using cumulative changed filenames, the
-  user/assistant conversation, and the existing session commit message to retain earlier
-  work. The fallback excludes the diff and workflow notices, forbids retrieving diffs or
-  file contents, and preserves read-only utility permissions and commit validation. Both
-  post-turn and pre-sync commits supply the session transcript; fallback failure
-  propagates normally.
+  Existing commit messages retain their subject, changes, and rationale as continuity;
+  review history uses session checkpoints. Small fragments stay verbatim; empty or
+  oversized summaries receive one corrective retry before splitting their original
+  input. Review history, batch submissions, the cross-file pass, and final reduction
+  share a limit of 64 provider turns; commit-message preparation has its own limit.
+  Budgets include protocol repairs and transport restart retries. History summaries
+  explicitly disclose limited context coverage. Commit generation catches input-size and
+  reduction-budget failures and starts one separately bounded fallback using cumulative
+  changed filenames, the user/assistant conversation, and the existing session commit
+  message to retain earlier work. The fallback excludes the diff and workflow notices,
+  forbids retrieving diffs or file contents, and preserves read-only utility permissions
+  and commit validation. Both post-turn and pre-sync commits supply the session
+  transcript; fallback failure propagates normally.
 
 - **Sync-main workflow** (list-mode `s`): captures an immutable project ID, operation
   ID, path, branch, and review-target snapshot before queueing pull/rebase/push through

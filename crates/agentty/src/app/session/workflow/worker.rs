@@ -150,6 +150,10 @@ impl SessionCommand {
                 ..
             } => "focused_review",
             Self::Run {
+                request_kind: AgentRequestKind::ReviewMetadata,
+                ..
+            } => "review_metadata",
+            Self::Run {
                 request_kind: AgentRequestKind::UtilityPrompt,
                 ..
             } => "utility_prompt",
@@ -646,14 +650,11 @@ impl SessionWorkerRebaseAssistClient {
             )
             .await?;
         if ag_worker::uses_persistent_session(self.session_agent.kind()) {
+            // This assist bootstraps a utility profile, so the next interactive
+            // turn must receive the full session contract again.
             self.db
                 .sessions()
-                .update_session_instruction_conversation_id(
-                    &self.session_id,
-                    ag_contracts::normalize_instruction_conversation_id(Some(
-                        &provider_conversation_id,
-                    )),
-                )
+                .update_session_instruction_conversation_id(&self.session_id, None)
                 .await?;
         }
 

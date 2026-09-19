@@ -136,7 +136,11 @@ pub(crate) fn build_resume_prompt(
         return Ok(prompt.to_string());
     };
 
-    let template = ResumeWithTranscriptPromptTemplate { prompt, transcript };
+    let transcript = serde_json::json!(transcript).to_string();
+    let template = ResumeWithTranscriptPromptTemplate {
+        prompt,
+        transcript: &transcript,
+    };
 
     render_template("resume_with_transcript_prompt.md", &template)
 }

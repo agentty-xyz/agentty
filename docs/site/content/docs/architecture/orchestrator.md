@@ -87,11 +87,13 @@ up to eight. Eight is a per-response fan-out limit, not a campaign limit. All ch
 start from the controller's base; plan order affects integration only.
 
 Implementation workers receive up to three focused-review remediation passes. When all
-tasks settle, the controller receives one bounded, inert verification envelope
-containing acceptance criteria, reports or branch evidence, review outcomes, and changed
-paths. The response accepts at most eight verdicts. Explicit `pass` verdicts advance;
-flagged or missing verdicts park. Reusing a task key starts a correction or a fresh
-researcher.
+tasks settle, the controller receives one inert verification envelope containing
+acceptance criteria, reports or branch evidence, review outcomes, and changed paths.
+Each research report is limited to 32 KiB after JSON encoding, including quotes and an
+explicit truncation notice when evidence is omitted. This bounds escaped report content
+without dropping task keys or acceptance criteria; the aggregate envelope is not capped.
+The response accepts at most eight verdicts. Explicit `pass` verdicts advance; flagged
+or missing verdicts park. Reusing a task key starts a correction or a fresh researcher.
 
 The user then makes one campaign-wide choice between local merge and forge review
 requests. Local integration follows plan order. Research-only campaigns need no

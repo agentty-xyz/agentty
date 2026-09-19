@@ -59,6 +59,11 @@ fn build_thread_start_payload_carries_method_id_cwd_and_model() {
         Some(false)
     );
     assert!(params.get("config").is_some());
+    assert_eq!(
+        params["developerInstructions"],
+        ag_protocol::workspace_instructions(&folder)
+    );
+    assert!(params.get("baseInstructions").is_none());
 }
 
 #[test]
@@ -68,6 +73,7 @@ fn build_thread_resume_payload_uses_thread_id_for_resume() {
 
     // Act
     let payload = build_thread_resume_payload(
+        std::path::Path::new("workspace"),
         "thread-resume-1",
         "existing-thread",
         model,
@@ -86,6 +92,11 @@ fn build_thread_resume_payload_uses_thread_id_for_resume() {
         Some("thread-resume-1")
     );
     let params = payload.get("params").expect("resume params present");
+    assert_eq!(
+        params["developerInstructions"],
+        ag_protocol::workspace_instructions(std::path::Path::new("workspace"))
+    );
+    assert!(params.get("baseInstructions").is_none());
     assert_eq!(
         params.get("threadId").and_then(Value::as_str),
         Some("existing-thread")

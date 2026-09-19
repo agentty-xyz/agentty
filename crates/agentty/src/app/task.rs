@@ -12,7 +12,6 @@ use std::time::Duration;
 
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
-use ag_protocol::focused_review_json_schema_json;
 use ag_worker::RunClient;
 use askama::Template;
 use async_trait::async_trait;
@@ -140,8 +139,6 @@ pub(super) struct ReviewAssistTaskInput {
 struct ReviewAssistPromptTemplate<'a> {
     /// Full diff payload wrapped in a Markdown fence sized for its content.
     fenced_diff: &'a str,
-    /// Self-descriptive schema for the review object returned in `answer`.
-    focused_review_json_schema: &'a str,
     /// Transcript context wrapped in a Markdown fence sized for its content.
     session_chat_history: &'a str,
 }
@@ -672,10 +669,8 @@ impl TaskService {
         let history_fence = ag_protocol::diff_fence(session_chat_history);
         let fenced_session_chat_history =
             format!("{history_fence}text\n{session_chat_history}\n{history_fence}");
-        let focused_review_json_schema = focused_review_json_schema_json();
         let template = ReviewAssistPromptTemplate {
             fenced_diff: &fenced_diff,
-            focused_review_json_schema: &focused_review_json_schema,
             session_chat_history: &fenced_session_chat_history,
         };
 
