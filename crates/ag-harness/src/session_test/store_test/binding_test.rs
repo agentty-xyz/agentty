@@ -23,7 +23,7 @@ async fn acquisition_rejects_a_different_backing_store_before_reserving() {
 
     // Act
     let result = database
-        .begin_turn(other, "session", "prompt", &turn_options())
+        .begin_turn(other, "session", "prompt", &turn_options(), 0)
         .await;
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session_turn")
         .fetch_one(&database.pool)
@@ -99,7 +99,13 @@ async fn cancelled_acquisition_retains_the_decorator_before_and_after_commit() {
             .expect("session");
         let task = tokio::spawn(async move {
             backend
-                .begin_turn(Arc::clone(&backend), "session", "prompt", &turn_options())
+                .begin_turn(
+                    Arc::clone(&backend),
+                    "session",
+                    "prompt",
+                    &turn_options(),
+                    0,
+                )
                 .await
         });
         entered.notified().await;

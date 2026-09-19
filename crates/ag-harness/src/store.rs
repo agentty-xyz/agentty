@@ -26,8 +26,9 @@ pub trait SessionStore: Send + Sync {
     /// Independent handles for the same backing store share this identity.
     fn identity(&self) -> &StoreIdentity;
 
-    /// Atomically creates a session, rejecting an existing identifier. Retain
-    /// [`NewSession::registration_identity`] unchanged, including its absence.
+    /// Atomically creates a session, rejecting an existing identifier.
+    /// Initialize generation zero and retain
+    /// [`NewSession::registration_identity`], including its absence.
     async fn create_session(
         &self,
         config: &NewSession,
@@ -35,9 +36,26 @@ pub trait SessionStore: Send + Sync {
         max_history_bytes: usize,
     ) -> Result<(), SessionError>;
     /// Loads configuration and bounded completed history; recovers expired
-    /// turns. Return the original registration identity in [`LoadedSession`];
+    /// turns. Return the current registration identity in [`LoadedSession`];
     /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
+    /// Switch an idle session atomically with turn admission. Recover expired
+    /// owners, reject active owners and a mismatched generation, validate all
+    /// completed history with the target capabilities, then update identity,
+    /// increment the generation, and clear continuation in the same mutation.
+    /// Rejections leave model selection unchanged. Never rewrite turn
+    /// snapshots. Reject provider-specific reasoning explicitly: it has no
+    /// cross-model portability contract. Validate canonical history, including
+    /// completed turns outside the replay budget.
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &crate::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError>;
+
     /// Bind the reservation to `store` before commit, including abandoned
     /// acquisition cleanup. Decorators forward this handle unchanged; it must
     /// have the same backing identity as the acquiring implementation.
@@ -48,19 +66,22 @@ pub trait SessionStore: Send + Sync {
     /// future must retain that responsibility. Clear incompatible continuation
     /// atomically, using [`crate::StoredTurnOptions`]. Return only completed
     /// history bounded by the stored payload budget, revalidated at
-    /// acquisition.
+    /// acquisition. Validate `generation` atomically before reserving a turn;
+    /// persist the selected model as immutable turn provenance.
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         session_id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError>;
 
     /// Atomically classify `request` before checking session busy state, or
-    /// bind it to a new reservation. Compare fingerprints before status. Use
-    /// the same retained acquisition/cleanup rules as `begin_turn`; a separate
-    /// lookup followed by insertion is insufficient across independent handles.
+    /// bind it to a new reservation. Compare fingerprints before status or
+    /// generation. Use the same retained acquisition/cleanup rules as
+    /// `begin_turn`; a separate lookup followed by insertion is
+    /// insufficient across independent handles.
     async fn begin_request(
         &self,
         store: Arc<dyn SessionStore>,
@@ -68,6 +89,7 @@ pub trait SessionStore: Send + Sync {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError>;
 
     /// Recover expired reservations and return the canonical request outcome

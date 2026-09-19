@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO session_turn (\n    session_id, turn_position, status, error_type, lease_expires_at, created_at, updated_at,\n    owner_token, turn_options, host_id, host_request, model_snapshot\n)\nSELECT ?, ?, 'running', NULL, ?, ?, ?, randomblob(16), ?, ?, ?,\n       json_object('generation', model_generation, 'key', registration_key,\n                   'revision', registration_revision, 'provider', provider, 'model', model)\nFROM session WHERE id = ?\nRETURNING owner_token AS \"owner_token!: Vec<u8>\"\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_token!: Vec<u8>",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "owner_token"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "59cc836739971770f50fa9536eb270e2b953d155c30dea13575b83681bf0e5d5"
+}

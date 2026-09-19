@@ -1095,10 +1095,14 @@ identity. A host-validated comparison OID stays fixed throughout execution; work
 Independent handles share local admission by backing-store and session identity, held
 through acquisition and abandoned-owner cleanup. Failed cleanup retains admission until
 reconciliation succeeds; cross-process fencing remains the backend's responsibility.
-Host-ID submissions classify duplicates before local admission rejection, while the
-store atomically binds new IDs and effective-request fingerprints to reservations.
-Completed retries return recorded outcomes; active, failed, or interrupted requests
-remain inspectable without re-execution. Recovery includes the turn's write intents and
+Idle model switching uses the same admission and effect-settlement boundary. Stores
+increment a persisted selection generation and clear continuation atomically; turn
+acquisition compares the handle's generation before execution. Stale handles must
+resume, even after an A-to-B-to-A switch. Turn model snapshots remain immutable. Host-ID
+submissions classify duplicates before local admission rejection, while the store
+atomically binds new IDs and effective-request fingerprints to reservations. Completed
+retries return recorded outcomes; active, failed, or interrupted requests remain
+inspectable without re-execution. Recovery includes the turn's write intents and
 outcomes, independently of bounded context replay. Controlled durable and one-shot turns
 expose a separately retained `TurnControl`. Cancellation stops the waiter while
 acquisition, terminal acknowledgment, and cleanup retain their owners. `settled()`

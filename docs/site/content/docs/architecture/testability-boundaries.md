@@ -102,19 +102,22 @@ SQLite and `MemoryStore`, covering admission, bounded history, terminal states, 
 journal ownership. Host-request conformance also covers atomic duplicates, effective
 configuration conflicts, stopped outcomes, pending effects, and SQLite reopen.
 Controlled request tests retain cancellation/commit races and lost acknowledgments.
-Memory clones share state; tests verify independent instances, expiry recovery,
-comparison compatibility, and canonical records outside replay budgets.
-Barrier-controlled store fixtures exercise stalled renewal and terminal persistence,
-acknowledgement loss, and finalization races. SQLite tests verify owner fencing, expired
-leases, journal settlement, and reopen behavior. The backend also injects a timestamp
-source and a reservation observer. The observer marks the boundary after SQLite commits
-a turn reservation, allowing tests to exercise cancellation at that point without
-conditional production control flow. Unit suites and their fixtures live in separate
-test files. Shared-engine tests compare provider requests across durable and ephemeral
-execution. Persistence tests cover options snapshots, legacy reads without live
-repository validation, and continuation invalidation against canonical configuration.
-Host comparison validation shares the bounded repository command runner; real-Git
-fixtures cover pinned OIDs and nested scopes; terminal lifecycle tests retain the
+Model-switch conformance covers stale handles, A-to-B-to-A reopen, canonical history
+compatibility, continuation isolation, and recovery provenance. Admission barriers
+exercise switching against unacknowledged acquisition and dropped switch waiters. Memory
+clones share state; tests verify independent instances, expiry recovery, comparison
+compatibility, and canonical records outside replay budgets. Barrier-controlled store
+fixtures exercise stalled renewal and terminal persistence, acknowledgement loss, and
+finalization races. SQLite tests verify owner fencing, expired leases, journal
+settlement, and reopen behavior. The backend also injects a timestamp source and a
+reservation observer. The observer marks the boundary after SQLite commits a turn
+reservation, allowing tests to exercise cancellation at that point without conditional
+production control flow. Unit suites and their fixtures live in separate test files.
+Shared-engine tests compare provider requests across durable and ephemeral execution.
+Persistence tests cover options snapshots, legacy reads without live repository
+validation, and continuation invalidation against canonical configuration. Host
+comparison validation shares the bounded repository command runner; real-Git fixtures
+cover pinned OIDs and nested scopes; terminal lifecycle tests retain the
 persistence-before-completion boundary. Gated filesystem replacements and journal
 recording verify independent persistence and effect settlement, retained execution after
 caller drop, successor admission, and stale controls across all stores. The filesystem

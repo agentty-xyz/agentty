@@ -20,14 +20,42 @@ use crate::{
 
 type Admissions = HashMap<(StoreIdentity, String), Weak<AsyncMutex<()>>>;
 
+pub(crate) async fn switch_model(
+    store: Arc<dyn SessionStore>,
+    id: String,
+    generation: i64,
+    registration: crate::ModelRegistration,
+) -> Result<i64, SessionError> {
+    recover_abandoned(&store, &id).await?;
+    let admission = admission(store.identity(), &id)?;
+    tokio::spawn(async move {
+        let _admission = admission;
+        store
+            .switch_model(
+                &id,
+                generation,
+                registration.identity(),
+                registration.metadata(),
+                registration.capabilities(),
+            )
+            .await
+    })
+    .await
+    .map_err(|source| SessionError::Store {
+        operation: "switch session model",
+        source: Box::new(source),
+    })?
+}
+
 pub(crate) async fn acquire(
     store: Arc<dyn SessionStore>,
-    session_id: String,
+    selection: (String, i64),
     prompt: String,
     options: TurnOptions,
     settlement: Option<Settlement>,
     effects: Effects,
 ) -> Result<AcquiredTurn, SessionError> {
+    let (session_id, generation) = selection;
     recover_abandoned(&store, &session_id).await?;
     let admission = Arc::new(admission(store.identity(), &session_id)?);
     effects.admit(Arc::clone(&admission));
@@ -42,7 +70,13 @@ pub(crate) async fn acquire(
     // model.
     tokio::spawn(async move {
         store
-            .begin_turn(Arc::clone(&store), &session_id, &prompt, &options)
+            .begin_turn(
+                Arc::clone(&store),
+                &session_id,
+                &prompt,
+                &options,
+                generation,
+            )
             .await
     })
     .await
@@ -54,7 +88,7 @@ pub(crate) async fn acquire(
 
 pub(crate) async fn acquire_request(
     store: Arc<dyn SessionStore>,
-    session_id: String,
+    selection: (String, i64),
     prompt: String,
     options: TurnOptions,
     request: HostRequest,
@@ -62,6 +96,8 @@ pub(crate) async fn acquire_request(
     effects: Effects,
 ) -> Result<HostTurnAcquisition, SessionError> {
     static REQUESTS: OnceLock<Mutex<Admissions>> = OnceLock::new();
+
+    let (session_id, generation) = selection;
     if let Some(record) = store.load_request(&session_id, request.id()).await? {
         record.check_request(&request)?;
 
@@ -89,7 +125,14 @@ pub(crate) async fn acquire_request(
         let _acquisition = acquisition;
 
         store
-            .begin_request(Arc::clone(&store), &session_id, &prompt, &options, &request)
+            .begin_request(
+                Arc::clone(&store),
+                &session_id,
+                &prompt,
+                &options,
+                &request,
+                generation,
+            )
             .await
     })
     .await
@@ -180,14 +223,30 @@ impl SessionStore for AdmittedStore {
         self.store.load_session(id).await
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &crate::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        self.store
+            .switch_model(id, generation, identity, metadata, capabilities)
+            .await
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
-        self.store.begin_turn(store, id, prompt, options).await
+        self.store
+            .begin_turn(store, id, prompt, options, generation)
+            .await
     }
 
     async fn begin_request(
@@ -197,9 +256,10 @@ impl SessionStore for AdmittedStore {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request)
+            .begin_request(store, id, prompt, options, request, generation)
             .await
     }
 

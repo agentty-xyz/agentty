@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) FROM session_turn WHERE session_id = ? AND status IN ('pending', 'running')",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0372ba146b4b6374a8cd48dde9a2c21a5b82eb36f2c2f609b9e6e9cd0d9dbaf0"
+}

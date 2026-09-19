@@ -42,8 +42,25 @@ and registered construction have distinct request fingerprints. Recreate the sam
 registration to recover a registered request after restart. Durable sessions persist the
 registration key and revision; resuming requires the same registration even when adapter
 metadata matches or is absent. Direct construction cannot resume registered sessions,
-and legacy or directly created sessions must resume through direct construction.
-Registry selection does not switch a stored session's model.
+and legacy or directly created sessions must resume through direct construction. Call
+`session.switch_model(&models, "other-model").await?` to select a registered model for
+an idle session. The switch commits its identity and clears native continuation
+atomically. Other handles become stale, including after switching back to their original
+model; resume a fresh handle before executing another turn. Existing host requests can
+still be recovered, and matching retries return recorded outcomes without execution.
+Explicit host execution-identity overrides survive switching.
+
+Switching preserves ordinary completed messages and tool-call/result groups. A target
+without tool capability rejects tool history. Provider-specific reasoning is currently
+nonportable and rejects the switch explicitly, even if that history falls outside the
+replay budget. Unknown registrations, incompatible history, active turns, and unsettled
+local effects leave the selected model unchanged. Dropping the switch waiter can leave a
+committed switch: resume to observe the durable selection.
+
+Custom stores must atomically compare the supplied model generation during admission,
+record each turn's selected identity, and implement `SessionStore::switch_model` against
+the same reservation boundary. `HostTurnRecord::model` exposes execution provenance;
+turns created before this capability retain `None`.
 
 ## Durable sessions
 

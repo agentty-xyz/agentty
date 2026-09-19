@@ -92,6 +92,7 @@ pub(super) async fn complete_native_turn(database: &Database, provider_session_i
             "session-a",
             "first",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");

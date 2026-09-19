@@ -19,6 +19,8 @@ pub(crate) struct Gate {
     pub(crate) fail_cleanup: AtomicBool,
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
+    pub(crate) panic_switch: bool,
+    pub(crate) pause_switch: bool,
     pub(crate) release: Notify,
     pub(crate) store: Arc<dyn SessionStore>,
 }
@@ -31,6 +33,8 @@ impl Gate {
             fail_cleanup: AtomicBool::new(false),
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
+            panic_switch: false,
+            pause_switch: false,
             release: Notify::new(),
             store,
         }
@@ -61,12 +65,37 @@ impl SessionStore for Gate {
         self.store.load_session(id).await
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &ag_harness::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: ag_harness::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        if self.panic_switch {
+            std::panic::resume_unwind(Box::new("injected switch panic"));
+        }
+        if self.pause_switch && !self.after_commit {
+            self.pause().await;
+        }
+        let result = self
+            .store
+            .switch_model(id, generation, identity, metadata, capabilities)
+            .await;
+        if self.pause_switch && self.after_commit {
+            self.pause().await;
+        }
+        result
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         if self.panic_acquire.load(Ordering::SeqCst) {
             std::panic::resume_unwind(Box::new("injected acquisition panic"));
@@ -74,7 +103,10 @@ impl SessionStore for Gate {
         if !self.after_commit {
             self.pause().await;
         }
-        let acquired = self.store.begin_turn(store, id, prompt, options).await?;
+        let acquired = self
+            .store
+            .begin_turn(store, id, prompt, options, generation)
+            .await?;
         if self.after_commit {
             self.pause().await;
         }
@@ -89,9 +121,10 @@ impl SessionStore for Gate {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request)
+            .begin_request(store, id, prompt, options, request, generation)
             .await
     }
 

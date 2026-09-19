@@ -81,6 +81,7 @@ async fn beginning_a_turn_for_a_missing_session_reports_not_found() {
             "missing",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .err()
@@ -120,6 +121,7 @@ END
             "session-a",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .err()
@@ -155,6 +157,7 @@ async fn beginning_a_turn_does_not_reserve_when_history_loading_fails() {
             "session-a",
             "new prompt",
             &turn_options(),
+            0,
         )
         .await
         .err()
@@ -202,6 +205,7 @@ async fn beginning_a_turn_calculates_the_lease_when_reserving() {
             "session-a",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");
@@ -333,6 +337,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
             "session-a",
             "cancelled",
             &turn_options(),
+            0,
         ),
     )
     .await;
@@ -346,6 +351,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
             "session-a",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement turn should begin immediately");
@@ -382,6 +388,7 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
             "session-a",
             "cancelled",
             &turn_options(),
+            0,
         ),
     )
     .await;
@@ -392,6 +399,7 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
             "session-a",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement turn should begin immediately");
@@ -434,6 +442,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
             "session-a",
             "abandoned",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");
@@ -449,6 +458,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
             "session-a",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement turn should begin");
@@ -493,6 +503,7 @@ async fn stopped_ownership_monitor_reports_ownership_loss() {
             "session-a",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");
@@ -546,6 +557,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
             "session-a",
             "first abandoned",
             &turn_options(),
+            0,
         )
         .await
         .expect("first turn should begin");
@@ -555,6 +567,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
             "session-a",
             "second abandoned",
             &turn_options(),
+            0,
         )
         .await
         .expect("second turn should begin");
@@ -580,6 +593,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
             "session-a",
             "second replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("second replacement should begin");
@@ -592,6 +606,7 @@ async fn abandoned_owners_are_scoped_to_their_database() {
             "session-a",
             "first replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("first replacement should begin");
@@ -618,6 +633,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_ownership_loss
             "session-a",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");
@@ -676,6 +692,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
             "session-a",
             "abandoned",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");
@@ -701,6 +718,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
             "session-a",
             "replacement",
             &turn_options(),
+            0,
         )
         .await
         .expect("replacement turn should begin");
@@ -742,6 +760,7 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
                 "session-a",
                 "abandoned",
                 &turn_options(),
+                0,
             )
             .await
             .expect("turn should begin");
@@ -816,6 +835,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
             "session-a",
             "pending",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn should begin");

@@ -27,7 +27,7 @@ async fn fixture() -> (Database, TurnGuard) {
         .await
         .expect("session");
     let acquired = database
-        .begin_turn(Arc::new(database.clone()), "session", "write", &options)
+        .begin_turn(Arc::new(database.clone()), "session", "write", &options, 0)
         .await
         .expect("turn");
 

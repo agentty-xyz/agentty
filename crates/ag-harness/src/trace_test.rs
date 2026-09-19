@@ -800,14 +800,30 @@ impl SessionStore for TracedWriteStore {
         self.store.load_session(id).await
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &crate::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        self.store
+            .switch_model(id, generation, identity, metadata, capabilities)
+            .await
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
-        self.store.begin_turn(store, id, prompt, options).await
+        self.store
+            .begin_turn(store, id, prompt, options, generation)
+            .await
     }
 
     async fn begin_request(
@@ -817,9 +833,10 @@ impl SessionStore for TracedWriteStore {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.store
-            .begin_request(store, id, prompt, options, request)
+            .begin_request(store, id, prompt, options, request, generation)
             .await
     }
 

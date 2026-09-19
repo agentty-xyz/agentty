@@ -32,6 +32,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
             "session",
             "prompt",
             &turn_options(),
+            0,
         )
         .await
         .expect("turn");
@@ -127,7 +128,7 @@ async fn failed_drop_cleanup_remains_registered_for_owner_scoped_recovery() {
         .await
         .expect("remove fault");
     let replacement = store
-        .begin_turn(store.clone(), "session", "replacement", &turn_options())
+        .begin_turn(store.clone(), "session", "replacement", &turn_options(), 0)
         .await
         .expect("recover owner");
 
@@ -166,7 +167,7 @@ async fn recovery_without_a_retained_handle_uses_the_current_store() {
         Vec::<crate::TurnOwner>::new()
     );
     let successor = store
-        .begin_turn(store.clone(), "session", "successor", &turn_options())
+        .begin_turn(store.clone(), "session", "successor", &turn_options(), 0)
         .await
         .expect("successor is admitted");
 

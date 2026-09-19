@@ -21,7 +21,7 @@ use ag_harness::{
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
-use gate::Gate;
+pub(crate) use gate::Gate;
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -79,7 +79,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .await
         .expect("create");
     let acquired = store
-        .begin_turn(Arc::clone(&store), "session", "first", &options())
+        .begin_turn(Arc::clone(&store), "session", "first", &options(), 0)
         .await
         .expect("begin")
         .activate()
@@ -89,7 +89,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
     // Act
     assert!(matches!(
         store
-            .begin_turn(Arc::clone(&store), "session", "busy", &options())
+            .begin_turn(Arc::clone(&store), "session", "busy", &options(), 0)
             .await,
         Err(SessionError::Busy { .. })
     ));
@@ -117,7 +117,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .await
         .expect("settle after terminal");
     let successor = store
-        .begin_turn(Arc::clone(&store), "session", "second", &options())
+        .begin_turn(Arc::clone(&store), "session", "second", &options(), 0)
         .await
         .expect("successor");
     store.interrupt(&owner).await.expect("stale interrupt");
@@ -191,7 +191,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .await
                 .expect("create");
             let turn = store
-                .begin_turn(store.clone(), &id, "first", &options())
+                .begin_turn(store.clone(), &id, "first", &options(), 0)
                 .await
                 .expect("turn");
             let write = store
@@ -222,7 +222,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .await
                 .expect("complete");
             let successor = store
-                .begin_turn(store.clone(), &id, "successor", &options())
+                .begin_turn(store.clone(), &id, "successor", &options(), 0)
                 .await
                 .expect("successor");
             store
@@ -257,7 +257,7 @@ async fn conflicting_write_settlements_have_one_winner() {
             .await
             .expect("create");
         let turn = store
-            .begin_turn(store.clone(), "settlement-race", "prompt", &options())
+            .begin_turn(store.clone(), "settlement-race", "prompt", &options(), 0)
             .await
             .expect("turn");
         let write = store
@@ -306,8 +306,8 @@ async fn concurrent_creation_and_acquisition_have_one_winner() {
         );
         let creations = [first, second];
         let (first, second) = tokio::join!(
-            store.begin_turn(store.clone(), "race", "first", &selected),
-            store.begin_turn(store.clone(), "race", "second", &selected),
+            store.begin_turn(store.clone(), "race", "first", &selected, 0),
+            store.begin_turn(store.clone(), "race", "second", &selected, 0),
         );
         let acquisitions = [first, second];
 
@@ -343,7 +343,7 @@ async fn owner_lookup_preserves_identity_across_activation() {
             .await
             .expect("create");
         let acquired = store
-            .begin_turn(Arc::clone(&store), "identity", "prompt", &options())
+            .begin_turn(Arc::clone(&store), "identity", "prompt", &options(), 0)
             .await
             .expect("acquire");
         let active = acquired.owner();

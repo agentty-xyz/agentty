@@ -59,7 +59,13 @@ impl GatedStore {
             .expect("session");
         let backend: Arc<dyn SessionStore> = store.clone();
         let acquired = backend
-            .begin_turn(Arc::clone(&backend), "session", "prompt", &turn_options())
+            .begin_turn(
+                Arc::clone(&backend),
+                "session",
+                "prompt",
+                &turn_options(),
+                0,
+            )
             .await
             .expect("turn");
 
@@ -96,14 +102,30 @@ impl SessionStore for GatedStore {
         self.database.load_session(id).await
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &crate::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: crate::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        self.database
+            .switch_model(id, generation, identity, metadata, capabilities)
+            .await
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
-        self.database.begin_turn(store, id, prompt, options).await
+        self.database
+            .begin_turn(store, id, prompt, options, generation)
+            .await
     }
 
     async fn begin_request(
@@ -113,9 +135,10 @@ impl SessionStore for GatedStore {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.database
-            .begin_request(store, id, prompt, options, request)
+            .begin_request(store, id, prompt, options, request, generation)
             .await
     }
 

@@ -165,15 +165,32 @@ impl SessionStore for Gate {
         self.store.load_session(id).await
     }
 
+    async fn switch_model(
+        &self,
+        id: &str,
+        generation: i64,
+        identity: &ag_harness::ExecutionIdentity,
+        metadata: Option<ModelMetadata>,
+        capabilities: ag_harness::ModelCapabilities,
+    ) -> Result<i64, SessionError> {
+        self.store
+            .switch_model(id, generation, identity, metadata, capabilities)
+            .await
+    }
+
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
         id: &str,
         prompt: &str,
         options: &TurnOptions,
+        generation: i64,
     ) -> Result<AcquiredTurn, SessionError> {
         self.pause(Phase::Acquire).await;
-        let turn = self.store.begin_turn(store, id, prompt, options).await?;
+        let turn = self
+            .store
+            .begin_turn(store, id, prompt, options, generation)
+            .await?;
         self.pause(Phase::AcquireAck).await;
         Ok(turn)
     }
@@ -185,6 +202,7 @@ impl SessionStore for Gate {
         prompt: &str,
         options: &TurnOptions,
         request: &HostRequest,
+        generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         if self.phase == Phase::AcquirePanic {
             std::panic::resume_unwind(Box::new("injected host acquisition panic"));
@@ -192,7 +210,7 @@ impl SessionStore for Gate {
         self.pause(Phase::Acquire).await;
         let turn = self
             .store
-            .begin_request(store, id, prompt, options, request)
+            .begin_request(store, id, prompt, options, request, generation)
             .await?;
         self.pause(Phase::AcquireAck).await;
 

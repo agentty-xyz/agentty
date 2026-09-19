@@ -177,6 +177,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         started_first: Arc::clone(&first_started),
     });
     let mut first = Session {
+        model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
@@ -186,6 +187,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
+        model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
@@ -275,6 +277,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         started: Arc::clone(&first_started),
     });
     let mut first = Session {
+        model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
@@ -284,6 +287,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
+        model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
@@ -361,6 +365,7 @@ END
         started_first: Arc::clone(&request_started),
     });
     let mut session = Session {
+        model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),

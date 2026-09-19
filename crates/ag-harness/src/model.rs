@@ -25,6 +25,17 @@ pub trait Model: Send + Sync {
         None
     }
 
+    /// Checks adapter-specific output-schema requirements without execution.
+    /// Implementations accepting every validated schema may use the default.
+    ///
+    /// # Errors
+    /// Returns an unsupported-schema error before committing a model switch.
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        let _ = schema;
+
+        Ok(())
+    }
+
     /// Completes one model request with optional provider metadata and
     /// continuation state.
     ///
@@ -199,6 +210,10 @@ impl ModelClient {
 impl Model for ModelClient {
     fn metadata(&self) -> Option<ModelMetadata> {
         Some(self.metadata.clone())
+    }
+
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        self.backend.validate_schema(schema)
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {

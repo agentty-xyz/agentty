@@ -553,3 +553,17 @@ async fn reports_meta_http_failure_without_exposing_the_key() {
     assert!(message.contains("invalid API key"));
     assert!(!message.contains("test-key"));
 }
+
+#[test]
+fn wrapper_preserves_adapter_schema_preflight() {
+    // Arrange
+    let model = Muse::from_environment(MUSE_SPARK_1_3, default_environment).expect("model");
+    let scalar = OutputSchema::new(json!({"type":"string"})).expect("scalar");
+
+    // Act / Assert
+    assert!(model.validate_schema(&person_schema()).is_ok());
+    assert!(matches!(
+        model.validate_schema(&scalar),
+        Err(model::ModelError::UnsupportedOutputSchema { .. })
+    ));
+}

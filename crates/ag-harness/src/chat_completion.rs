@@ -135,16 +135,24 @@ impl ChatCompletionBackend {
         (self.policy.telemetry_name, &self.model)
     }
 
+    pub(crate) fn validate_schema(
+        &self,
+        schema: &schema_contract::OutputSchema,
+    ) -> Result<(), model::ModelError> {
+        if !schema.has_object_root() {
+            return Err(model::ModelError::UnsupportedOutputSchema {
+                reason: self.policy.unsupported_schema_reason.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Generates raw structured output through the shared wire lifecycle.
     pub(crate) async fn generate(
         &self,
         request: &model::ModelRequest,
     ) -> Result<GeneratedResponse, model::ModelError> {
-        if !request.schema().has_object_root() {
-            return Err(model::ModelError::UnsupportedOutputSchema {
-                reason: self.policy.unsupported_schema_reason.to_string(),
-            });
-        }
+        self.validate_schema(request.schema())?;
         let tools: Vec<_> = request
             .tools()
             .iter()
