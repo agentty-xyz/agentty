@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{
+use ag_contracts::{
     AgentError, AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnEvent,
     TurnRequest, TurnResult,
 };
@@ -527,14 +527,10 @@ pub(super) async fn run_turn_with_cancellation(
     req: TurnRequest,
     event_tx: mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<TurnResult, AgentError> {
-    let result = ag_worker::run_turn(
-        context.channel.as_ref(),
-        context.session_id.to_string(),
-        req,
-        event_tx,
-        cancel_token,
-    )
-    .await;
+    let result = context
+        .session_run
+        .submit(req, event_tx, cancel_token)
+        .await;
     if matches!(result, Err(AgentError::InterruptedByUser(_)))
         && let Ok(mut pid) = context.child_pid.lock()
     {

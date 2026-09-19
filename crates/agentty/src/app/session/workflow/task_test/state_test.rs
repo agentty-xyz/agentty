@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use ag_agent as agent;
+use ag_contracts::OneShotError;
 use ag_git::{GitError, MockGitClient};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -178,10 +178,12 @@ async fn test_status_transition_from_services_updates_handle_and_persistence() {
         )),
         app_event_tx,
         AppServiceDeps {
-            session_channel_factory: Arc::new(
-                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
             ),
-            app_server_client_override: Some(crate::test_support::mock_app_server()),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(
+                crate::test_support::mock_app_server(),
+            ),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,
             fs_client: Arc::new(fs::MockFsClient::new()),
@@ -304,7 +306,7 @@ async fn test_run_agent_assist_task_returns_error_for_non_zero_exit_status() {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().returning(|_| {
-        Err(agent::OneShotError::new(
+        Err(OneShotError::new(
             "One-shot agent command failed with exit code 7: assist failed",
         ))
     });

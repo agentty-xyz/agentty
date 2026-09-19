@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
+use ag_contracts::AgentRequestKind;
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptTextSource};
 
 use crate::agent;
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
-use crate::channel::AgentRequestKind;
 
 /// Reads the latest replay transcript, preferring the live source over the
 /// queued snapshot.
@@ -44,7 +44,7 @@ pub(crate) fn turn_prompt_for_runtime(
     request_kind: &AgentRequestKind,
     replay_transcript: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
-    personality: &crate::channel::PersonalityPrompt,
+    personality: &ag_contracts::PersonalityPrompt,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
     workspace_root: &Path,
 ) -> Result<TurnPrompt, AppServerError> {

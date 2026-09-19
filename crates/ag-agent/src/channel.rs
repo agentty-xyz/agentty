@@ -6,16 +6,8 @@
 
 pub(crate) mod app_server;
 pub(crate) mod cli;
-mod contract;
 mod factory;
 
-pub(crate) use ag_runtime::PersonalityPromptUpdate;
-#[cfg(any(test, feature = "test-utils"))]
-pub use contract::MockAgentChannel;
-pub use contract::{
-    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, PersonalityPrompt,
-    SessionRef, StartSessionRequest, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
-};
 pub use factory::create_agent_channel;
 #[cfg(any(test, feature = "test-utils"))]
 pub use factory::create_cli_agent_channel_with_backend;

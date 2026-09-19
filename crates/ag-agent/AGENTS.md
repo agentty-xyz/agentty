@@ -1,11 +1,11 @@
 # ag-agent
 
-External-agent discovery and transport adapters implementing `ag-runtime` contracts.
+External-agent discovery and transport adapters implementing `ag-contracts` contracts.
 
 ## Boundaries
 
 - Keep provider routing, prompt translation, CLI/app-server transports, retries, and
-  resource cleanup here. Shared execution contracts belong in `ag-runtime`, selection
+  resource cleanup here. Shared execution contracts belong in `ag-contracts`, selection
   models in `ag-session`, and scheduling in `ag-worker`.
 - Keep concrete transports and parsers private; hosts use the curated crate-root API.
 - Keep subprocess execution behind the shared internal executor and injected transport
@@ -13,10 +13,11 @@ External-agent discovery and transport adapters implementing `ag-runtime` contra
 
 ## Integration
 
-- Compose adapters through the public factories at the host composition boundary.
-  Agentty passes `AgentChannel` and `OneShotClient` to the worker; its application
-  workflows submit through `ag-worker::RunClient` and must not execute raw runtime
-  clients. Callers must not select transport-specific helpers.
+- Export adapter-owned APIs only. Consumers import execution contracts and mocks from
+  `ag-contracts`, and selection models from `ag-session`.
+- Only `ag-runtime` composes these adapters. Applications submit through `ag-worker` and
+  never retain raw transport handles. Keep provider-specific fixture injection behind
+  `test-utils`.
 - Preserve cancellation cleanup and charge every provider attempt, including retries and
   protocol repairs, against the supplied `ProviderCallBudget`.
 - Await session cleanup after provider-turn panics. Adapters that detach cleanup work

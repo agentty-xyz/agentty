@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_agent::{
+use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, PermissionMode, ProviderCallBudget,
     is_input_size_error,
 };

@@ -9,8 +9,9 @@ use std::process::Command;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ag_agent::{AppServerClient, MockAppServerClient, StaticAgentAvailabilityProbe};
 use ag_git as git;
+use ag_session::StaticAgentAvailabilityProbe;
+use ag_worker::test_support::{AppServerClient, MockAppServerClient};
 use ratatui::buffer::{Buffer, Cell};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::{Interest, Subscriber};
@@ -326,9 +327,7 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
-        .with_session_channel_factory(Arc::new(
-            app::test_support::TestSessionChannelFactory::default(),
-        ))
+        .with_session_run_factory(Arc::new(app::test_support::TestSessionRunFactory::default()))
         .with_agent_availability_probe(Arc::new(StaticAgentAvailabilityProbe {
             available_agent_kinds,
         }))

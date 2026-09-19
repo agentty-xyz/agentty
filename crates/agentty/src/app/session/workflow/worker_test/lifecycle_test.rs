@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use ag_agent::{AgentRequestKind, MockAgentChannel};
+use ag_contracts::{AgentRequestKind, MockAgentChannel};
 
 use super::super::super::post_turn::TurnPersonalityPersistence;
 use super::super::super::turn::resolve_turn_personality;
@@ -321,7 +321,7 @@ async fn test_resolve_turn_personality_clears_removed_selection() {
     // Assert
     assert_eq!(
         resolution.prompt,
-        ag_agent::PersonalityPrompt::cleared(true)
+        ag_contracts::PersonalityPrompt::cleared(true)
     );
     assert_eq!(
         resolution.persistence,

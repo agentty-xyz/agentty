@@ -1,12 +1,12 @@
 use std::path::Path;
 
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::ProtocolRequestProfile;
+use ag_session::AgentModel;
 use serde_json::Value;
 use tempfile::tempdir;
 
 use crate::agent::app_server::codex::{lifecycle, policy};
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::session::SpeedMode;
 
 #[test]
 /// Verifies Codex auto-edit accepts command approvals when the app-server
@@ -22,7 +22,7 @@ fn build_pre_action_approval_response_accepts_command_requests() {
     // Act
     let approval_response = policy::build_server_request_response(
         &response_value,
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         session_folder,
     )
     .expect("approval response should be generated");
@@ -50,7 +50,7 @@ fn build_thread_start_payload_uses_unrestricted_auto_edit_policy() {
     let payload = lifecycle::build_thread_start_payload(
         folder.path(),
         AgentModel::Gpt56Sol.as_str(),
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
         "thread-start-1",
@@ -90,7 +90,7 @@ fn build_pre_action_approval_response_accepts_session_local_file_change() {
     // Act
     let approval_response = policy::build_server_request_response(
         &response_value,
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         session_folder,
     )
     .expect("approval response should be generated");
@@ -122,7 +122,7 @@ fn build_pre_action_approval_response_rejects_outside_file_change() {
     // Act
     let approval_response = policy::build_server_request_response(
         &response_value,
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         session_folder,
     )
     .expect("approval response should be generated");
@@ -154,7 +154,7 @@ fn build_server_request_response_grants_no_additional_permissions() {
     // Act
     let response = policy::build_server_request_response(
         &response_value,
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         session_folder,
     )
     .expect("permission response should be generated");
@@ -187,7 +187,7 @@ fn build_server_request_response_declines_mcp_elicitation() {
     // Act
     let response = policy::build_server_request_response(
         &response_value,
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
         session_folder,
     )
     .expect("elicitation response should be generated");
@@ -213,7 +213,7 @@ fn build_turn_start_payload_sets_structured_output_schema() {
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
         model: AgentModel::Gpt56Sol.as_str(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         prompt: "Implement the task".into(),
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         reasoning_level: ReasoningLevel::default(),
@@ -242,7 +242,7 @@ fn build_turn_start_payload_sets_direct_focused_review_schema() {
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
         model: AgentModel::Gpt56Sol.as_str(),
-        permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+        permission_mode: ag_contracts::PermissionMode::ReadOnly,
         prompt: "Review the task".into(),
         protocol_profile: ProtocolRequestProfile::FocusedReview,
         reasoning_level: ReasoningLevel::default(),

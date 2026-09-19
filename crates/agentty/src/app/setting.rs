@@ -2,8 +2,8 @@ use tracing::warn;
 
 use crate::app::AppServices;
 use crate::domain::agent::{
-    self, AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel,
-    ResponseStyle, SpeedMode,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
+    SpeedMode,
 };
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
@@ -777,7 +777,11 @@ fn resolve_available_model(
     available_agent_kinds: &[AgentKind],
     fallback_model: AgentModel,
 ) -> AgentModel {
-    agent::resolve_model_for_available_agent_kinds(model, available_agent_kinds, fallback_model)
+    ag_session::resolve_model_for_available_agent_kinds(
+        model,
+        available_agent_kinds,
+        fallback_model,
+    )
 }
 
 /// Resolves one stored agent/model selection against the currently available
@@ -799,7 +803,7 @@ fn resolve_available_selection(
         .copied()
         .unwrap_or(selection.kind());
     let agent_kind =
-        agent::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
+        ag_session::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
 
     AgentSelection::new(agent_kind, model)
 }
@@ -901,7 +905,7 @@ fn fallback_selection_for_available_model(
 ) -> AgentSelection {
     let fallback_agent_kind = fallback_agent_kind_for_model(model, AgentKind::Antigravity);
     let agent_kind =
-        agent::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
+        ag_session::resolve_agent_kind_for_model(model, available_agent_kinds, fallback_agent_kind);
 
     AgentSelection::new(agent_kind, model)
 }

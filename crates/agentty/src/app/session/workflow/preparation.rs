@@ -1,8 +1,6 @@
 //! Background workspace preparation for persisted conversation identities.
 
-use std::path::PathBuf;
-
-use ag_agent as agent;
+use std::path::{Path, PathBuf};
 
 use super::{isolation, session_branch, session_folder};
 use crate::app::session::SessionError;
@@ -41,8 +39,10 @@ impl SessionManager {
             .await?
             .ok_or(SessionError::NotFound)?;
         let selection = parse_persisted_session_agent_model(Some(&row.agent), &row.model);
-        let backend = agent::create_backend(selection.kind());
-        let result = Self::prepare_workspace(services, &preparation, &row, backend.as_ref()).await;
+        let result = Self::prepare_workspace(services, &preparation, &row, |folder| {
+            ag_worker::setup_backend(selection.kind(), folder).map_err(|error| error.to_string())
+        })
+        .await;
         let error = result.as_ref().err().map(ToString::to_string);
         let state = if result.is_ok() {
             SessionPreparationState::Ready
@@ -85,7 +85,7 @@ impl SessionManager {
         services: &AppServices,
         preparation: &SessionPreparationRow,
         row: &SessionRow,
-        backend: &dyn agent::AgentBackend,
+        setup: impl FnOnce(&Path) -> Result<(), String>,
     ) -> Result<(), SessionError> {
         let session_id = &preparation.session_id;
         let project = services
@@ -122,7 +122,7 @@ impl SessionManager {
             )
             .await?;
         }
-        backend.setup(&folder).map_err(|error| {
+        setup(&folder).map_err(|error| {
             SessionError::Workflow(format!("Failed to setup session backend: {error}"))
         })?;
         if row.parent_session_id.is_some() {

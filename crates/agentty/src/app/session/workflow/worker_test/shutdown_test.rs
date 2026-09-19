@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::MockAgentChannel;
+use ag_contracts::MockAgentChannel;
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerHost};

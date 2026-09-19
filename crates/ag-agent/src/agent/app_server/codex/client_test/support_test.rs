@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use ag_session::AgentModel;
 use mockall::Sequence;
 use serde_json::Value;
 
@@ -9,7 +10,6 @@ use crate::agent::app_server::stdio_transport::{
     AppServerStdioTransport, MockAppServerRuntimeTransport as MockCodexRuntimeTransport,
 };
 use crate::app_server_transport;
-use crate::model::agent::AgentModel;
 
 /// Creates runtime state for one synthetic Codex session path.
 pub(super) fn build_runtime_state(thread_id: &str, latest_input_tokens: u64) -> CodexRuntimeState {
@@ -19,7 +19,7 @@ pub(super) fn build_runtime_state(thread_id: &str, latest_input_tokens: u64) -> 
     let mut state = CodexRuntimeState::new(
         folder,
         AgentModel::Gpt56Sol.as_str().to_string(),
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
     );
     state.thread_id = thread_id.to_string();
     state.latest_input_tokens = latest_input_tokens;

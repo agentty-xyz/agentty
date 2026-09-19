@@ -21,7 +21,7 @@ pub enum AppError {
 
     /// An isolated agent prompt failed at the app layer.
     #[error("{0}")]
-    OneShot(#[from] ag_agent::OneShotError),
+    OneShot(#[from] ag_contracts::OneShotError),
 
     /// A workflow-specific or startup failure with a contextual message.
     #[error("{0}")]

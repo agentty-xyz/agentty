@@ -30,7 +30,8 @@ these constraints:
 | ------------------------- | -------------------------------------------------------------------- |
 | `crates/ag-forge/`        | Shared forge review-request library (`gh`/`glab` adapters).          |
 | `crates/ag-git/`          | Shared git, worktree, sync, rebase, and merge library.               |
-| `crates/ag-runtime/`      | Shared execution contracts and transport-neutral turn settings.      |
+| `crates/ag-contracts/`    | Shared execution contracts and transport-neutral turn settings.      |
+| `crates/ag-runtime/`      | Runtime composition, harness dispatch, and provider lifecycle.       |
 | `crates/ag-worker/`       | Headless scheduling, cancellation, heartbeat, and recovery.          |
 | `crates/ag-agent/`        | External-agent discovery and transport implementations.              |
 | `crates/ag-protocol/`     | Shared structured response protocol and turn prompt payload library. |
@@ -150,15 +151,21 @@ could prompt duplicate creation.
 
 ## Session Channel Composition
 
-`AppClients` injects `SessionChannelFactory` through `AppServices`. The factory
-constructs a channel for a session identifier and provider kind without starting a
-process or executing a turn. Production composition selects the provider adapter; tests
-supply scripted channels through the same interface.
+`AppClients` injects `SessionRunFactory` through `AppServices`. The factory returns a
+worker client for a session identifier and provider kind without starting a process or
+executing a turn. The worker supplies configuration to `ag-runtime`, which constructs
+the adapter. Tests supply scripted worker clients through the same interface.
 
-`SessionWorkerService` asks for a channel only when creating a worker. The worker reuses
-that channel across turns and owns cancellation and shutdown. Clearing the worker after
-a model switch causes the next submission to compose a fresh channel; per-turn settings
-remain in the turn request. Utility prompts keep their existing `RunClient` composition.
+`SessionWorkerService` asks composition for a `SessionRunClient` only when creating a
+worker. The runtime retains the adapter behind that worker-owned client; application
+workflows never construct or retain the raw adapter. `SessionWorkerHandle` creates and
+owns the serial mailbox, task, ordering source, and wakeups. The application host
+supplies command policy and effects, and closes its session client after work settles. A
+model switch waits for in-flight work and holds scheduling while atomically saving the
+selection, conversation reset, and optional project defaults. A failed save releases the
+hold and preserves pending work. After commit, retirement discards pending commands and
+messages and waits for runtime cleanup. The next submission composes a fresh channel.
+Per-turn settings remain in the request. Utility prompts use `RunClient`.
 
 ## Data Channels
 
@@ -413,8 +420,8 @@ flowchart LR
    provider-neutral style guidance; one-shot utility prompts bypass it. A pre-provider
    setup failure cleans prompt attachments, appends the error to the transcript, and
    runs the ordinary turn finalizer so resumed sessions do not remain `InProgress`.
-   Otherwise it calls `AgentChannel::run_turn()`, which streams `TurnEvent` values
-   (loader updates) and returns a `TurnResult`.
+   Otherwise it submits through `SessionRunClient`, whose worker-owned runtime call
+   streams `TurnEvent` values (loader updates) and returns a `TurnResult`.
 1. `workflow/post_turn.rs` appends the final assistant transcript output, then
    `TurnPersistence::apply(...)` transactionally stores the question payload,
    token-usage deltas, and provider conversation markers.
@@ -622,42 +629,23 @@ share the same busy state.
 
 ## Agent Channel Architecture
 
-<a id="architecture-agent-channel"></a> Session workers are transport-agnostic through
-`AgentChannel`:
+<a id="architecture-agent-channel"></a> Composition selects an external harness adapter
+once per worker. Session workflows execute through the worker client and runtime
+contract; they never construct or invoke the adapter directly.
 
 ```mermaid
 flowchart TD
-  worker["app/session/workflow/worker.rs"]
-  turn["app/session/workflow/turn.rs"]
-  factory["ag-agent root factory"]
-  provider["Provider registry<br/>ag-agent/src/agent/provider.rs"]
-  cli_mode["transport_mode() -> Cli"]
-  cli_channel["CliAgentChannel<br/>Claude; subprocess per turn"]
-  app_server_mode["transport_mode() -> AppServer"]
-  app_server_client["create_app_server_client()"]
-  app_server_channel["AppServerAgentChannel<br/>Antigravity/Codex/Gemini"]
-  client_trait["AppServerClient"]
-  codex_client["RealCodexAppServerClient"]
-  gemini_client["RealGeminiAcpClient"]
-  antigravity_client["RealAntigravityClient"]
-
-  worker --> turn
-  turn --> factory
-  factory --> provider
-  provider --> cli_mode
-  cli_mode --> cli_channel
-  provider --> app_server_mode
-  app_server_mode --> app_server_client
-  app_server_mode --> app_server_channel
-  app_server_channel --> client_trait
-  client_trait --> codex_client
-  client_trait --> gemini_client
-  client_trait --> antigravity_client
+  composition[Application composition] --> worker[ag-worker session client]
+  workflow[Application workflow] --> worker
+  worker --> runtime[ag-runtime]
+  runtime --> adapter[ag-agent harness adapter]
+  adapter --> harness[External CLI or app server]
+  harness --> model[LLM]
 ```
 
-<a id="architecture-key-types"></a> Key types (`crates/ag-runtime/src/contract.rs`,
-re-exported by the `ag-agent` crate root, with prompt payloads owned by `ag-protocol`
-and re-exported through `domain/turn_prompt.rs`):
+<a id="architecture-key-types"></a> Key types are imported from
+`crates/ag-contracts/src/contract.rs`; prompt payloads belong to `ag-protocol` and are
+re-exported through `domain/turn_prompt.rs`:
 
 | Type               | Purpose                                                  |
 | ------------------ | -------------------------------------------------------- |
@@ -1137,13 +1125,22 @@ has no Agentty runtime integration.
 
 ## Headless execution ownership
 
-`ag-runtime` owns `AgentChannel` and `OneShotClient`. A one-shot request identifies its
-harness and model independently; external adapters resolve those identifiers.
-`ag-worker` serializes commands and chat messages using their shared submission order.
-Agentty supplies question-mode policy, preparation gates, UI events, and ordered Git and
-forge workflows through the host boundary. Closing the mailbox drains runnable work; the
-host explicitly cancels remaining paused commands and removes queued messages before
-shutdown, notifying waiting callers and updating operation records.
+`ag-contracts` owns `AgentChannel` and `OneShotClient`. `ag-runtime` owns their concrete
+composition and dispatch. A one-shot request identifies its harness and model
+independently; external adapters resolve those identifiers. `ag-worker` serializes
+commands and chat messages using their shared submission order. Agentty supplies
+question-mode policy, preparation gates, UI events, and ordered Git and forge workflows
+through the host boundary. Closing the mailbox drains runnable work; the host explicitly
+cancels remaining paused commands and removes queued messages before shutdown, notifying
+waiting callers and updating operation records.
+
+Retirement serializes cancellation with command admission, including submissions from
+retained handle clones. Mailbox draining selects the oldest runnable command or message
+after each bounded batch, then yields so continuous submissions cannot prevent
+execution, cancellation, or a scheduling pause. Model switches acquire a reversible
+pause before reading defaults or saving the selection. Lookup and save failures release
+the pause with pending work intact; a successful save retires the old runtime and
+discards its pending work.
 
 Cancellation drops the turn future without polling it again, then gives the channel
 owner five seconds to shut down. CLI adapters isolate each execution in a process group
@@ -1162,21 +1159,22 @@ ownership of the application root.
 ## Utility run supervision
 
 All utility prompts enter `ag-worker::RunWorker` through `RunClient`. The application
-composition root injects the runtime and run repository. Session post-processing awaits
-child utilities without re-entering its serial queue; independent background utilities
-share bounded execution capacity. Caller drop and inherited cancellation stop execution,
-and application shutdown closes admission and waits for terminal bookkeeping. Nested
-scopes preserve all parent cancellation sources. App-server utilities signal shutdown
-and keep polling the provider turn until its runtime is released; the worker then
-records the terminal state, including failure when runtime polling panics. Session
-shutdown is also awaited when an initial or repair provider turn panics. Application
-shutdown uses one five-second deadline for worker, creation, and cleanup tasks; expiry
-forces detached adapter tasks to drop their owned runtimes. Unfinished durable records
-are left for startup recovery rather than extending terminal shutdown indefinitely.
-Session deletion waits for this cleanup before removing resources; terminal cancellation
-schedules the same wait in its background resource cleanup. Completed session trackers
-are evicted. Canceled trackers are evicted only after the run repository durably closes
-session admission, so detached submissions cannot restart model work. Startup recovery
-fails abandoned utility runs without replay.
+composition root supplies worker configuration and the run repository; the worker
+constructs its runtime through `ag-runtime`. Session post-processing awaits child
+utilities without re-entering its serial queue; independent background utilities share
+bounded execution capacity. Caller drop and inherited cancellation stop execution, and
+application shutdown closes admission and waits for terminal bookkeeping. Nested scopes
+preserve all parent cancellation sources. App-server utilities signal shutdown and keep
+polling the provider turn until its runtime is released; the worker then records the
+terminal state, including failure when runtime polling panics. Session shutdown is also
+awaited when an initial or repair provider turn panics. Application shutdown uses one
+five-second deadline for worker, creation, and cleanup tasks; expiry forces detached
+adapter tasks to drop their owned runtimes. Unfinished durable records are left for
+startup recovery rather than extending terminal shutdown indefinitely. Session deletion
+waits for this cleanup before removing resources; terminal cancellation schedules the
+same wait in its background resource cleanup. Completed session trackers are evicted.
+Canceled trackers are evicted only after the run repository durably closes session
+admission, so detached submissions cannot restart model work. Startup recovery fails
+abandoned utility runs without replay.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.

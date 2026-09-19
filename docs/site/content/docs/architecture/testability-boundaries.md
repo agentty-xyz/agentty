@@ -31,8 +31,8 @@ application ports:
 | -------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GitClient`                | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness and execution, merge, merge-conflict probes, rebase, diff, bounded preview-file reads, push, status, ahead/behind).                                                                                                                                                                                                                                                                    |
 | `FsClient`                 | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `AgentChannel`             | `crates/ag-runtime/src/contract.rs`          | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `OneShotClient`            | `crates/ag-runtime/src/one_shot.rs`          | Isolated structured prompts, including transport routing, protocol repair, scoped runtime reuse and cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                |
+| `AgentChannel`             | `crates/ag-contracts/src/contract.rs`        | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `OneShotClient`            | `crates/ag-contracts/src/one_shot.rs`        | Isolated structured prompts, including transport routing, protocol repair, scoped runtime reuse and cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                |
 | `AgentBackend`             | `crates/ag-agent/src/agent/backend.rs`       | Per-provider setup and transport command construction.                                                                                                                                                                                                                                                                                                                                                                             |
 | `AppServerClient`          | `crates/ag-agent/src/app_server/contract.rs` | Provider-managed runtime execution and session lifecycle, including app-server RPC and persistent NDJSON processes.                                                                                                                                                                                                                                                                                                                |
 | `ReviewRequestClient`      | `crates/ag-forge/src/client.rs`              | Review-request orchestration, comment loading, and thread reply/resolution through `gh`/`glab`.                                                                                                                                                                                                                                                                                                                                    |
@@ -138,7 +138,7 @@ adapter.
 enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `OneShotError`,
 `ClipboardError`, and so on). Within `ag-agent`, `AppServerError::Transport` retains
 transport-specific causes. The channel adapter maps app-server diagnostics into
-`ag-runtime`'s `AgentError::Runtime` category, keeping worker and host contracts
+`ag-contracts`' `AgentError::Runtime` category, keeping worker and host contracts
 independent of concrete transport error types.
 
 <a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
@@ -200,36 +200,46 @@ worktree names and the pinned version label without relying on their runtime wid
 
 `ag-worker` tests scheduling with injected `WorkQueue` and `WorkerHost` implementations.
 `OperationRepository` is generic over the storage error type and has no SQLite
-requirement. An injected `Clock` drives heartbeat tests. Runtime tests use `ag-runtime`
-mocks to cover cancellation before the first turn poll. CLI adapter tests use a real
-parent and long-lived child to verify process-group cleanup, including parent exit with
-inherited output pipes still open. Closed-mailbox tests cover paused work, operation
-settlement, and caller notifications. Session models and storage depend on contracts
-without pulling in provider transports.
+requirement. An injected `Clock` drives heartbeat tests. Runtime tests use
+`ag-contracts` mocks to cover cancellation before the first turn poll. CLI adapter tests
+use a real parent and long-lived child to verify process-group cleanup, including parent
+exit with inherited output pipes still open. Closed-mailbox tests cover paused work,
+operation settlement, and caller notifications. Session models and storage depend on
+contracts without pulling in provider transports.
 
 ## Session composition boundary
 
-Application tests inject `SessionChannelFactory` before submitting ordinary session
-commands. The default test factory stays offline: non-model worker operations can create
-and shut down a channel, but an unscripted model turn fails the test process, even from
-a detached worker. Tests requiring turns provide a scripted `AgentChannel` or explicitly
-compose an isolated CLI or mocked app-server adapter. Worker reuse, model-switch
-replacement, and shutdown follow the production path.
+Application tests inject `SessionRunFactory`, which returns worker clients, before
+submitting ordinary session commands. Runtime configuration and raw adapter injection
+are separated: production constructs runtimes inside the worker, while test-only worker
+facilities wrap scripted channels and CLI backends. The default test factory stays
+offline: non-model worker operations can create and shut down a channel, but an
+unscripted model turn fails the test process, even from a detached worker. Tests
+requiring turns supply scripted worker clients through `ag-worker` test facilities.
+Worker reuse, model-switch replacement, and shutdown follow the production path. A
+reversible scheduling hold protects pending work while
+`SessionRepository::apply_session_agent_model` atomically saves the selection,
+conversation reset, and optional project defaults. SQLite failure fixtures verify
+rollback, and worker tests verify resumption after releasing the hold.
 
 ## Worker submission boundary
 
-Workflow tests inject `ag-worker::MockRunClient`; worker tests inject runtime and
-persistence boundaries. Deterministic tests cover concurrency, inherited ownership,
-cancellation, heartbeat failures, and terminal persistence. Cancellation tests retain
-independent parent and child tokens, assert app-server shutdown during initial and
-repair turns, and verify session deletion and background cancellation cleanup wait for
-utilities. `RunRepository` atomically rejects admission for durably closed session IDs;
-SQLite tests verify closures survive session deletion, while worker tests cover tracker
-eviction, runtime panics, and closure-persistence failure. Adapter tests also cover
-provider panics during initial and repair turns through shutdown expectations. Deadline
-tests inject stuck turns and shutdown futures, verify runtime resources are dropped, and
-confirm unfinished run records remain recoverable. The source-boundary test rejects raw
-runtime execution from Agentty workflows.
+Utility workflow tests inject `ag-worker::MockRunClient`; session workflow tests receive
+`SessionRunClient` wrapping a scripted runtime through composition. Worker tests inject
+runtime and persistence boundaries. Mailbox tests verify shared ordering, wakeups,
+post-processing serialization, abandonment, and shutdown; public integration tests
+exercise the same submission handles without a frontend. Deterministic tests cover
+concurrency, inherited ownership, cancellation, heartbeat failures, and terminal
+persistence. Cancellation tests retain independent parent and child tokens, assert
+app-server shutdown during initial and repair turns, and verify session deletion and
+background cancellation cleanup wait for utilities. `RunRepository` atomically rejects
+admission for durably closed session IDs; SQLite tests verify closures survive session
+deletion, while worker tests cover tracker eviction, runtime panics, and
+closure-persistence failure. Adapter tests also cover provider panics during initial and
+repair turns through shutdown expectations. Deadline tests inject stuck turns and
+shutdown futures, verify runtime resources are dropped, and confirm unfinished run
+records remain recoverable. The source-boundary test rejects raw runtime execution from
+Agentty workflows.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.
 

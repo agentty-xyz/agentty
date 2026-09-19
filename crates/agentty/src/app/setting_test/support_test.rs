@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_agent::{AgentSelectionMetadata, MockAppServerClient};
 use ag_forge as forge;
 use ag_git as git;
+use ag_session::AgentSelectionMetadata;
+use ag_worker::test_support::MockAppServerClient;
 use tokio::sync::mpsc;
 
 use super::super::{
@@ -45,10 +46,12 @@ pub(super) async fn test_services_with_available_agent_kinds(
         Arc::new(crate::infra::clock::RealClock),
         event_tx,
         crate::app::service::AppServiceDeps {
-            session_channel_factory: Arc::new(
-                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
             ),
-            app_server_client_override: Some(Arc::new(MockAppServerClient::new())),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(Arc::new(
+                MockAppServerClient::new(),
+            )),
             available_agent_kinds: available_agent_kinds.clone(),
             clipboard_image_client_override: None,
             fs_client: Arc::new(fs::MockFsClient::new()),

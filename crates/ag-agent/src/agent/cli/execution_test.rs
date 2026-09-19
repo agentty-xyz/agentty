@@ -8,7 +8,9 @@ use std::sync::Mutex;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::TurnPromptAttachment;
+use ag_session::AgentKind;
 use rustix::process::{self, Pid, WaitId, WaitIdOptions};
 use tempfile::tempdir;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -19,8 +21,6 @@ use crate::agent::cli::execution::{
     ProcessGroupGuard, capture_stderr, capture_stdout, execute_cli_command, finish_cli_execution,
     require_pipe,
 };
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentKind, ReasoningLevel};
 
 /// Observer that records all streaming callbacks for assertions.
 struct RecordingObserver {
@@ -79,12 +79,12 @@ fn build_request<'a>(
         folder,
         main_checkout_root: None,
         model: "test-model",
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality_prompt: None,
         prompt,
         reasoning_level: ReasoningLevel::default(),
         request_kind,
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
         replay_transcript: None,
     }
 }

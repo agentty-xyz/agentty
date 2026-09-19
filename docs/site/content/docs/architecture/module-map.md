@@ -18,14 +18,16 @@ For file-level detail, read the module docstrings directly.
   file-list, and RGBA image read surface used by prompt image capture. Platform backends
   own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
   unsupported-backend reporting.
-- `crates/ag-runtime/`: Transport-independent session and one-shot execution contracts,
-  continuation state, settings, usage, events, and errors. It has no dependency on
-  provider implementations, persistence, or a frontend.
-- `crates/ag-worker/`: Headless serial scheduling, cancellation, heartbeat coordination,
-  operation completion, and restart recovery. Hosts supply queue policy and ordered
-  workflow effects; storage implements worker-owned operation contracts.
+- `crates/ag-contracts/`: Transport-independent session and one-shot execution
+  contracts, continuation state, settings, usage, events, and errors. It has no
+  dependency on provider implementations, persistence, or a frontend.
+- `crates/ag-runtime/`: Worker-consumed runtime composition, harness dispatch, and
+  provider lifecycle. It is the sole consumer of `ag-agent`.
+- `crates/ag-worker/`: Session mailboxes and execution clients, bounded utility runs,
+  cancellation, heartbeats, completion, and restart recovery. Hosts supply queue policy
+  and ordered workflow effects; storage implements worker-owned operation contracts.
 - `crates/ag-agent/`: External-agent adapters, prompt templates, provider discovery, and
-  CLI/app-server transport ownership. It implements `ag-runtime` contracts and owns
+  CLI/app-server transport ownership. It implements `ag-contracts` interfaces and owns
   cancellation of provider resources.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request and comment-thread types, GitHub/GitLab remote detection, thread
@@ -101,8 +103,8 @@ For file-level detail, read the module docstrings directly.
   background full-diff requests, typed prompt workflow requests and outcomes, the
   `session_api.rs` adapter for `ag-session`, the bounded `session_runtime.rs` command
   actor, prepared background session creation with foreground completion, and the
-  session module (`app/session/`) with its per-session worker queues and workflow steps
-  (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt composers,
+  session module (`app/session/`) with its worker handles, queue policy, and workflow
+  steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt composers,
   slash-menu state, and mode navigation remain presentation-owned. No direct process,
   filesystem, or clock calls — everything external goes through `infra/` traits.
 - `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
@@ -111,15 +113,16 @@ For file-level detail, read the module docstrings directly.
   model, stable input-revision and character-offset identities used to bind prompt
   attachments to exact placeholder occurrences and history states, session
   action-eligibility and list-ordering policies, and fuzzy file-entry ranking shared by
-  runtime selection and UI suggestions. Thin compatibility modules re-export `ag-agent`
-  provider metadata, `ag-session` agent/model selections and session models, and shared
-  protocol turn prompt payloads. No I/O.
+  runtime selection and UI suggestions. Thin compatibility modules re-export
+  `ag-session` provider metadata, agent/model selections and session models, and shared
+  protocol turn prompt payloads, plus settings and execution types from `ag-contracts`.
+  No I/O.
 - `infra/`: External integrations behind traits — Agentty data-root resolution and
   `ag-store` composition, git (`GitClient`, backed by `ag-git`), filesystem
   (`FsClient`), the session-worktree-only personality catalog, tmux, clipboard images,
   version checks, project discovery, and file indexing. Clipboard image capture
   delegates host clipboard reads to `ag-clipboard`, then owns temp-file persistence and
-  attachment metadata. Agentty imports the curated `ag-agent` crate-root API; provider
+  attachment metadata. Agentty accesses provider lifecycle through `ag-worker`; provider
   registry, router, parser, and transport internals stay private to `crates/ag-agent/`.
 - `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
   thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
@@ -187,9 +190,12 @@ for session chat.
 
 ## Worker-owned model execution
 
-Application workflows submit isolated model work through `ag-worker::RunClient`.
-`ag-worker` owns admission, concurrency, cancellation, and lifecycle records;
-`ag-runtime` defines execution contracts and `ag-agent` implements harness transports.
-`ag-store` persists utility runs independently of session-only workflow operations.
+Application workflows use `ag-worker::SessionRunClient` for session turns and
+`ag-worker::RunClient` for isolated model work. The worker owns runtime handles,
+mailboxes, utility admission, concurrency, cancellation, and execution lifecycle;
+`ag-runtime` constructs and dispatches adapters, and `ag-agent` implements harness
+transports. `ag-contracts` owns shared execution data and interfaces. Only `ag-worker`
+depends on `ag-runtime`; only `ag-runtime` depends on `ag-agent`. `ag-store` persists
+utility runs independently of session-only workflow operations.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.

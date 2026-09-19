@@ -9,7 +9,7 @@ repository.workspace = true
 include = ["/.sqlx/**", "/migrations/**", "/src/**"]
 
 [dependencies]
-ag-runtime.workspace = true
+ag-contracts.workspace = true
 ag-session.workspace = true
 ag-worker.workspace = true
 async-trait.workspace = true

@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 ag-runtime.workspace = true
+ag-session.workspace = true
+ag-contracts.workspace = true
 async-trait.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["rt"] }
@@ -20,10 +22,12 @@ uuid.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
-ag-protocol.workspace = true
+tempfile.workspace = true
 ag-runtime = { workspace = true, features = ["test-utils"] }
+ag-protocol.workspace = true
+ag-contracts = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [features]
-test-utils = ["dep:mockall"]
+test-utils = ["dep:mockall", "ag-runtime/test-utils", "ag-contracts/test-utils"]

@@ -15,13 +15,12 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-ag-agent.workspace = true
 ag-clipboard.workspace = true
 ag-forge.workspace = true
 ag-git.workspace = true
 ag-orchestration.workspace = true
 ag-protocol.workspace = true
-ag-runtime.workspace = true
+ag-contracts.workspace = true
 ag-session.workspace = true
 ag-store.workspace = true
 ag-tui-text.workspace = true
@@ -52,8 +51,8 @@ unicode-width.workspace = true
 libproc.workspace = true
 
 [dev-dependencies]
+ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-worker = { workspace = true, features = ["test-utils"] }
-ag-agent = { workspace = true, features = ["test-utils"] }
 ag-forge = { workspace = true, features = ["test-utils"] }
 ag-git = { workspace = true, features = ["test-utils"] }
 ag-store = { workspace = true, features = ["test-utils"] }

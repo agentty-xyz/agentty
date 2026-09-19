@@ -7,7 +7,7 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
 - Keep Agentty filesystem layout, TUI state, Git workflows, and rendering out of this
   crate.
 - Use shared models from `ag-session` and transport-independent settings from
-  `ag-runtime`. Implement the worker-owned `OperationRepository` contract from
+  `ag-contracts`. Implement the worker-owned `OperationRepository` contract from
   `ag-worker`; keep `ag-agent` provider transports and `agentty` out of persistence.
 - Expose repository mocks through `test-utils` when dependents need deterministic
   persistence tests.

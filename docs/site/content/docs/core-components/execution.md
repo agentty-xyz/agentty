@@ -28,12 +28,16 @@ post-processing; isolated utility runs execute concurrently with a bounded capac
 session workflow can await a utility child directly without placing that child behind
 itself in the session queue.
 
-Workflows receive a worker `RunClient`, not a raw runtime client. Utility admission is
-persisted before harness execution. Records retain the repository, purpose, optional
-session/project ownership, and optional parent operation. Draft title generation can
-belong to a session before any parent operation exists. Provider retries and protocol
-repairs remain attempts inside that supervised run. Permissions and provider-call
-budgets pass through unchanged.
+Application composition configures worker clients, which obtain their adapters through
+`ag-runtime`. Session workflows submit turns through `SessionRunClient`; utility
+workflows use `RunClient`. Both keep runtime execution and cancellation inside
+`ag-worker`. `SessionWorkerHandle` owns the session mailbox, task spawning, wakeups, and
+shared submission ordering. The application host supplies pause policy, durable command
+admission, and ordered workflow effects. Utility admission is persisted before harness
+execution. Records retain the repository, purpose, optional session/project ownership,
+and optional parent operation. Draft title generation can belong to a session before any
+parent operation exists. Provider retries and protocol repairs remain attempts inside
+that supervised run. Permissions and provider-call budgets pass through unchanged.
 
 Dropping a utility caller, canceling its parent, or shutting down the application stops
 the owned execution. Nested scopes retain every enclosing cancellation source, including
@@ -54,9 +58,10 @@ potentially mutating requests.
 
 ## Agent Runtime
 
-`ag-runtime` defines the shared contract for submitting turns and receiving events,
-results, and errors. `ag-agent` implements that contract for external CLI and app-server
-harnesses, owning transport details and provider resource cleanup.
+`ag-runtime` composes harness adapters, dispatches worker-admitted requests, and
+coordinates provider lifecycle. Shared requests, events, settings, and errors live in
+`ag-contracts`. `ag-agent` implements the adapter contracts for external CLI and
+app-server harnesses, owning transport details and provider resource cleanup.
 
 ## Harness
 
@@ -76,9 +81,13 @@ integrations.
 
 `ag-session` owns session models and the built-in agent/model catalog. `ag-store`
 provides SQLite persistence, including the worker's operation records. Agentty wires
-these components together and supplies application workflows. Adapter construction is
-confined to application composition. An automated source-boundary test rejects direct
-runtime clients or turn execution elsewhere in Agentty.
+these components together and supplies application workflows. Only `ag-worker` depends
+on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`. Adapter construction
+belongs in `ag-runtime`; applications receive worker handles and configuration. Import
+shared execution types from `ag-contracts` and selections from `ag-session`. Worker test
+facilities provide scripted adapter injection. Automated source and Cargo metadata
+checks reject execution bypasses and forbidden dependencies, including aliases, optional
+dependencies, and test dependencies.
 
 See [Module Map](@/docs/architecture/module-map.md) for ownership details and
 [Runtime Flow](@/docs/architecture/runtime-flow.md) for orchestration.

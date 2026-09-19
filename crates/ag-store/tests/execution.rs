@@ -2,7 +2,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use ag_runtime::{
+use ag_contracts::{
     AgentRequestKind, OneShotClient, OneShotError, OneShotRequest, OneShotSubmission,
     PermissionMode, ReasoningLevel, SpeedMode,
 };
@@ -25,7 +25,7 @@ impl OneShotClient for Runtime {
 async fn public_worker_composition_records_project_utility_failure() {
     // Arrange
     let db = Database::open_in_memory().await.expect("database");
-    let worker = Arc::new(RunWorker::new(
+    let worker = Arc::new(RunWorker::with_client(
         Arc::new(Runtime),
         db.runs(),
         Arc::new(HeartbeatClock),

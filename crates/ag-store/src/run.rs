@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ag_runtime::OneShotError;
+use ag_contracts::OneShotError;
 use ag_worker::{RunInfo, RunRepository, RunState};
 use async_trait::async_trait;
 use sqlx::SqlitePool;

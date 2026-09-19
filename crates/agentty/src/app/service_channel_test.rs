@@ -3,17 +3,19 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::MockAppServerClient;
-use ag_runtime::{
-    AgentChannel, AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt,
-    ReasoningLevel, ResponseStyle, SpeedMode, StartSessionRequest, TurnContinuation, TurnRequest,
+use ag_contracts::{
+    AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt, ReasoningLevel,
+    ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
 };
+use ag_worker::test_support::MockAppServerClient;
+use ag_worker::{RuntimeConfig, SessionRunClient};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
-use super::test_support::TestSessionChannelFactory;
-use super::{MockSessionChannelFactory, RealSessionChannelFactory, SessionChannelFactory};
+use super::test_support::TestSessionRunFactory;
+use super::{MockSessionRunFactory, RealSessionRunFactory, SessionRunFactory};
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
@@ -21,47 +23,41 @@ use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clie
 #[tokio::test]
 async fn session_factory_receives_identity_and_provider_through_app_composition() {
     // Arrange
-    let channel: Arc<dyn AgentChannel> = Arc::new(MockAgentChannel::new());
-    let expected_channel = Arc::clone(&channel);
-    let mut factory = MockSessionChannelFactory::new();
+    let mut factory = MockSessionRunFactory::new();
     factory
         .expect_create()
-        .withf(|session_id, kind| session_id.as_str() == "session" && *kind == AgentKind::Codex)
+        .withf(|id, kind| id.as_str() == "session" && *kind == AgentKind::Codex)
         .once()
-        .returning(move |_, _| Arc::clone(&channel));
-    let clients = test_app_clients().with_session_channel_factory(Arc::new(factory));
+        .returning(|id, _| {
+            let mut channel = MockAgentChannel::new();
+            channel
+                .expect_shutdown_session()
+                .withf(|id| id == "session")
+                .once()
+                .returning(|_| Box::pin(async { Ok(()) }));
+            SessionRunClient::from_channel(id.to_string(), Arc::new(channel))
+        });
+    let clients = test_app_clients().with_session_run_factory(Arc::new(factory));
     let (app, _directory) = new_test_app_with_clients(clients).await;
 
     // Act
-    let actual = app
+    let worker = app
         .services
-        .agent_channel(&SessionId::from("session"), AgentKind::Codex);
+        .session_run(&SessionId::from("session"), AgentKind::Codex);
 
     // Assert
-    assert!(Arc::ptr_eq(&actual, &expected_channel));
+    assert!(worker.shutdown().await.is_ok());
 }
 
 #[tokio::test]
 async fn real_session_factory_composes_each_provider_without_starting_a_process() {
     // Arrange
-    let factory = RealSessionChannelFactory::new(None);
-    let session_id = SessionId::from("session");
-
+    let factory = RealSessionRunFactory::new(RuntimeConfig::default());
     for kind in AgentKind::ALL {
         // Act
-        let first = factory.create(&session_id, *kind);
-        let second = factory.create(&session_id, *kind);
-        let session = first
-            .start_session(StartSessionRequest {
-                folder: PathBuf::new(),
-                session_id: session_id.to_string(),
-            })
-            .await
-            .expect("inert session initialization");
-
+        let worker = factory.create(&SessionId::from("session"), *kind);
         // Assert
-        assert!(!Arc::ptr_eq(&first, &second));
-        assert_eq!(session.session_id, session_id.as_str());
+        assert!(worker.shutdown().await.is_ok());
     }
 }
 
@@ -71,80 +67,50 @@ async fn real_session_factory_preserves_injected_transport() {
     let mut client = MockAppServerClient::new();
     client
         .expect_shutdown_session()
-        .withf(|session_id| session_id == "session")
+        .withf(|id| id == "session")
         .once()
         .returning(|_| Box::pin(async {}));
-    let factory = RealSessionChannelFactory::new(Some(Arc::new(client)));
-
+    let factory = RealSessionRunFactory::new(RuntimeConfig::with_app_server(Arc::new(client)));
     // Act
     let result = factory
         .create(&SessionId::from("session"), AgentKind::Codex)
-        .shutdown_session("session".to_string())
+        .shutdown()
         .await;
-
     // Assert
     assert!(result.is_ok());
 }
 
 #[tokio::test]
-async fn scripted_session_channel_is_consumed_only_for_its_worker() {
+async fn scripted_factory_retains_sessions_across_clones_and_consumes_each_script_once() {
     // Arrange
     let (mut app, _directory) = new_test_app().await;
-    let scripted: Arc<dyn AgentChannel> = Arc::new(MockAgentChannel::new());
-    let channels = TestSessionChannelFactory::install(&mut app.services);
-    channels.register("scripted", Arc::clone(&scripted));
-
-    // Act
-    let other = app
-        .services
-        .agent_channel(&SessionId::from("other"), AgentKind::Codex);
-    let actual = app
-        .services
-        .agent_channel(&SessionId::from("scripted"), AgentKind::Codex);
-    let replacement = app
-        .services
-        .agent_channel(&SessionId::from("scripted"), AgentKind::Codex);
-
-    // Assert
-    assert!(!Arc::ptr_eq(&other, &scripted));
-    assert!(Arc::ptr_eq(&actual, &scripted));
-    assert!(!Arc::ptr_eq(&replacement, &scripted));
-    assert!(other.shutdown_session("other".to_string()).await.is_ok());
-    assert!(
-        replacement
-            .shutdown_session("scripted".to_string())
-            .await
-            .is_ok()
-    );
-}
-
-#[tokio::test]
-async fn scripted_factory_retains_multiple_sessions_across_service_clones() {
-    // Arrange
-    let (mut app, _directory) = new_test_app().await;
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     let services = app.services.clone();
-    let first: Arc<dyn AgentChannel> = Arc::new(MockAgentChannel::new());
-    let second: Arc<dyn AgentChannel> = Arc::new(MockAgentChannel::new());
-
-    // Act
-    channels.register("first", Arc::clone(&first));
-    channels.register("second", Arc::clone(&second));
-    let second_worker = services.agent_channel(&SessionId::from("second"), AgentKind::Claude);
-    let first_worker = app
-        .services
-        .agent_channel(&SessionId::from("first"), AgentKind::Codex);
-    let unscripted = services.agent_channel(&SessionId::from("missing"), AgentKind::Codex);
-
-    // Assert
-    assert!(Arc::ptr_eq(&first_worker, &first));
-    assert!(Arc::ptr_eq(&second_worker, &second));
-    assert!(
-        unscripted
-            .shutdown_session("missing".to_string())
-            .await
-            .is_ok()
-    );
+    for id in ["first", "second"] {
+        let mut channel = MockAgentChannel::new();
+        channel
+            .expect_shutdown_session()
+            .withf(move |actual| actual == id)
+            .once()
+            .returning(|_| Box::pin(async { Ok(()) }));
+        channels.register(id, Arc::new(channel));
+    }
+    // Act / Assert: both service clones share the registry and consuming one
+    // script leaves the other intact. Later workers use the offline fallback.
+    for id in ["second", "first", "missing", "first"] {
+        let service = if id == "second" {
+            &services
+        } else {
+            &app.services
+        };
+        assert!(
+            service
+                .session_run(&SessionId::from(id), AgentKind::Codex)
+                .shutdown()
+                .await
+                .is_ok()
+        );
+    }
 }
 
 #[tokio::test]
@@ -152,22 +118,17 @@ async fn offline_session_channel_fails_even_in_a_detached_task() {
     // Arrange
     let child_marker = "AGENTTY_TEST_OFFLINE_TURN_CHILD";
     if env::var_os(child_marker).is_some() {
-        let factory = TestSessionChannelFactory::default();
+        let factory = TestSessionRunFactory::default();
         let channel = factory.create(&SessionId::from("unscripted"), AgentKind::Codex);
-        let session = channel
-            .start_session(StartSessionRequest {
-                folder: PathBuf::new(),
-                session_id: "unscripted".to_string(),
-            })
-            .await
-            .expect("offline initialization");
         let (events, _receiver) = mpsc::unbounded_channel();
         let request = unexpected_turn_request();
 
         // Act: ignore the task result, as a detached worker's caller would.
-        let _ = tokio::spawn(
-            async move { channel.run_turn(session.session_id, request, events).await },
-        )
+        let _ = tokio::spawn(async move {
+            channel
+                .submit(request, events, CancellationToken::new())
+                .await
+        })
         .await;
 
         return;
@@ -201,27 +162,15 @@ async fn offline_session_channel_fails_even_in_a_detached_task() {
 #[tokio::test]
 async fn offline_session_channel_allows_shutdown_without_polling_a_turn() {
     // Arrange
-    let factory = TestSessionChannelFactory::default();
+    let factory = TestSessionRunFactory::default();
     let channel = factory.create(&SessionId::from("offline"), AgentKind::Codex);
     let (events, _receiver) = mpsc::unbounded_channel();
 
     // Act
-    let session = channel
-        .start_session(StartSessionRequest {
-            folder: PathBuf::new(),
-            session_id: "offline".to_string(),
-        })
-        .await
-        .expect("offline session");
-    drop(channel.run_turn(
-        session.session_id.clone(),
-        unexpected_turn_request(),
-        events,
-    ));
-    let shutdown = channel.shutdown_session(session.session_id.clone()).await;
+    drop(channel.submit(unexpected_turn_request(), events, CancellationToken::new()));
+    let shutdown = channel.shutdown().await;
 
     // Assert
-    assert_eq!(session.session_id, "offline");
     assert!(shutdown.is_ok());
 }
 

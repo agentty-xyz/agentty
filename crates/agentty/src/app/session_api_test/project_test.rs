@@ -1,6 +1,6 @@
-use ag_agent::{AgentKind, AgentModel};
 use ag_session::{
-    CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionId,
+    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest,
+    SessionError as ApiSessionError, SessionId,
 };
 
 use super::support::{request_session, request_session_creation};
@@ -48,7 +48,7 @@ async fn runtime_backend_migrates_retired_model_for_inactive_project_lookup() {
     assert_eq!(loaded_session.settings.project_id, inactive_project_id);
     assert_eq!(
         loaded_session.settings.agent,
-        ag_agent::AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
+        ag_session::AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini35FlashLite)
     );
     assert_eq!(persisted_row.agent, "antigravity");
     assert_eq!(persisted_row.model, "gemini-3.5-flash-lite");

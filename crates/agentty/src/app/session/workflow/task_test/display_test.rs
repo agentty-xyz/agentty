@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_contracts::OneShotError;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
@@ -22,7 +22,7 @@ async fn test_run_agent_assist_task_rejects_plain_text_output() {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().returning(|_| {
-        Err(agent::OneShotError::new(
+        Err(OneShotError::new(
             "One-shot agent output did not match the required JSON schema\nresponse:\nplain text",
         ))
     });

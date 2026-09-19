@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ag_agent::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use ag_worker::RunClient;
 use async_trait::async_trait;
 use tokio::time::{Instant, timeout_at};

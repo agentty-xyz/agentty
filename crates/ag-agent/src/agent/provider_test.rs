@@ -1,11 +1,11 @@
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode};
+use ag_session::AgentKind;
 
 use crate::agent::backend::{AgentPromptTransport, AgentTransport};
 use crate::agent::provider::{
     is_app_server_thought_chunk, parse_turn_response, prompt_transport,
     protocol_schema_instruction_mode, transport_mode,
 };
-use crate::model::agent::AgentKind;
 
 #[test]
 /// Ensures transport capability is provided by infra backend descriptors,

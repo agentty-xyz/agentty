@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use ag_agent::{self as agent};
 use ag_forge::{ForgeRemote, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewRequestClient};
 use ag_git::GitClient;
 use ag_protocol::focused_review_json_schema_json;
@@ -274,7 +273,7 @@ impl TaskService {
     /// Loads one fresh machine-scoped snapshot of locally runnable agent
     /// kinds without probing CLI versions.
     pub(super) async fn load_agent_availability(
-        availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        availability_probe: Arc<dyn ag_session::AgentAvailabilityProbe>,
     ) -> Vec<AgentKind> {
         tokio::task::spawn_blocking(move || availability_probe.available_agent_kinds())
             .await
@@ -285,7 +284,7 @@ impl TaskService {
     /// after running their startup update commands behind the injected
     /// availability boundary.
     pub(super) async fn load_agent_cli_availability(
-        availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        availability_probe: Arc<dyn ag_session::AgentAvailabilityProbe>,
         fallback_agent_kinds: Vec<AgentKind>,
     ) -> Vec<AgentCliInfo> {
         tokio::task::spawn_blocking(move || availability_probe.available_agent_clis())
@@ -297,7 +296,7 @@ impl TaskService {
     /// completed snapshot through the app event bus.
     pub(super) fn spawn_agent_cli_version_task(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
-        availability_probe: Arc<dyn agent::AgentAvailabilityProbe>,
+        availability_probe: Arc<dyn ag_session::AgentAvailabilityProbe>,
         fallback_agent_kinds: Vec<AgentKind>,
     ) {
         let app_event_tx = app_event_tx.clone();
@@ -605,23 +604,25 @@ impl TaskService {
         let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(15));
         let review = crate::app::review_prompt::submit(
             &client,
-            agent::OneShotRequest {
+            ag_contracts::OneShotRequest {
                 provider_call_budget: None,
                 harness: (review_selection.kind()).to_string(),
                 child_pid: None,
                 folder: session_folder.to_path_buf(),
                 model: (review_selection.model()).as_str().to_string(),
-                permission_mode: ag_agent::PermissionMode::ReadOnly,
+                permission_mode: ag_contracts::PermissionMode::ReadOnly,
                 prompt: String::new(),
-                request_kind: ag_agent::AgentRequestKind::FocusedReview,
+                request_kind: ag_contracts::AgentRequestKind::FocusedReview,
                 reasoning_level,
                 speed_mode,
             },
             review_diff,
             session_chat_history.unwrap_or_default(),
             |diff, history| {
-                Self::review_assist_prompt(diff, Some(history))
-                    .map_err(|error| agent::OneShotError::new(error.to_string()))
+                crate::app::diff_prompt::render_result(Self::review_assist_prompt(
+                    diff,
+                    Some(history),
+                ))
             },
             progress,
         )
@@ -665,10 +666,10 @@ impl TaskService {
         session_chat_history: Option<&str>,
     ) -> Result<String, AppError> {
         let trimmed_diff = review_diff.trim();
-        let fence = agent::diff_fence(trimmed_diff);
+        let fence = ag_protocol::diff_fence(trimmed_diff);
         let fenced_diff = format!("{fence}diff\n{trimmed_diff}\n{fence}");
         let session_chat_history = session_chat_history.map_or("", str::trim_end);
-        let history_fence = agent::diff_fence(session_chat_history);
+        let history_fence = ag_protocol::diff_fence(session_chat_history);
         let fenced_session_chat_history =
             format!("{history_fence}text\n{session_chat_history}\n{history_fence}");
         let focused_review_json_schema = focused_review_json_schema_json();

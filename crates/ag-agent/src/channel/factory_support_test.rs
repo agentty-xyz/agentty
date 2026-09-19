@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
+use ag_contracts::AgentChannel;
+use ag_session::AgentKind;
+
 use crate::agent;
-use crate::channel::AgentChannel;
 use crate::channel::cli::CliAgentChannel;
-use crate::model::agent::AgentKind;
 
 /// Creates a CLI channel backed by an injected backend for tests.
 pub fn create_cli_agent_channel_with_backend(

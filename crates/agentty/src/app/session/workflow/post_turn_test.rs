@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::OneShotError;
 use ag_forge as forge;
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
@@ -37,11 +38,11 @@ async fn insert_research_session(database: &AppRepositories, session_id: &str) {
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: Some("OrchestrationResearcher"),
             speed_mode: SpeedMode::Normal,
             status: "InProgress",
@@ -356,7 +357,7 @@ async fn ordinary_commit_failures_do_not_emit_review_comment_warnings() {
     run_client
         .expect_submit()
         .once()
-        .returning(|_| Err(ag_agent::OneShotError::new("commit failed")));
+        .returning(|_| Err(OneShotError::new("commit failed")));
     context.run_client = Arc::new(run_client);
     let session_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
 

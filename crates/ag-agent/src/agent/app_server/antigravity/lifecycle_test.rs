@@ -7,7 +7,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
+use ag_session::AgentModel;
 use mockall::Sequence;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -20,9 +22,6 @@ use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
 use crate::agent::backend::{AgentBackendError, MockAgentBackend};
 use crate::app_server::{AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 fn request(folder: PathBuf) -> AppServerTurnRequest {
     AppServerTurnRequest {
@@ -33,12 +32,12 @@ fn request(folder: PathBuf) -> AppServerTurnRequest {
         model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Inspect the architecture"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,
         replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionStart,
+        request_kind: ag_contracts::AgentRequestKind::SessionStart,
         session_id: "session-1".to_string(),
         speed_mode: SpeedMode::default(),
     }

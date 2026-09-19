@@ -1,18 +1,14 @@
 use std::process::Command;
 use std::sync::Arc;
 
+use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_session::{AgentKind, AgentModel};
 use tempfile::tempdir;
 
 use super::support::mock_shell_command;
 use crate::agent::MockAgentBackend;
-use crate::agent::submission::{
-    OneShotRequest, attempt_one_shot_app_server_repair, submit_one_shot_with_backend,
-};
+use crate::agent::submission::{attempt_one_shot_app_server_repair, submit_one_shot_with_backend};
 use crate::app_server::MockAppServerClient;
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentKind, AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 #[tokio::test]
 async fn oversized_one_shot_responses_do_not_launch_repair() {

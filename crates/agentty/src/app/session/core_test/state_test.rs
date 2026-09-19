@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
-use ag_agent::{AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAppServerClient};
+use ag_worker::test_support::{
+    AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAppServerClient,
+};
 use tempfile::tempdir;
 
 use super::super::{SessionManager, session_folder};
@@ -12,7 +14,7 @@ use super::support::{
 };
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -517,7 +519,7 @@ async fn test_reply_turn_completion_persists_session_size() {
     });
 
     // Act
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     register_session_backend(&app, &channels, &session_id, Arc::new(backend));
     app.sessions
         .reply(&app.services, &session_id, "compute size after turn")

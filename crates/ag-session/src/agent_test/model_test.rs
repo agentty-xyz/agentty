@@ -274,7 +274,7 @@ fn test_model_strings_respect_provider_ownership() {
 #[test]
 fn test_reasoning_metadata_matches_runtime_preferences() {
     // Arrange
-    let level = ag_runtime::ReasoningLevel::High;
+    let level = ag_contracts::ReasoningLevel::High;
 
     // Act / Assert
     assert_eq!(AgentSelectionMetadata::name(&level), level.as_str());

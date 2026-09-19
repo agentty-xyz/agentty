@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent as agent;
-use ag_agent::{MockAgentChannel, PermissionMode, TurnResult};
+use ag_contracts::{MockAgentChannel, PermissionMode, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_worker::SessionRunClient;
 use mockall::Sequence;
 use tempfile::tempdir;
 use tokio::sync::{Notify, mpsc};
@@ -51,7 +51,10 @@ async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commi
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -135,7 +138,10 @@ async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_pus
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -242,7 +248,10 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db,
@@ -394,7 +403,7 @@ async fn test_run_rebase_command_uses_existing_session_channel_for_conflicts() {
     assert_eq!(provider_conversation_id.as_deref(), Some("thread-after"));
     assert_eq!(
         instruction_conversation_id,
-        agent::normalize_instruction_conversation_id(Some("thread-after"))
+        ag_contracts::normalize_instruction_conversation_id(Some("thread-after"))
     );
     assert_eq!(final_status, Status::Review);
     assert!(output_text.contains("[Sync Assist] Attempt 1/3. Resolving conflicts in:"));
@@ -602,7 +611,7 @@ async fn test_queued_review_request_waits_for_full_rebase_finalization() {
     let transcript = Arc::clone(&harness.context.transcript);
     let status = Arc::clone(&harness.status);
     let (command_tx, command_rx) = mpsc::unbounded_channel();
-    SessionWorkerService::spawn_session_worker(
+    super::support::spawn_session_worker(
         harness.context,
         auto_commit_run_client(),
         Arc::new(Notify::new()),

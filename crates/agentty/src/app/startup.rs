@@ -4,8 +4,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ag_agent::AgentAvailabilityProbe;
 use ag_git::GitClient;
+use ag_session::AgentAvailabilityProbe;
 use tokio::sync::mpsc;
 
 use super::core::{AGENTTY_WT_DIR, AppEvent};

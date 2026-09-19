@@ -1,16 +1,14 @@
 //! Provider contract compliance tests against mock app-server transports.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::{
-    AgentChannel, AgentRequestKind, StartSessionRequest, TurnContinuation, TurnRequest,
-    create_agent_channel,
-};
+use ag_contracts::{AgentRequestKind, TurnContinuation, TurnRequest};
+use ag_worker::{RuntimeConfig, SessionRunClient};
 use agentty::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 /// Prompt used for live provider protocol-compliance validation.
 const PROTOCOL_COMPLIANCE_PROMPT: &str = concat!(
@@ -29,7 +27,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const PROVIDER_PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Verifies real Codex (`gpt-5.6-sol`) turn execution through
-/// `create_agent_channel()` yields a non-empty protocol `answer`.
+/// the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Codex CLI credentials and network"]
 async fn codex_protocol_compliance_e2e() {
@@ -55,7 +53,7 @@ async fn codex_protocol_compliance_e2e() {
 }
 
 /// Verifies real Gemini Flash (`gemini-3.8-flash`) turn execution
-/// through `create_agent_channel()` yields a non-empty protocol `answer`.
+/// through the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Gemini CLI credentials and network"]
 async fn gemini_flash_protocol_compliance_e2e() {
@@ -81,7 +79,7 @@ async fn gemini_flash_protocol_compliance_e2e() {
 }
 
 /// Verifies real Antigravity CLI turn execution through
-/// `create_agent_channel()` yields a non-empty protocol `answer`.
+/// the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Antigravity CLI credentials and network"]
 async fn antigravity_protocol_compliance_e2e() {
@@ -107,7 +105,7 @@ async fn antigravity_protocol_compliance_e2e() {
 }
 
 /// Verifies real Claude Sonnet (`claude-sonnet-5`) turn execution through
-/// `create_agent_channel()` yields a non-empty protocol `answer`.
+/// the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Claude CLI credentials and network"]
 async fn claude_sonnet_protocol_compliance_e2e() {
@@ -180,33 +178,19 @@ async fn assert_provider_protocol_compliance(
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
     let session_id = format!("protocol-e2e-{}", model.provider_model_str());
-    let channel = create_agent_channel(kind, None);
-    let start_request = StartSessionRequest {
-        folder: folder.clone(),
-        session_id: session_id.clone(),
-    };
-    let session_ref = timeout(TURN_TIMEOUT, channel.start_session(start_request))
-        .await
-        .map_err(|_| {
-            format!(
-                "timed out after {} seconds while starting `{}` session",
-                TURN_TIMEOUT.as_secs(),
-                model.as_str()
-            )
-        })?
-        .map_err(|error| format!("failed to start `{}` session: {}", model.as_str(), error))?;
+    let channel = SessionRunClient::new(session_id.clone(), kind, &RuntimeConfig::default());
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let turn_request = build_turn_request(folder, model);
     let run_result = timeout(
         TURN_TIMEOUT,
-        channel.run_turn(session_ref.session_id.clone(), turn_request, events_tx),
+        channel.submit(turn_request, events_tx, CancellationToken::new()),
     )
     .await;
 
     let turn_result = match run_result {
         Ok(Ok(turn_result)) => turn_result,
         Ok(Err(error)) => {
-            let _ = shutdown_channel_session(&channel, &session_ref.session_id).await;
+            let _ = shutdown_channel_session(&channel, &session_id).await;
 
             return Err(format!(
                 "channel turn failed for `{}`: {}",
@@ -215,7 +199,7 @@ async fn assert_provider_protocol_compliance(
             ));
         }
         Err(_) => {
-            let _ = shutdown_channel_session(&channel, &session_ref.session_id).await;
+            let _ = shutdown_channel_session(&channel, &session_id).await;
 
             return Err(format!(
                 "channel turn timed out after {} seconds for `{}`",
@@ -230,7 +214,7 @@ async fn assert_provider_protocol_compliance(
         .iter()
         .any(|answer| !answer.trim().is_empty());
     if !has_non_empty_answer {
-        let _ = shutdown_channel_session(&channel, &session_ref.session_id).await;
+        let _ = shutdown_channel_session(&channel, &session_id).await;
 
         return Err(format!(
             "assistant response has no non-empty `answer` message for `{}`\ncontext_reset: \
@@ -243,7 +227,7 @@ async fn assert_provider_protocol_compliance(
         ));
     }
 
-    shutdown_channel_session(&channel, &session_ref.session_id).await
+    shutdown_channel_session(&channel, &session_id).await
 }
 
 /// Returns whether a failed live-provider run should be treated as an
@@ -271,31 +255,28 @@ fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
         folder,
         main_checkout_root: None,
         model: model.provider_model_str().to_string(),
-        permission_mode: ag_agent::PermissionMode::AutoEdit,
-        personality: ag_agent::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: PROTOCOL_COMPLIANCE_PROMPT.to_string().into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
-        response_style: ag_agent::ResponseStyle::default(),
-        speed_mode: ag_agent::SpeedMode::default(),
+        response_style: ag_contracts::ResponseStyle::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     }
 }
 
 /// Shuts down one channel session with timeout protection.
 async fn shutdown_channel_session(
-    channel: &Arc<dyn AgentChannel>,
+    channel: &SessionRunClient,
     session_id: &str,
 ) -> Result<(), String> {
-    timeout(
-        SHUTDOWN_TIMEOUT,
-        channel.shutdown_session(session_id.to_string()),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "timed out after {} seconds while shutting down session `{session_id}`",
-            SHUTDOWN_TIMEOUT.as_secs()
-        )
-    })?
-    .map_err(|error| format!("failed to shut down session `{session_id}`: {error}"))
+    timeout(SHUTDOWN_TIMEOUT, channel.shutdown())
+        .await
+        .map_err(|_| {
+            format!(
+                "timed out after {} seconds while shutting down session `{session_id}`",
+                SHUTDOWN_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| format!("failed to shut down session `{session_id}`: {error}"))
 }

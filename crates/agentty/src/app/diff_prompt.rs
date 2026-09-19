@@ -1,11 +1,13 @@
 //! Bounded, read-only preparation of large diff utility prompts.
 
 use std::collections::VecDeque;
+use std::fmt::Display;
 
-use ag_agent::{
+use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, diff_fence, is_input_size_error,
+    ReasoningLevel, is_input_size_error,
 };
+use ag_protocol::diff_fence;
 use ag_worker::RunClient;
 
 /// Conservative byte budget, also bounding characters and byte-tokenizer input.
@@ -20,6 +22,11 @@ const SUMMARY_CHUNK_BYTES: usize = PROMPT_BUDGET - 2_048;
 pub(super) const MAX_PROVIDER_CALLS: usize = 64;
 pub(super) const MIN_CHUNK_BYTES: usize = 512;
 const SUMMARY_LIMIT: usize = 2_000;
+
+/// Preserves host prompt-rendering diagnostics at the utility-run boundary.
+pub(super) fn render_result(result: Result<String, impl Display>) -> Result<String, OneShotError> {
+    result.map_err(|error| OneShotError::new(error.to_string()))
+}
 
 /// Submits a diff prompt, summarizing oversized input in isolated utility
 /// turns.
@@ -38,7 +45,7 @@ pub(super) async fn submit(
     context: &str,
     render: impl Fn(&str, &str) -> Result<String, OneShotError>,
 ) -> Result<(OneShotSubmission, bool), OneShotError> {
-    let call_budget = ag_agent::ProviderCallBudget::new(MAX_PROVIDER_CALLS);
+    let call_budget = ag_contracts::ProviderCallBudget::new(MAX_PROVIDER_CALLS);
     request.provider_call_budget = Some(call_budget.clone());
     let mut diff = diff.to_string();
     let mut context = context.to_string();
@@ -86,7 +93,7 @@ pub(super) async fn summarize(
     request: &OneShotRequest,
     input: &str,
     target: usize,
-    call_budget: &ag_agent::ProviderCallBudget,
+    call_budget: &ag_contracts::ProviderCallBudget,
 ) -> Result<String, OneShotError> {
     let mut input = input.to_string();
     while input.len() > target {
@@ -113,7 +120,7 @@ async fn summarize_round(
     request: &OneShotRequest,
     input: &str,
     target: usize,
-    call_budget: &ag_agent::ProviderCallBudget,
+    call_budget: &ag_contracts::ProviderCallBudget,
 ) -> Result<Vec<String>, OneShotError> {
     let summary_limit = SUMMARY_LIMIT.min(target / 4);
     let mut chunks = chunks(input, SUMMARY_CHUNK_BYTES);
@@ -172,7 +179,7 @@ async fn summary_with_repair(
     client: &dyn RunClient,
     request: &OneShotRequest,
     limit: usize,
-    call_budget: &ag_agent::ProviderCallBudget,
+    call_budget: &ag_contracts::ProviderCallBudget,
 ) -> Result<String, OneShotError> {
     let mut correction = String::new();
     let mut problem = String::new();

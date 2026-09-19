@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
+use ag_contracts::ReasoningLevel;
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPromptAttachment};
 use serde_json::Value;
 use tempfile::tempdir;
@@ -9,7 +10,6 @@ use super::support::{session_start_request_kind, settings_argument, utility_requ
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
 use crate::agent::claude::ClaudeBackend;
 use crate::agent::prompt as shared_prompt;
-use crate::model::agent::ReasoningLevel;
 
 #[test]
 /// Verifies Claude fast sessions enable the noninteractive `fastMode`
@@ -28,12 +28,12 @@ fn test_claude_fast_mode_sets_workspace_setting() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-opus-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Respond quickly",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::Fast,
+            speed_mode: ag_contracts::SpeedMode::Fast,
         },
     )
     .expect("command should build");
@@ -63,12 +63,12 @@ fn test_claude_command_sets_anthropic_model_to_claude_opus_5() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-opus-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Use Opus",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -99,12 +99,12 @@ fn test_claude_command_sets_anthropic_model_to_claude_opus_48() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-opus-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Use Opus",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -143,12 +143,12 @@ fn test_claude_command_passes_effort_flag_for_each_reasoning_level() {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
-                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Do work",
                 reasoning_level,
                 request_kind: &session_start_request_kind(),
-                speed_mode: crate::model::session::SpeedMode::default(),
+                speed_mode: ag_contracts::SpeedMode::default(),
             },
         )
         .expect("command should build");
@@ -197,12 +197,12 @@ fn test_claude_command_adds_attachment_access_directories() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-sonnet-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Inspect [Image #1] and [Image #2]",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -236,12 +236,12 @@ fn test_claude_prompt_stdin_payload_includes_repo_root_path_instructions() {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
-                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Plan prompt",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
-                speed_mode: crate::model::session::SpeedMode::default(),
+                speed_mode: ag_contracts::SpeedMode::default(),
             },
             ProtocolSchemaInstructionMode::TransportSchema,
             "Claude",
@@ -273,12 +273,12 @@ fn test_claude_one_shot_command_enforces_json_schema() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-sonnet-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &utility_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -291,12 +291,12 @@ fn test_claude_one_shot_command_enforces_json_schema() {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
-                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Generate title",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &utility_request_kind(),
-                speed_mode: crate::model::session::SpeedMode::default(),
+                speed_mode: ag_contracts::SpeedMode::default(),
             },
             ProtocolSchemaInstructionMode::TransportSchema,
             "Claude",
@@ -332,12 +332,12 @@ fn test_claude_start_command_includes_json_schema() {
             main_checkout_root: None,
             replay_transcript: None,
             model: "claude-sonnet-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Return protocol response",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -350,12 +350,12 @@ fn test_claude_start_command_includes_json_schema() {
                 main_checkout_root: None,
                 replay_transcript: None,
                 model: "claude-sonnet-5",
-                permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+                permission_mode: ag_contracts::PermissionMode::AutoEdit,
                 personality_prompt: None,
                 prompt: "Return protocol response",
                 reasoning_level: ReasoningLevel::default(),
                 request_kind: &session_start_request_kind(),
-                speed_mode: crate::model::session::SpeedMode::default(),
+                speed_mode: ag_contracts::SpeedMode::default(),
             },
             ProtocolSchemaInstructionMode::TransportSchema,
             "Claude",

@@ -1,26 +1,15 @@
-//! Transport-independent contracts for session and isolated agent execution.
-//! Implementations own provider routing and resource cleanup; hosts own
-//! scheduling.
+//! Runtime composition and dispatch for worker-owned agent execution.
+//!
+//! Only `ag-worker` consumes this implementation. Shared execution contracts
+//! live in `ag-contracts`; concrete provider adapters live in `ag-agent`.
 
-mod contract;
-mod one_shot;
-mod permission;
-mod provider_call_budget;
-mod reasoning;
-mod session;
+mod provider;
+mod runtime;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub use contract::MockAgentChannel;
-pub use contract::{
-    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, PersonalityPrompt,
-    PersonalityPromptUpdate, SessionRef, StartSessionRequest, TurnContinuation,
-    TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
-    normalize_instruction_conversation_id,
+pub use provider::{
+    RealAgentAvailabilityProbe, cleanup_session_worktree_artifacts, setup_backend,
+    uses_persistent_session,
 };
-#[cfg(any(test, feature = "test-utils"))]
-pub use one_shot::MockOneShotClient;
-pub use one_shot::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
-pub use permission::PermissionMode;
-pub use provider_call_budget::ProviderCallBudget;
-pub use reasoning::ReasoningLevel;
-pub use session::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
+#[cfg(feature = "test-utils")]
+pub use runtime::test_support;
+pub use runtime::{RuntimeFactory, SessionRuntime, UtilityRuntime};

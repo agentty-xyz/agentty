@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent::{MockAppServerClient, OneShotRequest};
-use ag_runtime::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
+use ag_worker::test_support::MockAppServerClient;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -135,7 +135,9 @@ fn blocking_provider(
                 started.cancel();
                 stopped.cancelled().await;
                 finish.cancelled().await;
-                Err(ag_agent::AppServerError::Provider("stopped".into()))
+                Err(ag_worker::test_support::AppServerError::Provider(
+                    "stopped".into(),
+                ))
             })
         }
     });

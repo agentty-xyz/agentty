@@ -107,7 +107,7 @@ impl FsClient for RealFsClient {
                 for entry in entries {
                     let entry = entry?;
                     if entry.file_type()?.is_dir() {
-                        ag_agent::cleanup_session_worktree_artifacts(&entry.path())
+                        ag_worker::cleanup_session_worktree_artifacts(&entry.path())
                             .map_err(std::io::Error::other)?;
                     }
                 }

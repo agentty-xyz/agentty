@@ -12,8 +12,8 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "ag-agent"
 version = "0.16.0"
 dependencies = [
+ "ag-contracts",
  "ag-protocol",
- "ag-runtime",
  "ag-session",
  "agent-client-protocol",
  "askama",
@@ -44,6 +44,18 @@ dependencies = [
  "rustix",
  "thiserror 2.0.20",
  "x11rb",
+]
+
+[[package]]
+name = "ag-contracts"
+version = "0.16.0"
+dependencies = [
+ "ag-protocol",
+ "async-trait",
+ "mockall",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -114,7 +126,7 @@ dependencies = [
 name = "ag-orchestration"
 version = "0.16.0"
 dependencies = [
- "ag-agent",
+ "ag-contracts",
  "ag-git",
  "ag-protocol",
  "ag-session",
@@ -140,10 +152,9 @@ dependencies = [
 name = "ag-runtime"
 version = "0.16.0"
 dependencies = [
- "ag-protocol",
- "async-trait",
- "mockall",
- "thiserror 2.0.20",
+ "ag-agent",
+ "ag-contracts",
+ "ag-session",
  "tokio",
  "tokio-util",
 ]
@@ -152,9 +163,9 @@ dependencies = [
 name = "ag-session"
 version = "0.16.0"
 dependencies = [
+ "ag-contracts",
  "ag-forge",
  "ag-protocol",
- "ag-runtime",
  "async-trait",
  "rustc-hash",
  "serde",
@@ -167,7 +178,7 @@ dependencies = [
 name = "ag-store"
 version = "0.16.0"
 dependencies = [
- "ag-runtime",
+ "ag-contracts",
  "ag-session",
  "ag-worker",
  "async-trait",
@@ -192,10 +203,13 @@ dependencies = [
 name = "ag-worker"
 version = "0.16.0"
 dependencies = [
+ "ag-contracts",
  "ag-protocol",
  "ag-runtime",
+ "ag-session",
  "async-trait",
  "mockall",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -272,13 +286,12 @@ dependencies = [
 name = "agentty"
 version = "0.16.0"
 dependencies = [
- "ag-agent",
  "ag-clipboard",
+ "ag-contracts",
  "ag-forge",
  "ag-git",
  "ag-orchestration",
  "ag-protocol",
- "ag-runtime",
  "ag-session",
  "ag-store",
  "ag-tui-text",

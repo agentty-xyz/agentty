@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use ag_runtime::{OneShotClient, OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use async_trait::async_trait;
 use tokio::sync::{Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -37,26 +37,15 @@ pub struct RunWorker {
 }
 
 impl RunWorker {
-    /// Composes the runtime and storage boundaries with bounded concurrency.
+    /// Creates provider runtimes inside the worker, retaining host storage and
+    /// clock injection.
     pub fn new(
-        runtime: Arc<dyn OneShotClient>,
+        config: &crate::RuntimeConfig,
         repository: Arc<dyn RunRepository>,
         clock: Arc<dyn Clock>,
         concurrency: NonZeroUsize,
     ) -> Self {
-        Self {
-            admission: Mutex::new(true),
-            execution: Arc::new(Execution {
-                sessions: Mutex::new(HashMap::new()),
-                capacity: Semaphore::new(concurrency.get()),
-                clock,
-                force_shutdown: CancellationToken::new(),
-                repository,
-                runtime,
-                shutdown: CancellationToken::new(),
-            }),
-            tasks: TaskTracker::new(),
-        }
+        Self::from_runtime(config.factory.utility(), repository, clock, concurrency)
     }
 
     /// Cancels this session's utilities and rejects late submissions from
@@ -98,6 +87,28 @@ impl RunWorker {
         self.close_admission();
         self.execution.force_shutdown.cancel();
         self.execution.runtime.force_shutdown();
+    }
+
+    /// Composes the runtime and storage boundaries with bounded concurrency.
+    fn from_runtime(
+        runtime: ag_runtime::UtilityRuntime,
+        repository: Arc<dyn RunRepository>,
+        clock: Arc<dyn Clock>,
+        concurrency: NonZeroUsize,
+    ) -> Self {
+        Self {
+            admission: Mutex::new(true),
+            execution: Arc::new(Execution {
+                sessions: Mutex::new(HashMap::new()),
+                capacity: Semaphore::new(concurrency.get()),
+                clock,
+                force_shutdown: CancellationToken::new(),
+                repository,
+                runtime,
+                shutdown: CancellationToken::new(),
+            }),
+            tasks: TaskTracker::new(),
+        }
     }
 
     fn close_admission(&self) {
@@ -167,7 +178,7 @@ struct Execution {
     clock: Arc<dyn Clock>,
     force_shutdown: CancellationToken,
     repository: Arc<dyn RunRepository>,
-    runtime: Arc<dyn OneShotClient>,
+    runtime: ag_runtime::UtilityRuntime,
     sessions: Mutex<HashMap<String, Arc<SessionExecution>>>,
     shutdown: CancellationToken,
 }
@@ -322,3 +333,7 @@ impl Execution {
 #[cfg(test)]
 #[path = "utility_test.rs"]
 mod tests;
+
+#[cfg(any(test, feature = "test-utils"))]
+#[path = "utility_support_test.rs"]
+mod support;

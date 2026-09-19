@@ -1,8 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ag_agent as agent;
-use ag_agent::AgentRequestKind;
+use ag_contracts::{AgentRequestKind, OneShotError, OneShotSubmission};
 use ag_git as git;
 use ag_protocol::AgentResponse;
 use ag_worker::{MockRunClient, RunClient};
@@ -620,18 +619,21 @@ async fn test_run_title_generation_command_returns_answer_text() {
             assert_eq!(request.harness, (AgentKind::Claude).to_string());
             assert_eq!(request.folder, expected_folder);
             assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
-            assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
+            assert_eq!(
+                request.permission_mode,
+                ag_contracts::PermissionMode::ReadOnly
+            );
             assert_eq!(request.prompt, "Generate a title");
             assert_eq!(request.reasoning_level, ReasoningLevel::Low);
             assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
             assert_eq!(request.speed_mode, SpeedMode::Fast);
 
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: AgentResponse::plain("Refine session titles"),
-                stats: agent::SessionStats {
+                stats: ag_contracts::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
+                    diff_state: ag_contracts::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },
@@ -667,15 +669,15 @@ async fn test_run_title_generation_command_retries_provider_failure() {
         .returning(move |_| {
             attempt += 1;
             if attempt == 1 {
-                return Err(agent::OneShotError::new("temporary provider failure"));
+                return Err(OneShotError::new("temporary provider failure"));
             }
 
-            Ok(agent::OneShotSubmission {
+            Ok(OneShotSubmission {
                 response: AgentResponse::plain("Stabilize session titles"),
-                stats: agent::SessionStats {
+                stats: ag_contracts::SessionStats {
                     added_lines: 0,
                     deleted_lines: 0,
-                    diff_state: agent::SessionDiffState::Unknown,
+                    diff_state: ag_contracts::SessionDiffState::Unknown,
                     input_tokens: 0,
                     output_tokens: 0,
                 },
@@ -707,7 +709,7 @@ async fn test_run_title_generation_command_returns_none_after_retry_exhaustion()
     run_client
         .expect_submit()
         .times(SESSION_TITLE_GENERATION_MAX_ATTEMPTS)
-        .returning(|_| Err(agent::OneShotError::new("provider unavailable")));
+        .returning(|_| Err(OneShotError::new("provider unavailable")));
 
     // Act
     let title = SessionManager::run_title_generation_command(

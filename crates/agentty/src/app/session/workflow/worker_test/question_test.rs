@@ -3,15 +3,13 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
-use ag_agent::{AgentRequestKind, MockAgentChannel};
+use ag_contracts::{AgentRequestKind, MockAgentChannel};
 use ag_protocol::AgentResponse;
 use tokio::sync::{Notify, mpsc};
 
 use super::super::super::post_turn::build_assistant_message_content;
 use super::super::super::turn::run_channel_turn;
-use super::super::{
-    ScheduledSessionCommand, SessionCommand, SessionWorkerHandle, SessionWorkerService,
-};
+use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerService};
 use super::support::{auto_commit_run_client, default_turn_metadata, queue_test_context};
 use crate::app::AppEvent;
 use crate::domain::question::QuestionItem;
@@ -103,13 +101,13 @@ async fn test_worker_wakeup_resumes_buffered_action_after_question_cancel() {
     let mut worker_service = SessionWorkerService::new();
     worker_service.workers.insert(
         SessionId::from("sess1"),
-        SessionWorkerHandle {
-            queued_work_sequence: Arc::new(AtomicU64::new(0)),
-            sender: command_tx.clone(),
-            wakeup: Arc::clone(&wakeup),
-        },
+        ag_worker::test_session_worker_handle(
+            Arc::new(AtomicU64::new(0)),
+            command_tx.clone(),
+            Arc::clone(&wakeup),
+        ),
     );
-    SessionWorkerService::spawn_session_worker(
+    super::support::spawn_session_worker(
         context,
         auto_commit_run_client(),
         Arc::clone(&wakeup),

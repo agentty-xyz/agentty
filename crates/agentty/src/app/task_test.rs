@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_agent as agent;
+use ag_contracts::{OneShotError, OneShotSubmission};
 use ag_forge::{
     ForgeKind, ForgeRemote, MockReviewRequestClient, ReviewComment, ReviewCommentAnchorSide,
     ReviewCommentSnapshot,
@@ -27,18 +27,24 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
     // Arrange
     let mut client = ag_worker::MockRunClient::new();
     client.expect_submit().returning(|request| {
-        assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+        assert_eq!(
+            request.permission_mode,
+            ag_contracts::PermissionMode::ReadOnly
+        );
         assert!(request.prompt.len() <= 60_000);
-        let response = if request.request_kind == agent::AgentRequestKind::UtilityPrompt {
+        let response = if request.request_kind == ag_contracts::AgentRequestKind::UtilityPrompt {
             AgentResponse::plain("Preserve accepted decisions and source changes.")
         } else {
-            assert_eq!(request.request_kind, agent::AgentRequestKind::FocusedReview);
+            assert_eq!(
+                request.request_kind,
+                ag_contracts::AgentRequestKind::FocusedReview
+            );
             assert!(request.prompt.contains("Summarized input"));
             AgentResponse::plain(r#"{"project_impact":["Changes behavior"],"suggestions":[]}"#)
         };
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response,
-            stats: agent::SessionStats::default(),
+            stats: ag_contracts::SessionStats::default(),
         })
     });
 
@@ -67,7 +73,7 @@ const REAL_VERSION_TASK_CHILD_ENV: &str = "AGENTTY_REAL_VERSION_TASK_CHILD";
 
 struct PanickingAgentAvailabilityProbe;
 
-impl agent::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
+impl ag_session::AgentAvailabilityProbe for PanickingAgentAvailabilityProbe {
     fn available_agent_kinds(&self) -> Vec<AgentKind> {
         vec![AgentKind::Claude]
     }
@@ -751,10 +757,13 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let mut run_client = ag_worker::MockRunClient::new();
     run_client.expect_submit().times(1).returning(|request| {
         assert_eq!(request.harness, (AgentKind::Gemini).to_string());
-        assert_eq!(request.permission_mode, ag_agent::PermissionMode::ReadOnly);
+        assert_eq!(
+            request.permission_mode,
+            ag_contracts::PermissionMode::ReadOnly
+        );
         assert!(matches!(
             request.request_kind,
-            ag_agent::AgentRequestKind::FocusedReview
+            ag_contracts::AgentRequestKind::FocusedReview
         ));
         assert_eq!(request.reasoning_level, ReasoningLevel::XHigh);
         assert_eq!(request.speed_mode, crate::domain::agent::SpeedMode::Fast);
@@ -764,11 +773,11 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
                 .contains("diff --git a/src/lib.rs b/src/lib.rs")
         );
 
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
             ),
-            stats: agent::SessionStats::default(),
+            stats: ag_contracts::SessionStats::default(),
         })
     });
     let input = ReviewAssistTaskInput {
@@ -860,7 +869,7 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
     let mut run_client = ag_worker::MockRunClient::new();
     run_client
         .expect_submit()
-        .returning(|_| Err(agent::OneShotError::new("submit failed")));
+        .returning(|_| Err(OneShotError::new("submit failed")));
 
     // Act
     let result = TaskService::review_assist_text_with_client(
@@ -901,15 +910,15 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
         assert_eq!(request.model, AgentModel::Gemini38Flash.as_str());
         assert_eq!(
             request.request_kind,
-            ag_agent::AgentRequestKind::FocusedReview
+            ag_contracts::AgentRequestKind::FocusedReview
         );
         assert_eq!(request.reasoning_level, ReasoningLevel::Low);
 
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Review completed."],"suggestions":[]}"#,
             ),
-            stats: agent::SessionStats::default(),
+            stats: ag_contracts::SessionStats::default(),
         })
     });
 
@@ -1319,11 +1328,11 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         .expect("session");
     let mut client = ag_worker::MockRunClient::new();
     client.expect_submit().once().returning(|_| {
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Completed review retained"],"suggestions":[]}"#,
             ),
-            stats: agent::SessionStats::default(),
+            stats: ag_contracts::SessionStats::default(),
         })
     });
     let (app_event_tx, mut events) = mpsc::unbounded_channel();

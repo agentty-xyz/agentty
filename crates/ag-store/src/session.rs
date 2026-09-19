@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use ag_session::{
-    AgentKind, FocusedReviewStatus, PermissionMode, ReasoningLevel, ResponseStyle,
-    SessionMessageKind, SessionStats, SpeedMode,
+    AgentKind, AgentSelection, AgentSelectionMetadata, FocusedReviewStatus, PermissionMode,
+    ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName, SpeedMode,
 };
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -568,6 +568,16 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         id: &str,
         agent: &str,
         model: &str,
+    ) -> Result<(), DbError>;
+
+    /// Atomically saves a selection, optional conversation reset, and optional
+    /// project defaults. A failure preserves all previous values.
+    async fn apply_session_agent_model(
+        &self,
+        id: &str,
+        selection: AgentSelection,
+        clear_conversation: bool,
+        default_project_id: Option<i64>,
     ) -> Result<(), DbError>;
 
     /// Updates the persisted agent provider and model only while the session
@@ -2023,6 +2033,86 @@ WHERE id = ?
         Ok(())
     }
 
+    async fn apply_session_agent_model(
+        &self,
+        id: &str,
+        selection: AgentSelection,
+        clear_conversation: bool,
+        default_project_id: Option<i64>,
+    ) -> Result<(), DbError> {
+        let agent = selection.kind().to_string();
+        let model = selection.model().as_str();
+        let now = self.now();
+        let mut transaction = self.0.begin().await?;
+        sqlx::query!(
+            r"
+UPDATE session
+SET agent = ?,
+    model = ?,
+    updated_at = ?
+WHERE id = ?
+",
+            agent,
+            model,
+            now,
+            id
+        )
+        .execute(&mut *transaction)
+        .await?;
+        if clear_conversation {
+            let conversation: Option<&str> = None;
+            sqlx::query!(
+                r"
+UPDATE session
+SET provider_conversation_id = ?,
+    updated_at = ?
+WHERE id = ?
+",
+                conversation,
+                now,
+                id
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query!(
+                r"
+UPDATE session
+SET app_server_instruction_provider_conversation_id = ?,
+    updated_at = ?
+WHERE id = ?
+",
+                conversation,
+                now,
+                id
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        if let Some(project_id) = default_project_id {
+            for (name, value) in [
+                (SettingName::DefaultSmartAgent, selection.kind().name()),
+                (SettingName::DefaultSmartModel, model),
+            ] {
+                sqlx::query!(
+                    r"
+INSERT INTO project_setting (project_id, name, value)
+VALUES (?, ?, ?)
+ON CONFLICT(project_id, name) DO UPDATE
+SET value = excluded.value
+",
+                    project_id,
+                    name.as_str(),
+                    value
+                )
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn update_active_session_agent_model(
         &self,
         id: &str,
@@ -2770,7 +2860,7 @@ impl SessionInstructionStateRow {
     /// Converts the optional stored provider conversation id into one
     /// normalized bootstrap conversation id when present and non-empty.
     fn into_instruction_conversation_id(self) -> Option<String> {
-        ag_runtime::normalize_instruction_conversation_id(
+        ag_contracts::normalize_instruction_conversation_id(
             self.app_server_instruction_provider_conversation_id
                 .as_deref(),
         )

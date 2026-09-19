@@ -1,16 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_contracts::{AgentRequestKind, LiveTranscript, ReasoningLevel};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
 
-use crate::agent;
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::contract::AppServerTurnRequest;
 use crate::app_server::prompt::{
     instruction_delivery_mode_for_runtime, read_latest_replay_transcript, turn_prompt_for_runtime,
 };
-use crate::channel::{AgentRequestKind, LiveTranscript};
-use crate::model::agent::ReasoningLevel;
 
 /// Workspace root used by app-server prompt shaping tests.
 const TEST_WORKSPACE_ROOT: &str = "/tmp/agentty-wt/session-1";
@@ -37,7 +35,7 @@ fn live_transcript(text: &str) -> Arc<dyn LiveTranscript> {
 fn persisted_instruction_conversation_id_for_session_turn(
     provider_conversation_id: Option<&str>,
 ) -> Option<String> {
-    agent::normalize_instruction_conversation_id(provider_conversation_id)
+    ag_contracts::normalize_instruction_conversation_id(provider_conversation_id)
 }
 
 #[test]
@@ -49,8 +47,8 @@ fn read_latest_replay_transcript_prefers_live_source() {
         live_transcript: Some(live_transcript("live content")),
         main_checkout_root: None,
         model: "test-model".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("hello"),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
@@ -58,7 +56,7 @@ fn read_latest_replay_transcript_prefers_live_source() {
         request_kind: AgentRequestKind::SessionStart,
         replay_transcript: None,
         session_id: "test-session".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -77,8 +75,8 @@ fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
         live_transcript: Some(live_transcript("  ")),
         main_checkout_root: None,
         model: "test-model".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("hello"),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
@@ -86,7 +84,7 @@ fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
         request_kind: AgentRequestKind::SessionStart,
         replay_transcript: Some("queued transcript".to_string()),
         session_id: "test-session".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -105,8 +103,8 @@ fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
         live_transcript: None,
         main_checkout_root: None,
         model: "test-model".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("hello"),
         provider_conversation_id: None,
         persisted_instruction_conversation_id: None,
@@ -114,7 +112,7 @@ fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
         request_kind: AgentRequestKind::SessionStart,
         replay_transcript: None,
         session_id: "test-session".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -136,7 +134,7 @@ fn turn_prompt_for_runtime_includes_protocol_preamble() {
         &request_kind,
         None,
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         Path::new(TEST_WORKSPACE_ROOT),
     );
@@ -165,7 +163,7 @@ fn turn_prompt_for_runtime_omits_full_schema_for_transport_schema_mode() {
         &request_kind,
         None,
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::TransportSchema,
         Path::new(TEST_WORKSPACE_ROOT),
     );
@@ -193,7 +191,7 @@ fn turn_prompt_for_runtime_uses_compact_refresh_reminder_for_delta_only() {
         &request_kind,
         None,
         InstructionDeliveryMode::DeltaOnly,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         Path::new(TEST_WORKSPACE_ROOT),
     );
@@ -216,7 +214,7 @@ fn turn_prompt_for_runtime_rewrites_user_at_lookups_for_agent_delivery() {
         &request_kind,
         None,
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         Path::new(TEST_WORKSPACE_ROOT),
     );
@@ -242,7 +240,7 @@ fn turn_prompt_for_runtime_preserves_generated_at_tokens_for_agent_data() {
         &request_kind,
         None,
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         Path::new(TEST_WORKSPACE_ROOT),
     );
@@ -262,8 +260,8 @@ fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
         live_transcript: None,
         main_checkout_root: None,
         model: "test-model".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("hello"),
         provider_conversation_id: Some("thread-123".to_string()),
         persisted_instruction_conversation_id:
@@ -272,7 +270,7 @@ fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
         request_kind: AgentRequestKind::SessionResume,
         replay_transcript: None,
         session_id: "test-session".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act

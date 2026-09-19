@@ -170,10 +170,10 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
-      - id: test-ag-runtime-src
-        name: cargo nextest ag-runtime src
+      - id: test-ag-contracts-src
+        name: cargo nextest ag-contracts src
         description: Source tests for the provider-independent execution contracts.
-        entry: cargo nextest run --locked --profile ci -p ag-runtime --lib
+        entry: cargo nextest run --locked --profile ci -p ag-contracts --lib
         language: system
         always_run: true
         pass_filenames: false

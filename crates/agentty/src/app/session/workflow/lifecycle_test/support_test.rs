@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ag_agent as agent;
+use ag_contracts::{OneShotError, OneShotSubmission};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::AgentResponse;
@@ -34,16 +34,16 @@ pub(super) struct DelayedTitleClient {
 impl RunClient for DelayedTitleClient {
     async fn submit(
         &self,
-        _request: agent::OneShotRequest,
-    ) -> Result<agent::OneShotSubmission, agent::OneShotError> {
+        _request: ag_contracts::OneShotRequest,
+    ) -> Result<OneShotSubmission, OneShotError> {
         self.release.notified().await;
 
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain("Assess project quality"),
-            stats: agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -57,12 +57,12 @@ pub(super) fn mock_title_client(response: &str) -> Arc<dyn RunClient> {
     let response = response.to_string();
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().times(1).returning(move |_| {
-        Ok(agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain(response.clone()),
-            stats: agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },
@@ -273,10 +273,12 @@ pub(super) fn test_services_with_fs_client(
         clock,
         event_tx,
         crate::app::service::AppServiceDeps {
-            session_channel_factory: Arc::new(
-                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
             ),
-            app_server_client_override: Some(crate::test_support::mock_app_server()),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(
+                crate::test_support::mock_app_server(),
+            ),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,
             fs_client,
@@ -318,10 +320,12 @@ pub(super) fn test_services_with_event_receiver(
         Arc::new(crate::infra::clock::RealClock),
         event_tx,
         crate::app::service::AppServiceDeps {
-            session_channel_factory: Arc::new(
-                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
             ),
-            app_server_client_override: Some(crate::test_support::mock_app_server()),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(
+                crate::test_support::mock_app_server(),
+            ),
             available_agent_kinds: AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,
             fs_client: Arc::new(create_passthrough_mock_fs_client()),

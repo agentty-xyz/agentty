@@ -1,4 +1,4 @@
-use ag_agent::AgentSelectionMetadata;
+use ag_session::AgentSelectionMetadata;
 
 use super::super::load_default_review_agent_setting;
 use super::support::{new_settings_manager, test_services};

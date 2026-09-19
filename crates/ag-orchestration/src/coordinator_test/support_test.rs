@@ -1,13 +1,13 @@
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{AgentKind, ReasoningLevel, SpeedMode};
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{AgentResponse, SubtaskItem, SubtaskKind};
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, FocusedReviewStatus,
-    ForgeKind, OrchestrationStatus, OrchestrationTaskKind, OrchestrationTaskStatus, ReviewRequest,
-    ReviewRequestState, ReviewRequestSummary, Session, SessionBackend, SessionError, SessionId,
-    SessionService, SessionStatus,
+    AgentKind, AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest,
+    FocusedReviewStatus, ForgeKind, OrchestrationStatus, OrchestrationTaskKind,
+    OrchestrationTaskStatus, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session,
+    SessionBackend, SessionError, SessionId, SessionService, SessionStatus,
 };
 use ag_store::{
     AppRepositories, DbError, MockOrchestrationRepository, PersistedSessionCreation,
@@ -439,11 +439,11 @@ pub(super) async fn controller_database() -> (AppRepositories, i64) {
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: Some("Orchestrator"),
             speed_mode: SpeedMode::Normal,
             status: "Review",
@@ -556,11 +556,11 @@ pub(super) async fn insert_managed_child(
             model: AgentKind::Codex.default_model().as_str(),
             orchestration_task_id: Some(task_id),
             parent_session_id: None,
-            permission_mode: ag_agent::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
-            response_style: ag_agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             role: Some("OrchestrationWorker"),
             speed_mode: SpeedMode::Normal,
             status: "Review",

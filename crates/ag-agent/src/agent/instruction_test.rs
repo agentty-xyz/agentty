@@ -1,8 +1,9 @@
+use ag_contracts::AgentRequestKind;
+
 use crate::agent::instruction::{
     InstructionDeliveryMode, normalize_instruction_conversation_id,
     plan_app_server_instruction_delivery,
 };
-use crate::channel::AgentRequestKind;
 
 #[test]
 fn missing_conversation_ids_require_full_bootstrap() {

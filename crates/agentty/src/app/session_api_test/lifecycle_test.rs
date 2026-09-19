@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use ag_agent::{
-    AgentKind, AgentModel, AgentSelection, AppServerTurnResponse, MockAppServerClient,
-    PermissionMode, ReasoningLevel, SpeedMode,
-};
+use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
-    CoordinatorMessageRequest, CoordinatorMessageVisibility, CreateSessionMode,
-    CreateSessionRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
-    SessionRole, SessionStatus,
+    AgentKind, AgentModel, AgentSelection, CoordinatorMessageRequest, CoordinatorMessageVisibility,
+    CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionId,
+    SessionMessageKind, SessionRole, SessionStatus,
 };
+use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
 use super::support::{
     persist_inherited_launch_settings, request_coordinator_message, request_message,
@@ -193,7 +191,7 @@ async fn runtime_backend_inherits_launch_settings_for_regular_and_draft_sessions
     // Assert
     assert_eq!(
         inherited_session.settings.agent,
-        ag_agent::AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5)
+        ag_session::AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5)
     );
     assert_eq!(
         inherited_session.settings.reasoning_level,

@@ -59,15 +59,10 @@ jobs:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p ag-protocol --token "$CRATES_IO_TOKEN"
 
-      - name: Publish `ag-runtime` to crates.io
+      - name: Publish `ag-contracts` to crates.io
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p ag-runtime --token "$CRATES_IO_TOKEN"
-
-      - name: Publish `ag-worker` to crates.io
-        env:
-          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p ag-worker --token "$CRATES_IO_TOKEN"
+        run: cargo publish -p ag-contracts --token "$CRATES_IO_TOKEN"
 
       - name: Publish `ag-session` to crates.io
         env:
@@ -78,6 +73,16 @@ jobs:
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p ag-agent --token "$CRATES_IO_TOKEN"
+
+      - name: Publish `ag-runtime` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-runtime --token "$CRATES_IO_TOKEN"
+
+      - name: Publish `ag-worker` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-worker --token "$CRATES_IO_TOKEN"
 
       - name: Publish `ag-store` to crates.io
         env:

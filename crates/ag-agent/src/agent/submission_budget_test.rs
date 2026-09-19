@@ -3,14 +3,17 @@ use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_contracts::{
+    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget,
+    ReasoningLevel, SpeedMode,
+};
 use ag_protocol::ProtocolSchemaInstructionMode;
+use ag_session::{AgentKind, AgentModel};
 
 use super::submit_one_shot_with_backend;
 use crate::app_server::{AppServerSessionRegistry, RuntimeInspector, run_turn_with_restart_retry};
 use crate::{
-    AgentKind, AgentModel, AgentRequestKind, AppServerError, MockAgentBackend, MockAppServerClient,
-    OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget, RealOneShotClient,
-    ReasoningLevel, SpeedMode, is_input_size_error,
+    AppServerError, MockAgentBackend, MockAppServerClient, RealOneShotClient, is_input_size_error,
 };
 
 fn request(limit: usize) -> OneShotRequest {

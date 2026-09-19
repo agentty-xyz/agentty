@@ -1,14 +1,12 @@
 use std::sync::Arc;
 
-use ag_agent::{
-    AgentRequestKind, AppServerTurnResponse, MockAppServerClient, PermissionMode, ReasoningLevel,
-    SpeedMode,
-};
+use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
     AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
     QuestionAnswer, ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
     SessionStatus,
 };
+use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
 use crate::app::App;
 use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskKind};

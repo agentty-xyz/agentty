@@ -1,8 +1,9 @@
+use ag_contracts::{SessionDiffState, SessionStats};
+
 use crate::agent::response_parser::{
     antigravity_value_text, parse_antigravity_response_with_fallback,
     parse_antigravity_stream_output_line,
 };
-use crate::model::session::{SessionDiffState, SessionStats};
 
 #[test]
 /// Ensures the supported Antigravity final stream envelope exposes its

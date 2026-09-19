@@ -4,13 +4,13 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{
-    AgentRequestKind, AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAgentChannel,
-    MockAppServerClient, TurnResult,
-};
+use ag_contracts::{AgentRequestKind, MockAgentChannel, OneShotSubmission, TurnResult};
 use ag_git as git;
 use ag_protocol::AgentResponse;
 use ag_worker::MockRunClient;
+use ag_worker::test_support::{
+    AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAppServerClient,
+};
 use tempfile::tempdir;
 
 use super::super::{
@@ -24,7 +24,7 @@ use super::support::{
     wait_for_output_contains, wait_for_path_absent, wait_for_status,
 };
 use crate::app::session::workflow::task::SessionTaskService;
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{SessionState, Tab};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::selection::SelectionState;
@@ -111,7 +111,7 @@ async fn test_spawn_session_task_auto_commits_changes() {
         .create_session()
         .await
         .expect("failed to create session");
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     register_session_backend(&app, &channels, &session_id, Arc::new(mock));
     app.sessions
         .reply(&app.services, &session_id, "AutoCommit")
@@ -218,7 +218,7 @@ async fn test_spawn_session_task_skips_commit_when_nothing_to_commit() {
         .create_session()
         .await
         .expect("failed to create session");
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     register_session_backend(&app, &channels, &session_id, Arc::new(mock));
     app.sessions
         .reply(&app.services, &session_id, "NoChanges")
@@ -648,7 +648,7 @@ async fn test_spawn_integration() {
         .create_session()
         .await
         .expect("failed to create session");
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     channels.register(&session_id, Arc::new(mock_channel));
     app.sessions
         .reply(&app.services, &session_id, "SpawnInit")
@@ -1007,12 +1007,12 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
     run_client.expect_submit().times(1).returning(|request| {
         assert!(request.prompt.contains("Refine session work"));
 
-        Ok(ag_agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: AgentResponse::plain("Refine session work"),
-            stats: ag_agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: ag_agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },

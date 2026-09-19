@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use ag_contracts::OneShotSubmission;
 use ag_git::MockGitClient;
 use ag_worker::MockRunClient;
 use tempfile::tempdir;
@@ -19,12 +20,12 @@ async fn test_run_agent_assist_uses_injected_run_client() {
     run_client.expect_submit().times(1).returning(|request| {
         assert_eq!(request.prompt, "Resolve the conflict");
 
-        Ok(ag_agent::OneShotSubmission {
+        Ok(OneShotSubmission {
             response: ag_protocol::AgentResponse::plain("Conflict resolved"),
-            stats: ag_agent::SessionStats {
+            stats: ag_contracts::SessionStats {
                 added_lines: 0,
                 deleted_lines: 0,
-                diff_state: ag_agent::SessionDiffState::Unknown,
+                diff_state: ag_contracts::SessionDiffState::Unknown,
                 input_tokens: 0,
                 output_tokens: 0,
             },

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use ag_agent::{AgentKind, AgentModel, AgentRequestKind, AgentSelection};
+use ag_contracts::AgentRequestKind;
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,
-    SessionError as ApiSessionError, SessionStatus,
+    AgentKind, AgentModel, AgentSelection, AnswerQuestionsRequest, CreateSessionMode,
+    CreateSessionRequest, QuestionAnswer, SessionError as ApiSessionError, SessionStatus,
 };
 
 use super::super::{question_answer_message, question_restore_error, validate_question_answers};

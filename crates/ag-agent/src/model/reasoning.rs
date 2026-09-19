@@ -1,6 +1,6 @@
 //! Maps generic execution preferences into provider transport values.
 
-use ag_runtime::ReasoningLevel;
+use ag_contracts::ReasoningLevel;
 
 /// Returns the Codex reasoning-effort identifier for this level.
 pub(crate) fn codex(level: ReasoningLevel) -> &'static str {

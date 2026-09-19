@@ -98,10 +98,12 @@ fn test_services(
         Arc::new(crate::infra::clock::RealClock),
         event_tx,
         crate::app::service::AppServiceDeps {
-            session_channel_factory: Arc::new(
-                crate::app::service::test_support::TestSessionChannelFactory::default(),
+            session_run_factory: Arc::new(
+                crate::app::service::test_support::TestSessionRunFactory::default(),
             ),
-            app_server_client_override: Some(crate::test_support::mock_app_server()),
+            runtime_config: ag_worker::RuntimeConfig::with_app_server(
+                crate::test_support::mock_app_server(),
+            ),
             available_agent_kinds: crate::domain::agent::AgentKind::ALL.to_vec(),
             clipboard_image_client_override: None,
             fs_client: Arc::new(create_passthrough_mock_fs_client()),

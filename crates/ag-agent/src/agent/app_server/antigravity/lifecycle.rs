@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+use ag_contracts::{PermissionMode, ReasoningLevel};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use super::super::stdio_transport::{AppServerRuntimeTransport, AppServerStdioTransport};
@@ -14,8 +16,6 @@ use crate::agent::prompt::{
     CliPromptAccessRootMode, cli_prompt_access_directories, render_prompt_with_local_images,
 };
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
-use crate::model::agent::{AgentKind, ReasoningLevel};
-use crate::model::permission::PermissionMode;
 use crate::{agent, app_server_transport};
 
 /// Mutable runtime state retained across Antigravity turns.

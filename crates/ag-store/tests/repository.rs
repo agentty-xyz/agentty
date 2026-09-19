@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use ag_session::AgentSelectionMetadata;
 use ag_store::Database;
 use ag_worker::RunInfo;
 
@@ -476,4 +477,158 @@ async fn explicit_review_invalidation_fences_reactivated_identical_generations()
             .expect("reuse current evidence"),
         Some("new".into())
     );
+}
+
+#[tokio::test]
+async fn model_switch_rolls_back_selection_conversations_and_defaults_on_any_write_failure() {
+    // Arrange
+    let (database, project) = model_switch_database().await.expect("model switch fixture");
+    let sessions = database.sessions();
+    let selection = ag_session::AgentSelection::new(
+        ag_session::AgentKind::Claude,
+        ag_session::AgentModel::ClaudeOpus5,
+    );
+    let original: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT agent, model, provider_conversation_id, \
+         app_server_instruction_provider_conversation_id FROM session WHERE id = 'switch'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("original");
+
+    // Act / Assert: failures at early and late writes leave all state
+    // unchanged.
+    for rejection in [
+        "CREATE TRIGGER reject_switch BEFORE UPDATE OF agent ON session BEGIN SELECT RAISE(ABORT, \
+         'save failed'); END",
+        "CREATE TRIGGER reject_switch BEFORE UPDATE OF provider_conversation_id ON session BEGIN \
+         SELECT RAISE(ABORT, 'save failed'); END",
+        "CREATE TRIGGER reject_switch BEFORE UPDATE OF \
+         app_server_instruction_provider_conversation_id ON session BEGIN SELECT RAISE(ABORT, \
+         'save failed'); END",
+        "CREATE TRIGGER reject_switch BEFORE INSERT ON project_setting WHEN NEW.name = \
+         'DefaultSmartModel' BEGIN SELECT RAISE(ABORT, 'save failed'); END",
+    ] {
+        sqlx::query(rejection)
+            .execute(database.pool())
+            .await
+            .expect("failure fixture");
+        assert!(
+            sessions
+                .apply_session_agent_model("switch", selection, true, Some(project))
+                .await
+                .is_err()
+        );
+        let actual: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT agent, model, provider_conversation_id, \
+             app_server_instruction_provider_conversation_id FROM session WHERE id = 'switch'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .expect("rollback");
+        assert_eq!(actual, original);
+        assert!(
+            database
+                .settings()
+                .get_project_setting(project, ag_session::SettingName::DefaultSmartAgent)
+                .await
+                .expect("default")
+                .is_none()
+        );
+        assert!(
+            database
+                .settings()
+                .get_project_setting(project, ag_session::SettingName::DefaultSmartModel)
+                .await
+                .expect("default")
+                .is_none()
+        );
+        sqlx::query("DROP TRIGGER reject_switch")
+            .execute(database.pool())
+            .await
+            .expect("repair fixture");
+    }
+}
+
+#[tokio::test]
+async fn model_switch_commits_optional_conversation_reset_and_project_defaults() {
+    // Arrange
+    let (database, project) = model_switch_database().await.expect("model switch fixture");
+    let sessions = database.sessions();
+    let selection = ag_session::AgentSelection::new(
+        ag_session::AgentKind::Claude,
+        ag_session::AgentModel::ClaudeOpus5,
+    );
+
+    // Act / Assert
+    sessions
+        .apply_session_agent_model("switch", selection, false, None)
+        .await
+        .expect("preserve conversation");
+    assert_eq!(
+        sessions
+            .get_session_provider_conversation_id("switch")
+            .await
+            .expect("conversation"),
+        Some("conversation".into())
+    );
+    sessions
+        .apply_session_agent_model("switch", selection, true, Some(project))
+        .await
+        .expect("commit switch");
+    let actual: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT agent, model, provider_conversation_id, \
+         app_server_instruction_provider_conversation_id FROM session WHERE id = 'switch'",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("committed");
+    assert_eq!(
+        actual,
+        (
+            selection.kind().to_string(),
+            selection.model().as_str().into(),
+            None,
+            None
+        )
+    );
+    assert_eq!(
+        database
+            .settings()
+            .get_project_setting(project, ag_session::SettingName::DefaultSmartAgent)
+            .await
+            .expect("default"),
+        Some(selection.kind().name().into())
+    );
+    assert_eq!(
+        database
+            .settings()
+            .get_project_setting(project, ag_session::SettingName::DefaultSmartModel)
+            .await
+            .expect("default"),
+        Some(selection.model().as_str().into())
+    );
+}
+
+/// Persistent session state shared by model-switch transaction regressions.
+async fn model_switch_database() -> Result<(Database, i64), ag_store::DbError> {
+    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123)).await?;
+    let project = database
+        .projects()
+        .upsert_project("model-switch", None)
+        .await?;
+    database
+        .sessions()
+        .insert_session("switch", "gpt-5.6-sol", "main", "Review", project)
+        .await?;
+    database
+        .sessions()
+        .update_session_provider_conversation_id("switch", Some("conversation".into()))
+        .await?;
+    database
+        .sessions()
+        .update_session_instruction_conversation_id("switch", Some("instructions".into()))
+        .await?;
+
+    Ok((database, project))
 }

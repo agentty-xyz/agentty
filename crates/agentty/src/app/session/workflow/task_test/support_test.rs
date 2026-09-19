@@ -1,7 +1,7 @@
 use std::sync::{Mutex, Mutex as StdMutex};
 use std::time::{Instant, SystemTime};
 
-use ag_agent as agent;
+use ag_contracts::OneShotSubmission;
 
 use crate::app::session::Clock;
 use crate::db::AppRepositories;
@@ -48,13 +48,13 @@ pub(super) fn one_shot_submission(
     answer: &str,
     input_tokens: u64,
     output_tokens: u64,
-) -> agent::OneShotSubmission {
-    agent::OneShotSubmission {
+) -> OneShotSubmission {
+    OneShotSubmission {
         response: ag_protocol::AgentResponse::plain(answer),
-        stats: agent::SessionStats {
+        stats: ag_contracts::SessionStats {
             added_lines: 0,
             deleted_lines: 0,
-            diff_state: agent::SessionDiffState::Unknown,
+            diff_state: ag_contracts::SessionDiffState::Unknown,
             input_tokens,
             output_tokens,
         },

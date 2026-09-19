@@ -2,9 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use ag_contracts::PermissionMode;
 use ag_protocol::{
     ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment, TurnPromptContentPart,
 };
+use ag_session::AgentKind;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AGENT_METHOD_NAMES, ContentBlock, ImageContent, InitializeRequest, InitializeResponse,
@@ -21,8 +23,6 @@ use super::{policy, stream_parser, usage};
 use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
-use crate::model::agent::AgentKind;
-use crate::model::permission::PermissionMode;
 
 /// Mutable runtime state required while a Gemini ACP process is active.
 pub(super) struct GeminiRuntimeState {
@@ -146,12 +146,12 @@ pub(super) async fn bootstrap_runtime_session<Transport: AppServerRuntimeTranspo
 /// retain the bounded startup timeout so unrelated configuration failures are
 /// still reported promptly.
 fn bootstrap_response_timeout(
-    request_kind: &crate::channel::AgentRequestKind,
+    request_kind: &ag_contracts::AgentRequestKind,
 ) -> std::time::Duration {
     if matches!(
         request_kind,
-        crate::channel::AgentRequestKind::FocusedReview
-            | crate::channel::AgentRequestKind::UtilityPrompt
+        ag_contracts::AgentRequestKind::FocusedReview
+            | ag_contracts::AgentRequestKind::UtilityPrompt
     ) {
         app_server_transport::TURN_TIMEOUT
     } else {

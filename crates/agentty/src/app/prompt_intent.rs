@@ -1,7 +1,6 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use ag_agent as agent;
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
@@ -718,7 +717,7 @@ pub(crate) fn build_resolve_review_comment_prompt(
         .map(|thread| thread.id.clone())
         .collect::<Vec<_>>();
     let review_comments = review_comments.trim_end();
-    let fence = agent::diff_fence(review_comments);
+    let fence = ag_protocol::diff_fence(review_comments);
     let fenced_review_comments = format!("{fence}text\n{review_comments}\n{fence}");
     let prompt = RESOLVE_REVIEW_COMMENT_PROMPT_TEMPLATE
         .trim_end()

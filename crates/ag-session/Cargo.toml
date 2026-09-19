@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-ag-runtime.workspace = true
+ag-contracts.workspace = true
 ag-forge.workspace = true
 ag-protocol.workspace = true
 async-trait.workspace = true

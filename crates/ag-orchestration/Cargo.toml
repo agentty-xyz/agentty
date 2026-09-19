@@ -22,6 +22,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-ag-agent.workspace = true
+ag-contracts.workspace = true
 ag-git = { workspace = true, features = ["test-utils"] }
 ag-store = { workspace = true, features = ["test-utils"] }

@@ -2,10 +2,11 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_agent::{AgentError, MockAgentChannel, TurnResult};
+use ag_contracts::{AgentError, MockAgentChannel, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_worker::SessionRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -110,7 +111,10 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
         app_event_tx,
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        channel: Arc::new(MockAgentChannel::new()),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -398,7 +402,7 @@ async fn test_queued_saved_child_reserves_stack_until_worker_rejects_acceptance(
     .execute(&pool)
     .await
     .expect("reject acceptance");
-    SessionWorkerService::spawn_session_worker(
+    super::support::spawn_session_worker(
         preparation_test_worker_context(&app, &child_id),
         auto_commit_run_client(),
         Arc::default(),

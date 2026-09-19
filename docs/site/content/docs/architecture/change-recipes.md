@@ -121,18 +121,23 @@ through the correct modules without crossing layer boundaries.
    inputs, and make line-count/layout helpers reuse the same cached derived data as the
    final paint path.
 1. When changing `TurnRequest`/`TurnContinuation`/`TurnEvent`/`TurnResult` shapes in
-   `crates/ag-runtime/src/contract.rs` (re-exported by the `ag-agent` crate root),
-   update the key-types table in `docs/site/content/docs/architecture/runtime-flow.md`.
+   `crates/ag-contracts/src/contract.rs`, update the key-types table in
+   `docs/site/content/docs/architecture/runtime-flow.md`.
 1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits,
    update `docs/site/content/docs/architecture/testability-boundaries.md`.
 1. Run quality gates from `AGENTS.md` before opening a PR.
 
 ## Change run execution
 
-1. Update shared lifecycle contracts in `ag-runtime` and provider behavior in
+1. Update shared lifecycle contracts in `ag-contracts` and provider behavior in
    `ag-agent`.
-1. Keep scheduling, cancellation coordination, and recovery in `ag-worker`; implement
-   product-specific question, Git, forge, and UI policy in the host adapter.
+1. Keep mailboxes, session runtime ownership, scheduling, cancellation, and recovery in
+   `ag-worker`; implement product-specific question, Git, forge, and UI policy in the
+   host adapter. Submit session turns through `SessionRunClient` and utilities through
+   `RunClient`.
+1. Import execution contracts from `ag-contracts` and selections from `ag-session`.
+   Construct `ag-agent` adapters only inside `ag-runtime`; applications configure
+   workers.
 1. Extend headless contract tests and the affected Agentty workflow tests. Changes to
    operation persistence also need `ag-store` adapter tests.
 
@@ -142,6 +147,7 @@ Inject `ag-worker::RunClient` and submit with the existing request permissions a
 provider-call budget. Capture session/project ownership and a purpose with
 `ag-worker::scoped_client` when spawning background work. Nested operations must retain
 parent scope and await worker-owned utilities directly, rather than enqueueing behind
-the waiting session command. Construct runtime adapters only at application composition.
+the waiting session command. Construct runtime adapters only inside `ag-runtime`;
+configure their workers in the application.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.

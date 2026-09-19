@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
-use ag_agent::{
-    AgentRequestKind, OneShotRequest, OneShotSubmission, PermissionMode, ReasoningLevel,
-    SessionStats, SpeedMode,
+use ag_contracts::{
+    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
+    ReasoningLevel, SessionStats, SpeedMode,
 };
 use ag_protocol::AgentResponse;
 use ag_session::FocusedReviewStatus;
@@ -177,7 +177,7 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
             .expect("budget")
             .consume()?;
         if request.prompt.len() > 8000 {
-            return Err(ag_agent::OneShotError::new("contextWindowExceeded"));
+            return Err(OneShotError::new("contextWindowExceeded"));
         }
         assert!(
             successful

@@ -85,7 +85,7 @@ fn test_backend_errors_preserve_diagnostics_at_runtime_boundary() {
     for error in errors {
         let message = error.to_string();
         assert!(
-            matches!(ag_runtime::AgentError::from(error), ag_runtime::AgentError::Backend(actual) if actual == message)
+            matches!(ag_contracts::AgentError::from(error), ag_contracts::AgentError::Backend(actual) if actual == message)
         );
     }
 }

@@ -1,13 +1,12 @@
 use std::path::PathBuf;
 
+use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::ProtocolSchemaInstructionMode;
 
 use super::support::{live_transcript, session_resume_request_kind, session_start_request_kind};
 use crate::agent::InstructionDeliveryMode;
 use crate::app_server::contract::AppServerTurnRequest;
 use crate::app_server::prompt::{read_latest_replay_transcript, turn_prompt_for_runtime};
-use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
 
 #[test]
 fn turn_prompt_for_runtime_adds_repo_root_path_instructions_without_context_reset() {
@@ -20,7 +19,7 @@ fn turn_prompt_for_runtime_adds_repo_root_path_instructions_without_context_rese
         &session_start_request_kind(),
         Some("prior context"),
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         std::path::Path::new("/tmp/agentty-wt/session-1"),
     )
@@ -43,7 +42,7 @@ fn turn_prompt_for_runtime_replays_session_output_after_context_reset_with_path_
         &session_resume_request_kind(),
         Some("assistant: proposed plan"),
         InstructionDeliveryMode::BootstrapWithReplay,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         std::path::Path::new("/tmp/agentty-wt/session-1"),
     )
@@ -70,7 +69,7 @@ fn turn_prompt_for_runtime_uses_shared_protocol_wrapper_for_utility_prompts() {
         &AgentRequestKind::UtilityPrompt,
         None,
         InstructionDeliveryMode::BootstrapFull,
-        &crate::channel::PersonalityPrompt::default(),
+        &ag_contracts::PersonalityPrompt::default(),
         ProtocolSchemaInstructionMode::PromptSchema,
         std::path::Path::new("/tmp/agentty-wt/session-1"),
     )
@@ -90,8 +89,8 @@ fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
         live_transcript: Some(live_transcript("live content from stream")),
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("queued snapshot".to_string()),
@@ -99,7 +98,7 @@ fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -118,8 +117,8 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empt
         live_transcript: Some(live_transcript("")),
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("queued snapshot".to_string()),
@@ -127,7 +126,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empt
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -146,8 +145,8 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_resume_request_kind(),
         replay_transcript: Some("queued snapshot".to_string()),
@@ -155,7 +154,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act
@@ -174,8 +173,8 @@ fn read_latest_replay_transcript_returns_none_when_both_are_absent() {
         live_transcript: None,
         main_checkout_root: None,
         model: "model-a".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do work".into(),
         request_kind: session_start_request_kind(),
         replay_transcript: None,
@@ -183,7 +182,7 @@ fn read_latest_replay_transcript_returns_none_when_both_are_absent() {
         persisted_instruction_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         session_id: "session-1".to_string(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
 
     // Act

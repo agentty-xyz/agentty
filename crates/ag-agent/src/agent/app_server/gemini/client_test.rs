@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ag_contracts::{
+    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ProviderCallBudget,
+    ReasoningLevel, SpeedMode,
+};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_session::AgentModel;
 use tokio::sync::mpsc;
 
 use crate::agent::app_server::client::{
@@ -10,16 +15,12 @@ use crate::agent::app_server::client::{
 use crate::agent::app_server::gemini::client::{GeminiRuntimeProvider, GeminiSessionRuntime};
 use crate::agent::app_server::gemini::lifecycle::GeminiRuntimeState;
 use crate::agent::app_server::stdio_transport::AppServerStdioTransport;
-use crate::agent::submission::{OneShotClient, OneShotRequest, RealOneShotClient};
+use crate::agent::submission::RealOneShotClient;
 use crate::app_server::{
     AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
     BorrowedAppServerFuture,
 };
-use crate::channel::AgentRequestKind;
-use crate::model::agent::{AgentModel, ReasoningLevel};
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
-use crate::{ProviderCallBudget, app_server_transport};
+use crate::app_server_transport;
 
 /// Builds one Gemini session runtime whose stdin is already closed so turn
 /// writes fail deterministically without a live ACP process.
@@ -37,7 +38,7 @@ fn build_stopped_session_runtime() -> GeminiSessionRuntime {
     let mut state = GeminiRuntimeState::new(
         PathBuf::from("/tmp/agentty-gemini-runtime"),
         AgentModel::Gemini31Pro.as_str().to_string(),
-        crate::model::permission::PermissionMode::AutoEdit,
+        ag_contracts::PermissionMode::AutoEdit,
     );
     state.session_id = "session-1".to_string();
 
@@ -56,7 +57,7 @@ async fn runtime_reuse_requires_matching_permission_mode() {
 
     // Act
     let auto_edit_matches = runtime.matches_request(&request);
-    request.permission_mode = crate::model::permission::PermissionMode::ReadOnly;
+    request.permission_mode = ag_contracts::PermissionMode::ReadOnly;
     let read_only_matches = runtime.matches_request(&request);
     runtime.shutdown_runtime().await;
 
@@ -95,14 +96,14 @@ fn runtime_request(runtime: &GeminiSessionRuntime) -> AppServerTurnRequest {
         live_transcript: None,
         main_checkout_root: None,
         model: runtime.state.model.clone(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Continue"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),
         replay_transcript: None,
-        request_kind: crate::channel::AgentRequestKind::SessionResume,
+        request_kind: ag_contracts::AgentRequestKind::SessionResume,
         session_id: "session-1".to_string(),
         speed_mode: SpeedMode::default(),
     }

@@ -1,20 +1,19 @@
-//! Per-session async worker orchestration for serialized command execution.
+//! Application host policy and ordered effects for worker-owned session
+//! execution.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, Weak};
 
-use ag_agent as agent;
+use ag_contracts::{
+    AgentError, AgentRequestKind, TurnContinuation, TurnEvent, TurnRequest, TurnResult,
+};
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
-use ag_runtime::{
-    AgentChannel, AgentError, AgentRequestKind, TurnContinuation, TurnEvent, TurnRequest,
-    TurnResult,
-};
-use ag_worker::RunClient;
-use tokio::sync::{Notify, mpsc, oneshot};
+use ag_worker::{RunClient, SessionRunClient};
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -211,26 +210,8 @@ impl ag_worker::ScheduledCommand for ScheduledSessionCommand {
     }
 }
 
-/// Sender and shared ordering source owned by one active session worker.
-#[derive(Clone)]
-struct SessionWorkerHandle {
-    queued_work_sequence: Arc<AtomicU64>,
-    sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
-    wakeup: Arc<Notify>,
-}
-
-impl SessionWorkerHandle {
-    /// Reserves the next submission order shared with queued chat messages.
-    fn next_queued_work_order(&self) -> u64 {
-        self.queued_work_sequence.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Wakes the worker so buffered work is reconsidered after an external
-    /// status transition.
-    fn wake(&self) {
-        self.wakeup.notify_one();
-    }
-}
+/// Worker-owned mailbox for this application's scheduled commands.
+type SessionWorkerHandle = ag_worker::SessionWorkerHandle<ScheduledSessionCommand>;
 
 /// Next unit selected from the combined action and chat queues.
 type ScheduledSessionWork = ag_worker::ScheduledWork<ScheduledSessionCommand, QueuedMessage>;
@@ -339,11 +320,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
     }
 
     async fn shutdown(&self) {
-        let _ = self
-            .context
-            .channel
-            .shutdown_session(self.context.session_id.to_string())
-            .await;
+        let _ = self.context.session_run.shutdown().await;
         if let Ok(mut guard) = self.context.child_pid.lock() {
             *guard = None;
         }
@@ -360,8 +337,8 @@ pub(super) struct SessionWorkerContext {
     /// of each turn; the UI calls `cancel()` on the current token to
     /// interrupt a running turn.
     pub(super) cancel_token: Arc<Mutex<CancellationToken>>,
-    /// Provider-agnostic agent channel for this session's worker.
-    pub(super) channel: Arc<dyn AgentChannel>,
+    /// Worker-owned execution client for this session.
+    pub(super) session_run: SessionRunClient,
     /// Runtime accounting root; adapters retain their own cancellation
     /// ownership.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
@@ -464,8 +441,8 @@ struct SessionWorkerRebaseAssistClient {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Per-turn cancellation token shared with the UI.
     cancel_token: Arc<Mutex<CancellationToken>>,
-    /// Provider channel already associated with this session.
-    channel: Arc<dyn AgentChannel>,
+    /// Worker execution client already associated with this session.
+    session_run: SessionRunClient,
     /// Runtime accounting root; app-server cancellation uses channel shutdown.
     child_pid: Arc<Mutex<Option<u32>>>,
     /// Repository bundle used for conversation and usage persistence.
@@ -492,7 +469,7 @@ impl SessionWorkerRebaseAssistClient {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             cancel_token: Arc::clone(&context.cancel_token),
-            channel: Arc::clone(&context.channel),
+            session_run: context.session_run.clone(),
             child_pid: Arc::clone(&context.child_pid),
             db: context.db.clone(),
             folder: context.folder.clone(),
@@ -537,12 +514,12 @@ impl SessionWorkerRebaseAssistClient {
             folder: self.folder.clone(),
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
-            permission_mode: agent::PermissionMode::AutoEdit,
-            personality: ag_agent::PersonalityPrompt::default(),
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            personality: ag_contracts::PersonalityPrompt::default(),
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
-            response_style: agent::ResponseStyle::default(),
+            response_style: ag_contracts::ResponseStyle::default(),
             speed_mode,
         };
         let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
@@ -583,14 +560,7 @@ impl SessionWorkerRebaseAssistClient {
         req: TurnRequest,
         event_tx: mpsc::UnboundedSender<TurnEvent>,
     ) -> Result<TurnResult, AgentError> {
-        let result = ag_worker::run_turn(
-            self.channel.as_ref(),
-            self.session_id.to_string(),
-            req,
-            event_tx,
-            cancel_token,
-        )
-        .await;
+        let result = self.session_run.submit(req, event_tx, cancel_token).await;
         if matches!(result, Err(AgentError::InterruptedByUser(_)))
             && let Ok(mut pid) = self.child_pid.lock()
         {
@@ -631,7 +601,7 @@ impl SessionWorkerRebaseAssistClient {
         let token_usage_delta = SessionStats {
             added_lines: 0,
             deleted_lines: 0,
-            diff_state: agent::SessionDiffState::Unknown,
+            diff_state: ag_contracts::SessionDiffState::Unknown,
             input_tokens: turn_result.input_tokens,
             output_tokens: turn_result.output_tokens,
         };
@@ -675,12 +645,14 @@ impl SessionWorkerRebaseAssistClient {
                 Some(provider_conversation_id.clone()),
             )
             .await?;
-        if agent::transport_mode(self.session_agent.kind()).uses_app_server() {
+        if ag_worker::uses_persistent_session(self.session_agent.kind()) {
             self.db
                 .sessions()
                 .update_session_instruction_conversation_id(
                     &self.session_id,
-                    agent::normalize_instruction_conversation_id(Some(&provider_conversation_id)),
+                    ag_contracts::normalize_instruction_conversation_id(Some(
+                        &provider_conversation_id,
+                    )),
                 )
                 .await?;
         }
@@ -912,7 +884,7 @@ impl SessionWorkerService {
         self.send_persisted_command(
             services.db().operations(),
             &session_id,
-            worker.sender,
+            worker,
             scheduled_command,
         )
         .await?;
@@ -953,7 +925,7 @@ impl SessionWorkerService {
         self.send_persisted_command(
             services.db().operations(),
             session_id,
-            worker.sender,
+            worker,
             ScheduledSessionCommand::queued(command, queued_order),
         )
         .await?;
@@ -964,6 +936,14 @@ impl SessionWorkerService {
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.workers.remove(session_id);
+    }
+
+    /// Holds scheduling while the host attempts a reversible model update.
+    async fn pause_session_worker(
+        &self,
+        session_id: &str,
+    ) -> Option<ag_worker::SessionWorkerPause> {
+        Some(self.workers.get(session_id)?.pause().await)
     }
 
     /// Wakes an existing session worker after an external state transition.
@@ -993,7 +973,7 @@ impl SessionWorkerService {
         let mut scheduled_command = ScheduledSessionCommand::immediate(command);
         scheduled_command.ready_rx = Some(ready_rx);
         self.reserve_preparation_command(&runtime.session_id, &mut scheduled_command);
-        if worker.sender.send(scheduled_command).is_err() {
+        if worker.submit(scheduled_command).is_err() {
             self.workers.remove(&runtime.session_id);
 
             return Err(SessionError::Workflow(
@@ -1019,13 +999,13 @@ impl SessionWorkerService {
             return worker.clone();
         }
 
-        let channel = services.agent_channel(&runtime.session_id, runtime.session_agent.kind());
+        let session_run = services.session_run(&runtime.session_id, runtime.session_agent.kind());
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
             branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
             cancel_token: Arc::clone(&runtime.cancel_token),
-            channel,
+            session_run,
             child_pid: Arc::clone(&runtime.child_pid),
             clock: services.clock(),
             db: services.db().clone(),
@@ -1041,21 +1021,15 @@ impl SessionWorkerService {
             status: Arc::clone(&runtime.status),
             transcript: Arc::clone(&runtime.transcript),
         };
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let wakeup = Arc::new(Notify::new());
-        let worker = SessionWorkerHandle {
-            queued_work_sequence: Arc::clone(&runtime.queued_work_sequence),
-            sender,
-            wakeup: Arc::clone(&wakeup),
-        };
+        let worker = SessionWorkerHandle::spawn(
+            SessionWorkerHost {
+                context,
+                run_client: services.session_run_client(&runtime.session_id),
+            },
+            Arc::clone(&runtime.queued_work_sequence),
+        );
         self.workers
             .insert(runtime.session_id.clone(), worker.clone());
-        Self::spawn_session_worker(
-            context,
-            services.session_run_client(&runtime.session_id),
-            wakeup,
-            receiver,
-        );
 
         worker
     }
@@ -1078,7 +1052,7 @@ impl SessionWorkerService {
         self.send_persisted_command(
             services.db().operations(),
             session_id,
-            worker.sender,
+            worker,
             ScheduledSessionCommand::immediate(command),
         )
         .await
@@ -1089,11 +1063,11 @@ impl SessionWorkerService {
         &mut self,
         operations: &dyn OperationRepository<crate::infra::db::DbError>,
         session_id: &SessionId,
-        sender: mpsc::UnboundedSender<ScheduledSessionCommand>,
+        worker: SessionWorkerHandle,
         scheduled_command: ScheduledSessionCommand,
     ) -> Result<(), SessionError> {
         let operation_id = scheduled_command.command.operation_id().to_string();
-        if sender.send(scheduled_command).is_err() {
+        if worker.submit(scheduled_command).is_err() {
             self.workers.remove(session_id);
             // Best-effort: operation tracking metadata is non-critical.
             let _ = operations
@@ -1106,30 +1080,6 @@ impl SessionWorkerService {
         }
 
         Ok(())
-    }
-
-    /// Spawns the background loop that executes queued session commands.
-    ///
-    /// Queued workflow actions and chat messages share one submission order,
-    /// so the next displayed row is always the next work executed. Scheduling
-    /// pauses while the session is in `Question` state, except for an
-    /// immediate answer command that makes the session runnable again. A turn
-    /// stopped by the user (`Ctrl+C`) clears queued chat so canceled work does
-    /// not silently leak into the next session activity.
-    fn spawn_session_worker(
-        context: SessionWorkerContext,
-        run_client: Arc<dyn RunClient>,
-        wakeup: Arc<Notify>,
-        receiver: mpsc::UnboundedReceiver<ScheduledSessionCommand>,
-    ) {
-        tokio::spawn(ag_worker::run(
-            SessionWorkerHost {
-                context,
-                run_client,
-            },
-            wakeup,
-            receiver,
-        ));
     }
 
     /// Clears pending chat messages when the work just stopped by user action.
@@ -1725,6 +1675,16 @@ impl SessionManager {
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
         self.worker_service_mut().clear_session_worker(session_id);
+    }
+
+    /// Settles current work and retains pending work until persistence commits.
+    pub(super) async fn pause_session_worker(
+        &mut self,
+        session_id: &str,
+    ) -> Option<ag_worker::SessionWorkerPause> {
+        self.worker_service_mut()
+            .pause_session_worker(session_id)
+            .await
     }
 
     /// Wakes an existing worker so it re-evaluates buffered work against the

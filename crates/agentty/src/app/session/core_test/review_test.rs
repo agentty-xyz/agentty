@@ -3,8 +3,9 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
-use ag_agent::{MockAgentBackend, MockAgentChannel, TurnResult};
+use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_protocol::AgentResponse;
+use ag_worker::test_support::MockAgentBackend;
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
@@ -19,7 +20,7 @@ use crate::app::ReviewCacheEntry;
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::session::SessionError;
-use crate::app::test_support::TestSessionChannelFactory;
+use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{SESSION_DATA_DIR, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -138,7 +139,7 @@ async fn test_reply_replays_history_after_app_restart_for_review_session() {
         .await
         .expect("failed to create session");
     let start_backend = create_mock_backend();
-    let channels = TestSessionChannelFactory::install(&mut first_app.services);
+    let channels = TestSessionRunFactory::install(&mut first_app.services);
     register_session_backend(&first_app, &channels, &session_id, Arc::new(start_backend));
     first_app
         .sessions
@@ -185,7 +186,7 @@ async fn test_reply_replays_history_after_app_restart_for_review_session() {
             .stderr(Stdio::null());
         Ok(cmd)
     });
-    let channels = TestSessionChannelFactory::install(&mut resumed_app.services);
+    let channels = TestSessionRunFactory::install(&mut resumed_app.services);
     register_session_backend(
         &resumed_app,
         &channels,
@@ -373,7 +374,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
     mock_channel
         .expect_shutdown_session()
         .returning(|_| Box::pin(async { Ok(()) }));
-    let channels = TestSessionChannelFactory::install(&mut app.services);
+    let channels = TestSessionRunFactory::install(&mut app.services);
     channels.register(&session_id, Arc::new(mock_channel));
     let selected_comments = vec![ReviewCommentSelection {
         thread_id: "thread-42".to_string(),

@@ -2,6 +2,7 @@
 
 use std::marker::PhantomData;
 
+use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::mpsc;
 
@@ -9,8 +10,6 @@ use crate::app_server::{
     self, AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
     AppServerStreamEvent, AppServerTurnRequest, AppServerTurnResponse, BorrowedAppServerFuture,
 };
-use crate::model::agent::ReasoningLevel;
-use crate::model::session::SpeedMode;
 
 /// Provider hook surface for the shared app-server client lifecycle.
 pub(crate) trait RuntimeClientProvider: Send + Sync + 'static {

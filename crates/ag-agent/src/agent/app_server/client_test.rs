@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use ag_contracts::{AgentRequestKind, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt};
 use tokio::sync::{Mutex, MutexGuard, mpsc};
 
@@ -12,9 +13,6 @@ use crate::app_server::{
     AppServerClient, AppServerError, AppServerFuture, AppServerSessionRegistry,
     AppServerStreamEvent, AppServerTurnRequest, BorrowedAppServerFuture,
 };
-use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
-use crate::model::session::SpeedMode;
 
 // Counter assertions share one async lock across complete test scenarios.
 static COUNTER_LOCK: Mutex<()> = Mutex::const_new(());
@@ -126,9 +124,9 @@ fn make_request() -> AppServerTurnRequest {
         live_transcript: None,
         main_checkout_root: None,
         model: "test-model".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: crate::channel::PersonalityPrompt::default(),
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from_text("Hello".to_string()),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,

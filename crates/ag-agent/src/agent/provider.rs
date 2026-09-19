@@ -6,6 +6,7 @@ use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode,
     format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
+use ag_session::AgentKind;
 
 use super::backend::{
     AgentBackend, AgentBackendError, AgentPromptTransport, AgentTransport, AppServerThoughtPolicy,
@@ -14,7 +15,6 @@ use super::backend::{
 use super::prompt;
 use super::response_parser::ParsedResponse;
 use crate::app_server::AppServerClient;
-use crate::model::agent::AgentKind;
 
 /// Factory hook used to build or override provider-specific app-server
 /// clients.

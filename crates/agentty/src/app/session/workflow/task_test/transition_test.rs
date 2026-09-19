@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_agent as agent;
+use ag_contracts::{OneShotError, PermissionMode};
 use ag_git::{GitError, MockGitClient};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
@@ -37,7 +37,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
     run_client
         .expect_submit()
         .once()
-        .returning(|_| Err(agent::OneShotError::new("commit failed")));
+        .returning(|_| Err(OneShotError::new("commit failed")));
     let context = AssistContext {
         app_event_tx,
         child_pid: Arc::new(Mutex::new(None)),
@@ -287,7 +287,7 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
     let mut client = MockRunClient::new();
     client.expect_submit().returning(|request| {
         assert!(request.prompt.len() <= 60_000);
-        assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
         if request.prompt.starts_with("Summarize") {
             return Ok(one_shot_submission(
                 "Preserve changes to all affected files",
@@ -344,7 +344,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
                     "isolated runtime must not receive the session PID slot"
                 );
                 if assist_fails {
-                    Err(agent::OneShotError::new("assist failed"))
+                    Err(OneShotError::new("assist failed"))
                 } else {
                     Ok(one_shot_submission("Fixed the commit failure", 0, 0))
                 }
@@ -388,7 +388,7 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
     let temp_directory = tempfile::tempdir().expect("failed to create temp dir");
     let mut run_client = MockRunClient::new();
     run_client.expect_submit().returning(|_| {
-        Err(agent::OneShotError::new(
+        Err(OneShotError::new(
             "One-shot agent output did not match the required JSON schema\nresponse:\nRefactor \
              agent prompt and protocol handling",
         ))
@@ -560,14 +560,14 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
                         .consume()?;
                     return Ok(one_shot_submission("", 0, 0));
                 }
-                Err(agent::OneShotError::new("Input exceeds the maximum length"))
+                Err(OneShotError::new("Input exceeds the maximum length"))
             });
         client
             .expect_submit()
             .times(1)
             .withf(|request| request.prompt.contains("Use only the changed file list"))
             .returning(|request| {
-                assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+                assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
                 assert_eq!(request.reasoning_level, ReasoningLevel::Low);
                 assert!(
                     request
@@ -726,7 +726,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
         .expect_submit()
         .times(1)
         .in_sequence(&mut sequence)
-        .returning(|_| Err(agent::OneShotError::new("Input exceeds the maximum length")));
+        .returning(|_| Err(OneShotError::new("Input exceeds the maximum length")));
     client
         .expect_submit()
         .times(1)
@@ -742,7 +742,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
                     .prompt
                     .contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER)
             );
-            assert_eq!(request.permission_mode, agent::PermissionMode::ReadOnly);
+            assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
             Ok(one_shot_submission(&revised_message, 0, 0))
         });
 

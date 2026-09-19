@@ -3,12 +3,8 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
+use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::TurnPromptAttachment;
-
-use crate::channel::AgentRequestKind;
-use crate::model::agent::ReasoningLevel;
-use crate::model::permission::PermissionMode;
-use crate::model::session::SpeedMode;
 
 /// Maximum concurrent subagents requested from providers with a native limit.
 ///
@@ -101,7 +97,7 @@ impl fmt::Display for AgentBackendError {
 
 impl Error for AgentBackendError {}
 
-impl From<AgentBackendError> for ag_runtime::AgentError {
+impl From<AgentBackendError> for ag_contracts::AgentError {
     fn from(error: AgentBackendError) -> Self {
         Self::Backend(error.to_string())
     }

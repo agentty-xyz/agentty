@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_contracts::{AgentChannel, AgentRequestKind, ReasoningLevel, TurnEvent};
 use ag_protocol::TurnPrompt;
+use ag_session::AgentKind;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -11,8 +13,6 @@ use crate::channel::cli::{
     CliAgentChannel, execute_cli_repair_command, execute_cli_repair_turn,
     parse_or_repair_cli_response,
 };
-use crate::channel::contract::{AgentChannel, AgentRequestKind, TurnEvent};
-use crate::model::agent::{AgentKind, ReasoningLevel};
 
 #[tokio::test]
 async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
@@ -110,12 +110,12 @@ async fn test_execute_cli_repair_turn_cleans_up_stdin_writer_after_timeout() {
         main_checkout_root: None,
         replay_transcript: None,
         model: "test-model",
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality_prompt: None,
         prompt: &repair_prompt,
         reasoning_level: ReasoningLevel::default(),
         request_kind: &request_kind,
-        speed_mode: crate::model::session::SpeedMode::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     };
     let mut backend = MockAgentBackend::new();
     backend.expect_build_command().returning(|request| {
@@ -228,7 +228,7 @@ async fn repair_receives_complete_response_and_rejects_oversize_before_execution
             assert!(request.prompt.contains("preserved tail"));
             assert_eq!(
                 request.permission_mode,
-                crate::model::permission::PermissionMode::ReadOnly
+                ag_contracts::PermissionMode::ReadOnly
             );
             let mut command = std::process::Command::new("sh");
             command

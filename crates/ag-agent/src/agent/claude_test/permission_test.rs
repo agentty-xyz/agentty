@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
+use ag_contracts::ReasoningLevel;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -9,7 +10,6 @@ use crate::agent::backend::{AgentBackend, BuildCommandRequest};
 use crate::agent::claude::{
     CLAUDE_ALLOWED_TOOLS, CLAUDE_READ_ONLY_TOOLS, ClaudeBackend, claude_absolute_permission_path,
 };
-use crate::model::agent::ReasoningLevel;
 
 #[test]
 /// Verifies Claude permission-rule paths use slash separators for glob
@@ -43,12 +43,12 @@ fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
             main_checkout_root: Some(main_checkout_root.as_path()),
             replay_transcript: None,
             model: "claude-sonnet-5",
-            permission_mode: crate::model::permission::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Plan prompt",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");
@@ -117,12 +117,12 @@ fn test_claude_read_only_mode_uses_plan_tools_and_denies_writes() {
             main_checkout_root: Some(main_checkout_root.as_path()),
             replay_transcript: None,
             model: "claude-sonnet-5",
-            permission_mode: crate::model::permission::PermissionMode::ReadOnly,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_prompt: None,
             prompt: "Inspect the architecture",
             reasoning_level: ReasoningLevel::default(),
             request_kind: &session_start_request_kind(),
-            speed_mode: crate::model::session::SpeedMode::default(),
+            speed_mode: ag_contracts::SpeedMode::default(),
         },
     )
     .expect("command should build");

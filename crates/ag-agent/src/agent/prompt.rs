@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use ag_contracts::{PersonalityPromptUpdate, ResponseStyle};
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptAttachment,
     TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
@@ -13,8 +14,6 @@ use askama::Template;
 
 use super::backend::{AgentBackendError, BuildCommandRequest};
 use super::instruction::InstructionDeliveryMode;
-use crate::channel::PersonalityPromptUpdate;
-use crate::model::session::ResponseStyle;
 
 /// Askama view model for rendering resume prompts with prior transcript text.
 #[derive(Template)]
@@ -364,8 +363,6 @@ fn attachment_path_for_prompt(
             ))
         })
 }
-
-pub use ag_protocol::diff_fence;
 
 /// Renders one Askama markdown template and trims the trailing newline added
 /// by file-based templates.

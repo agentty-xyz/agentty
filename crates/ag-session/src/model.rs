@@ -7,9 +7,9 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub use ag_contracts::{PermissionMode, ResponseStyle, SpeedMode};
 pub use ag_forge::{ForgeKind, ReviewRequestState, ReviewRequestSummary};
 use ag_protocol::QuestionItem;
-pub use ag_runtime::{PermissionMode, ResponseStyle, SpeedMode};
 use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};

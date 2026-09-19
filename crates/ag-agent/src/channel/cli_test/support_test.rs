@@ -1,21 +1,20 @@
 use std::path::PathBuf;
 
-use crate::channel::contract::{AgentRequestKind, TurnRequest};
-use crate::model::agent::ReasoningLevel;
+use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnRequest};
 
 pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
     TurnRequest {
-        continuation: crate::channel::TurnContinuation::fresh(),
+        continuation: ag_contracts::TurnContinuation::fresh(),
         folder,
         main_checkout_root: None,
         model: "claude-sonnet-5".to_string(),
-        permission_mode: crate::model::permission::PermissionMode::AutoEdit,
-        personality: crate::channel::PersonalityPrompt::default(),
+        permission_mode: ag_contracts::PermissionMode::AutoEdit,
+        personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Write a test".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
-        response_style: crate::ResponseStyle::default(),
-        speed_mode: crate::model::session::SpeedMode::default(),
+        response_style: ag_contracts::ResponseStyle::default(),
+        speed_mode: ag_contracts::SpeedMode::default(),
     }
 }
 

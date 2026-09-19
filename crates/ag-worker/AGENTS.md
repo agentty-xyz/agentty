@@ -11,9 +11,14 @@ Headless serial scheduling, cancellation, heartbeat coordination, and restart re
 
 ## Integration
 
-- Implement `WorkQueue` and `WorkerHost` using one monotonically increasing submission
-  order for commands and messages. Execution includes ordered post-processing before the
-  next item may run.
+- Import shared data and interfaces from `ag-contracts`. Only this crate depends on
+  `ag-runtime`; applications receive worker handles and configuration.
+- Keep raw runtime adapters inside `SessionRunClient` and utility execution. Hosts
+  submit model work through worker clients; `ag-runtime` alone constructs adapters.
+- Use `SessionWorkerHandle` for mailbox creation and task ownership. Implement
+  `WorkQueue` and `WorkerHost` using one monotonically increasing submission order for
+  commands and messages. Execution includes ordered post-processing before the next item
+  may run.
 - Notify the worker after queue or pause-state changes. On mailbox closure, settle
   abandoned work and notify its callers before releasing resources.
 - Inject `Clock` for heartbeat timing. Before recovery, ensure the previous worker has

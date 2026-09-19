@@ -1,3 +1,4 @@
+use ag_contracts::PersonalityPromptUpdate;
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode,
     prepend_protocol_instructions as protocol_prepend_instructions,
@@ -7,7 +8,6 @@ use ag_protocol::{
 use super::support::{normalize_prompt, test_workspace_root};
 use crate::agent::instruction::InstructionDeliveryMode;
 use crate::agent::prompt::{PromptPreparationRequest, prepare_prompt_text};
-use crate::channel::PersonalityPromptUpdate;
 
 #[test]
 fn repair_bootstrap_applies_schema_once_for_each_provider_and_profile() {
@@ -15,10 +15,10 @@ fn repair_bootstrap_applies_schema_once_for_each_provider_and_profile() {
     let repair = ag_protocol::build_protocol_repair_prompt("bad JSON", "original response")
         .expect("repair body");
     for kind in [
-        crate::model::agent::AgentKind::Gemini,
-        crate::model::agent::AgentKind::Codex,
-        crate::model::agent::AgentKind::Claude,
-        crate::model::agent::AgentKind::Antigravity,
+        ag_session::AgentKind::Gemini,
+        ag_session::AgentKind::Codex,
+        ag_session::AgentKind::Claude,
+        ag_session::AgentKind::Antigravity,
     ] {
         for profile in [
             ProtocolRequestProfile::SessionTurn,

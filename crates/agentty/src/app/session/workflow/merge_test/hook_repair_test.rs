@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use ag_agent::OneShotError;
+use ag_contracts::OneShotError;
 use ag_git::{GitError, MockGitClient, RebaseStepResult};
 use ag_worker::MockRunClient;
 use mockall::Sequence;

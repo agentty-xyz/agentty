@@ -1,6 +1,6 @@
 //! Public contract coverage for shared provider-turn accounting.
 
-use ag_agent::{ProviderCallBudget, is_input_size_error};
+use ag_contracts::{ProviderCallBudget, is_input_size_error};
 
 #[test]
 fn clones_share_an_atomic_limit_and_availability_checks_do_not_charge() {

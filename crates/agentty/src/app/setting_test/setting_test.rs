@@ -1,4 +1,4 @@
-use ag_agent::AgentSelectionMetadata;
+use ag_session::AgentSelectionMetadata;
 
 use super::super::{
     ModelSelectorOption, SettingsManager, load_default_fast_agent_setting,

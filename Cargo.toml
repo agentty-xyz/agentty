@@ -15,6 +15,7 @@ repository = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
 ag-agent = { path = "crates/ag-agent", version = "0.16.0" }
+ag-contracts = { path = "crates/ag-contracts", version = "0.16.0" }
 ag-clipboard = { path = "crates/ag-clipboard", version = "0.16.0" }
 ag-forge = { path = "crates/ag-forge", version = "0.16.0" }
 ag-git = { path = "crates/ag-git", version = "0.16.0" }

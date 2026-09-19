@@ -1,6 +1,6 @@
 /// Typed error returned by session-layer workflow operations.
 ///
-/// Wraps infrastructure errors from git, database, app-server, and forge
+/// Wraps infrastructure errors from git, database, and forge
 /// boundaries alongside workflow-specific validation failures, replacing the
 /// previous opaque `Result<T, String>` pattern used throughout session
 /// orchestration code.
@@ -20,7 +20,7 @@ pub enum SessionError {
 
     /// An isolated agent prompt failed.
     #[error("{0}")]
-    OneShot(#[from] ag_agent::OneShotError),
+    OneShot(#[from] ag_contracts::OneShotError),
 
     /// A database operation failed.
     #[error("{0}")]
@@ -29,10 +29,6 @@ pub enum SessionError {
     /// A filesystem boundary operation failed.
     #[error("{0}")]
     Fs(#[from] crate::infra::fs::FsError),
-
-    /// An app-server operation failed.
-    #[error("{0}")]
-    AppServer(#[from] ag_agent::AppServerError),
 
     /// A workflow-specific failure with a contextual message.
     ///
@@ -53,10 +49,10 @@ impl SessionError {
     /// produced the failure.
     ///
     /// `StoppedByUser` keeps the same typed routing while adding context to
-    /// the display message. Typed infrastructure variants (`Git`, `Db`,
-    /// `AppServer`) pass through unchanged because their type already
-    /// identifies the failure origin and callers can still discriminate them
-    /// by pattern matching. In practice every current assist call site
+    /// the display message. Typed infrastructure variants (`Git`, `Db`) pass
+    /// through unchanged because their type already identifies the failure
+    /// origin and callers can still discriminate them by pattern matching.
+    /// In practice every current assist call site
     /// (`run_rebase_assist_agent`, `run_sync_rebase_assist_agent`,
     /// commit-assist in `task.rs`) only receives `Workflow` variants because
     /// the upstream assist functions convert all errors via

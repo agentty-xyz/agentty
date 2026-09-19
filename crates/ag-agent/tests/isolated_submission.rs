@@ -6,9 +6,11 @@ use std::task::Poll;
 use std::time::Duration;
 
 use ag_agent::{
-    AgentRequestKind, AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent,
-    AppServerTurnRequest, AppServerTurnResponse, OneShotClient, OneShotRequest, PermissionMode,
-    RealOneShotClient, ReasoningLevel, SpeedMode,
+    AppServerClient, AppServerError, AppServerFuture, AppServerStreamEvent, AppServerTurnRequest,
+    AppServerTurnResponse, RealOneShotClient,
+};
+use ag_contracts::{
+    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
 };
 use tokio::sync::{Notify, mpsc};
 

@@ -1,3 +1,5 @@
+use ag_contracts::OneShotError;
+
 use super::AppError;
 use crate::app::session::SessionError;
 
@@ -42,7 +44,7 @@ fn db_error_converts_via_from() {
 #[test]
 fn one_shot_error_converts_via_from() {
     // Arrange
-    let one_shot_error = ag_agent::OneShotError::new("one-shot failed");
+    let one_shot_error = OneShotError::new("one-shot failed");
 
     // Act
     let error = AppError::from(one_shot_error);
