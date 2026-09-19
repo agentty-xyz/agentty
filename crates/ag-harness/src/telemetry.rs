@@ -147,10 +147,9 @@ impl LifecycleMetrics {
     fn record(&self, measurement: MetricMeasurement) {
         match measurement {
             MetricMeasurement::Agent(measurement) => {
-                let duration_attributes = measurement
-                    .error_type
-                    .map(|error_type| vec![KeyValue::new(ATTRIBUTE_ERROR_TYPE, error_type)])
-                    .unwrap_or_default();
+                let duration_attributes = measurement.error_type.map_or_default(|error_type| {
+                    vec![KeyValue::new(ATTRIBUTE_ERROR_TYPE, error_type)]
+                });
                 self.agent_duration
                     .record(measurement.duration.as_secs_f64(), &duration_attributes);
                 self.agent_inference_calls

@@ -162,7 +162,7 @@ pub fn assert_text_in_region(frame: &TerminalFrame, needle: &str, region: &Regio
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -208,7 +208,7 @@ pub fn assert_not_visible(frame: &TerminalFrame, needle: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -333,7 +333,7 @@ pub fn assert_text_has_fg_color(frame: &TerminalFrame, needle: &str, expected_co
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -400,7 +400,7 @@ pub fn assert_text_has_bg_color(frame: &TerminalFrame, needle: &str, expected_co
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -463,7 +463,7 @@ pub fn assert_span_is_highlighted(frame: &TerminalFrame, needle: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 
@@ -524,7 +524,7 @@ pub fn assert_span_is_not_highlighted(frame: &TerminalFrame, needle: &str) {
     assert!(
         result.is_ok(),
         "{}",
-        result.err().map(|f| f.message).unwrap_or_default()
+        result.err().map_or_default(|f| f.message)
     );
 }
 

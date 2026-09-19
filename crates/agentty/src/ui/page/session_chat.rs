@@ -524,9 +524,7 @@ fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
 
     let question_item = questions.get(*current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
-    let options = question_item
-        .map(|item| item.options.as_slice())
-        .unwrap_or_default();
+    let options = question_item.map_or_default(|item| item.options.as_slice());
     let is_free_text_mode = selected_option_index.is_none();
     let input_text = if is_free_text_mode { input.text() } else { "" };
 
@@ -554,9 +552,7 @@ fn question_panel_areas(bottom_area: Rect, mode: &AppMode) -> Option<layout::Que
     };
     let question_item = questions.get(*current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
-    let options = question_item
-        .map(|item| item.options.as_slice())
-        .unwrap_or_default();
+    let options = question_item.map_or_default(|item| item.options.as_slice());
     let input_text = if selected_option_index.is_none() {
         input.text()
     } else {
@@ -603,9 +599,7 @@ fn render_question_panel(
     } = *state;
     let question_item = questions.get(current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
-    let options = question_item
-        .map(|item| item.options.as_slice())
-        .unwrap_or_default();
+    let options = question_item.map_or_default(|item| item.options.as_slice());
     let is_free_text_mode = selected_option_index.is_none();
     let Some(panel_areas) = panel_areas else {
         return;

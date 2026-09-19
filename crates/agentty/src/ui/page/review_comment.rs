@@ -194,9 +194,8 @@ pub(crate) fn review_comment_view_max_scroll_offset(
     let detail_area = diff_util::diff_page_areas(area).diff_area;
     let viewport_height = detail_area.height.saturating_sub(2);
     let content_width = usize::from(detail_area.width.saturating_sub(2).max(1));
-    let rows = comment_snapshot
-        .map(review_comment_selection::grouped_review_comment_rows)
-        .unwrap_or_default();
+    let rows =
+        comment_snapshot.map_or_default(review_comment_selection::grouped_review_comment_rows);
     let line_count = comment_detail_lines(
         comment_snapshot.map(|_| rows.as_slice()),
         comment_error,

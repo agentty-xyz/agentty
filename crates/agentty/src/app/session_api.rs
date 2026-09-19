@@ -462,14 +462,13 @@ impl App {
         let queued_messages = self
             .sessions
             .session_for_id(session_id)
-            .map(|session| {
+            .map_or_default(|session| {
                 session
                     .queued_messages
                     .iter()
                     .map(|message| message.transcript_text().to_string())
                     .collect()
-            })
-            .unwrap_or_default();
+            });
 
         build_api_session(row, message_rows, queued_messages).map(Some)
     }

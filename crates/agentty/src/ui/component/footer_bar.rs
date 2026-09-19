@@ -98,7 +98,7 @@ impl FooterBar {
             return self.session_branch_text(branch, base_ref);
         }
 
-        let status_text = self.git_status.map(Self::format_status).unwrap_or_default();
+        let status_text = self.git_status.map_or_default(Self::format_status);
 
         format!("{status_text}{}", self.branch_label(branch))
     }

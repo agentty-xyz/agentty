@@ -161,8 +161,7 @@ fn system_local_utc_offset_seconds(timestamp_seconds: i64) -> i64 {
     };
 
     UtcOffset::local_offset_at(utc_timestamp)
-        .map(|local_offset| i64::from(local_offset.whole_seconds()))
-        .unwrap_or_default()
+        .map_or_default(|local_offset| i64::from(local_offset.whole_seconds()))
 }
 
 #[cfg(test)]

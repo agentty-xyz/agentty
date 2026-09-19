@@ -119,8 +119,7 @@ impl AppServices {
     pub(crate) fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         self.available_agent_clis
             .lock()
-            .map(|agent_clis| agent_clis.clone())
-            .unwrap_or_default()
+            .map_or_default(|agent_clis| agent_clis.clone())
     }
 
     /// Replaces the cached CLI rows after background version detection
@@ -368,8 +367,7 @@ impl AppServices {
         loop {
             let task_handles = cleanup_task_handles
                 .lock()
-                .map(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>())
-                .unwrap_or_default();
+                .map_or_default(|mut task_handles| task_handles.drain(..).collect::<Vec<_>>());
 
             if task_handles.is_empty() {
                 break;

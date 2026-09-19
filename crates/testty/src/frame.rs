@@ -402,7 +402,7 @@ impl TerminalFrame {
         let first_cell = screen.cell(row, col);
         let foreground = first_cell.and_then(|cell| convert_vt100_color(cell.fgcolor()));
         let background = first_cell.and_then(|cell| convert_vt100_color(cell.bgcolor()));
-        let style = first_cell.map(CellStyle::from_cell).unwrap_or_default();
+        let style = first_cell.map_or_default(CellStyle::from_cell);
 
         for offset in 0..length {
             if let Some(cell) = screen.cell(row, col + offset) {

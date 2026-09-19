@@ -1077,8 +1077,7 @@ impl SessionHandles {
         // Selection".
         self.queued_messages
             .lock()
-            .map(|guard| guard.iter().cloned().collect::<Vec<_>>())
-            .unwrap_or_default()
+            .map_or_default(|guard| guard.iter().cloned().collect::<Vec<_>>())
     }
 
     /// Stores one queued workflow row beside the worker-owned queue state.
@@ -1107,8 +1106,7 @@ impl SessionHandles {
     pub(crate) fn queued_action_snapshot(&self) -> Vec<TransientMessage> {
         self.queued_actions
             .lock()
-            .map(|queued_actions| queued_actions.messages().to_vec())
-            .unwrap_or_default()
+            .map_or_default(|queued_actions| queued_actions.messages().to_vec())
     }
 
     /// Merges messages appended while persistence was in flight into a

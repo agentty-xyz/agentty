@@ -185,8 +185,7 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
     assert_eq!(response.provider_conversation_id, None);
     let retry_prompt = captured_retry_prompt
         .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+        .map_or_default(|guard| guard.clone());
     assert!(
         retry_prompt.contains("streamed before crash"),
         "retry prompt should contain live transcript, not queued snapshot"
@@ -524,10 +523,7 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
         Some("thread-123".to_string())
     );
     assert_eq!(response.pid, Some(24));
-    let captured_prompt = captured_prompt
-        .lock()
-        .map(|guard| guard.clone())
-        .unwrap_or_default();
+    let captured_prompt = captured_prompt.lock().map_or_default(|guard| guard.clone());
     assert!(captured_prompt.contains("repository-root-relative POSIX paths"));
     assert!(captured_prompt.ends_with("Do work"));
     assert!(!captured_prompt.contains("previous transcript"));
