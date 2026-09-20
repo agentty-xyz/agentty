@@ -34,7 +34,7 @@ Linux bind mounts remain writable. A host-owned cache directory provides writabl
 Cargo, `prek`, and build locations while preserving them between runs:
 
 ```sh
-published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:d8bcf1bcc38f051c583ed75b614bde552df28646dc74772e31e61453b1b00079
+published_e2e_image=ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
 e2e_cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/agentty-e2e"
 mkdir -p \
   "${e2e_cache_root}/home" \
