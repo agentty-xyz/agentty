@@ -24,12 +24,15 @@ mod store_conformance_test;
 #[path = "../tests/support/repository.rs"]
 mod repository_fixture;
 
+mod bash;
 mod cancellation;
 #[cfg(test)]
 #[path = "../tests/support/cancellation.rs"]
 mod cancellation_test;
 
 mod chat_completion;
+mod command_journal;
+mod command_settlement;
 mod comparison;
 mod context;
 #[cfg(test)]
@@ -66,7 +69,12 @@ mod turn_options_snapshot;
 mod write;
 mod write_journal;
 
+pub use bash::{BashArguments, BashConfig, BashError};
 pub use cancellation::{ControlledTurn, SettlementError, TurnControl};
+pub use command_journal::{
+    CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
+};
+pub use command_settlement::CommandSettlementError;
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use context::{ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator};
 pub use effect::EffectSettlementError;
@@ -114,3 +122,11 @@ pub use turn::{
 pub use turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use write::{WriteError, WriteOutput};
 pub use write_journal::{WriteRecord, WriteStatus};
+
+/// Entry point for the matching trusted `ag-harness-sandbox` executable.
+/// Run only in a dedicated process, before creating any runtime or threads.
+/// Host applications should launch the executable through Bash turn options.
+#[doc(hidden)]
+pub fn run_sandbox_launcher() -> std::process::ExitCode {
+    execution::run_launcher()
+}

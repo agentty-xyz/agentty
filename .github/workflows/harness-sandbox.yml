@@ -1,0 +1,39 @@
+name: Native Harness Sandbox
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native sandbox (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup Rust and prek
+        uses: $/.github/actions/setup-rust-prek
+        with:
+          cargo-llvm-cov: "true"
+          llvm-tools-preview: "true"
+      - name: Install native Linux isolation
+        if: runner.os == 'Linux'
+        uses: $/.github/actions/setup-native-sandbox
+      - name: Record qualification environment
+        run: |
+          uname -a
+          rustc --version
+      - name: Native sandbox public contract and launcher coverage
+        run: prek run coverage-ag-harness-sandbox --all-files --hook-stage manual

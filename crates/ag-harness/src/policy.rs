@@ -6,6 +6,8 @@ use crate::tool::Tool;
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolPolicy {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    bash: bool,
     read: bool,
     write: bool,
 }
@@ -15,6 +17,7 @@ impl ToolPolicy {
     #[must_use]
     pub fn allow(mut self, tool: Tool) -> Self {
         match tool {
+            Tool::Bash => self.bash = true,
             Tool::Read => self.read = true,
             Tool::Write => self.write = true,
         }
@@ -27,6 +30,7 @@ impl ToolPolicy {
     #[must_use]
     pub fn deny(mut self, tool: Tool) -> Self {
         match tool {
+            Tool::Bash => self.bash = false,
             Tool::Read => self.read = false,
             Tool::Write => self.write = false,
         }
@@ -37,6 +41,7 @@ impl ToolPolicy {
     /// Returns whether this policy permits executing and advertising `tool`.
     pub fn allows(self, tool: Tool) -> bool {
         match tool {
+            Tool::Bash => self.bash,
             Tool::Read => self.read,
             Tool::Write => self.write,
         }

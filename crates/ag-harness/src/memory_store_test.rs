@@ -10,9 +10,9 @@ use super::Status;
 use crate::session::Database;
 use crate::store_conformance_test::{harness, options, schema};
 use crate::{
-    ComparisonBase, HostRequest, HostTurnAcquisition, HostTurnStatus, MemoryStore, ModelError,
-    ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError,
-    TurnInput, TurnOwner, WriteRecord, WriteStatus,
+    CommandIntent, ComparisonBase, HostRequest, HostTurnAcquisition, HostTurnStatus, MemoryStore,
+    ModelError, ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
+    TurnError, TurnInput, TurnOwner, WriteRecord, WriteStatus,
 };
 
 #[tokio::test]
@@ -626,4 +626,45 @@ async fn host_recovery_requires_atomic_terminal_output() {
     // Assert
     assert!(matches!(result, Err(SessionError::InvalidData { .. })));
     assert!(matches!(record.status, HostTurnStatus::InProgress));
+}
+
+#[tokio::test]
+async fn command_id_exhaustion_does_not_publish_an_intent() {
+    // Arrange
+    let store = Arc::new(MemoryStore::new());
+    store
+        .create_session(&NewSession::new("commands", schema()), None, 1024)
+        .await
+        .expect("session");
+    let mut turn = store
+        .begin_turn(
+            store.clone(),
+            "commands",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
+    store.lock().next_command = i64::MAX;
+    let intent = CommandIntent {
+        call_id: "call".into(),
+        command: "effect".into(),
+        policy: serde_json::json!({}),
+        workspace: "/workspace".into(),
+    };
+
+    // Act
+    let result = store.command_intent(turn.owner(), &intent).await;
+    let missing = store.load_commands("missing").await;
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::OwnershipLost { .. })));
+    assert!(matches!(missing, Err(SessionError::NotFound { .. })));
+    assert_eq!(
+        store.load_commands("commands").await.expect("records"),
+        Vec::new()
+    );
+    store.interrupt(turn.owner()).await.expect("interrupt");
+    turn.guard.disarm();
 }

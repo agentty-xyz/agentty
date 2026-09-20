@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 use tokio::sync::{OwnedMutexGuard, watch};
 
+use crate::command_settlement::{CommandLease, Commands};
+
 /// A managed write could not fully acknowledge completion or its journal
 /// outcome.
 #[derive(Clone, Debug, Error)]
@@ -26,13 +28,18 @@ impl EffectSettlementError {
 type Admission = Arc<OwnedMutexGuard<()>>;
 
 #[derive(Clone)]
-pub(crate) struct Effects(watch::Sender<State>);
+pub(crate) struct Effects(watch::Sender<State>, Commands);
 
 impl Effects {
+    pub(crate) fn commands(&self) -> &Commands {
+        &self.1
+    }
+
     pub(crate) fn retain(&self) -> EffectLease {
         self.0.send_modify(|state| state.pending += 1);
 
         EffectLease {
+            _commands: self.1.retain(),
             effects: self.clone(),
             recording: false,
             unresolved: false,
@@ -40,6 +47,7 @@ impl Effects {
     }
 
     pub(crate) fn admit(&self, admission: Admission) {
+        self.1.admit(Arc::clone(&admission));
         self.0
             .send_modify(|state| state.admission = Some(admission));
     }
@@ -69,7 +77,7 @@ impl Effects {
 
 impl Default for Effects {
     fn default() -> Self {
-        Self(watch::Sender::new(State::default()))
+        Self(watch::Sender::new(State::default()), Commands::default())
     }
 }
 
@@ -81,6 +89,7 @@ struct State {
 }
 
 pub(crate) struct EffectLease {
+    _commands: CommandLease,
     effects: Effects,
     recording: bool,
     unresolved: bool,

@@ -918,3 +918,20 @@ impl Drop for FakeProcess {
         self.state.dropped.fetch_add(1, Ordering::SeqCst);
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn progress_does_not_replace_exit_or_completion_observation() {
+    // Arrange
+    let fixture = Fixture::ready();
+    fixture.event(Event::Progress);
+    fixture.complete();
+    let PreparedExecution { control, execution } = fixture.prepare(0);
+
+    // Act
+    let result = execution.run().await;
+
+    // Assert
+    assert_eq!(result.termination, Termination::Completed);
+    assert_eq!(result.execution_failure, None);
+    assert_eq!(control.cleanup().await, Ok(()));
+}

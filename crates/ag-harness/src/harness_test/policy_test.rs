@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -17,6 +18,7 @@ use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ToolErrorType, TurnEr
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::tool::ToolDefinition;
 use crate::turn::TurnError;
+use crate::{BashConfig, BashError, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
 
 #[tokio::test]
 async fn rejects_schema_invalid_output_from_injected_model() {
@@ -491,4 +493,41 @@ async fn returns_typed_model_failure() {
         error.error_type(),
         TurnErrorType::Model(ModelErrorType::Request)
     );
+}
+
+#[tokio::test]
+async fn bash_permission_requires_host_configuration_and_host_information_grant() {
+    // Arrange
+    let mut model = model();
+    model.expect_complete().never();
+    let harness = Harness::new(model).repository(Repository::fixture("repo"));
+    let options = TurnOptions::new(
+        object_schema(),
+        ToolPolicy::default().allow(Tool::Bash),
+        TurnLimits::default(),
+    );
+    let configuration = BashConfig::new(
+        "/trusted/launcher".into(),
+        "/bin/bash".into(),
+        "revision".into(),
+        Duration::from_secs(1),
+        1024,
+    )
+    .expect("config");
+
+    // Act
+    let missing = harness.run_once_with_options("run", options.clone()).await;
+    let denied = harness
+        .run_once_with_options("run", options.with_bash(configuration))
+        .await;
+
+    // Assert
+    assert!(matches!(
+        missing,
+        Err(TurnError::Bash(BashError::InvalidPolicy))
+    ));
+    assert!(matches!(
+        denied,
+        Err(TurnError::Bash(BashError::Unavailable))
+    ));
 }
