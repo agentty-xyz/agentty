@@ -124,7 +124,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # compiler. `RUSTUP_TOOLCHAIN` overrides the workspace toolchain selection
 # inside the container, so rustup never downloads a newer nightly at run time.
 # Bump the date deliberately and re-verify the committed GIF hash sidecars.
-ARG RUST_TOOLCHAIN=nightly-2026-07-15
+ARG RUST_TOOLCHAIN=nightly-2026-09-19
 ENV RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}
 
 # Install the checksum-verified tools from the read-only download stage, then
