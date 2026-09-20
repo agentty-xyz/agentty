@@ -124,7 +124,8 @@ impl MemoryStore {
             deadline,
             session.history(),
             continuation.clone(),
-        )?;
+        )?
+        .with_checkpoint(session.configuration.checkpoint.clone());
         session.turns.push(TurnRecord {
             model: session.configuration.recorded_model(),
             deadline,
@@ -300,6 +301,8 @@ impl SessionStore for MemoryStore {
             Record {
                 commands: Vec::new(),
                 configuration: LoadedSession {
+                    checkpoint: None,
+                    latest_completed_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -327,9 +330,42 @@ impl SessionStore for MemoryStore {
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
         let mut loaded = session.configuration.clone();
+        loaded.latest_completed_turn = session.latest_completed_turn();
         loaded.turns = session.history();
 
         Ok(loaded)
+    }
+
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+        let outdated = session.configuration.model_generation != checkpoint.model_generation()
+            || session
+                .latest_completed_turn()
+                .is_none_or(|completed| checkpoint.covered_through() > completed)
+            || session
+                .configuration
+                .checkpoint
+                .as_ref()
+                .is_some_and(|existing| existing.covered_through() > checkpoint.covered_through());
+        if outdated {
+            return Err(SessionError::CheckpointStale {
+                id: session_id.to_string(),
+            });
+        }
+        session.configuration.checkpoint = Some(checkpoint.clone());
+
+        Ok(())
     }
 
     async fn switch_model(
@@ -631,15 +667,25 @@ impl Record {
         }
     }
 
+    fn latest_completed_turn(&self) -> Option<i64> {
+        self.turns
+            .iter()
+            .filter(|turn| turn.status == Status::Completed)
+            .map(|turn| turn.owner.turn_position())
+            .max()
+    }
+
     fn history(&self) -> Vec<Vec<ModelMessage>> {
+        let boundary = self
+            .configuration
+            .checkpoint
+            .as_ref()
+            .map_or(-1, crate::SessionCheckpoint::covered_through);
         let mut remaining = self.configuration.max_history_bytes;
         let mut turns = Vec::new();
-        for turn in self
-            .turns
-            .iter()
-            .rev()
-            .filter(|turn| turn.status == Status::Completed)
-        {
+        for turn in self.turns.iter().rev().filter(|turn| {
+            turn.status == Status::Completed && turn.owner.turn_position() > boundary
+        }) {
             let bytes = turn.messages.iter().fold(0_usize, |bytes, message| {
                 bytes.saturating_add(message.retained_bytes())
             });

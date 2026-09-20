@@ -131,13 +131,13 @@ VALUES (?, ?, 0, 'user', '"boundary"', ?, 1)
         .acquire()
         .await
         .expect("database connection should be acquired");
-    let initial_page = load_turn_size_page(&mut connection, "session-a", None)
+    let initial_page = load_turn_size_page(&mut connection, "session-a", None, None)
         .await
         .expect("initial page should load");
-    let before_maximum = load_turn_size_page(&mut connection, "session-a", Some(i64::MAX))
+    let before_maximum = load_turn_size_page(&mut connection, "session-a", Some(i64::MAX), None)
         .await
         .expect("page before maximum should load");
-    let before_minimum = load_turn_size_page(&mut connection, "session-a", Some(i64::MIN))
+    let before_minimum = load_turn_size_page(&mut connection, "session-a", Some(i64::MIN), None)
         .await
         .expect("page before minimum should load");
 

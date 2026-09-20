@@ -86,6 +86,20 @@ record each turn's selected identity, and implement `SessionStore::switch_model`
 the same reservation boundary. `HostTurnRecord::model` exposes execution provenance;
 turns created before this capability retain `None`.
 
+Call `session.compact().await?` to summarize completed turns into a versioned,
+schema-validated `SessionCheckpoint`. Generation runs the session's current model with
+tools denied, bounded by the effective context budget, and publishes atomically through
+`SessionStore::publish_checkpoint`; a session with no uncovered completed turn returns
+`None` without a model call. Publication is rejected as `SessionError::CheckpointStale`
+when the model generation has advanced or coverage would regress, and generation,
+validation, or persistence failure leaves the previous checkpoint intact. Request
+projection then replays the summary as ordinary user-role conversation data ahead of the
+uncovered turns that fit the budget, falling back to bounded recent history when even
+the summary does not fit. Custom stores implement `publish_checkpoint` against the same
+validation contract and return the current checkpoint and latest completed turn from
+`load_session`; when a registration declares a `ContextBudget`, image-bearing input is
+weighed through the estimator instead of the byte-based history rejection.
+
 ## Durable sessions
 
 ```rust

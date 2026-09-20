@@ -8,6 +8,7 @@ use serde_json::json;
 use tokio::sync::OnceCell;
 
 use crate::cancellation::{ControlledTurn, TurnControl};
+use crate::compaction::{self, SessionCheckpoint};
 use crate::context::{self, ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::effect::Effects;
 use crate::engine::Engine;
@@ -35,6 +36,7 @@ const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 /// Owns its runtime resources and captured defaults, so it can outlive the
 /// creating harness and move into a spawned task.
 pub struct Session {
+    checkpoint: Option<SessionCheckpoint>,
     database: Arc<dyn SessionStore>,
     harness: Harness,
     history: SessionHistory,
@@ -129,6 +131,104 @@ impl Session {
         Ok(())
     }
 
+    /// Generates and publishes a compaction checkpoint covering every
+    /// completed turn, replacing covered turns with a structured summary in
+    /// later outgoing requests.
+    ///
+    /// Generation runs the session's current model through the shared engine
+    /// with every tool denied, outside store writer transactions, and bounded
+    /// by the effective context budget: the most recent uncovered turns that
+    /// fit are summarized together with the previous checkpoint. Dropping the
+    /// returned future cancels generation before anything is published.
+    /// Publication is atomic and only succeeds while the model selection and
+    /// existing coverage are still current. On any failure the previous
+    /// checkpoint stays usable and projection falls back to bounded recent
+    /// history. Canonical messages, host requests, model provenance, and
+    /// write journals always remain intact.
+    ///
+    /// Returns `None` without a model call when no completed turn is
+    /// uncovered.
+    ///
+    /// # Errors
+    /// Returns [`SessionError`] for a stale handle, model or validation
+    /// failure, a summary violating the bounded checkpoint schema, or a
+    /// publication rejected as [`SessionError::CheckpointStale`].
+    pub async fn compact(&mut self) -> Result<Option<SessionCheckpoint>, SessionError> {
+        let loaded = self.database.load_session(&self.id).await?;
+        crate::session_model::check_generation(
+            &self.id,
+            loaded.model_generation,
+            self.model_generation,
+        )?;
+        let Some(boundary) = loaded.latest_completed_turn else {
+            return Ok(None);
+        };
+        if loaded
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.covered_through() >= boundary)
+        {
+            self.checkpoint = loaded.checkpoint;
+
+            return Ok(None);
+        }
+        let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
+        let options = TurnOptions::new(schema, ToolPolicy::default(), self.harness.limits);
+        let input = self.compaction_input(&loaded, &options)?;
+        let outcome = self.harness.run_compaction(input, &options).await?;
+        let checkpoint = SessionCheckpoint::new(
+            boundary,
+            self.model_generation,
+            loaded.provider,
+            loaded.model,
+            outcome.output().clone(),
+        )?;
+        self.database
+            .publish_checkpoint(&self.id, &checkpoint)
+            .await?;
+        self.provider_session_id = None;
+        self.checkpoint = Some(checkpoint.clone());
+
+        Ok(Some(checkpoint))
+    }
+
+    /// Returns the checkpoint this handle currently projects ahead of recent
+    /// turns. Acquisition refreshes it together with replayed history.
+    pub fn checkpoint(&self) -> Option<&SessionCheckpoint> {
+        self.checkpoint.as_ref()
+    }
+
+    /// Renders the bounded generation source: the previous summary plus the
+    /// most recent uncovered turns that fit the effective context budget.
+    fn compaction_input(
+        &self,
+        loaded: &LoadedSession,
+        options: &TurnOptions,
+    ) -> Result<TurnInput, SessionError> {
+        let mut turns: Vec<&Vec<ModelMessage>> = loaded.turns.iter().collect();
+
+        loop {
+            let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
+            let input = TurnInput::text(source);
+            let Some(budget) = self.harness.context_budget() else {
+                return Ok(input);
+            };
+            match context::admit_mandatory_content(
+                self.harness.context_estimator.as_ref(),
+                budget,
+                Some(compaction::GENERATION_INSTRUCTIONS),
+                &input,
+                options,
+            ) {
+                Ok(_) => return Ok(input),
+                Err(_) if !turns.is_empty() => {
+                    turns.remove(0);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
     /// Returns the stable application-provided session identifier.
     pub fn id(&self) -> &str {
         &self.id
@@ -202,6 +302,7 @@ impl Session {
     ) -> ControlledTurn<'_, SessionError> {
         let input = input.into();
         let mut session = Self {
+            checkpoint: self.checkpoint.clone(),
             database: Arc::clone(&self.database),
             harness: self.harness.snapshot(),
             history: SessionHistory::new(self.history.max_bytes),
@@ -254,6 +355,7 @@ impl Session {
         let input = input.into();
         let request = self.host_request(host_id.into(), &input, &options)?;
         let mut session = Self {
+            checkpoint: self.checkpoint.clone(),
             database: Arc::clone(&self.database),
             harness: self.harness.snapshot(),
             history: SessionHistory::new(self.history.max_bytes),
@@ -408,7 +510,11 @@ impl Session {
         request: Option<&HostRequest>,
     ) -> Result<TurnOutcome, SessionError> {
         self.harness.check_input_capability(&input)?;
-        self.check_image_history_budget(&input)?;
+        // A declared context budget supersedes the byte-based image rejection:
+        // images are weighed by the estimator during mandatory admission.
+        if self.harness.context_budget().is_none() {
+            self.check_image_history_budget(&input)?;
+        }
         let available_history_weight = self
             .harness
             .context_budget()
@@ -432,6 +538,7 @@ impl Session {
             result = acquisition => result?,
         };
         let AcquiredTurn {
+            checkpoint,
             mut guard,
             provider_session_id,
             turns,
@@ -439,6 +546,7 @@ impl Session {
             HostTurnAcquisition::Acquired(acquired) => acquired,
             HostTurnAcquisition::Recorded(record) => return record.into_outcome(),
         };
+        self.checkpoint = checkpoint;
         let host_request = request.is_some();
         if host_request {
             *turn = self.harness.lifecycle.start_turn();
@@ -499,22 +607,46 @@ impl Session {
         Ok(outcome)
     }
 
-    /// Projects loaded history into one request under the effective context
-    /// budget, keeping the count of retained messages that precede new output.
+    /// Projects the checkpoint summary and loaded uncovered history into one
+    /// request under the effective context budget, keeping the count of
+    /// retained messages that precede new output.
     fn build_request(
         &self,
         input: TurnInput,
         options: &TurnOptions,
         available_history_weight: Option<u64>,
     ) -> (ModelRequest, usize) {
-        let mut messages = match available_history_weight {
-            Some(available_weight) => context::select_recent_turns(
-                self.harness.context_estimator.as_ref(),
-                self.history.turns(),
-                available_weight,
-            ),
-            None => self.history.messages(),
+        let estimator = self.harness.context_estimator.as_ref();
+        let checkpoint_message = self
+            .checkpoint
+            .as_ref()
+            .map(SessionCheckpoint::history_message);
+        let (checkpoint_message, mut messages) = match available_history_weight {
+            Some(available_weight) => {
+                // The summary is admitted ahead of recent turns; when even it
+                // cannot fit, projection falls back to recent history alone.
+                let (checkpoint_message, remaining_weight) = match checkpoint_message {
+                    Some(message) => {
+                        let weight = estimator.message_weight(&message);
+                        if weight <= available_weight {
+                            (Some(message), available_weight - weight)
+                        } else {
+                            (None, available_weight)
+                        }
+                    }
+                    None => (None, available_weight),
+                };
+
+                (
+                    checkpoint_message,
+                    context::select_recent_turns(estimator, self.history.turns(), remaining_weight),
+                )
+            }
+            None => (checkpoint_message, self.history.messages()),
         };
+        if let Some(checkpoint_message) = checkpoint_message {
+            messages.insert(0, checkpoint_message);
+        }
         if let Some(system_prompt) = &self.system_prompt {
             messages.insert(0, ModelMessage::System(system_prompt.clone()));
         }
@@ -522,18 +654,24 @@ impl Session {
         let mut request = ModelRequest::with_history(messages, input, options.schema().clone());
         // A continuation's provider-side conversation can hold turns that the
         // byte replay budget already evicted from loading, so a budgeted
-        // registration always replays the projected normalized history.
-        request.set_provider_session_id(if available_history_weight.is_some() {
-            None
-        } else {
-            self.provider_session_id.clone()
-        });
+        // registration always replays the projected normalized history. A
+        // checkpointed session replays for the same reason: the provider-side
+        // conversation retains covered turns instead of the summary.
+        request.set_provider_session_id(
+            if available_history_weight.is_some() || self.checkpoint.is_some() {
+                None
+            } else {
+                self.provider_session_id.clone()
+            },
+        );
 
         (request, retained_messages)
     }
 
     /// Rejects image input that the replay budget would evict immediately,
     /// together with every earlier turn, instead of losing context silently.
+    /// Registrations with a declared context budget skip this byte check and
+    /// weigh images through mandatory-content admission instead.
     fn check_image_history_budget(&self, input: &TurnInput) -> Result<(), SessionError> {
         let input_bytes = input.retained_bytes();
         if input.has_images() && input_bytes > self.history.max_bytes {
@@ -627,6 +765,7 @@ impl SessionBuilder {
         let history = SessionHistory::new(self.harness.max_history_bytes);
 
         Ok(Session {
+            checkpoint: None,
             database,
             harness: self.harness,
             history,
@@ -958,6 +1097,7 @@ impl Harness {
         }
 
         Ok(Session {
+            checkpoint: loaded.checkpoint,
             database,
             harness: self.snapshot(),
             history,
@@ -1012,6 +1152,34 @@ impl Harness {
         engine.effects = effects;
         let result = engine.run(request, turn_id, None).await;
 
+        if let Some(turn) = turn {
+            match &result {
+                Ok(_) => turn.completed(),
+                Err(error) => turn.failed(error.error_type()),
+            }
+        }
+
+        result.map(|(outcome, _, _)| outcome)
+    }
+
+    /// Runs one bounded, tool-free summarization turn for checkpoint
+    /// generation, owned by the caller's lifecycle like an ephemeral turn.
+    async fn run_compaction(
+        &self,
+        input: TurnInput,
+        options: &TurnOptions,
+    ) -> Result<TurnOutcome, TurnError> {
+        let request = ModelRequest::with_history(
+            vec![ModelMessage::System(
+                compaction::GENERATION_INSTRUCTIONS.to_string(),
+            )],
+            input,
+            options.schema().clone(),
+        );
+        let turn = self.lifecycle.start_turn();
+        let turn_id = turn.as_ref().map(TurnLifecycle::id);
+        let engine = self.engine(options);
+        let result = engine.run(request, turn_id, None).await;
         if let Some(turn) = turn {
             match &result {
                 Ok(_) => turn.completed(),

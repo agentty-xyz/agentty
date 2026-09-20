@@ -45,7 +45,9 @@ For file-level detail, read the module docstrings directly.
   initialization. The library owns a host model registry used by harness construction;
   registrations carry capability declarations and the recovery contract's execution
   identity, and a declared context budget bounds request projection to recent whole
-  turns through an injectable estimator. It also owns history, leases, terminal
+  turns through an injectable estimator. `Session::compact` summarizes covered turns
+  into a versioned `SessionCheckpoint` that the store publishes atomically and
+  projection replays ahead of uncovered history. It also owns history, leases, terminal
   transitions, and write journals through a public transactional `SessionStore` with
   SQLite and process-local `MemoryStore` backends. The store also owns atomic
   host-request deduplication and complete result recovery. Hosts can inject stores;

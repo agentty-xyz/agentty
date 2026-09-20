@@ -292,6 +292,14 @@ impl SessionStore for AdmittedStore {
             .await
     }
 
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        self.store.publish_checkpoint(session_id, checkpoint).await
+    }
+
     async fn load_request(
         &self,
         id: &str,

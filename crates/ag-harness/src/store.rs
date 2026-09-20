@@ -20,8 +20,10 @@ use crate::{
 /// effects. Acquisition must settle its commit before reporting failure;
 /// dropping its waiter retains responsibility for any eventual reservation.
 /// History returned by load/acquire contains only complete turns within the
-/// stored byte budget. Implementations preserve the existing options codec and
-/// fingerprints.
+/// stored byte budget and, when a compaction checkpoint exists, only turns
+/// after its covered boundary; loads and acquisitions return the current
+/// checkpoint alongside that history. Implementations preserve the existing
+/// options codec and fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Returns command records independently of completed history. Stores that
@@ -141,6 +143,19 @@ pub trait SessionStore: Send + Sync {
         request: &HostRequest,
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError>;
+
+    /// Atomically publishes the session's compaction checkpoint, replacing an
+    /// existing record. Validate before mutating: the checkpoint's generation
+    /// must equal the session's current model generation, its boundary must
+    /// not exceed the latest completed turn, and coverage must never regress
+    /// below an existing checkpoint. Reject stale publications with
+    /// [`SessionError::CheckpointStale`] without changing state. Canonical
+    /// messages, host requests, and journals remain intact.
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::SessionCheckpoint,
+    ) -> Result<(), SessionError>;
 
     /// Recover expired reservations and return the canonical request outcome
     /// plus its current journal. Never execute a model or tool. Missing host

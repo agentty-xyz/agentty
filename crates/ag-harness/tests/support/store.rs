@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use ag_harness::{
     AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,
-    ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
-    StoredTurnOptions, TurnError, TurnInput, TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
-    WriteStatus,
+    ModelMessage, ModelMetadata, NewSession, SessionCheckpoint, SessionError, SessionStore,
+    StoreIdentity, StoredTurnOptions, TurnError, TurnInput, TurnOptions, TurnOutcome, TurnOwner,
+    WriteRecord, WriteStatus,
 };
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
@@ -31,6 +31,7 @@ struct Record {
     next_turn: i64,
     owner: Option<(TurnOwner, Instant)>,
     pending: Vec<ModelMessage>,
+    positions: Vec<i64>,
     requests: Vec<HostTurnRecord>,
     snapshot: Option<String>,
     writes: Vec<(Vec<u8>, WriteRecord)>,
@@ -65,16 +66,28 @@ impl Record {
 
     fn bounded(&self) -> LoadedSession {
         let mut loaded = self.loaded.clone();
-        while loaded
-            .turns
+        let boundary = loaded
+            .checkpoint
+            .as_ref()
+            .map_or(-1, SessionCheckpoint::covered_through);
+        loaded.latest_completed_turn = self.positions.iter().copied().max();
+        let mut turns: Vec<Vec<ModelMessage>> = self
+            .positions
+            .iter()
+            .zip(loaded.turns.iter())
+            .filter(|(position, _)| **position > boundary)
+            .map(|(_, turn)| turn.clone())
+            .collect();
+        while turns
             .iter()
             .flatten()
             .map(ModelMessage::retained_bytes)
             .sum::<usize>()
             > loaded.max_history_bytes
         {
-            loaded.turns.remove(0);
+            turns.remove(0);
         }
+        loaded.turns = turns;
 
         loaded
     }
@@ -167,7 +180,8 @@ impl ExternalStore {
             deadline,
             session.bounded().turns,
             continuation.clone(),
-        )?;
+        )?
+        .with_checkpoint(session.loaded.checkpoint.clone());
         if let Some(request) = request {
             session.requests.push(HostTurnRecord {
                 commands: Vec::new(),
@@ -202,6 +216,7 @@ impl ExternalStore {
             .loaded
             .turns
             .push(std::mem::take(&mut session.pending));
+        session.positions.push(owner.turn_position());
         if let Some(outcome) = outcome {
             session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
         }
@@ -249,6 +264,8 @@ impl SessionStore for ExternalStore {
             config.id().to_string(),
             Record {
                 loaded: LoadedSession {
+                    checkpoint: None,
+                    latest_completed_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -262,6 +279,7 @@ impl SessionStore for ExternalStore {
                 next_turn: 0,
                 owner: None,
                 pending: Vec::new(),
+                positions: Vec::new(),
                 requests: Vec::new(),
                 snapshot: None,
                 writes: Vec::new(),
@@ -378,6 +396,36 @@ impl SessionStore for ExternalStore {
         generation: i64,
     ) -> Result<HostTurnAcquisition, SessionError> {
         self.acquire(store, id, input, options, Some(request), generation)
+    }
+
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+        let latest_completed = session.positions.iter().copied().max();
+        let stale =
+            session.loaded.model_generation != checkpoint.model_generation()
+                || latest_completed
+                    .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
+                || session.loaded.checkpoint.as_ref().is_some_and(|existing| {
+                    existing.covered_through() > checkpoint.covered_through()
+                });
+        if stale {
+            return Err(SessionError::CheckpointStale {
+                id: session_id.to_string(),
+            });
+        }
+        session.loaded.checkpoint = Some(checkpoint.clone());
+
+        Ok(())
     }
 
     async fn load_request(

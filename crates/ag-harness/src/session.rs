@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::store::SessionStore;
@@ -111,6 +112,15 @@ enum Reservation {
     Acquired(TurnGuard),
     Recorded(HostTurnRecord),
     Retry,
+}
+
+struct CheckpointRow {
+    covered_through: i64,
+    model: Option<String>,
+    model_generation: i64,
+    provider: Option<String>,
+    summary: String,
+    version: i64,
 }
 
 struct ModelIdentityRow {
@@ -409,13 +419,21 @@ impl Database {
             decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
         let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
-        let turns = load_turns_from(&mut transaction, session_id, max_history_bytes).await?;
+        let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
+        let turns = load_turns_from(
+            &mut transaction,
+            session_id,
+            max_history_bytes,
+            checkpoint_boundary(checkpoint.as_ref()),
+        )
+        .await?;
         transaction
             .commit()
             .await
             .session_context("load persistent session turn acquisition")?;
 
         Ok(TurnAcquisition {
+            checkpoint,
             expected_generation: configuration.model_generation,
             configuration,
             latest_completed_turn,
@@ -465,6 +483,7 @@ impl Database {
             {
                 Reservation::Acquired(guard) => {
                     return Ok(HostTurnAcquisition::Acquired(AcquiredTurn {
+                        checkpoint: acquisition.checkpoint,
                         guard,
                         provider_session_id: acquisition
                             .configuration
@@ -714,18 +733,34 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         Ok(())
     }
 
-    async fn load_turns(
+    async fn load_history(
         &self,
         session_id: &str,
         max_history_bytes: usize,
-    ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
+    ) -> Result<
+        (
+            Option<SessionCheckpoint>,
+            Option<i64>,
+            Vec<Vec<ModelMessage>>,
+        ),
+        SessionError,
+    > {
         let mut connection = self
             .pool
             .acquire()
             .await
             .session_context("load persistent session history")?;
+        let checkpoint = load_checkpoint_from(&mut connection, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(&mut connection, session_id).await?;
+        let turns = load_turns_from(
+            &mut connection,
+            session_id,
+            max_history_bytes,
+            checkpoint_boundary(checkpoint.as_ref()),
+        )
+        .await?;
 
-        load_turns_from(&mut connection, session_id, max_history_bytes).await
+        Ok((checkpoint, latest_completed_turn, turns))
     }
 
     fn validate_owner(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -949,7 +984,8 @@ WHERE id = ?
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
-        let turns = self.load_turns(id, max_history_bytes).await?;
+        let (checkpoint, latest_completed_turn, turns) =
+            self.load_history(id, max_history_bytes).await?;
         let registration_identity = match (row.registration_key, row.registration_revision) {
             (None, None) => None,
             (Some(key), Some(revision)) => Some(ExecutionIdentity::new(key, revision)?),
@@ -961,6 +997,8 @@ WHERE id = ?
         };
 
         Ok(LoadedSession {
+            checkpoint,
+            latest_completed_turn,
             model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
@@ -971,6 +1009,69 @@ WHERE id = ?
             system_prompt: row.system_prompt,
             turns,
         })
+    }
+
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        let operation = "publish session checkpoint";
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context(operation)?;
+        let configuration = load_turn_configuration(&mut transaction, session_id).await?;
+        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let existing = load_checkpoint_from(&mut transaction, session_id).await?;
+        let stale = configuration.model_generation != checkpoint.model_generation()
+            || latest_completed_turn
+                .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
+            || existing
+                .is_some_and(|existing| existing.covered_through() > checkpoint.covered_through());
+        if stale {
+            return Err(SessionError::CheckpointStale {
+                id: session_id.to_string(),
+            });
+        }
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let covered_through = checkpoint.covered_through();
+        let model_generation = checkpoint.model_generation();
+        let provider = checkpoint.provider();
+        let model = checkpoint.model();
+        let summary = checkpoint.summary().to_string();
+        sqlx::query!(
+            r"
+INSERT INTO session_checkpoint (
+    session_id, version, covered_through, model_generation, provider, model, summary,
+    created_at, updated_at
+)
+VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(session_id) DO UPDATE SET
+    version = excluded.version,
+    covered_through = excluded.covered_through,
+    model_generation = excluded.model_generation,
+    provider = excluded.provider,
+    model = excluded.model,
+    summary = excluded.summary,
+    updated_at = excluded.updated_at
+",
+            session_id,
+            covered_through,
+            model_generation,
+            provider,
+            model,
+            summary,
+            now,
+            now
+        )
+        .execute(&mut *transaction)
+        .await
+        .session_context(operation)?;
+        transaction.commit().await.session_context(operation)?;
+
+        Ok(())
     }
 
     async fn switch_model(
@@ -1352,6 +1453,16 @@ pub enum SessionError {
         /// Replay budget stored for the session.
         max_history_bytes: usize,
     },
+    /// A compaction checkpoint record was invalid or exceeded its bounds.
+    #[error(transparent)]
+    Checkpoint(#[from] CheckpointError),
+    /// The session's model selection or checkpoint coverage advanced after the
+    /// checkpoint was generated; nothing was published.
+    #[error("session `{id}` rejected a stale checkpoint publication")]
+    CheckpointStale {
+        /// Session whose state advanced past the checkpoint's source.
+        id: String,
+    },
     /// The host selected a key absent from its registry.
     #[error(transparent)]
     Registry(#[from] crate::ModelRegistryError),
@@ -1484,6 +1595,7 @@ impl From<StoredTurnOptionsError> for SessionError {
 /// must remain driven until cleanup completes; persistence settlement does not
 /// settle filesystem effects.
 pub struct AcquiredTurn {
+    pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) guard: TurnGuard,
     pub(crate) provider_session_id: Option<String>,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
@@ -1512,10 +1624,20 @@ impl AcquiredTurn {
         }
 
         Ok(Self {
+            checkpoint: None,
             guard: TurnGuard::new(store, owner, deadline),
             provider_session_id,
             turns,
         })
+    }
+
+    /// Attaches the session's current compaction checkpoint. `turns` supplied
+    /// to [`Self::new`] must then contain only turns after its boundary.
+    #[must_use]
+    pub fn with_checkpoint(mut self, checkpoint: Option<SessionCheckpoint>) -> Self {
+        self.checkpoint = checkpoint;
+
+        self
     }
 
     /// Starts ownership monitoring after the reservation is acknowledged.
@@ -1546,6 +1668,10 @@ impl AcquiredTurn {
 /// Session configuration and bounded completed turns returned by a store.
 #[derive(Clone)]
 pub struct LoadedSession {
+    /// Current compaction checkpoint, replayed ahead of `turns`.
+    pub checkpoint: Option<SessionCheckpoint>,
+    /// Highest completed turn position, used as the next coverage boundary.
+    pub latest_completed_turn: Option<i64>,
     /// Maximum history payload bytes, counted with
     /// `ModelMessage::retained_bytes`.
     pub max_history_bytes: usize,
@@ -1564,8 +1690,8 @@ pub struct LoadedSession {
     pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
-    /// Recent complete turns, oldest first; never split tool-call/result
-    /// groups.
+    /// Recent complete turns after the checkpoint boundary, oldest first;
+    /// never split tool-call/result groups.
     pub turns: Vec<Vec<ModelMessage>>,
 }
 
@@ -1582,6 +1708,7 @@ impl LoadedSession {
 }
 
 struct TurnAcquisition {
+    checkpoint: Option<SessionCheckpoint>,
     configuration: TurnConfigurationRow,
     expected_generation: i64,
     latest_completed_turn: Option<i64>,
@@ -1603,10 +1730,18 @@ impl TurnAcquisition {
         )?;
         let turn_position = next_turn_position(transaction, session_id).await?;
         let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
+        let checkpoint_boundary = load_checkpoint_from(transaction, session_id)
+            .await?
+            .map(|checkpoint| checkpoint.covered_through());
 
         Ok(configuration == self.configuration
             && turn_position == self.turn_position
-            && latest_completed_turn == self.latest_completed_turn)
+            && latest_completed_turn == self.latest_completed_turn
+            && checkpoint_boundary
+                == self
+                    .checkpoint
+                    .as_ref()
+                    .map(SessionCheckpoint::covered_through))
     }
 }
 
@@ -2375,9 +2510,10 @@ async fn load_turns_from(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
+    after_turn: Option<i64>,
 ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
     let Some(oldest_turn) =
-        oldest_turn_within_budget(connection, session_id, max_history_bytes).await?
+        oldest_turn_within_budget(connection, session_id, max_history_bytes, after_turn).await?
     else {
         return Ok(Vec::new());
     };
@@ -2423,13 +2559,15 @@ async fn oldest_turn_within_budget(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
+    after_turn: Option<i64>,
 ) -> Result<Option<i64>, SessionError> {
     let mut retained_bytes = 0_usize;
     let mut oldest_turn = None;
     let mut before_turn = None;
 
     'pages: loop {
-        let turn_sizes = load_turn_size_page(connection, session_id, before_turn).await?;
+        let turn_sizes =
+            load_turn_size_page(connection, session_id, before_turn, after_turn).await?;
         if turn_sizes.is_empty() {
             break;
         }
@@ -2462,6 +2600,7 @@ async fn load_turn_size_page(
     connection: &mut SqliteConnection,
     session_id: &str,
     before_turn: Option<i64>,
+    after_turn: Option<i64>,
 ) -> Result<Vec<(i64, i64)>, SessionError> {
     let Some(inclusive_end) =
         before_turn.map_or(Some(i64::MAX), |position| position.checked_sub(1))
@@ -2479,6 +2618,7 @@ JOIN session_turn AS turn
  AND turn.turn_position = message.turn_position
 WHERE message.session_id = ?
   AND message.turn_position <= ?
+  AND (? IS NULL OR message.turn_position > ?)
   AND turn.status = 'completed'
 GROUP BY message.turn_position
 ORDER BY message.turn_position DESC
@@ -2486,6 +2626,8 @@ LIMIT ?
 "#,
         session_id,
         inclusive_end,
+        after_turn,
+        after_turn,
         TURN_SIZE_PAGE_SIZE
     )
     .fetch_all(&mut *connection)
@@ -2522,7 +2664,7 @@ WHERE session_id = ?
 }
 
 async fn latest_completed_turn(
-    transaction: &mut Transaction<'_, sqlx::Sqlite>,
+    connection: &mut SqliteConnection,
     session_id: &str,
 ) -> Result<Option<i64>, SessionError> {
     sqlx::query_scalar::<_, Option<i64>>(
@@ -2533,9 +2675,57 @@ WHERE session_id = ? AND status = 'completed'
 ",
     )
     .bind(session_id)
-    .fetch_one(&mut **transaction)
+    .fetch_one(&mut *connection)
     .await
     .session_context("load persistent session history position")
+}
+
+/// Exclusive lower turn bound applied to history loading: positions at or
+/// below a published checkpoint's boundary are replayed through its summary.
+/// `None` loads all completed turns.
+fn checkpoint_boundary(checkpoint: Option<&SessionCheckpoint>) -> Option<i64> {
+    checkpoint.map(SessionCheckpoint::covered_through)
+}
+
+async fn load_checkpoint_from(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+) -> Result<Option<SessionCheckpoint>, SessionError> {
+    let row = sqlx::query_as!(
+        CheckpointRow,
+        r#"
+SELECT version AS "version!: i64",
+       covered_through AS "covered_through!: i64",
+       model_generation AS "model_generation!: i64",
+       provider,
+       model,
+       summary AS "summary!: String"
+FROM session_checkpoint
+WHERE session_id = ?
+"#,
+        session_id
+    )
+    .fetch_optional(&mut *connection)
+    .await
+    .session_context("load session checkpoint")?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    if row.version != 1 {
+        return Err(SessionError::InvalidData {
+            reason: format!("session `{session_id}` has an unsupported checkpoint version"),
+        });
+    }
+    let summary: Value = deserialize_payload(&row.summary)?;
+    let checkpoint = SessionCheckpoint::new(
+        row.covered_through,
+        row.model_generation,
+        row.provider,
+        row.model,
+        summary,
+    )?;
+
+    Ok(Some(checkpoint))
 }
 
 async fn insert_message(

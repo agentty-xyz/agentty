@@ -33,6 +33,10 @@ mod cancellation_test;
 mod chat_completion;
 mod command_journal;
 mod command_settlement;
+mod compaction;
+#[cfg(test)]
+#[path = "../tests/support/compaction.rs"]
+mod compaction_projection_test;
 mod comparison;
 mod context;
 #[cfg(test)]
@@ -75,6 +79,7 @@ pub use command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
 };
 pub use command_settlement::CommandSettlementError;
+pub use compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use context::{ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator};
 pub use effect::EffectSettlementError;

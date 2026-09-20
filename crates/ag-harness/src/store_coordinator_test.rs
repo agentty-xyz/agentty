@@ -36,6 +36,20 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
             )
             .await
             .expect("switch through decorator");
+        let checkpoint = crate::SessionCheckpoint::new(
+            0,
+            1,
+            None,
+            None,
+            serde_json::json!({"context": "c", "decisions": [], "state": "s"}),
+        )
+        .expect("checkpoint");
+        decorated
+            .publish_checkpoint("session", &checkpoint)
+            .await
+            .expect("publish through decorator");
+        let loaded = decorated.load_session("session").await.expect("load");
+        assert_eq!(loaded.checkpoint, Some(checkpoint));
     }
 }
 
