@@ -11,7 +11,7 @@ jobs:
     name: Run suite
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/agentty-xyz/agentty-e2e@sha256:d8bcf1bcc38f051c583ed75b614bde552df28646dc74772e31e61453b1b00079
+      image: ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
       # GitHub requires the default root user to access `GITHUB_WORKSPACE`.
       # Local recording still uses the image's unprivileged default user.
       options: --platform linux/amd64 --user 0
