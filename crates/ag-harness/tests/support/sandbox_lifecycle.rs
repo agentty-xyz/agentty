@@ -2,9 +2,9 @@ use std::time::Duration;
 
 use ag_harness::{CommandOutcome, CommandTermination};
 
-use super::fixture::{CONFORMANCE_EXECUTORS, Workspace};
+use super::fixture::{CONFORMANCE_EXECUTORS, Workspace, wait_file};
 #[cfg(target_os = "macos")]
-use super::fixture::{Descendant, NativeFixture, wait_file};
+use super::fixture::{Descendant, NativeFixture};
 #[tokio::test]
 async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() {
     for selected in CONFORMANCE_EXECUTORS {
@@ -37,17 +37,12 @@ async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() 
             17,
             "{selected:?}: {result:?}"
         );
-        // The read-only native Linux policy leaves no observable marker; the
-        // wire-level launcher test proves completion waits for descendants
-        // there.
-        if selected.observes_markers() {
-            assert_eq!(
-                std::fs::read_to_string(workspace.path().join("output/child"))
-                    .expect("descendant completed"),
-                "finished",
-                "{selected:?}"
-            );
-        }
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("output/child"))
+                .expect("descendant completed"),
+            "finished",
+            "{selected:?}"
+        );
     }
 }
 
@@ -65,20 +60,10 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
         let mut turn = Box::pin(turn);
 
         // Act
+        let ready = workspace.path().join("output/ready");
         tokio::select! {
             result = &mut turn => assert!(result.is_err(), "command must wait"),
-            () = async {
-                if selected.observes_markers() {
-                    tokio::time::timeout(Duration::from_secs(5), async {
-                        while !workspace.path().join("output/ready").exists() { tokio::time::sleep(Duration::from_millis(5)).await; }
-                    }).await.expect("started command");
-                } else {
-                    // The read-only native Linux policy leaves no observable
-                    // marker; a bounded delay lets the command start before
-                    // the caller drops.
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                }
-            } => {}
+            () = wait_file(&ready) => {}
         }
         drop(turn);
         tokio::time::timeout(Duration::from_secs(5), control.commands_settled())
@@ -112,8 +97,8 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
 }
 
 /// The Linux equivalent drives the launcher wire directly in
-/// `sandbox_launcher.rs`, because the production Linux policy rejects the
-/// write grants this synchronization requires.
+/// `sandbox_launcher.rs`: namespace PIDs written by descendants are not host
+/// PIDs, so this host-side release protocol only works on macOS.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn native_detached_fork_and_posix_spawn_keep_access_confinement_and_report_scope() {

@@ -121,6 +121,7 @@ fn seatbelt_profiles_reject_non_utf8_paths_and_keep_host_information_explicit() 
         launcher: "/launcher".into(),
         linux_bubblewrap: None,
         workspace: "/workspace".into(),
+        workspace_write_nodes: vec![],
         workspace_writes: vec![],
     };
     let invalid = OsString::from_vec(vec![0xff]);

@@ -84,7 +84,7 @@ fn launcher_encoding_rejects_non_utf8_arguments_and_environment() {
 
         // Act / Assert
         assert!(matches!(
-            process().launch(&command, &policy, vec![]),
+            process().launch(&command, &policy, vec![], vec![]),
             Err(ExecutionError::Setup)
         ));
     }

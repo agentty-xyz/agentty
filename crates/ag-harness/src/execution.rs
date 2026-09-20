@@ -1,4 +1,6 @@
 mod contract;
+#[cfg(any(target_os = "linux", test))]
+mod landlock;
 mod launcher;
 mod native;
 #[cfg(any(target_os = "linux", test))]

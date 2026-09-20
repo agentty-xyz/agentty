@@ -108,21 +108,11 @@ async fn assert_reopened_effects(selected: Selected, workspace: &Workspace, path
         2,
         "{selected:?}"
     );
-    // The read-only native Linux policy denies the redirect, so it observes
-    // no filesystem effect; every other combination records one effect per
-    // executed command.
-    if selected.observes_markers() {
-        assert_eq!(
-            std::fs::read_to_string(workspace.path().join("output/executions")).expect("effects"),
-            "xyxy",
-            "{selected:?}"
-        );
-    } else {
-        assert!(
-            !workspace.path().join("output/executions").exists(),
-            "{selected:?}"
-        );
-    }
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("output/executions")).expect("effects"),
+        "xyxy",
+        "{selected:?}"
+    );
 }
 
 #[tokio::test]
@@ -225,7 +215,6 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
         vec![recorded[0].outcome.clone()]
     );
     assert!(duplicate.is_err(), "failed host requests never rerun");
-    #[cfg(target_os = "macos")]
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("output/executions"))
             .expect("actual effects"),
@@ -261,30 +250,10 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .expect("controlled submission");
     let control = turn.control();
     let mut turn = Box::pin(turn);
-    if selected.observes_markers() {
-        let ready = workspace.path().join("output/ready");
-        tokio::select! {
-            () = wait_file(&ready) => {},
-            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
-        }
-    } else {
-        // The read-only native Linux policy leaves no observable marker;
-        // wait for the committed acquisition, then allow a
-        // bounded start window.
-        tokio::select! {
-            acquired = tokio::time::timeout(Duration::from_secs(5), async {
-                while sqlx::query("SELECT 1 FROM session_turn WHERE session_id = 'lease'")
-                    .fetch_optional(&pool)
-                    .await
-                    .expect("acquisition probe")
-                    .is_none()
-                {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                }
-                tokio::time::sleep(Duration::from_millis(300)).await;
-            }) => acquired.expect("committed acquisition"),
-            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
-        }
+    let ready = workspace.path().join("output/ready");
+    tokio::select! {
+        () = wait_file(&ready) => {},
+        result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
     }
 
     // Act

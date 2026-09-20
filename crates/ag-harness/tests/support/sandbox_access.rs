@@ -1,5 +1,5 @@
-#[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ag_harness::{BashConfig, CommandOutcome, ToolPolicy, TurnError, TurnLimits, TurnOptions};
@@ -36,37 +36,104 @@ async fn native_linux_denies_keyrings_and_nested_user_namespaces() {
     );
 }
 
+/// Cross-mount hard links and renames fail on the mount boundaries between
+/// the read-only workspace, the write-grant binds, and the tmpfs root before
+/// Landlock is consulted. Landlock supplies the remaining denials — writes to
+/// the mount-writable tmpfs root, including through symlinks — and its
+/// granted refer right lets cross-directory renames and links inside a grant
+/// succeed.
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn native_linux_rejects_directory_write_grants_before_execution() {
+async fn native_linux_denies_writes_links_and_renames_outside_grants() {
     // Arrange
     let workspace = Workspace::new();
-    let options = workspace.options(Duration::from_secs(5), 128);
-    let configuration = options
-        .bash()
-        .expect("policy")
-        .clone()
-        .with_write("output".into())
-        .expect("write grant");
+    // The expected denials emit several hundred bytes of stderr, which share
+    // one capture budget with the asserted stdout marker.
+    let options = workspace.options_with_runtime(
+        &["/bin/ln".into(), "/bin/mv".into(), "/bin/mkdir".into()],
+        Duration::from_secs(10),
+        1024,
+    );
 
     // Act
     let result = workspace
         .harness()
         .run_once_with_options(
-            "printf escaped > output/escaped",
-            options.with_bash(configuration),
+            "set -e; printf allowed > output/file; if printf escaped > /probe; then exit 91; fi; \
+             if /bin/mkdir /escaped-directory; then exit 92; fi; if /bin/ln input \
+             output/hardlink; then exit 93; fi; if /bin/mv input output/moved; then exit 94; fi; \
+             printf inside > output/inside; if /bin/mv output/inside /escaped-file; then exit 95; \
+             fi; /bin/ln -s / output/rootlink; if printf escaped > output/rootlink/tmpfs-probe; \
+             then exit 96; fi; if printf escaped > \"output/rootlink$(pwd)/input\"; then exit 97; \
+             fi; /bin/mkdir output/subdirectory; printf value > output/renamed-source; /bin/mv \
+             output/renamed-source output/subdirectory/renamed; /bin/ln \
+             output/subdirectory/renamed output/linked; printf confined",
+            options,
         )
-        .await;
+        .await
+        .expect("turn");
+    let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
     // Assert
-    let Err(TurnError::CommandFailed { outcome }) = result else {
-        std::panic::resume_unwind(Box::new("write grants must fail closed before execution"));
-    };
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(result.stdout, "confined", "{result:?}");
     assert_eq!(
-        outcome.execution_failure,
-        Some(ag_harness::BashError::Unavailable)
+        std::fs::read_to_string(workspace.path().join("output/file")).expect("granted write"),
+        "allowed"
     );
-    assert!(!workspace.path().join("output/escaped").exists());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("input")).expect("read-only input"),
+        "input-value"
+    );
+    assert!(!workspace.path().join("output/hardlink").exists());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("output/linked")).expect("granted link"),
+        "value"
+    );
+}
+
+/// The recorded Linux contract: Git metadata existing at launch stays
+/// read-only, while a repository the command itself creates inside a write
+/// grant is the command's own output. macOS keeps its stronger pattern-based
+/// denial of new metadata names.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in_grants() {
+    // Arrange
+    let workspace = Workspace::new();
+    let root = workspace.path();
+    std::fs::create_dir_all(root.join("output/nested/.git")).expect("nested metadata");
+    std::fs::write(root.join("output/nested/.git/config"), "protected").expect("nested config");
+    let options =
+        workspace.options_with_runtime(&["/bin/mkdir".into()], Duration::from_secs(10), 256);
+
+    // Act
+    let result = workspace
+        .harness()
+        .run_once_with_options(
+            "set -e; if printf changed > output/nested/.git/config; then exit 91; fi; /bin/mkdir \
+             -p output/fresh/.git; printf fresh > output/fresh/.git/config; printf allowed > \
+             output/ordinary",
+            options,
+        )
+        .await
+        .expect("turn");
+    let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
+
+    // Assert
+    assert_eq!(result.exit_code, Some(0), "{result:?}");
+    assert_eq!(
+        std::fs::read_to_string(root.join("output/nested/.git/config")).expect("nested config"),
+        "protected"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("output/fresh/.git/config")).expect("own output"),
+        "fresh"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("output/ordinary")).expect("ordinary output"),
+        "allowed"
+    );
 }
 
 #[tokio::test]
@@ -80,15 +147,11 @@ async fn native_positive_controls_and_filesystem_network_denials() {
     drop(connection);
 
     // Act
-    #[cfg(target_os = "macos")]
-    let write_control = "printf allowed > output/file";
-    #[cfg(target_os = "linux")]
-    let write_control = "if printf forbidden > output/file; then exit 94; fi";
     let result = workspace
         .run(&format!(
-            "set -e; /bin/cat input; {write_control}; if printf forbidden > input; then exit 91; \
-             fi; if printf forbidden > .git/config; then exit 92; fi; if printf forbidden > \
-             /dev/tcp/127.0.0.1/{port}; then exit 93; fi; printf confined"
+            "set -e; /bin/cat input; printf allowed > output/file; if printf forbidden > input; \
+             then exit 91; fi; if printf forbidden > .git/config; then exit 92; fi; if printf \
+             forbidden > /dev/tcp/127.0.0.1/{port}; then exit 93; fi; printf confined"
         ))
         .await;
 
@@ -103,13 +166,10 @@ async fn native_positive_controls_and_filesystem_network_denials() {
         std::fs::read_to_string(workspace.path().join(".git/config")).expect("metadata"),
         "protected"
     );
-    #[cfg(target_os = "macos")]
     assert_eq!(
         std::fs::read_to_string(workspace.path().join("output/file")).expect("write"),
         "allowed"
     );
-    #[cfg(target_os = "linux")]
-    assert!(!workspace.path().join("output/file").exists());
     assert!(!result.cleanup_failed);
     assert!(!result.stderr.contains("LLVM Profile"), "{result:?}");
     workspace.assert_launcher_profiles();
@@ -250,7 +310,6 @@ async fn native_external_contents_require_a_read_grant_and_precancel_never_spawn
     assert_eq!(permitted.stdout, "read-positive-control", "{permitted:?}");
 }
 
-#[cfg(target_os = "macos")]
 #[tokio::test]
 async fn native_linked_worktree_administration_stays_read_only_inside_a_write_grant() {
     // Arrange
@@ -476,13 +535,14 @@ async fn native_metadata_denials_include_new_names_and_nested_repository_scope()
     }
 }
 
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn native_alias_created_by_another_command_after_validation_cannot_expose_metadata() {
-    // Arrange
-    let workspace = Workspace::new();
+/// Builds victim options behind a gate launcher that pauses only the
+/// argument-free outer phase until `release` exists; sandboxed phases pass an
+/// argument and run without host filesystem access to the gate. Returns the
+/// gate directory with its `ready`/`release` markers and the victim options.
+fn gated_scope_options(
+    workspace: &Workspace,
+) -> (tempfile::TempDir, PathBuf, PathBuf, TurnOptions) {
     let root = workspace.path();
-    std::fs::create_dir(root.join("output/scope")).expect("grant");
     let gate = tempfile::tempdir().expect("trusted launcher gate");
     let gate_root = gate.path().canonicalize().expect("gate root");
     let launcher = gate_root.join("launcher");
@@ -492,8 +552,8 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     std::fs::write(
         &launcher,
         format!(
-            "#!/bin/bash\nif [ \"${{1-}}\" != --seatbelt-child ]; then printf ready > '{}'; while \
-             [ ! -e '{}' ]; do /bin/sleep 0.01; done; fi\nexec '{}' \"$@\"\n",
+            "#!/bin/bash\nif [ \"$#\" -eq 0 ]; then printf ready > '{}'; while [ ! -e '{}' ]; do \
+             /bin/sleep 0.01; done; fi\nexec '{}' \"$@\"\n",
             ready.display(),
             release.display(),
             delegate.display()
@@ -523,6 +583,17 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     let options = workspace
         .options(Duration::from_secs(10), 128)
         .with_bash(with_runtime(configuration, &[delegate]));
+
+    (gate, ready, release, options)
+}
+
+#[tokio::test]
+async fn native_alias_created_by_another_command_after_validation_cannot_expose_metadata() {
+    // Arrange
+    let workspace = Workspace::new();
+    let root = workspace.path();
+    std::fs::create_dir(root.join("output/scope")).expect("grant");
+    let (_gate, ready, release, options) = gated_scope_options(&workspace);
     let harness = workspace.harness();
     let turn = harness.run_once_controlled(
         "if printf corrupted > output/scope/config; then exit 91; fi; printf confined",
@@ -536,9 +607,19 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
         () = super::fixture::wait_file(&ready) => {},
         result = &mut turn => std::panic::resume_unwind(Box::new(format!("victim finished before gate: {result:?}"))),
     }
-    let attacker = workspace
-        .run("/bin/mv output/scope output/original; /bin/ln -s ../.git output/scope")
-        .await;
+    let attacker = harness
+        .run_once_with_options(
+            "/bin/mv output/scope output/original; /bin/ln -s ../.git output/scope",
+            workspace.options_with_runtime(
+                &["/bin/mv".into(), "/bin/ln".into()],
+                Duration::from_secs(10),
+                1024,
+            ),
+        )
+        .await
+        .expect("attacker turn");
+    let attacker: CommandOutcome =
+        serde_json::from_value(attacker.into_output()).expect("attacker outcome");
     assert_eq!(
         attacker.exit_code,
         Some(0),
@@ -546,20 +627,38 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     );
     assert!(root.join("output/scope").is_symlink());
     std::fs::write(&release, "release").expect("release victim after alias replacement");
-    let outcome = turn.await.expect("victim");
-    let outcome: CommandOutcome = serde_json::from_value(outcome.into_output()).expect("outcome");
-    control
-        .commands_settled()
-        .await
-        .expect("best-effort cleanup");
+    let result = turn.await;
 
     // Assert
-    assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
-    assert_eq!(outcome.stdout, "confined");
-    assert_eq!(
-        outcome.cleanup_scope,
-        ag_harness::CommandCleanupScope::ProcessGroupBestEffort
-    );
+    // macOS resolves every write against the Seatbelt pattern denials, so the
+    // victim still runs fully confined; Linux verifies the validated grant
+    // identity inside the namespace and fails the launch closed instead.
+    #[cfg(target_os = "macos")]
+    {
+        let outcome = result.expect("victim");
+        let outcome: CommandOutcome =
+            serde_json::from_value(outcome.into_output()).expect("outcome");
+        control
+            .commands_settled()
+            .await
+            .expect("best-effort cleanup");
+        assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
+        assert_eq!(outcome.stdout, "confined");
+        assert_eq!(
+            outcome.cleanup_scope,
+            ag_harness::CommandCleanupScope::ProcessGroupBestEffort
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        assert!(
+            matches!(result, Err(TurnError::CommandFailed { .. })),
+            "{result:?}"
+        );
+        // The failed launcher exits before confirming its namespace scope, so
+        // settlement reports the retained cleanup instead of erasing it.
+        assert!(control.commands_settled().await.is_err());
+    }
     assert_eq!(
         std::fs::read_to_string(root.join(".git/config")).expect("metadata"),
         "protected"
