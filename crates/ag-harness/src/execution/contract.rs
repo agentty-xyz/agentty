@@ -1,14 +1,18 @@
-//! Private command contracts consumed by the native Bash executor.
+//! Command contracts shared by the harness supervisor and Bash executors.
 //!
 //! Commands, descendants, and repository contents are hostile. The configuring
-//! host and other host processes are trusted. Native executors enforce
-//! the complete policy before starting anything, including against path
-//! aliases, symlinks, hard links, renames, and races. Lexical validation is not
-//! enforcement. Git metadata includes `.git` entries, resolved Git directories,
-//! common directories, and linked-worktree administration; no grant permits
-//! mutation. Applied workspace writes survive cancellation and failure; there
-//! is no rollback. Aggregate memory, process-count, and disk quotas are outside
-//! this contract.
+//! host and other host processes are trusted. The harness retains policy
+//! selection, the separate tool permission, command-journal persistence,
+//! deadlines, the combined output budget, and the no-replay rule; a selected
+//! executor owns process launch, its documented enforcement, output capture,
+//! and cleanup. Enforcing executors apply the complete policy before starting
+//! anything, including against path aliases, symlinks, hard links, renames,
+//! and races, and reject any policy they cannot enforce. Lexical validation is
+//! not enforcement. Git metadata includes `.git` entries, resolved Git
+//! directories, common directories, and linked-worktree administration; no
+//! grant permits mutation. Applied workspace writes survive cancellation and
+//! failure; there is no rollback. Aggregate memory, process-count, and disk
+//! quotas are outside this contract.
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -16,15 +20,107 @@ use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use thiserror::Error;
+
+use crate::command_journal::CommandCleanupScope;
+
+/// Host-selected Bash execution boundary consumed through `BashConfig`.
+///
+/// The harness validates policy values, persists command intent before any
+/// spawn, supervises the original deadline and the combined output budget,
+/// drains excess output, and retains cleanup after caller drop. An executor
+/// owns process launch, the isolation its documentation states, bounded
+/// output production, and idempotent cleanup. Selection is always explicit:
+/// there is no fallback or environment-based executor choice.
+pub trait BashExecutor: Send + Sync {
+    /// Stable executor identity recorded in durable policy snapshots and
+    /// host-request fingerprints. Changing enforcement behavior requires a
+    /// new identity or a host policy-revision change.
+    fn identity(&self) -> &str;
+
+    /// Cleanup scope this executor acknowledges, carried on every recorded
+    /// command outcome.
+    fn cleanup_scope(&self) -> CommandCleanupScope;
+
+    /// Inert, synchronous allocation of one command's cleanup owner. No
+    /// processes, writes, blocking work, or background preparation may occur
+    /// here.
+    ///
+    /// # Errors
+    /// Returns an error when this executor cannot execute on the current
+    /// platform or configuration.
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError>;
+}
+
+/// One bound command execution driven by the harness supervisor.
+///
+/// All acquired resources must be recorded in `self` before an operation can
+/// yield. Dropping any operation must leave cleanup authority in `self`, with
+/// no detached acquisition still able to create resources afterward. Methods
+/// must yield promptly and never block the runtime thread.
+#[async_trait]
+pub trait BashProcess: Send {
+    /// Establish the executor's documented enforcement before `start`, or
+    /// fail closed. Preparation must not run the command.
+    ///
+    /// # Errors
+    /// Returns an error when the policy cannot be honored as documented.
+    async fn prepare(
+        &mut self,
+        command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
+    ) -> Result<(), ExecutionError>;
+
+    /// Launch the prepared command.
+    ///
+    /// # Errors
+    /// Returns an error when the process cannot be spawned. Start failure
+    /// still requires retained cleanup.
+    async fn start(&mut self) -> Result<(), ExecutionError>;
+
+    /// Read into the supplied bounded buffer, without an unbounded internal
+    /// queue. Output lengths cannot exceed the buffer. EOF is per pipe;
+    /// completion independently acknowledges the executor's cleanup scope.
+    /// Deliver the main exit separately, even if unavailable.
+    ///
+    /// # Errors
+    /// Returns an error when supervision of the running command fails.
+    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<ProcessEvent, ExecutionError>;
+
+    /// Idempotently clean up within the documented cleanup scope and release
+    /// even partially prepared resources. A best-effort scope cannot confirm
+    /// escaped descendants; a dropped attempt must leave the owner usable for
+    /// another bounded attempt. This operation owns any remaining pipe
+    /// draining/disposal and cannot depend on a consumer.
+    ///
+    /// # Errors
+    /// Returns an error when the cleanup scope could not be confirmed.
+    async fn cleanup(&mut self) -> Result<(), ExecutionError>;
+}
+
+/// One supervision observation delivered by [`BashProcess::next_event`].
+#[derive(Clone, Copy, Debug)]
+pub enum ProcessEvent {
+    /// Internal progress without output, exit, or scope acknowledgment.
+    Progress,
+    /// Captured bytes written into the supplied buffer prefix.
+    Output(OutputStream, usize),
+    /// The named pipe reached end of file.
+    Eof(OutputStream),
+    /// The main process exited; descendants may still run.
+    MainExit(MainExit),
+    /// The executor acknowledged its documented cleanup scope.
+    Quiescent,
+}
 
 /// Owned argv without shell parsing, implicit PATH lookup, or inherited state.
-pub(super) struct Command {
+pub struct ExecutionCommand {
     arguments: Vec<OsString>,
     directory: PathBuf,
     executable: PathBuf,
 }
 
-impl Command {
+impl ExecutionCommand {
     pub(super) fn new(
         executable: PathBuf,
         arguments: Vec<OsString>,
@@ -43,16 +139,18 @@ impl Command {
         })
     }
 
-    pub(super) fn executable(&self) -> &Path {
+    /// Absolute path of the executable to launch.
+    pub fn executable(&self) -> &Path {
         &self.executable
     }
 
-    pub(super) fn arguments(&self) -> &[OsString] {
+    /// Arguments passed verbatim, without shell parsing.
+    pub fn arguments(&self) -> &[OsString] {
         &self.arguments
     }
 
     /// Relative to the policy workspace, including `.` for its root.
-    pub(super) fn directory(&self) -> &Path {
+    pub fn directory(&self) -> &Path {
         &self.directory
     }
 }
@@ -71,9 +169,10 @@ pub(super) struct Grants {
 ///
 /// No inherited environment, descriptors, external filesystem reads, or host
 /// information is implicitly authorized, including executable/runtime
-/// resources. An executor must reject any policy it cannot enforce, never
-/// weaken it.
-pub(super) struct Policy {
+/// resources. An enforcing executor must reject any policy it cannot enforce,
+/// never weaken it; an executor documented as unenforcing applies only the
+/// launch configuration.
+pub struct ExecutionPolicy {
     environment: BTreeMap<OsString, OsString>,
     external_reads: Vec<PathBuf>,
     git_metadata: Vec<PathBuf>,
@@ -82,9 +181,9 @@ pub(super) struct Policy {
     workspace_writes: Vec<PathBuf>,
 }
 
-impl Policy {
-    /// The trusted host supplies known Git administration roots. The executor
-    /// must additionally discover and protect repository-controlled
+impl ExecutionPolicy {
+    /// The trusted host supplies known Git administration roots. An enforcing
+    /// executor must additionally discover and protect repository-controlled
     /// indirections before launch, or fail closed if complete protection
     /// cannot be established.
     pub(super) fn new(
@@ -140,35 +239,44 @@ impl Policy {
         })
     }
 
-    pub(super) fn workspace(&self) -> &Path {
+    /// Absolute command workspace root; reads default to this tree.
+    pub fn workspace(&self) -> &Path {
         &self.workspace
     }
 
-    pub(super) fn git_metadata(&self) -> &[PathBuf] {
+    /// Known Git administration roots that no grant permits mutating.
+    pub fn git_metadata(&self) -> &[PathBuf] {
         &self.git_metadata
     }
 
-    pub(super) fn environment(&self) -> &BTreeMap<OsString, OsString> {
+    /// Complete environment for the command; nothing else is inherited.
+    pub fn environment(&self) -> &BTreeMap<OsString, OsString> {
         &self.environment
     }
 
-    pub(super) fn external_reads(&self) -> &[PathBuf] {
+    /// Absolute external roots granted recursive read access.
+    pub fn external_reads(&self) -> &[PathBuf] {
         &self.external_reads
     }
 
-    pub(super) fn workspace_writes(&self) -> &[PathBuf] {
+    /// Workspace-relative directories granted recursive write access.
+    pub fn workspace_writes(&self) -> &[PathBuf] {
         &self.workspace_writes
     }
 
-    pub(super) fn exposes_host_information(&self) -> bool {
+    /// Whether the host explicitly granted native host-information exposure.
+    pub fn exposes_host_information(&self) -> bool {
         self.host_information
     }
 
     /// Reports lexical intent only; never use this as a filesystem access
     /// check. Protected metadata can be read only where a read grant
-    /// already exists.
-    pub(super) fn requested_access(&self, path: &Path) -> Result<Access, ValidationError> {
-        validate_path(path, true)?;
+    /// already exists. Relative, empty, traversing, and NUL-containing paths
+    /// report [`ExecutionAccess::Denied`].
+    pub fn requested_access(&self, path: &Path) -> ExecutionAccess {
+        if validate_path(path, true).is_err() {
+            return ExecutionAccess::Denied;
+        }
         let in_workspace = path.starts_with(&self.workspace);
         if !in_workspace
             && !self
@@ -176,10 +284,10 @@ impl Policy {
                 .iter()
                 .any(|root| path.starts_with(root))
         {
-            return Ok(Access::Denied);
+            return ExecutionAccess::Denied;
         }
         if has_git_component(path) || self.git_metadata.iter().any(|root| path.starts_with(root)) {
-            return Ok(Access::ReadOnly);
+            return ExecutionAccess::ReadOnly;
         }
         if in_workspace
             && self.workspace_writes.iter().any(|root| {
@@ -188,17 +296,21 @@ impl Policy {
                 path.starts_with(root)
             })
         {
-            return Ok(Access::ReadWrite);
+            return ExecutionAccess::ReadWrite;
         }
 
-        Ok(Access::ReadOnly)
+        ExecutionAccess::ReadOnly
     }
 }
 
+/// Lexical policy intent for one absolute path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Access {
+pub enum ExecutionAccess {
+    /// The path lies outside every granted root.
     Denied,
+    /// The path is readable but no grant permits writing it.
     ReadOnly,
+    /// The path lies beneath a workspace write grant.
     ReadWrite,
 }
 
@@ -259,11 +371,11 @@ impl Output {
         }
     }
 
-    pub(super) fn capture(&mut self, stream: Stream, bytes: &[u8]) {
+    pub(super) fn capture(&mut self, stream: OutputStream, bytes: &[u8]) {
         let retained = bytes.len().min(self.remaining);
         let destination = match stream {
-            Stream::Stdout => &mut self.stdout,
-            Stream::Stderr => &mut self.stderr,
+            OutputStream::Stdout => &mut self.stdout,
+            OutputStream::Stderr => &mut self.stderr,
         };
         destination.extend_from_slice(&bytes[..retained]);
         self.remaining -= retained;
@@ -283,18 +395,24 @@ impl Output {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(super) enum Stream {
+/// One captured binary stream of the main process and its pipe inheritors.
+#[derive(Clone, Copy, Debug)]
+pub enum OutputStream {
+    /// Standard output.
     Stdout,
+    /// Standard error.
     Stderr,
 }
 
 /// Main-process observation, independent of descendants and overall
 /// termination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MainExit {
+pub enum MainExit {
+    /// The main process exited with this status code.
     Code(i32),
+    /// The main process was terminated by this signal.
     Signal(i32),
+    /// No main exit observation is available.
     Unavailable,
 }
 
@@ -323,8 +441,8 @@ pub(super) struct ExecutionResult {
 pub(super) trait Executor: Send + Sync {
     fn prepare(
         &self,
-        command: Command,
-        policy: Policy,
+        command: ExecutionCommand,
+        policy: ExecutionPolicy,
         limits: Limits,
     ) -> Result<PreparedExecution, ExecutionError>;
 }
@@ -338,31 +456,43 @@ pub(super) struct PreparedExecution {
 pub(super) trait Execution: Send {
     /// Enforces the policy for the entire process tree or fails before launch.
     /// Start failure still requires retained cleanup. Completion uses the
-    /// backend scope: Linux descendants, or best-effort macOS process groups.
+    /// selected executor's documented cleanup scope.
     async fn run(self: Box<Self>) -> ExecutionResult;
 }
 
 #[async_trait]
 pub(crate) trait ExecutionControl: Send + Sync {
-    /// Idempotent cancellation, including before launch. macOS group cleanup
-    /// does not establish that escaped descendants stopped.
+    /// Idempotent cancellation, including before launch. Best-effort cleanup
+    /// scopes do not establish that escaped descendants stopped.
     fn cancel(&self);
 
-    /// Idempotently settle the backend cleanup scope and release resources
+    /// Idempotently settle the executor cleanup scope and release resources
     /// after cancellation, a dropped run future, or deadline expiry. A
     /// failed cleanup can be retried. The owner retains its failure
     /// separately in the result.
     async fn cleanup(&self) -> Result<(), ExecutionError>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ExecutionError {
+/// Content-free executor failure classification.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+pub enum ExecutionError {
+    /// The executor cannot execute this policy, platform, or configuration.
+    #[error("execution unsupported for this policy or platform")]
     Unsupported,
+    /// Preparation failed before the command could run.
+    #[error("execution setup failed")]
     Setup,
+    /// Launching or observing the process failed.
+    #[error("process execution failed")]
     Process,
+    /// Harness-side supervision failed.
+    #[error("execution supervision failed")]
     Supervision,
+    /// Cleanup failed within its documented scope.
+    #[error("execution cleanup failed")]
     Cleanup,
     /// Cleanup exhausted its bounds without confirming resource release.
+    #[error("execution cleanup remains unconfirmed")]
     CleanupUnconfirmed,
 }
 

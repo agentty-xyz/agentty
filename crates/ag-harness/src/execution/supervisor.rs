@@ -1,5 +1,5 @@
-//! Platform-independent ownership and lifecycle orchestration. Only injected
-//! backends supply native process operations and state their cleanup scope.
+//! Platform-independent ownership and lifecycle orchestration. Only selected
+//! executors supply process operations and state their cleanup scope.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,50 +9,14 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::contract::{
-    Command, Execution, ExecutionControl, ExecutionError, ExecutionResult, Executor, Limits,
-    MainExit, Output, Policy, PreparedExecution, Stream, Termination,
+    BashExecutor, BashProcess, Execution, ExecutionCommand, ExecutionControl, ExecutionError,
+    ExecutionPolicy, ExecutionResult, Executor, Limits, MainExit, Output, OutputStream,
+    PreparedExecution, ProcessEvent, Termination,
 };
 
 const READ_BYTES: usize = 4096;
 const CLEANUP_ATTEMPTS: usize = 2;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// Inert, synchronous allocation of the cleanup owner. No processes, writes,
-/// blocking work, or background preparation may occur here.
-pub(super) trait Backend: Send + Sync {
-    fn bind(&self) -> Result<Box<dyn Process>, ExecutionError>;
-}
-
-/// All acquired resources must be recorded in `self` before an operation can
-/// yield. Dropping any operation must leave cleanup authority in `self`, with
-/// no detached acquisition still able to create resources afterward. Methods
-/// must yield promptly and never block the runtime thread.
-#[async_trait]
-pub(super) trait Process: Send {
-    /// Enforce the complete policy before `start`, or fail closed.
-    async fn prepare(&mut self, command: &Command, policy: &Policy) -> Result<(), ExecutionError>;
-    async fn start(&mut self) -> Result<(), ExecutionError>;
-    /// Read into the supplied bounded buffer, without an unbounded internal
-    /// queue. Output lengths cannot exceed the buffer. EOF is per pipe;
-    /// completion independently acknowledges the backend scope: Linux namespace
-    /// descendants, or best-effort macOS process-group observation. Deliver the
-    /// main exit separately, even if unavailable.
-    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<Event, ExecutionError>;
-    /// Idempotently clean up within the documented backend scope and release
-    /// even partially prepared resources. macOS cannot confirm escaped
-    /// descendants; a dropped attempt must leave the owner usable for
-    /// another bounded attempt. This operation owns any remaining pipe
-    /// draining/disposal and cannot depend on a consumer.
-    async fn cleanup(&mut self) -> Result<(), ExecutionError>;
-}
-
-pub(super) enum Event {
-    Progress,
-    Output(Stream, usize),
-    Eof(Stream),
-    MainExit(MainExit),
-    Quiescent,
-}
 
 /// The same monotonic clock supplies execution and cleanup deadlines.
 #[async_trait]
@@ -62,7 +26,7 @@ pub(super) trait Clock: Send + Sync {
 }
 
 pub(super) struct Supervisor {
-    backend: Arc<dyn Backend>,
+    backend: Arc<dyn BashExecutor>,
     clock: Arc<dyn Clock>,
     runtime: Handle,
 }
@@ -72,7 +36,7 @@ impl Supervisor {
     /// then run on any thread. The host must keep this runtime alive and driven
     /// until cleanup settles; the handle does not prevent runtime shutdown.
     pub(super) fn new(
-        backend: Arc<dyn Backend>,
+        backend: Arc<dyn BashExecutor>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, ExecutionError> {
         let runtime = Handle::try_current().map_err(|_| ExecutionError::Supervision)?;
@@ -88,8 +52,8 @@ impl Supervisor {
 impl Executor for Supervisor {
     fn prepare(
         &self,
-        command: Command,
-        policy: Policy,
+        command: ExecutionCommand,
+        policy: ExecutionPolicy,
         limits: Limits,
     ) -> Result<PreparedExecution, ExecutionError> {
         let process = self.backend.bind()?;
@@ -211,10 +175,10 @@ impl Drop for Running {
 struct Worker {
     cancellation: watch::Receiver<bool>,
     clock: Arc<dyn Clock>,
-    command: Command,
+    command: ExecutionCommand,
     limits: Limits,
-    policy: Policy,
-    process: Box<dyn Process>,
+    policy: ExecutionPolicy,
+    process: Box<dyn BashProcess>,
 }
 
 impl Worker {
@@ -297,17 +261,17 @@ impl Worker {
             )
             .await;
             match event {
-                Ok(Ok(Event::Progress)) => {}
-                Ok(Ok(Event::Output(stream, length))) if length <= buffer.len() => {
+                Ok(Ok(ProcessEvent::Progress)) => {}
+                Ok(Ok(ProcessEvent::Output(stream, length))) if length <= buffer.len() => {
                     outcome.output.capture(stream, &buffer[..length]);
                 }
-                Ok(Ok(Event::Eof(Stream::Stdout))) => stdout_eof = true,
-                Ok(Ok(Event::Eof(Stream::Stderr))) => stderr_eof = true,
-                Ok(Ok(Event::MainExit(exit))) => {
+                Ok(Ok(ProcessEvent::Eof(OutputStream::Stdout))) => stdout_eof = true,
+                Ok(Ok(ProcessEvent::Eof(OutputStream::Stderr))) => stderr_eof = true,
+                Ok(Ok(ProcessEvent::MainExit(exit))) => {
                     outcome.main_exit = exit;
                     main_exited = true;
                 }
-                Ok(Ok(Event::Quiescent)) => quiescent = true,
+                Ok(Ok(ProcessEvent::Quiescent)) => quiescent = true,
                 other => {
                     record_phase(
                         other.map(|event| event.and(Err(ExecutionError::Process))),

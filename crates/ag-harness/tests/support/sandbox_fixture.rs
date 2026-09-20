@@ -8,7 +8,7 @@ use std::time::Duration;
 use ag_harness::{
     BashConfig, CommandOutcome, ExecutionIdentity, Harness, Model, ModelCompletion, ModelError,
     ModelMessage, ModelRequest, ModelResponse, OutputSchema, Repository, SqliteStore, Tool,
-    ToolCall, ToolPolicy, TurnLimits, TurnOptions,
+    ToolCall, ToolPolicy, TurnLimits, TurnOptions, UnsandboxedExecutor,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -34,6 +34,25 @@ impl Model for ShellModel {
             };
 
         Ok(ModelCompletion::from_response(response))
+    }
+}
+
+/// Executors covered by the shared execution-conformance behavior. Native
+/// enforcement suites remain the sandboxed executor's qualification.
+#[derive(Clone, Copy)]
+pub(super) enum Selected {
+    Native,
+    Unsandboxed,
+}
+
+pub(super) const CONFORMANCE_EXECUTORS: [Selected; 2] = [Selected::Native, Selected::Unsandboxed];
+
+impl Selected {
+    /// Whether commands can leave observable markers through the `output`
+    /// directory: the native Linux policy rejects write grants, while the
+    /// unsandboxed executor never restricts writes.
+    pub(super) fn observes_markers(self) -> bool {
+        matches!(self, Self::Unsandboxed) || cfg!(target_os = "macos")
     }
 }
 
@@ -95,6 +114,37 @@ impl Workspace {
             TurnLimits::default(),
         )
         .with_bash(with_runtime(configuration, &[]))
+    }
+
+    pub(super) fn executor_options(
+        &self,
+        selected: Selected,
+        timeout: Duration,
+        capture: usize,
+    ) -> TurnOptions {
+        match selected {
+            Selected::Native => self.options(timeout, capture),
+            Selected::Unsandboxed => {
+                let configuration = BashConfig::for_executor(
+                    Arc::new(UnsandboxedExecutor::without_isolation()),
+                    "/bin/bash".into(),
+                    "unsandboxed-runtime-v1".into(),
+                    timeout,
+                    capture,
+                )
+                .expect("executor configuration")
+                .with_host_information()
+                .with_write("output".into())
+                .expect("write grant");
+
+                TurnOptions::new(
+                    schema(),
+                    ToolPolicy::default().allow(Tool::Bash),
+                    TurnLimits::default(),
+                )
+                .with_bash(configuration)
+            }
+        }
     }
 
     pub(super) fn launcher(&self) -> PathBuf {
@@ -286,9 +336,8 @@ impl Drop for Descendant {
     }
 }
 
-/// Waits for a marker written through a macOS write grant; the read-only
-/// Linux policy leaves no such marker to observe.
-#[cfg(target_os = "macos")]
+/// Waits for a marker written through a write grant or the unsandboxed
+/// executor; the read-only native Linux policy leaves no marker to observe.
 pub(super) async fn wait_file(path: &Path) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !path.exists() {

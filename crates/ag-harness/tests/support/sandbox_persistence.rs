@@ -3,107 +3,110 @@ use std::time::Duration;
 
 use ag_harness::{CommandTermination, MemoryStore, SessionStore, SqliteStore, TurnError};
 
-#[cfg(target_os = "macos")]
-use super::fixture::wait_file;
-use super::fixture::{Workspace, fault_store, schema};
+use super::fixture::{CONFORMANCE_EXECUTORS, Selected, Workspace, fault_store, schema, wait_file};
 #[tokio::test]
-async fn native_durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
-    // Arrange
-    let workspace = Workspace::new();
-    let storage = tempfile::tempdir().expect("storage");
-    let path = storage.path().join("commands.sqlite");
-    let stores: Vec<Arc<dyn SessionStore>> = vec![
-        Arc::new(MemoryStore::new()),
-        Arc::new(SqliteStore::open(&path).await.expect("SQLite")),
-    ];
-    for (index, store) in stores.into_iter().enumerate() {
-        let harness = workspace.harness().store(Arc::clone(&store));
-        let mut session = harness
-            .session("session", schema())
-            .create()
-            .await
-            .expect("session");
-        let options = workspace.options(Duration::from_secs(5), 128);
-        let command = "printf x >> output/executions; printf done";
+async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
+    for selected in CONFORMANCE_EXECUTORS {
+        // Arrange
+        let workspace = Workspace::new();
+        let storage = tempfile::tempdir().expect("storage");
+        let path = storage.path().join("commands.sqlite");
+        let stores: Vec<Arc<dyn SessionStore>> = vec![
+            Arc::new(MemoryStore::new()),
+            Arc::new(SqliteStore::open(&path).await.expect("SQLite")),
+        ];
+        for (index, store) in stores.into_iter().enumerate() {
+            let harness = workspace.harness().store(Arc::clone(&store));
+            let mut session = harness
+                .session("session", schema())
+                .create()
+                .await
+                .expect("session");
+            let options = workspace.executor_options(selected, Duration::from_secs(5), 128);
+            let command = "printf x >> output/executions; printf done";
 
-        // Act
-        let first = session
-            .submit("command-id", command, options.clone())
-            .await
-            .expect("first command");
-        drop(session);
-        drop(harness);
-        let store: Arc<dyn SessionStore> = if index == 1 {
-            drop(store);
-            Arc::new(SqliteStore::open(&path).await.expect("reopen SQLite"))
-        } else {
-            store
-        };
-        let harness = workspace.harness().store(Arc::clone(&store));
-        let mut session = harness
-            .resume("session")
-            .await
-            .expect("resume Bash history");
-        let duplicate = session
-            .submit("command-id", command, options.clone())
-            .await
-            .expect("duplicate");
-        let records = session.commands().await.expect("command records");
-        let recovered = session
-            .recover("command-id")
-            .await
-            .expect("recovery")
-            .expect("record");
+            // Act
+            let first = session
+                .submit("command-id", command, options.clone())
+                .await
+                .expect("first command");
+            drop(session);
+            drop(harness);
+            let store: Arc<dyn SessionStore> = if index == 1 {
+                drop(store);
+                Arc::new(SqliteStore::open(&path).await.expect("reopen SQLite"))
+            } else {
+                store
+            };
+            let harness = workspace.harness().store(Arc::clone(&store));
+            let mut session = harness
+                .resume("session")
+                .await
+                .expect("resume Bash history");
+            let duplicate = session
+                .submit("command-id", command, options.clone())
+                .await
+                .expect("duplicate");
+            let records = session.commands().await.expect("command records");
+            let recovered = session
+                .recover("command-id")
+                .await
+                .expect("recovery")
+                .expect("record");
 
-        // Assert
-        assert_eq!(first, duplicate);
-        assert_eq!(records.len(), 1);
-        assert_eq!(session.writes().await.expect("writes"), []);
-        assert_eq!(recovered.commands, records);
-        assert!(!records[0].blocks_admission());
+            // Assert
+            assert_eq!(first, duplicate);
+            assert_eq!(records.len(), 1);
+            assert_eq!(session.writes().await.expect("writes"), []);
+            assert_eq!(recovered.commands, records);
+            assert!(!records[0].blocks_admission());
+            assert_eq!(
+                records[0].outcome.as_ref().expect("outcome").stdout,
+                "done",
+                "{records:?}"
+            );
+            session
+                .submit(
+                    "next-id",
+                    "printf y >> output/executions; printf next",
+                    options.clone(),
+                )
+                .await
+                .expect("new turn after reopening Bash history");
+            let retry = session
+                .submit("command-id", command, options)
+                .await
+                .expect("old ID after another turn");
+            assert_eq!(retry, first);
+            assert_eq!(session.commands().await.expect("two commands").len(), 2);
+            let changed = workspace.executor_options(selected, Duration::from_secs(6), 128);
+            assert!(matches!(
+                session.submit("command-id", command, changed).await,
+                Err(ag_harness::SessionError::HostTurnConflict)
+            ));
+        }
+        let reopened = SqliteStore::open(&path).await.expect("reopen");
         assert_eq!(
-            records[0].outcome.as_ref().expect("outcome").stdout,
-            "done",
-            "{records:?}"
+            reopened
+                .load_commands("session")
+                .await
+                .expect("reopened commands")
+                .len(),
+            2
         );
-        session
-            .submit(
-                "next-id",
-                "printf y >> output/executions; printf next",
-                options.clone(),
-            )
-            .await
-            .expect("new turn after reopening Bash history");
-        let retry = session
-            .submit("command-id", command, options)
-            .await
-            .expect("old ID after another turn");
-        assert_eq!(retry, first);
-        assert_eq!(session.commands().await.expect("two commands").len(), 2);
-        let changed = workspace.options(Duration::from_secs(6), 128);
-        assert!(matches!(
-            session.submit("command-id", command, changed).await,
-            Err(ag_harness::SessionError::HostTurnConflict)
-        ));
+        // The read-only native Linux policy denies the redirect, so it observes
+        // no filesystem effect; every other combination records one effect per
+        // executed command.
+        if selected.observes_markers() {
+            assert_eq!(
+                std::fs::read_to_string(workspace.path().join("output/executions"))
+                    .expect("effects"),
+                "xyxy"
+            );
+        } else {
+            assert!(!workspace.path().join("output/executions").exists());
+        }
     }
-    let reopened = SqliteStore::open(&path).await.expect("reopen");
-    assert_eq!(
-        reopened
-            .load_commands("session")
-            .await
-            .expect("reopened commands")
-            .len(),
-        2
-    );
-    // The read-only Linux policy denies the redirect, so only macOS observes
-    // one filesystem effect per executed command.
-    #[cfg(target_os = "macos")]
-    assert_eq!(
-        std::fs::read_to_string(workspace.path().join("output/executions")).expect("effects"),
-        "xyxy"
-    );
-    #[cfg(target_os = "linux")]
-    assert!(!workspace.path().join("output/executions").exists());
 }
 
 #[tokio::test]
@@ -214,8 +217,20 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     );
 }
 
+// Each executor gets its own test because one lease-loss wait spans a full
+// ~100-second renewal interval; a loop over both executors would exceed the CI
+// runner's per-test termination budget.
 #[tokio::test]
 async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
+    lease_loss_cancels_execution_and_records_late_outcome(Selected::Native).await;
+}
+
+#[tokio::test]
+async fn unsandboxed_lease_loss_cancels_execution_and_records_late_outcome() {
+    lease_loss_cancels_execution_and_records_late_outcome(Selected::Unsandboxed).await;
+}
+
+async fn lease_loss_cancels_execution_and_records_late_outcome(selected: Selected) {
     // Arrange
     let workspace = Workspace::new();
     let storage = tempfile::tempdir().expect("storage");
@@ -231,35 +246,35 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .submit_controlled(
             "owner",
             "printf ready > output/ready; /bin/sleep 180",
-            workspace.options(Duration::from_secs(300), 128),
+            workspace.executor_options(selected, Duration::from_secs(300), 128),
         )
         .expect("controlled submission");
     let control = turn.control();
     let mut turn = Box::pin(turn);
-    #[cfg(target_os = "macos")]
-    {
+    if selected.observes_markers() {
         let ready = workspace.path().join("output/ready");
         tokio::select! {
             () = wait_file(&ready) => {},
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
         }
-    }
-    // The read-only Linux policy leaves no observable marker; wait for the
-    // committed acquisition, then allow a bounded start window.
-    #[cfg(target_os = "linux")]
-    tokio::select! {
-        acquired = tokio::time::timeout(Duration::from_secs(5), async {
-            while sqlx::query("SELECT 1 FROM session_turn WHERE session_id = 'lease'")
-                .fetch_optional(&pool)
-                .await
-                .expect("acquisition probe")
-                .is_none()
-            {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-        }) => acquired.expect("committed acquisition"),
-        result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
+    } else {
+        // The read-only native Linux policy leaves no observable marker;
+        // wait for the committed acquisition, then allow a
+        // bounded start window.
+        tokio::select! {
+            acquired = tokio::time::timeout(Duration::from_secs(5), async {
+                while sqlx::query("SELECT 1 FROM session_turn WHERE session_id = 'lease'")
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("acquisition probe")
+                    .is_none()
+                {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }) => acquired.expect("committed acquisition"),
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected early turn: {result:?}"))),
+        }
     }
 
     // Act

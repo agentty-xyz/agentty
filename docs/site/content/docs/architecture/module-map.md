@@ -59,11 +59,13 @@ For file-level detail, read the module docstrings directly.
   `SqliteStore` implementation encapsulates pool access and row decoding. Bounded tools
   use validated `Repository` and injectable `FileSystem` boundaries. Hosts own prompts,
   comparison-base selection, permissions, and telemetry setup; the engine enforces a
-  validated, pinned commit for comparisons. Private execution contracts and
-  platform-independent supervision own bounded preparation, output draining, and
-  retained cleanup for sandboxed Bash. A trusted launcher implements Linux namespace
-  isolation and macOS Seatbelt with explicitly best-effort process-group cleanup.
-  Command journals and settlement remain separate from patch-write effects.
+  validated, pinned commit for comparisons. The public `BashExecutor` contract lets
+  hosts select command execution, while platform-independent supervision retains bounded
+  preparation, output draining, and retained cleanup for Bash. The default native
+  executor's trusted launcher implements Linux namespace isolation and macOS Seatbelt
+  with explicitly best-effort process-group cleanup; an explicitly named unsandboxed
+  executor exists for hosts already inside a container or VM. Command journals and
+  settlement remain separate from patch-write effects.
 - `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
   process-level tests. It derives provider parsing and help from `ag-harness`, then owns
   command-line defaults, application prompts, bounded repository permission selection,

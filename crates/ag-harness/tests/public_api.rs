@@ -37,14 +37,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::{
-    ComparisonBase, CompletionMetadata, CompletionUsage, ExecutionIdentity, FileSystem, Harness,
-    ImageContent, ImageMediaType, InputBlock, LifecycleEventKind, LifecycleMetrics,
-    LifecycleObserverSet, LifecycleTraceObserver, LocalFileSystem, MemoryStore, Model,
-    ModelCapabilities, ModelCompletion, ModelConfiguration, ModelError, ModelMessage,
-    ModelMetadata, ModelProvider, ModelRegistry, ModelRequest, ModelResponse, ModelResponseType,
-    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
-    SessionError, SessionInfo, SessionStore, Tool, ToolCall, ToolPolicy, TurnError, TurnInput,
-    TurnInputError, TurnLimits, TurnOptions, WriteStatus,
+    BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandOutcome, CommandTermination,
+    ComparisonBase, CompletionMetadata, CompletionUsage, ExecutionAccess, ExecutionCommand,
+    ExecutionError, ExecutionIdentity, ExecutionPolicy, FileSystem, Harness, ImageContent,
+    ImageMediaType, InputBlock, LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet,
+    LifecycleTraceObserver, LocalFileSystem, MainExit, MemoryStore, Model, ModelCapabilities,
+    ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider,
+    ModelRegistry, ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError,
+    OutputStream, ProcessEvent, Repository, RepositoryError, Session, SessionBuilder, SessionError,
+    SessionInfo, SessionStore, Tool, ToolCall, ToolPolicy, TurnError, TurnInput, TurnInputError,
+    TurnLimits, TurnOptions, UnsandboxedExecutor, WriteStatus,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -1227,6 +1229,153 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
         1,
         "repeating an image host ID must never rerun the model"
     );
+
+    Ok(())
+}
+
+struct BashDrivingModel;
+
+#[async_trait]
+impl Model for BashDrivingModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let response =
+            if let Some(ModelMessage::ToolResult { content, .. }) = request.messages().last() {
+                ModelResponse::Output(serde_json::from_str(content).map_err(ModelError::request)?)
+            } else {
+                ModelResponse::ToolCall(ToolCall::from_json(
+                    "command".into(),
+                    "bash",
+                    &json!({"command": request.prompt()}).to_string(),
+                    None,
+                )?)
+            };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+struct ScriptedExecutor {
+    workspace: PathBuf,
+}
+
+impl BashExecutor for ScriptedExecutor {
+    fn identity(&self) -> &'static str {
+        "scripted-container"
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::PidNamespace
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
+        Ok(Box::new(ScriptedProcess {
+            step: 0,
+            workspace: self.workspace.clone(),
+        }))
+    }
+}
+
+struct ScriptedProcess {
+    step: usize,
+    workspace: PathBuf,
+}
+
+#[async_trait]
+impl BashProcess for ScriptedProcess {
+    async fn prepare(
+        &mut self,
+        command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
+    ) -> Result<(), ExecutionError> {
+        assert_eq!(command.executable(), Path::new("/bin/container-bash"));
+        assert_eq!(command.directory(), Path::new("."));
+        assert_eq!(
+            command.arguments().last().map(OsString::as_os_str),
+            Some(OsString::from("printf scripted").as_os_str())
+        );
+        assert_eq!(policy.workspace(), self.workspace);
+        assert!(policy.exposes_host_information());
+        assert!(
+            policy
+                .git_metadata()
+                .iter()
+                .all(|root| { policy.requested_access(root) == ExecutionAccess::ReadOnly })
+        );
+        assert_eq!(
+            policy.requested_access(command.executable()),
+            ExecutionAccess::Denied
+        );
+
+        Ok(())
+    }
+
+    async fn start(&mut self) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<ProcessEvent, ExecutionError> {
+        self.step += 1;
+
+        Ok(match self.step {
+            1 => {
+                buffer[..8].copy_from_slice(b"scripted");
+
+                ProcessEvent::Output(OutputStream::Stdout, 8)
+            }
+            2 => ProcessEvent::Eof(OutputStream::Stdout),
+            3 => ProcessEvent::Eof(OutputStream::Stderr),
+            4 => ProcessEvent::MainExit(MainExit::Code(0)),
+            _ => ProcessEvent::Quiescent,
+        })
+    }
+
+    async fn cleanup(&mut self) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn external_executor_runs_bash_through_the_public_contract() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let configuration = BashConfig::for_executor(
+        Arc::new(ScriptedExecutor {
+            workspace: root.clone(),
+        }),
+        "/bin/container-bash".into(),
+        "scripted-runtime-1".into(),
+        std::time::Duration::from_secs(5),
+        256,
+    )?
+    .with_host_information();
+    let options = TurnOptions::new(
+        OutputSchema::new(json!({"type": "object"}))?,
+        ToolPolicy::default().allow(Tool::Bash),
+        TurnLimits::default(),
+    )
+    .with_bash(configuration);
+    let harness = Harness::new(BashDrivingModel)
+        .repository(repository_fixture::repository_with_host_git(&root));
+
+    // Act
+    let outcome = harness
+        .run_once_with_options("printf scripted", options)
+        .await?;
+    let result: CommandOutcome = serde_json::from_value(outcome.into_output())?;
+
+    // Assert
+    assert_eq!(result.stdout, "scripted");
+    assert_eq!(result.exit_code, Some(0));
+    assert_eq!(result.termination, CommandTermination::Completed);
+    assert_eq!(
+        result.cleanup_scope,
+        CommandCleanupScope::PidNamespace,
+        "the executor's declared scope is carried on the outcome"
+    );
+    assert!(!result.truncated);
+    assert!(!result.cleanup_failed);
+    let _explicit: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
 
     Ok(())
 }
