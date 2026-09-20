@@ -11,7 +11,7 @@ async fn confirm_launch_configuration_input_adds_trimmed_command_and_persists_va
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
     manager.start_adding_launch_configuration();
 
@@ -43,7 +43,7 @@ async fn confirm_launch_configuration_input_edits_selected_command_and_persists_
         "cargo test\nnpm run dev",
     )
     .await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
     manager.next_launch_configuration_list_editor_item();
     manager.start_editing_selected_launch_configuration();
@@ -84,7 +84,7 @@ async fn confirm_launch_configuration_input_drops_empty_edited_command() {
         "cargo test\nnpm run dev",
     )
     .await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
     manager.start_editing_selected_launch_configuration();
 
@@ -112,7 +112,7 @@ async fn confirm_launch_configuration_input_drops_empty_edited_command() {
 fn footer_hint_returns_launch_configuration_input_hint_when_input_is_active() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
     manager.start_adding_launch_configuration();
 
@@ -131,7 +131,7 @@ fn cancel_launch_configuration_input_returns_to_browse_without_changing_value() 
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().launch_configuration = "old command".to_string();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
     manager.start_adding_launch_configuration();
     manager.apply_launch_configuration_input_command(InputCommand::Insert('n'));

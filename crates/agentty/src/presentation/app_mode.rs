@@ -589,7 +589,7 @@ pub enum DiffPreviewUnavailableReason {
 }
 
 /// Frontend-neutral rectangular viewport coordinates.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ViewportRect {
     /// Rectangle height in terminal cells.
     pub height: u16,
@@ -599,6 +599,17 @@ pub struct ViewportRect {
     pub x: u16,
     /// Vertical origin in terminal cells.
     pub y: u16,
+}
+
+impl ViewportRect {
+    /// Returns whether a terminal cell lies inside this rectangle.
+    #[must_use]
+    pub fn contains(self, column: u16, row: u16) -> bool {
+        column >= self.x
+            && row >= self.y
+            && column < self.x.saturating_add(self.width)
+            && row < self.y.saturating_add(self.height)
+    }
 }
 
 /// Captured question-mode state for restoring after diff preview.

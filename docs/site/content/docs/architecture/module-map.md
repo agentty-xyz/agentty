@@ -127,29 +127,33 @@ For file-level detail, read the module docstrings directly.
   delegates host clipboard reads to `ag-clipboard`, then owns temp-file persistence and
   attachment metadata. Agentty accesses provider lifecycle through `ag-worker`; provider
   registry, router, parser, and transport internals stay private to `crates/ag-agent/`.
-- `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
-  thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
-  for common interactions such as review-request detail navigation, session-output
-  metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
-  session review-comment navigation, address/deny marking, and batch submission. Runtime
-  owns `PresentationState`, including the shared `RenderCacheStore` used by input
-  metrics and frame rendering.
+- `runtime/`: Terminal lifecycle and the event loop — terminal setup and mouse-capture
+  toggling, the event-reader thread, key dispatch, mode-focused handlers under
+  `runtime/mode/`, mouse dispatch in `runtime/mouse_handler.rs`, and shared handlers for
+  common interactions such as review-request detail navigation, session-output metrics,
+  transcript scrolling, `KeyEvent` mapping to domain input commands, and session
+  review-comment navigation, address/deny marking, and batch submission. Runtime owns
+  `PresentationState`, including the shared `RenderCacheStore` used by input metrics and
+  frame rendering, the `LayoutSnapshot` recorded by the last frame, and scrollbar drag
+  state.
 - `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
   runtime input and UI output. They expose mode, help-action, prompt, settings-screen
-  actions, editor, scroll, viewport, semantic list-selection contracts, and one coherent
-  `FrameTime` value per render pass without importing Ratatui or `ui/` formatting.
-  `presentation/review_comment.rs` owns review comment group ordering and headings while
-  preserving forge-thread selection and batch actions across grouped snapshot refreshes.
-  `presentation/setting.rs` owns settings row selection, selectors, launch-configuration
-  editing through the shared `InputState`, and render-ready settings snapshots; it
-  returns typed persistence operations to `app/setting.rs`.
+  actions, editor, scroll, viewport, per-frame scroll-region layout and scrollbar
+  geometry (`presentation/viewport.rs`), semantic list-selection contracts, and one
+  coherent `FrameTime` value per render pass without importing Ratatui or `ui/`
+  formatting. `presentation/review_comment.rs` owns review comment group ordering and
+  headings while preserving forge-thread selection and batch actions across grouped
+  snapshot refreshes. `presentation/setting.rs` owns settings row selection, selectors,
+  launch-configuration editing through the shared `InputState`, and render-ready
+  settings snapshots; it returns typed persistence operations to `app/setting.rs`.
 - `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
   reusable widgets under `ui/component/`, application-to-frame projection in
-  `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
-  review-comment formatting, the unified Diff Files/Comments workspace, and theme
-  helpers. `ui/session_output_assembly.rs` owns the pure transcript-to-display-line
-  projection; the `SessionOutput` component retains layout caching, scrollbar metrics,
-  loader effects, and Ratatui painting.
+  `ui/app_render.rs`, the per-frame scroll-region recorder in `ui/layout_snapshot.rs`,
+  Agentty theme adapters for `ag-tui-text`, plus diff, layout, review-comment
+  formatting, the unified Diff Files/Comments workspace, and theme helpers.
+  `ui/session_output_assembly.rs` owns the pure transcript-to-display-line projection;
+  the `SessionOutput` component retains layout caching, scrollbar metrics, loader
+  effects, and Ratatui painting.
 
 ## Layer Rules
 

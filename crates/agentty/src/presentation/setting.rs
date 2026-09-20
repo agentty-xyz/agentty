@@ -2,6 +2,7 @@
 
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
+use crate::domain::mouse::MouseSupport;
 use crate::domain::selection::SelectionState;
 use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
 use crate::domain::theme::ColorTheme;
@@ -24,6 +25,7 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_speed_mode: SpeedMode,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
+    pub(crate) mouse_support: MouseSupport,
     pub(crate) orchestration_parallelism: u8,
     pub(crate) theme: ColorTheme,
     pub(crate) use_last_used_model_as_default: bool,
@@ -52,6 +54,7 @@ pub(crate) enum SettingsOperation {
     },
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
+    MouseSupport(bool),
     OrchestrationParallelism(u8),
     Theme(ColorTheme),
 }
@@ -745,6 +748,9 @@ fn settings_operation_for_primary_selector(
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
+        (SettingRow::MouseSupport, SettingSelectorValue::Bool(value)) => {
+            Some(SettingsOperation::MouseSupport(value))
+        }
         (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
             Some(SettingsOperation::DefaultResponseStyle(value))
         }
@@ -773,15 +779,17 @@ enum SettingRow {
     DefaultResponseStyle,
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
+    MouseSupport,
     OrchestrationParallelism,
     Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Theme,
         Self::OrchestrationParallelism,
         Self::AutoApproveOrchestrationResearch,
+        Self::MouseSupport,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -789,10 +797,11 @@ impl SettingRow {
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
     ];
-    const GLOBAL: [Self; 3] = [
+    const GLOBAL: [Self; 4] = [
         Self::Theme,
         Self::OrchestrationParallelism,
         Self::AutoApproveOrchestrationResearch,
+        Self::MouseSupport,
     ];
     const PROJECT: [Self; 6] = [
         Self::DefaultSmartModel,
@@ -827,6 +836,7 @@ impl SettingRow {
             Self::DefaultResponseStyle => "Default Response Style",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
+            Self::MouseSupport => "Mouse Support",
             Self::OrchestrationParallelism => "Orchestrator Parallelism",
             Self::Theme => "Theme",
         }
@@ -1009,6 +1019,9 @@ impl SettingSelectorOption {
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
+            (SettingRow::MouseSupport, SettingSelectorValue::Bool(value)) => {
+                view.mouse_support.is_enabled() == value
+            }
             (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
                 view.orchestration_parallelism == value
             }
@@ -1080,9 +1093,9 @@ fn move_launch_configuration_list_editor_selection(
 
 fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<SettingSelectorOption> {
     match row {
-        SettingRow::AutoApproveOrchestrationResearch | SettingRow::IncludeCoauthoredByAgentty => {
-            bool_selector_options()
-        }
+        SettingRow::AutoApproveOrchestrationResearch
+        | SettingRow::IncludeCoauthoredByAgentty
+        | SettingRow::MouseSupport => bool_selector_options(),
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
@@ -1190,6 +1203,7 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
         SettingRow::LaunchConfiguration => {
             display_launch_configuration_summary(&view.launch_configuration)
         }
+        SettingRow::MouseSupport => bool_setting_display(view.mouse_support.is_enabled()),
         SettingRow::OrchestrationParallelism => view.orchestration_parallelism.to_string(),
         SettingRow::Theme => view.theme.label().to_string(),
     }

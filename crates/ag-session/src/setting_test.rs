@@ -45,6 +45,7 @@ fn test_as_str_returns_persisted_keys() {
             SettingName::LastUsedModelAsDefault,
             "LastUsedModelAsDefault",
         ),
+        (SettingName::MouseSupport, "MouseSupport"),
         (
             SettingName::OrchestrationParallelism,
             "OrchestrationParallelism",
@@ -82,6 +83,7 @@ fn test_display_matches_as_str() {
         SettingName::IncludeCoauthoredByAgentty,
         SettingName::LaunchConfiguration,
         SettingName::LastUsedModelAsDefault,
+        SettingName::MouseSupport,
         SettingName::OrchestrationParallelism,
         SettingName::Theme,
     ];

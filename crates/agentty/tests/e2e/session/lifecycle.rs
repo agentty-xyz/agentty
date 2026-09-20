@@ -404,6 +404,7 @@ async fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .press_key("j")
                     .press_key("j")
                     .press_key("j")
+                    .press_key("j")
                     .press_key("Enter")
                     .press_key("Enter")
                     .press_key("j")

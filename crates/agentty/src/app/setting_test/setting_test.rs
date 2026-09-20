@@ -11,6 +11,7 @@ use super::support::{
 };
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::mouse::MouseSupport;
 use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::presentation::setting::SettingsOperation;
@@ -47,17 +48,19 @@ fn settings_rows_include_role_model_coauthor_and_launch_configuration_options() 
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows.len(), 9);
+    assert_eq!(rows.len(), 10);
     assert_eq!(rows[0].0, "Theme");
     assert_eq!(rows[1].0, "Orchestrator Parallelism");
     assert_eq!(rows[2].0, "Auto-approve Research");
     assert_eq!(rows[2].1, "Enabled");
-    assert_eq!(rows[3].0, "Default Smart Model");
-    assert_eq!(rows[4].0, "Default Fast Model");
-    assert_eq!(rows[5].0, "Default Review Model");
-    assert_eq!(rows[6].0, "Coauthored by Agentty");
-    assert_eq!(rows[7].0, "Launch Configurations");
-    assert_eq!(rows[8].0, "Default Response Style");
+    assert_eq!(rows[3].0, "Mouse Support");
+    assert_eq!(rows[3].1, "Enabled");
+    assert_eq!(rows[4].0, "Default Smart Model");
+    assert_eq!(rows[5].0, "Default Fast Model");
+    assert_eq!(rows[6].0, "Default Review Model");
+    assert_eq!(rows[7].0, "Coauthored by Agentty");
+    assert_eq!(rows[8].0, "Launch Configurations");
+    assert_eq!(rows[9].0, "Default Response Style");
 }
 
 #[test]
@@ -69,7 +72,7 @@ fn settings_rows_show_empty_placeholder_for_launch_configuration() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[7].1, "(none)");
+    assert_eq!(rows[8].1, "(none)");
 }
 
 #[test]
@@ -82,7 +85,7 @@ fn settings_rows_show_single_launch_configuration_summary() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[7].1, "http://localhost:5173");
+    assert_eq!(rows[8].1, "http://localhost:5173");
 }
 
 #[test]
@@ -96,7 +99,7 @@ fn settings_rows_show_multiple_launch_configuration_summary() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[7].1, "cargo test (+2 more)");
+    assert_eq!(rows[8].1, "cargo test (+2 more)");
 }
 
 #[test]
@@ -109,7 +112,7 @@ fn settings_rows_show_last_used_model_as_default_value_when_enabled() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[3].1, "Last used model as default [high]");
+    assert_eq!(rows[4].1, "Last used model as default [high]");
 }
 
 #[test]
@@ -123,7 +126,7 @@ fn settings_rows_show_default_smart_model_with_agent_prefix() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[3].1, "antigravity/gemini-3.1-pro-preview [high]");
+    assert_eq!(rows[4].1, "antigravity/gemini-3.1-pro-preview [high]");
 }
 
 #[test]
@@ -141,7 +144,7 @@ fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[3].1, "gemini/gemini-3.1-pro-preview [high]");
+    assert_eq!(rows[4].1, "gemini/gemini-3.1-pro-preview [high]");
 }
 
 #[test]
@@ -155,7 +158,7 @@ fn settings_rows_show_default_fast_model_value() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[4].1, "codex/gpt-5.6-sol [low, Normal]");
+    assert_eq!(rows[5].1, "codex/gpt-5.6-sol [low, Normal]");
 }
 
 #[test]
@@ -168,7 +171,7 @@ fn settings_rows_show_coauthored_by_agentty_value() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[6].1, "Disabled");
+    assert_eq!(rows[7].1, "Disabled");
 }
 
 #[test]
@@ -402,11 +405,41 @@ async fn settings_manager_new_loads_persisted_dark_horizon_theme() {
 }
 
 #[tokio::test]
+async fn settings_manager_new_defaults_mouse_support_to_enabled() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+
+    // Act
+    let manager = settings_manager(&services, project_id).await;
+
+    // Assert
+    assert_eq!(manager.settings().mouse_support, MouseSupport::Enabled);
+}
+
+#[tokio::test]
+async fn settings_manager_new_loads_persisted_disabled_mouse_support() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    services
+        .db()
+        .settings()
+        .upsert_setting(SettingName::MouseSupport, "false")
+        .await
+        .expect("failed to persist mouse support setting");
+
+    // Act
+    let manager = settings_manager(&services, project_id).await;
+
+    // Assert
+    assert_eq!(manager.settings().mouse_support, MouseSupport::Disabled);
+}
+
+#[tokio::test]
 async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 6);
+    select_row(&mut manager, 7);
 
     // Act
     manager.handle_enter();
@@ -493,7 +526,7 @@ async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
         .await
         .expect("failed to persist smart selector fixture");
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 3);
+    select_row(&mut manager, 4);
 
     // Act
     manager.handle_enter();

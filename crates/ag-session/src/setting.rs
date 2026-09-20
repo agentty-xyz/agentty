@@ -51,6 +51,8 @@ pub enum SettingName {
     LaunchConfiguration,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
+    /// Persists whether the terminal reports mouse wheel and drag events.
+    MouseSupport,
     /// Persists how many orchestration children may run at once.
     OrchestrationParallelism,
     /// Persists the active terminal color theme.
@@ -80,6 +82,7 @@ impl SettingName {
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
+            Self::MouseSupport => "MouseSupport",
             Self::OrchestrationParallelism => "OrchestrationParallelism",
             Self::Theme => "Theme",
         }

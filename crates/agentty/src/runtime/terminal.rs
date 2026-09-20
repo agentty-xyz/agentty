@@ -4,8 +4,8 @@ use std::{env, fmt, io};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -58,6 +58,14 @@ trait TerminalOperation {
         stdout: &mut io::Stdout,
         enhancement: TerminalEnhancement,
     ) -> io::Result<()>;
+
+    /// Turns on terminal mouse reporting so wheel, click, and drag events
+    /// reach the app as `Event::Mouse`.
+    fn enable_mouse_capture(&self, stdout: &mut io::Stdout) -> io::Result<()>;
+
+    /// Turns off terminal mouse reporting so the terminal owns clicks and
+    /// text selection again.
+    fn disable_mouse_capture(&self, stdout: &mut io::Stdout) -> io::Result<()>;
 }
 
 /// Terminal keyboard modes enabled for the active TUI session.
@@ -126,6 +134,36 @@ impl TerminalOperation for CrosstermTerminalOperation {
         } else {
             execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen, Show)
         }
+    }
+
+    fn enable_mouse_capture(&self, stdout: &mut io::Stdout) -> io::Result<()> {
+        execute!(stdout, EnableMouseCapture)
+    }
+
+    fn disable_mouse_capture(&self, stdout: &mut io::Stdout) -> io::Result<()> {
+        execute!(stdout, DisableMouseCapture)
+    }
+}
+
+/// Toggles terminal mouse reporting for the active TUI session.
+///
+/// The runtime loop reconciles this with the persisted `Mouse Support`
+/// setting every cycle so the switch takes effect live, and the terminal guard
+/// releases capture on every exit path.
+#[cfg_attr(test, mockall::automock)]
+pub(crate) trait MouseCapture {
+    /// Enables or disables mouse reporting, doing nothing when the terminal is
+    /// already in the requested state.
+    fn set_enabled(&self, enabled: bool) -> io::Result<()>;
+}
+
+/// Mouse-capture stand-in for backends without a real terminal, such as the
+/// `TestBackend` runtime path.
+pub(crate) struct NoopMouseCapture;
+
+impl MouseCapture for NoopMouseCapture {
+    fn set_enabled(&self, _enabled: bool) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -224,6 +262,7 @@ const _: () = {
 /// cleanup runs from the same task via `Drop`.
 pub(crate) struct TerminalGuard {
     enhancement: Cell<TerminalEnhancement>,
+    mouse_capture_enabled: Cell<bool>,
 }
 
 impl TerminalGuard {
@@ -234,7 +273,30 @@ impl TerminalGuard {
                 keyboard_enhancement_enabled: false,
                 xterm_modified_keys_enabled: false,
             }),
+            mouse_capture_enabled: Cell::new(false),
         }
+    }
+
+    /// Applies one mouse-capture transition through the supplied operation
+    /// provider and records the new state for symmetric cleanup.
+    fn set_mouse_capture_enabled_with_operation(
+        &self,
+        operation: &dyn TerminalOperation,
+        enabled: bool,
+    ) -> io::Result<()> {
+        if self.mouse_capture_enabled.get() == enabled {
+            return Ok(());
+        }
+
+        let mut stdout = io::stdout();
+        if enabled {
+            operation.enable_mouse_capture(&mut stdout)?;
+        } else {
+            operation.disable_mouse_capture(&mut stdout)?;
+        }
+        self.mouse_capture_enabled.set(enabled);
+
+        Ok(())
     }
 
     /// Records the enabled keyboard modes so cleanup can restore them.
@@ -248,9 +310,19 @@ impl TerminalGuard {
     }
 }
 
+impl MouseCapture for TerminalGuard {
+    fn set_enabled(&self, enabled: bool) -> io::Result<()> {
+        self.set_mouse_capture_enabled_with_operation(&CROSSTERM_TERMINAL_OPERATION, enabled)
+    }
+}
+
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        restore_terminal_state(&CROSSTERM_TERMINAL_OPERATION, self.enhancement());
+        restore_terminal_state(
+            &CROSSTERM_TERMINAL_OPERATION,
+            self.enhancement(),
+            self.mouse_capture_enabled.get(),
+        );
     }
 }
 
@@ -321,9 +393,19 @@ fn has_ssh_environment(mut get_var: impl FnMut(&str) -> Option<OsString>) -> boo
 }
 
 /// Restores terminal modes and ignores failures so drop paths do not panic.
-fn restore_terminal_state(operation: &dyn TerminalOperation, enhancement: TerminalEnhancement) {
+///
+/// Mouse capture is released first so the terminal stops reporting pointer
+/// events before the alternate screen is torn down.
+fn restore_terminal_state(
+    operation: &dyn TerminalOperation,
+    enhancement: TerminalEnhancement,
+    mouse_capture_enabled: bool,
+) {
     let mut stdout = io::stdout();
     // Best-effort: terminal may already be in normal state.
+    if mouse_capture_enabled {
+        let _ = operation.disable_mouse_capture(&mut stdout);
+    }
     let _ = operation.disable_raw_mode();
     let _ = operation.leave_alternate_screen(&mut stdout, enhancement);
 }

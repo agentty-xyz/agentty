@@ -361,8 +361,93 @@ fn restore_terminal_state_attempts_leave_even_when_disable_fails() {
         });
 
     // Act
-    restore_terminal_state(&operation, enhancement_fixture(true, true));
+    restore_terminal_state(&operation, enhancement_fixture(true, true), false);
 
     // Assert
     assert_eq!(leave_calls.load(Ordering::Relaxed), 1);
+}
+
+/// Verifies restore releases mouse capture before leaving the alternate
+/// screen when capture was enabled.
+#[test]
+fn restore_terminal_state_disables_mouse_capture_when_enabled() {
+    // Arrange
+    let mut operation = MockTerminalOperation::new();
+    let mut sequence = mockall::Sequence::new();
+    operation
+        .expect_disable_mouse_capture()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_| Ok(()));
+    operation
+        .expect_disable_raw_mode()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|| Ok(()));
+    operation
+        .expect_leave_alternate_screen()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_, _| Ok(()));
+
+    // Act
+    restore_terminal_state(&operation, enhancement_fixture(false, false), true);
+
+    // Assert — expectations verified on drop.
+}
+
+/// Verifies the guard only issues a mouse-capture transition when the
+/// requested state differs from the recorded one.
+#[test]
+fn set_mouse_capture_enabled_is_idempotent_and_records_state() {
+    // Arrange
+    let mut operation = MockTerminalOperation::new();
+    let guard = TerminalGuard::new();
+    operation
+        .expect_enable_mouse_capture()
+        .once()
+        .returning(|_| Ok(()));
+    operation
+        .expect_disable_mouse_capture()
+        .once()
+        .returning(|_| Ok(()));
+
+    // Act
+    guard
+        .set_mouse_capture_enabled_with_operation(&operation, false)
+        .expect("disabled-to-disabled should be a no-op");
+    guard
+        .set_mouse_capture_enabled_with_operation(&operation, true)
+        .expect("enable should succeed");
+    guard
+        .set_mouse_capture_enabled_with_operation(&operation, true)
+        .expect("enabled-to-enabled should be a no-op");
+    let enabled_after_enable = guard.mouse_capture_enabled.get();
+    guard
+        .set_mouse_capture_enabled_with_operation(&operation, false)
+        .expect("disable should succeed");
+
+    // Assert
+    assert!(enabled_after_enable);
+    assert!(!guard.mouse_capture_enabled.get());
+}
+
+/// Verifies a failed enable leaves the recorded state untouched so cleanup
+/// does not try to disable capture that never turned on.
+#[test]
+fn set_mouse_capture_enabled_keeps_state_when_enable_fails() {
+    // Arrange
+    let mut operation = MockTerminalOperation::new();
+    let guard = TerminalGuard::new();
+    operation
+        .expect_enable_mouse_capture()
+        .once()
+        .returning(|_| Err(io::Error::other("enable failed")));
+
+    // Act
+    let result = guard.set_mouse_capture_enabled_with_operation(&operation, true);
+
+    // Assert
+    assert!(result.is_err());
+    assert!(!guard.mouse_capture_enabled.get());
 }

@@ -27,7 +27,9 @@ use crate::ui::diff_util::{
     DiffLine, DiffLineKind, FileTreeItem, diff_header_new_path, diff_header_paths, parse_diff_lines,
 };
 use crate::ui::page::review_comment;
-use crate::ui::{Component, Page, diff_util, input_layout, markdown, prompt_format, style};
+use crate::ui::{
+    Component, Page, diff_util, input_layout, layout_snapshot, markdown, prompt_format, style,
+};
 
 const WRAPPED_CHUNK_START_INDEX: usize = 0;
 
@@ -1427,12 +1429,18 @@ impl<'a> DiffPage<'a> {
 
         f.render_widget(paragraph, area);
 
-        if layout.show_scrollbar {
-            let scrollbar_area =
-                diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height);
-
+        let scrollbar_area = layout
+            .show_scrollbar
+            .then(|| diff_util::diff_scrollbar_area(area, layout.render_layout.viewport_height));
+        if let Some(scrollbar_area) = scrollbar_area {
             VerticalScrollbar::new(scroll_offset, layout.line_count).render(f, scrollbar_area);
         }
+        layout_snapshot::record_diff_panel(layout_snapshot::scroll_region(
+            area,
+            scrollbar_area,
+            layout.line_count,
+            layout.render_layout.viewport_height,
+        ));
     }
 
     /// Builds visible rows from cached diff lines plus short-lived comments.
@@ -1668,12 +1676,19 @@ impl<'a> DiffPage<'a> {
                 );
                 frame.render_widget(paragraph, area);
 
-                if layout.show_scrollbar {
-                    let scrollbar_area =
-                        diff_util::diff_scrollbar_area(area, layout.viewport_height);
+                let scrollbar_area = layout
+                    .show_scrollbar
+                    .then(|| diff_util::diff_scrollbar_area(area, layout.viewport_height));
+                if let Some(scrollbar_area) = scrollbar_area {
                     VerticalScrollbar::new(scroll_offset, layout.lines.len())
                         .render(frame, scrollbar_area);
                 }
+                layout_snapshot::record_diff_panel(layout_snapshot::scroll_region(
+                    area,
+                    scrollbar_area,
+                    layout.lines.len(),
+                    layout.viewport_height,
+                ));
             }
             DiffPreview::Loading { .. } => {
                 render_preview_notice(
@@ -1976,6 +1991,7 @@ impl Page for DiffPage<'_> {
         let sidebar_areas =
             diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
 
+        layout_snapshot::record_diff_file_list(sidebar_areas.file_list_area);
         self.file_explorer(&content)
             .render(f, sidebar_areas.file_list_area);
 

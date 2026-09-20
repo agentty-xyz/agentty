@@ -14,6 +14,7 @@ use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::InputCommand;
+use crate::domain::mouse::MouseSupport;
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM, SettingName,
 };
@@ -103,6 +104,7 @@ impl SettingsTestHarness {
                 default_smart_speed_mode: SpeedMode::Normal,
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
+                mouse_support: MouseSupport::Enabled,
                 orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
                 theme: ColorTheme::Current,
                 use_last_used_model_as_default: false,

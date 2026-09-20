@@ -10,6 +10,8 @@ pub mod icon;
 pub mod input_layout;
 /// Shared page and popup layout calculations.
 pub mod layout;
+/// Scrollable panel geometry recorded per frame for mouse hit-testing.
+pub(crate) mod layout_snapshot;
 /// Markdown parsing, wrapping, styling, and caching.
 pub mod markdown;
 /// Mermaid diagram parsing and terminal rendering.

@@ -13,10 +13,19 @@ use crate::presentation::app_mode::{
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
 };
+use crate::presentation::viewport::{LayoutSnapshot, MOUSE_WHEEL_SCROLL_LINES};
 use crate::runtime::EventResult;
 use crate::runtime::mode::{at_mention, input_key};
+use crate::runtime::mouse_handler::WheelDirection;
 use crate::ui::component::file_explorer::FileExplorer;
 use crate::ui::{RenderCacheStore, diff_util, page};
+
+/// Direction for moving the diff file-explorer selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FileSelectionDirection {
+    Next,
+    Previous,
+}
 
 /// Handles key input while the app is in `AppMode::Diff`.
 ///
@@ -45,6 +54,51 @@ pub(crate) fn handle_with_cache(
     handle_navigation_key(app, render_cache_store, content_area, key);
 
     EventResult::Continue
+}
+
+/// Applies one mouse wheel notch in diff mode.
+///
+/// Over the right panel the wheel scrolls that panel, clamped to the content
+/// height recorded by the last frame. Over the file explorer it moves the
+/// file selection exactly like `j`/`k` with the file tree focused. Returns
+/// whether anything changed.
+pub(crate) fn handle_mouse_wheel(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    layout: &LayoutSnapshot,
+    column: u16,
+    row: u16,
+    direction: WheelDirection,
+) -> bool {
+    if let Some(region) = layout.diff_panel
+        && region.contains(column, row)
+    {
+        let AppMode::Diff { scroll_offset, .. } = &mut app.mode else {
+            return false;
+        };
+        let next_scroll_offset = match direction {
+            WheelDirection::Down => region.scroll_down(*scroll_offset, MOUSE_WHEEL_SCROLL_LINES),
+            WheelDirection::Up => region.scroll_up(*scroll_offset, MOUSE_WHEEL_SCROLL_LINES),
+        };
+        let changed = next_scroll_offset != *scroll_offset;
+        *scroll_offset = next_scroll_offset;
+
+        return changed;
+    }
+
+    if layout
+        .diff_file_list
+        .is_some_and(|file_list| file_list.contains(column, row))
+    {
+        let file_direction = match direction {
+            WheelDirection::Down => FileSelectionDirection::Next,
+            WheelDirection::Up => FileSelectionDirection::Previous,
+        };
+
+        return move_file_selection(app, render_cache_store, file_direction);
+    }
+
+    false
 }
 
 /// Handles the only interactive action available while a full diff loads.
@@ -660,23 +714,13 @@ fn apply_navigation_key(
         KeyCode::Char(character @ ('j' | 'k'))
             if *navigation.focus == DiffFocus::Files && is_plain_char_key(key, character) =>
         {
-            let content = render_cache_store
-                .diff_layout_cache()
-                .content(navigation.diff);
-            let new_index = selected_index_after_key(
-                character,
-                *navigation.file_explorer_selected_index,
-                content.item_count(),
-            );
-            if *navigation.file_explorer_selected_index != new_index {
-                *navigation.file_explorer_selected_index = new_index;
-                navigation.line_comments.clear_comment_selection();
-                *navigation.scroll_cache = None;
-                *navigation.scroll_offset = 0;
-                *navigation.selected_diff_line_index = 0;
+            let direction = if character == 'j' {
+                FileSelectionDirection::Next
+            } else {
+                FileSelectionDirection::Previous
+            };
 
-                return true;
-            }
+            return select_adjacent_file(render_cache_store, navigation, direction);
         }
         KeyCode::Enter | KeyCode::Char('l')
             if *navigation.focus == DiffFocus::Files
@@ -1028,13 +1072,109 @@ fn refresh_selected_preview(
     );
 }
 
-/// Returns the wrapped explorer selection for a plain `j` or `k` key.
-fn selected_index_after_key(character: char, current_index: usize, item_count: usize) -> usize {
-    if character == 'j' {
-        return FileExplorer::next_selected_index(current_index, item_count);
+/// Moves the explorer selection one entry with wraparound and resets the
+/// right-pane cursor, scroll, and comment selection when it changes.
+///
+/// Returns whether the selected file changed.
+fn select_adjacent_file(
+    render_cache_store: &RenderCacheStore,
+    navigation: &mut DiffKeyNavigation<'_>,
+    direction: FileSelectionDirection,
+) -> bool {
+    let content = render_cache_store
+        .diff_layout_cache()
+        .content(navigation.diff);
+    let current_index = *navigation.file_explorer_selected_index;
+    let new_index = match direction {
+        FileSelectionDirection::Next => {
+            FileExplorer::next_selected_index(current_index, content.item_count())
+        }
+        FileSelectionDirection::Previous => {
+            FileExplorer::previous_selected_index(current_index, content.item_count())
+        }
+    };
+    if current_index == new_index {
+        return false;
     }
 
-    FileExplorer::previous_selected_index(current_index, item_count)
+    *navigation.file_explorer_selected_index = new_index;
+    navigation.line_comments.clear_comment_selection();
+    *navigation.scroll_cache = None;
+    *navigation.scroll_offset = 0;
+    *navigation.selected_diff_line_index = 0;
+
+    true
+}
+
+/// Moves the file-explorer selection from a pointer gesture and refreshes an
+/// enabled preview for the newly selected file.
+///
+/// Returns whether the selected file changed.
+fn move_file_selection(
+    app: &mut App,
+    render_cache_store: &RenderCacheStore,
+    direction: FileSelectionDirection,
+) -> bool {
+    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+    let AppMode::Diff {
+        diff,
+        mut file_explorer_selected_index,
+        mut focus,
+        mut line_comments,
+        mut preview,
+        mut review_comments,
+        restore,
+        mut scroll_cache,
+        mut scroll_offset,
+        mut selected_diff_line_index,
+        session_id,
+    } = mode
+    else {
+        app.mode = mode;
+
+        return false;
+    };
+
+    let mut navigation = DiffKeyNavigation {
+        diff: &diff,
+        file_explorer_selected_index: &mut file_explorer_selected_index,
+        focus: &mut focus,
+        line_comments: &mut line_comments,
+        preview: &mut preview,
+        review_comments: &mut review_comments,
+        scroll_cache: &mut scroll_cache,
+        scroll_offset: &mut scroll_offset,
+        selected_diff_line_index: &mut selected_diff_line_index,
+        session_id: &session_id,
+    };
+    let selection_changed = select_adjacent_file(render_cache_store, &mut navigation, direction);
+
+    if selection_changed && preview.is_enabled() {
+        refresh_selected_preview(
+            app,
+            render_cache_store,
+            &diff,
+            file_explorer_selected_index,
+            &mut preview,
+            &session_id,
+        );
+    }
+
+    app.mode = AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        focus,
+        line_comments,
+        preview,
+        review_comments,
+        restore,
+        scroll_cache,
+        scroll_offset,
+        selected_diff_line_index,
+        session_id,
+    };
+
+    selection_changed
 }
 
 /// Toggles preview for the selected row, ignoring unsupported toggle-on keys.

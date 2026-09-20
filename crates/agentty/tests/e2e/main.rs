@@ -12,6 +12,7 @@
 mod common;
 mod confirmation;
 mod demo;
+mod mouse;
 mod navigation;
 mod orchestration;
 mod project;

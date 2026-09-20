@@ -16,14 +16,16 @@ use tokio::sync::mpsc;
 
 use super::{
     EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState, forced_redraw_elapsed,
-    render_frame, run, run_until_quit, run_with_backend, stop_orchestration_task,
+    render_frame, run, run_main_loop, run_until_quit, run_with_backend, stop_orchestration_task,
 };
 use crate::app::AppEvent;
+use crate::domain::mouse::MouseSupport;
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
-use crate::runtime::PresentationState;
+use crate::runtime::terminal::{MockMouseCapture, NoopMouseCapture};
+use crate::runtime::{FRAME_INTERVAL, PresentationState};
 use crate::test_support::SessionFixtureBuilder;
 
 /// Environment marker used to distinguish the nested PTY test process.
@@ -416,6 +418,51 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
 
 /// Verifies that `run_with_backend` drives the main loop with a
 /// `TestBackend` and exits cleanly when quit key events are injected.
+/// Verifies the main loop reconciles terminal mouse capture with the
+/// persisted setting before the first frame.
+#[tokio::test]
+async fn run_main_loop_enables_mouse_capture_from_setting() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.settings.mouse_support = MouseSupport::Enabled;
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let mut tick = tokio::time::interval(FRAME_INTERVAL);
+    let mut mouse_capture = MockMouseCapture::new();
+    mouse_capture
+        .expect_set_enabled()
+        .with(mockall::predicate::eq(true))
+        .returning(|_| Ok(()));
+
+    event_tx
+        .send(Event::Key(KeyEvent::new(
+            KeyCode::Char('q'),
+            KeyModifiers::NONE,
+        )))
+        .expect("failed to send quit key");
+    event_tx
+        .send(Event::Key(KeyEvent::new(
+            KeyCode::Char('y'),
+            KeyModifiers::NONE,
+        )))
+        .expect("failed to send confirm key");
+
+    // Act
+    let result = run_main_loop(
+        &mut app,
+        &mut terminal,
+        &mut event_rx,
+        &mut tick,
+        &mouse_capture,
+    )
+    .await;
+
+    // Assert
+    assert!(result.is_ok(), "main loop should exit cleanly on quit");
+    mouse_capture.checkpoint();
+}
+
 #[tokio::test]
 async fn run_with_backend_exits_on_quit_key() {
     // Arrange
@@ -629,6 +676,7 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         clock,
         event_rx: &mut event_rx,
         last_draw_at,
+        mouse_capture: &NoopMouseCapture,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,

@@ -7,6 +7,7 @@ mod core;
 mod event;
 mod key_handler;
 pub mod mode;
+mod mouse_handler;
 mod presentation;
 mod terminal;
 mod timing;

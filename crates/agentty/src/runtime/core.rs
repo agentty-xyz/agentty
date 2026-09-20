@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 
 use crate::app::App;
 use crate::infra::clock::Clock;
+use crate::runtime::terminal::{MouseCapture, NoopMouseCapture};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
@@ -120,7 +121,14 @@ pub async fn run(app: &mut App) -> io::Result<()> {
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let run_result = run_main_loop(app, &mut terminal, &mut event_rx, &mut tick).await;
+    let run_result = run_main_loop(
+        app,
+        &mut terminal,
+        &mut event_rx,
+        &mut tick,
+        &terminal_guard,
+    )
+    .await;
     let reader_shutdown_result = event_reader_task.shutdown().await;
     app.wait_for_background_cleanup_tasks().await;
     let cursor_result = terminal.show_cursor().map_err(backend_err);
@@ -132,8 +140,9 @@ pub async fn run(app: &mut App) -> io::Result<()> {
 /// event channel.
 ///
 /// Tests use this to drive the full runtime with a `TestBackend` and injected
-/// `crossterm::event::Event` values, bypassing terminal setup and the
-/// background event-reader thread.
+/// `crossterm::event::Event` values, bypassing terminal setup, mouse-capture
+/// toggling, and the background event-reader thread. Injected `Event::Mouse`
+/// values are still routed like real pointer input.
 ///
 /// # Errors
 /// Returns an error if rendering or event processing fails.
@@ -148,7 +157,7 @@ where
     let mut tick = tokio::time::interval(FRAME_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    let run_result = run_main_loop(app, terminal, event_rx, &mut tick).await;
+    let run_result = run_main_loop(app, terminal, event_rx, &mut tick, &NoopMouseCapture).await;
     app.wait_for_background_cleanup_tasks().await;
 
     run_result
@@ -164,6 +173,7 @@ async fn run_main_loop<B: Backend, Message: event::TerminalEventMessage>(
     terminal: &mut Terminal<B>,
     event_rx: &mut mpsc::UnboundedReceiver<Message>,
     tick: &mut tokio::time::Interval,
+    mouse_capture: &dyn MouseCapture,
 ) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
@@ -183,6 +193,7 @@ where
         clock,
         event_rx,
         last_draw_at,
+        mouse_capture,
         presentation: Rc::new(PresentationState::default()),
         terminal,
         tick,
@@ -215,6 +226,7 @@ struct MainLoopState<'a, B: Backend, Message> {
     clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<Message>,
     last_draw_at: Instant,
+    mouse_capture: &'a dyn MouseCapture,
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
@@ -231,7 +243,13 @@ where
     /// session view then reconciles into the clarification panel when its
     /// session has reached `Status::Question`, covering cases where the live
     /// `AgentResponseReceived` projection did not flip the view.
+    ///
+    /// Terminal mouse capture is reconciled with the persisted `Mouse Support`
+    /// setting at the start of every cycle, which applies the initial state on
+    /// the first cycle and makes later settings-page toggles take effect live.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
+        self.mouse_capture
+            .set_enabled(self.app.settings.mouse_support.is_enabled())?;
         self.app.process_pending_app_events().await;
         self.app.reconcile_open_session_question_mode().await;
         self.app

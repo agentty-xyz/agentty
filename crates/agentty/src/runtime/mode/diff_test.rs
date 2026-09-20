@@ -9,6 +9,9 @@ mod display;
 #[path = "diff_test/lifecycle_test.rs"]
 mod lifecycle;
 
+#[path = "diff_test/mouse_test.rs"]
+mod mouse;
+
 #[path = "diff_test/persistence_test.rs"]
 mod persistence;
 

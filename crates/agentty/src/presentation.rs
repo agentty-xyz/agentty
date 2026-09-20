@@ -11,3 +11,5 @@ pub mod prompt;
 /// Stable selection projection for grouped review-comment snapshots.
 pub(crate) mod review_comment;
 pub(crate) mod setting;
+/// Scroll viewport geometry shared by mouse and key handlers.
+pub mod viewport;

@@ -35,7 +35,7 @@ fn footer_hint_returns_selector_dropdown_hint_when_dropdown_is_open() {
 fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
     manager.handle_enter();
 
     // Act
@@ -48,7 +48,7 @@ fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_
             .presentation
             .snapshot(&manager.view)
             .selected_row_index,
-        Some(7)
+        Some(8)
     );
     assert!(manager.is_launch_configuration_list_editor_open());
 }
@@ -89,7 +89,7 @@ fn previous_wraps_to_default_response_style_row_from_theme_row() {
             .presentation
             .snapshot(&manager.view)
             .selected_row_index,
-        Some(8)
+        Some(9)
     );
 }
 
@@ -116,7 +116,7 @@ fn handle_enter_opens_launch_configuration_list_editor() {
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 8);
 
     // Act
     manager.handle_enter();

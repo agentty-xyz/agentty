@@ -1232,6 +1232,7 @@ fn test_read_only_detail_and_diff_action_groups_expose_expected_keys() {
         [
             "q",
             "j/k",
+            "Wheel",
             "Enter/l",
             "f/Esc/Left",
             "c",
