@@ -31,6 +31,10 @@ mod cancellation_test;
 
 mod chat_completion;
 mod comparison;
+mod context;
+#[cfg(test)]
+#[path = "../tests/support/context_projection.rs"]
+mod context_projection_test;
 mod effect;
 mod engine;
 mod execution;
@@ -64,6 +68,7 @@ mod write_journal;
 
 pub use cancellation::{ControlledTurn, SettlementError, TurnControl};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
+pub use context::{ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator};
 pub use effect::EffectSettlementError;
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};

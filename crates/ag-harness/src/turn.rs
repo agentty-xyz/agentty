@@ -407,6 +407,16 @@ pub enum TurnError {
         /// Configured maximum calls.
         limit: usize,
     },
+    /// Mandatory content exceeds the effective model's declared context
+    /// budget, before any history is considered.
+    #[error("mandatory request content weighs {required} but the model context budget is {budget}")]
+    ContextBudgetExceeded {
+        /// Total declared budget in approximate weight units.
+        budget: u64,
+        /// Approximate weight of instructions, current input, advertised tool
+        /// definitions, and reserved output.
+        required: u64,
+    },
 }
 
 impl TurnError {
@@ -420,6 +430,7 @@ impl TurnError {
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,
+            Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
         }
     }
 }

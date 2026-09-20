@@ -116,6 +116,28 @@ from a model family. Other configurations reject current and replayed image cont
 a typed error before network access. Image payloads stay out of telemetry and bounded
 diagnostics.
 
+## Context projection
+
+A registered model may declare an approximate `ContextBudget` in its
+`ModelCapabilities`. When the effective registration declares one, request construction
+weighs the system prompt, current input, advertised tool definitions, and reserved
+output through an injectable `ContextEstimator` — a byte-ratio heuristic by default —
+and keeps the most recent complete turns that fit the remaining weight. Weights are
+deterministic approximations, never exact provider token counts; images weigh their
+encoded data-URL length.
+
+Selection drops only whole turns, so tool-call/result groups are never split, and it
+never drops the current input: mandatory content that cannot fit fails with a typed
+error before acquisition and before any provider request. The budget covers every
+provider request of a turn — tool traffic grows the request between model calls, and a
+grown request that no longer fits fails with the same typed error before the next call.
+Budgeted registrations always replay the projected normalized history and never reuse
+native continuation, because the provider-side conversation can retain turns the byte
+replay budget already evicted from loading. Projection changes only the outgoing
+request. Canonical messages, host requests, model provenance, and write journals remain
+intact, and the stored byte-based replay budget still bounds history loading. Switching
+models applies the target registration's budget to subsequent turns.
+
 ## Session model switching
 
 `Session::switch_model` selects an existing registration for an idle session. Switching
@@ -289,19 +311,19 @@ emits cancellation once.
 
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
-construction and idle-session model switching, and ordered text/image input are
-delivered library capabilities.
+construction and idle-session model switching, ordered text/image input, and model-aware
+context projection are delivered library capabilities.
 
 1. **Sandboxed Bash**
 
    Add a cancellable command tool with fixed workspace scope, timeouts, output limits,
    and explicit network policy.
 
-1. **Context management**
+1. **Compaction checkpoints**
 
-   Preserve the durable log while projecting model-aware recent history and structured
-   compaction checkpoints. Model-aware image accounting replaces the byte-based replay
-   budget and its image-input rejection.
+   Persist structured compaction checkpoints and project them together with uncovered
+   recent turns under the delivered budget. Model-aware image accounting replaces the
+   byte-based replay budget and its image-input rejection.
 
 1. **Agentty runtime adapters**
 

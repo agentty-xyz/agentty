@@ -27,6 +27,7 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
                 &crate::ExecutionIdentity::new("next", "1").expect("identity"),
                 None,
                 crate::ModelCapabilities {
+                    context_budget: None,
                     image_input: false,
                     native_continuation: true,
                     tool_calls: true,

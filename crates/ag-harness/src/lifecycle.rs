@@ -199,6 +199,8 @@ pub enum TurnErrorType {
     ToolDenied,
     /// The turn exceeded its configured tool-call limit.
     ToolCallLimit,
+    /// Mandatory request content exceeded the model's context budget.
+    ContextBudget,
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
     /// The comparison base belongs to a different repository scope.
@@ -216,6 +218,7 @@ impl TurnErrorType {
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
             Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
             Self::ToolCallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
+            Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH

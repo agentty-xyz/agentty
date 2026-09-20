@@ -1,5 +1,6 @@
 use std::io;
 use std::io::Cursor;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,11 +13,14 @@ use super::support::{
     read_call_with_path, read_harness, readable_file_system, readable_file_system_with,
     response_with_metadata, response_without_metadata,
 };
+use crate::context::{ContextBudget, ContextEstimator};
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType};
 use crate::model::{ModelMessage, ModelResponse, ReasoningEffort};
+use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::read::ReadError;
+use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::tool::{ReadAction, Tool, ToolCall, ToolDefinition};
 use crate::turn::{ToolActivity, TurnError};
@@ -571,4 +575,67 @@ async fn emits_correlated_lifecycle_for_read_tool_round_trip() {
     let event_debug = format!("{events:?}");
     assert!(!event_debug.contains("sensitive prompt"));
     assert!(!event_debug.contains("[workspace]"));
+}
+
+/// Deterministic flat weights so in-turn budget arithmetic stays readable.
+struct FlatEstimator;
+
+impl ContextEstimator for FlatEstimator {
+    fn message_weight(&self, _message: &ModelMessage) -> u64 {
+        7
+    }
+
+    fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
+        2
+    }
+}
+
+#[tokio::test]
+async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
+    // Arrange
+    let mut model = model();
+    model.expect_complete().times(1).returning(|_| {
+        Ok(response_without_metadata(ModelResponse::ToolCall(
+            read_call("call_read"),
+        )))
+    });
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("budgeted", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                context_budget: Some(ContextBudget::new(
+                    NonZeroU64::new(15).expect("nonzero budget"),
+                )),
+                image_input: false,
+                native_continuation: false,
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+    let harness = Harness::from_registry(&registry, "budgeted")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(readable_file_system())
+        .context_estimator(FlatEstimator);
+
+    // Act
+    let rejected = harness
+        .run_once("inspect the manifest", object_schema())
+        .await;
+
+    // Assert
+    // Admission passes with the 7-weight input message + tool definition 2
+    // of 15, but the recorded call and result grow the request to three
+    // 7-weight messages plus the 2-weight definition before the second
+    // model call.
+    assert!(matches!(
+        rejected,
+        Err(TurnError::ContextBudgetExceeded {
+            budget: 15,
+            required: 23,
+        })
+    ));
 }

@@ -1067,6 +1067,7 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
                     messages: Arc::default(),
                 },
                 ModelCapabilities {
+                    context_budget: None,
                     image_input,
                     native_continuation: false,
                     tool_calls: false,
@@ -1135,6 +1136,7 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
         ExecutionIdentity::new("text", "1")?,
         ExternalModel,
         ModelCapabilities {
+            context_budget: None,
             image_input: true,
             native_continuation: false,
             tool_calls: false,
