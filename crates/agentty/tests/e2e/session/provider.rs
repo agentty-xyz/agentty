@@ -602,17 +602,35 @@ async fn test_session_commit_index_lock() -> E2eResult {
 async fn test_session_commit_index_lock_recovers() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
+    let git_trace = evidence.path().join("git-trace");
     // Model an independent writer owned by the test, outside the provider's
     // process group. A provider descendant must not survive turn completion.
+    // Releasing on the traced staging attempt instead of a fixed sleep keeps
+    // the writer inside auto-commit's bounded retry window even when a
+    // loaded CI host stretches wall-clock timing.
     let release_evidence = evidence.path().to_path_buf();
+    let release_trace = git_trace.clone();
     let release_lock = async move {
         tokio::time::timeout(Duration::from_secs(30), async {
             while !release_evidence.join("release-lock").exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+            // `GIT_TRACE` records the staging command the moment auto-commit
+            // starts contending for the index, with the retry budget still
+            // nearly full. The quoted form covers older Git trace output.
+            loop {
+                let trace = std::fs::read_to_string(&release_trace).unwrap_or_default();
+                if trace.contains("git add -A") || trace.contains("'add' '-A'") {
+                    break;
+                }
+
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         })
         .await?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Give the traced staging attempt a beat to hit the lock so recovery
+        // exercises a real retry rather than a clean first try.
+        tokio::time::sleep(Duration::from_millis(250)).await;
         let lock_path = std::fs::read_to_string(release_evidence.join("lock-path"))?;
         std::fs::remove_file(lock_path.trim())?;
 
@@ -626,6 +644,7 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
         .env("AGENTTY_TEST_RELEASE_LOCK", "1")
         .env("GIT_OPTIONAL_LOCKS", "1")
+        .env("GIT_TRACE", git_trace.to_string_lossy())
         .setup(|env| Box::pin(async move { seed_commit_index_lock_project(env).await }))
         .run(
             |scenario| {

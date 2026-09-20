@@ -31,6 +31,12 @@ confused with the manifest-list publication. Because the Containerfile contains 
 instructions, the combined build requires binfmt/QEMU emulation for the non-native
 platform; without it, use the manual workflow instead.
 
+When testing a locally built candidate, skip the `podman pull` step in
+`skills/feature-test/references/recording.md` and run the candidate's image ID from
+`podman image inspect --format '{{.Id}}'` or pass `--pull=never` to `podman run`.
+Pulling a tag, or running `--platform` with one, re-resolves it against the registry and
+silently replaces the local build with a previously published image.
+
 The publication verification command also requires `jq` on the maintainer host.
 
 ```sh

@@ -45,6 +45,11 @@ jobs:
             runner_arch: ARM64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
+    # Each matrix leg sets only its architecture's digest; matrix job
+    # outputs are combined, and the publish job asserts both are present.
+    outputs:
+      digest_amd64: ${{ steps.push.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.push.outputs.digest_arm64 }}
 
     steps:
       - name: Checkout
@@ -69,13 +74,16 @@ jobs:
             --file container/e2e.Containerfile \
             container
           test "$(podman image inspect --format '{{.Architecture}}' "$candidate_image")" = "$ARCHITECTURE"
+          # Record the image ID so later steps run and push this exact
+          # build instead of re-resolving the mutable tag. Guard against
+          # an empty ID: a substitution failure inside `echo` would
+          # otherwise be masked and only fail steps later.
+          candidate_image_id=$(podman image inspect --format '{{.Id}}' "$candidate_image")
+          test -n "$candidate_image_id"
+          echo "CANDIDATE_IMAGE_ID=$candidate_image_id" >> "$GITHUB_ENV"
 
       - name: Run end-to-end feature suite
-        env:
-          ARCHITECTURE: ${{ matrix.architecture }}
-          PLATFORM: ${{ matrix.platform }}
         run: |
-          candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
           # `cargo-nextest` creates its store dir under the workspace root
           # (not `CARGO_TARGET_DIR`) whenever the profile configures JUnit
           # output, so give it a discardable tmpfs above the read-only mount.
@@ -83,12 +91,15 @@ jobs:
           # and mode 1777 keeps the tmpfs writable for the image's
           # unprivileged `agentty` user.
           mkdir -p "$GITHUB_WORKSPACE/target"
+          # Run the recorded image ID, not the tag: `podman run --platform`
+          # once re-pulled the tag from the registry, replacing the
+          # just-built candidate with a previously published `build-*`
+          # image. The build step already asserts the architecture.
           podman run --rm \
-            --platform "$PLATFORM" \
             --mount type=bind,source="$GITHUB_WORKSPACE",target=/workspace,readonly=true \
             --mount type=tmpfs,destination=/workspace/target,tmpfs-mode=1777 \
             --env CARGO_TARGET_DIR=/tmp/target \
-            "$candidate_image" \
+            "$CANDIDATE_IMAGE_ID" \
             prek run test-agentty-e2e --all-files --hook-stage manual
 
       - name: Authenticate with GHCR
@@ -98,11 +109,21 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Push candidate image
+        id: push
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
         run: |
           candidate_image="${E2E_REPOSITORY}:build-${ARCHITECTURE}"
-          podman push "$candidate_image" "docker://${candidate_image}"
+          digest_file=$(mktemp)
+          trap 'rm -f "$digest_file"' EXIT
+          podman push --digestfile "$digest_file" \
+            "$CANDIDATE_IMAGE_ID" "docker://${candidate_image}"
+          # Record the pushed digest so the publish job assembles the
+          # manifest from the tested images by identity instead of
+          # re-resolving the mutable `build-*` tags.
+          digest=$(sed -n '1p' "$digest_file")
+          test -n "$digest"
+          echo "digest_${ARCHITECTURE}=$digest" >> "$GITHUB_OUTPUT"
 
   publish:
     name: Publish and verify manifest
@@ -123,14 +144,22 @@ jobs:
         run: printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
 
       - name: Assemble manifest
+        env:
+          DIGEST_AMD64: ${{ needs.build.outputs.digest_amd64 }}
+          DIGEST_ARM64: ${{ needs.build.outputs.digest_arm64 }}
         run: |
+          # Assemble from the digests the build jobs pushed, not the
+          # mutable `build-*` tags: a tag re-resolution here could
+          # publish images other than the ones the build jobs tested.
+          test -n "$DIGEST_AMD64"
+          test -n "$DIGEST_ARM64"
           podman manifest create "${E2E_REPOSITORY}:latest"
           podman manifest add \
             "${E2E_REPOSITORY}:latest" \
-            "docker://${E2E_REPOSITORY}:build-amd64"
+            "docker://${E2E_REPOSITORY}@${DIGEST_AMD64}"
           podman manifest add \
             "${E2E_REPOSITORY}:latest" \
-            "docker://${E2E_REPOSITORY}:build-arm64"
+            "docker://${E2E_REPOSITORY}@${DIGEST_ARM64}"
 
       - name: Publish manifest
         id: publish
