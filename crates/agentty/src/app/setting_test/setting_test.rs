@@ -439,7 +439,7 @@ async fn selector_dropdown_selects_coauthor_setting_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, "Coauthored by Agentty");
 
     // Act
     manager.handle_enter();
@@ -465,7 +465,7 @@ async fn selector_dropdown_selects_theme_setting_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 0);
+    select_row(&mut manager, "Theme");
 
     // Act
     manager.handle_enter();
@@ -526,7 +526,7 @@ async fn selector_dropdown_persists_last_used_flag_and_explicit_smart_model() {
         .await
         .expect("failed to persist smart selector fixture");
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 4);
+    select_row(&mut manager, "Default Smart Model");
 
     // Act
     manager.handle_enter();

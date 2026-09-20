@@ -35,7 +35,7 @@ fn footer_hint_returns_selector_dropdown_hint_when_dropdown_is_open() {
 fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_open() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 8);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
 
     // Act
@@ -57,7 +57,7 @@ fn next_and_previous_do_not_move_selection_while_launch_configuration_editor_is_
 fn next_and_previous_do_not_move_selection_while_selector_dropdown_is_open() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 0);
+    select_row(&mut manager, "Theme");
     manager.handle_enter();
 
     // Act
@@ -116,7 +116,7 @@ fn handle_enter_opens_launch_configuration_list_editor() {
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().launch_configuration = "nvim .".to_string();
-    select_row(&mut manager, 8);
+    select_row(&mut manager, "Launch Configurations");
 
     // Act
     manager.handle_enter();

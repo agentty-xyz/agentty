@@ -262,8 +262,20 @@ impl SettingsTestHarness {
     }
 }
 
-/// Selects one settings row through the screen navigation action.
-pub(super) fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
+/// Selects the settings row with the given label through the screen
+/// navigation action.
+///
+/// The index is derived from the rendered global and project rows so tests
+/// follow the production row order instead of hardcoding positions.
+pub(super) fn select_row(manager: &mut SettingsTestHarness, label: &str) {
+    let snapshot = manager.presentation.snapshot(&manager.view);
+    let row_index = snapshot
+        .global_rows
+        .iter()
+        .chain(snapshot.project_rows.iter())
+        .position(|(row_label, _)| *row_label == label)
+        .expect("settings row label must be rendered");
+
     for _ in 0..row_index {
         manager.next();
     }

@@ -463,6 +463,56 @@ async fn run_main_loop_enables_mouse_capture_from_setting() {
     mouse_capture.checkpoint();
 }
 
+/// Verifies a terminal that rejects mouse capture does not abort the loop,
+/// is not asked again for the same state, and is retried once the setting
+/// changes.
+#[tokio::test]
+async fn reconcile_mouse_capture_logs_once_and_retries_after_setting_change() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.settings.mouse_support = MouseSupport::Enabled;
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let (_event_tx, mut event_rx) = mpsc::unbounded_channel::<Event>();
+    let mut tick = tokio::time::interval(FRAME_INTERVAL);
+    let mut mouse_capture = MockMouseCapture::new();
+    mouse_capture
+        .expect_set_enabled()
+        .once()
+        .with(mockall::predicate::eq(true))
+        .returning(|_| Err(io::Error::other("terminal rejected mouse capture")));
+    mouse_capture
+        .expect_set_enabled()
+        .once()
+        .with(mockall::predicate::eq(false))
+        .returning(|_| Ok(()));
+    let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
+    let last_draw_at = clock.now_instant();
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        clock,
+        event_rx: &mut event_rx,
+        last_draw_at,
+        mouse_capture: &mouse_capture,
+        mouse_capture_failed_for: None,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+    };
+
+    // Act
+    main_loop_state.reconcile_mouse_capture();
+    main_loop_state.reconcile_mouse_capture();
+    let failed_for_after_rejection = main_loop_state.mouse_capture_failed_for;
+    main_loop_state.app.settings.mouse_support = MouseSupport::Disabled;
+    main_loop_state.reconcile_mouse_capture();
+
+    // Assert
+    assert_eq!(failed_for_after_rejection, Some(true));
+    assert_eq!(main_loop_state.mouse_capture_failed_for, None);
+    mouse_capture.checkpoint();
+}
+
 #[tokio::test]
 async fn run_with_backend_exits_on_quit_key() {
     // Arrange
@@ -677,6 +727,7 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
         event_rx: &mut event_rx,
         last_draw_at,
         mouse_capture: &NoopMouseCapture,
+        mouse_capture_failed_for: None,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,

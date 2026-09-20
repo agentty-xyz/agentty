@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::app::App;
 use crate::infra::clock::Clock;
@@ -194,6 +195,7 @@ where
         event_rx,
         last_draw_at,
         mouse_capture,
+        mouse_capture_failed_for: None,
         presentation: Rc::new(PresentationState::default()),
         terminal,
         tick,
@@ -227,6 +229,9 @@ struct MainLoopState<'a, B: Backend, Message> {
     event_rx: &'a mut mpsc::UnboundedReceiver<Message>,
     last_draw_at: Instant,
     mouse_capture: &'a dyn MouseCapture,
+    /// Requested capture state the terminal last rejected, so the failure is
+    /// logged once and not retried until the setting changes.
+    mouse_capture_failed_for: Option<bool>,
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
@@ -247,9 +252,10 @@ where
     /// Terminal mouse capture is reconciled with the persisted `Mouse Support`
     /// setting at the start of every cycle, which applies the initial state on
     /// the first cycle and makes later settings-page toggles take effect live.
+    /// Capture is optional UI, so a terminal that rejects the mode switch is
+    /// logged once and the loop continues with keyboard input only.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
-        self.mouse_capture
-            .set_enabled(self.app.settings.mouse_support.is_enabled())?;
+        self.reconcile_mouse_capture();
         self.app.process_pending_app_events().await;
         self.app.reconcile_open_session_question_mode().await;
         self.app
@@ -270,6 +276,23 @@ where
             self.tick,
         )
         .await
+    }
+
+    /// Applies the `Mouse Support` setting to the terminal, skipping a state
+    /// the terminal already rejected until the setting changes again.
+    fn reconcile_mouse_capture(&mut self) {
+        let enabled = self.app.settings.mouse_support.is_enabled();
+        if self.mouse_capture_failed_for == Some(enabled) {
+            return;
+        }
+
+        match self.mouse_capture.set_enabled(enabled) {
+            Ok(()) => self.mouse_capture_failed_for = None,
+            Err(error) => {
+                warn!(enabled, %error, "failed to reconcile terminal mouse capture");
+                self.mouse_capture_failed_for = Some(enabled);
+            }
+        }
     }
 }
 
