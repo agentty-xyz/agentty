@@ -60,8 +60,10 @@ pub(crate) fn handle_with_cache(
 ///
 /// Over the right panel the wheel scrolls that panel, clamped to the content
 /// height recorded by the last frame. Over the file explorer it moves the
-/// file selection exactly like `j`/`k` with the file tree focused. Returns
-/// whether anything changed.
+/// file selection exactly like `j`/`k` with the file tree focused, so it is
+/// ignored whenever the keyboard could not reach the file list: while a line
+/// comment is being edited, while a row selection is active, or while the
+/// review-comments sidebar owns navigation. Returns whether anything changed.
 pub(crate) fn handle_mouse_wheel(
     app: &mut App,
     render_cache_store: &RenderCacheStore,
@@ -90,6 +92,9 @@ pub(crate) fn handle_mouse_wheel(
         .diff_file_list
         .is_some_and(|file_list| file_list.contains(column, row))
     {
+        if !file_list_accepts_wheel(&app.mode) {
+            return false;
+        }
         let file_direction = match direction {
             WheelDirection::Down => FileSelectionDirection::Next,
             WheelDirection::Up => FileSelectionDirection::Previous,
@@ -99,6 +104,25 @@ pub(crate) fn handle_mouse_wheel(
     }
 
     false
+}
+
+/// Reports whether wheel input over the file explorer may move the file
+/// selection, mirroring the states that keep `j`/`k` away from the file list.
+/// Modes other than diff pass through so `move_file_selection` rejects them.
+fn file_list_accepts_wheel(mode: &AppMode) -> bool {
+    let AppMode::Diff {
+        line_comments,
+        review_comments,
+        ..
+    } = mode
+    else {
+        return true;
+    };
+    let review_comments_are_focused = review_comments
+        .as_ref()
+        .is_some_and(|review_comments| review_comments.sidebar_focus == DiffSidebarFocus::Comments);
+
+    !line_comments.is_editing() && !line_comments.is_selecting() && !review_comments_are_focused
 }
 
 /// Handles the only interactive action available while a full diff loads.
@@ -780,16 +804,15 @@ fn apply_navigation_key(
             }
         }
         KeyCode::Char('c')
-            if *navigation.focus == DiffFocus::Files
-                && is_plain_char_key(key, 'c')
-                && navigation.review_comments.is_some() =>
+            if *navigation.focus == DiffFocus::Files && is_plain_char_key(key, 'c') =>
         {
-            *navigation.focus = DiffFocus::Files;
-            focus_review_comments(
-                navigation.review_comments,
-                navigation.scroll_cache,
-                navigation.scroll_offset,
-            );
+            if let Some(review_comments) = navigation.review_comments.as_mut() {
+                focus_review_comments(
+                    review_comments,
+                    navigation.scroll_cache,
+                    navigation.scroll_offset,
+                );
+            }
         }
         _ => {}
     }
@@ -1043,13 +1066,11 @@ fn selected_preview_is_visible(
 }
 
 fn focus_review_comments(
-    review_comments: &mut Option<DiffReviewComments>,
+    review_comments: &mut DiffReviewComments,
     scroll_cache: &mut Option<DiffScrollCache>,
     scroll_offset: &mut u16,
 ) {
-    if let Some(review_comments) = review_comments {
-        review_comments.sidebar_focus = DiffSidebarFocus::Comments;
-    }
+    review_comments.sidebar_focus = DiffSidebarFocus::Comments;
     *scroll_cache = None;
     *scroll_offset = 0;
 }

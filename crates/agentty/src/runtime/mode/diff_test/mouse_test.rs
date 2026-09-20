@@ -1,6 +1,9 @@
 use super::super::handle_mouse_wheel;
 use super::support::{aligned_file_diff_fixture, diff_mode_fixture, scrollable_diff_fixture};
-use crate::presentation::app_mode::{AppMode, DiffFocus, DiffPreview, ViewportRect};
+use crate::presentation::app_mode::{
+    AppMode, DiffCommentTarget, DiffFocus, DiffPreview, DiffReviewComments, DiffSidebarFocus,
+    ViewportRect,
+};
 use crate::presentation::viewport::{LayoutSnapshot, ScrollRegion};
 use crate::runtime::mouse_handler::WheelDirection;
 use crate::ui::RenderCacheStore;
@@ -215,4 +218,144 @@ async fn test_handle_mouse_wheel_ignores_non_diff_mode_and_pointer_outside_regio
     assert!(!file_list_in_list_mode);
     assert!(!outside_regions);
     assert!(matches!(app.mode, AppMode::Diff { .. }));
+}
+
+/// Reads the selected file index out of diff mode.
+fn selected_file_index(mode: &AppMode) -> usize {
+    match mode {
+        AppMode::Diff {
+            file_explorer_selected_index,
+            ..
+        } => *file_explorer_selected_index,
+        _ => usize::MAX,
+    }
+}
+
+#[tokio::test]
+async fn test_handle_mouse_wheel_over_file_list_ignores_input_while_editing_comment() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = diff_mode_fixture(
+        &aligned_file_diff_fixture(),
+        0,
+        DiffFocus::Content,
+        DiffPreview::Unsupported { request_id: 0 },
+    );
+    if let AppMode::Diff { line_comments, .. } = &mut app.mode {
+        line_comments.start_editing_target(DiffCommentTarget::File {
+            path: "src/main.rs".into(),
+        });
+    }
+    let render_cache_store = RenderCacheStore::default();
+    let layout = diff_layout();
+
+    // Act
+    let moved = handle_mouse_wheel(
+        &mut app,
+        &render_cache_store,
+        &layout,
+        5,
+        5,
+        WheelDirection::Down,
+    );
+
+    // Assert
+    assert!(!moved);
+    assert_eq!(selected_file_index(&app.mode), 0);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Diff { line_comments, .. } if line_comments.is_editing()
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_mouse_wheel_over_file_list_ignores_input_while_selecting_rows() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = diff_mode_fixture(
+        &aligned_file_diff_fixture(),
+        0,
+        DiffFocus::Content,
+        DiffPreview::Unsupported { request_id: 0 },
+    );
+    if let AppMode::Diff {
+        line_comments,
+        selected_diff_line_index,
+        ..
+    } = &mut app.mode
+    {
+        *selected_diff_line_index = 2;
+        line_comments.start_selection(2);
+    }
+    let render_cache_store = RenderCacheStore::default();
+    let layout = diff_layout();
+
+    // Act
+    let moved = handle_mouse_wheel(
+        &mut app,
+        &render_cache_store,
+        &layout,
+        5,
+        5,
+        WheelDirection::Down,
+    );
+
+    // Assert
+    assert!(!moved);
+    assert_eq!(selected_file_index(&app.mode), 0);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Diff {
+            line_comments,
+            selected_diff_line_index: 2,
+            ..
+        } if line_comments.is_selecting()
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_mouse_wheel_over_file_list_ignores_input_while_comments_sidebar_focused() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = diff_mode_fixture(
+        &aligned_file_diff_fixture(),
+        0,
+        DiffFocus::Content,
+        DiffPreview::Unsupported { request_id: 0 },
+    );
+    if let AppMode::Diff {
+        review_comments,
+        scroll_offset,
+        ..
+    } = &mut app.mode
+    {
+        *scroll_offset = 3;
+        *review_comments = Some(DiffReviewComments {
+            sidebar_focus: DiffSidebarFocus::Comments,
+            ..DiffReviewComments::loading(1)
+        });
+    }
+    let render_cache_store = RenderCacheStore::default();
+    let layout = diff_layout();
+
+    // Act
+    let moved = handle_mouse_wheel(
+        &mut app,
+        &render_cache_store,
+        &layout,
+        5,
+        5,
+        WheelDirection::Down,
+    );
+
+    // Assert
+    assert!(!moved);
+    assert_eq!(selected_file_index(&app.mode), 0);
+    assert!(matches!(
+        app.mode,
+        AppMode::Diff {
+            scroll_offset: 3,
+            ..
+        }
+    ));
 }

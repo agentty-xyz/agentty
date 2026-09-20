@@ -73,6 +73,48 @@ async fn test_handle_l_focuses_visible_markdown_preview() {
 }
 
 #[tokio::test]
+async fn test_handle_c_without_linked_review_comments_keeps_diff_state() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = AppMode::Diff {
+        diff: "diff output".to_string(),
+        file_explorer_selected_index: 0,
+        focus: DiffFocus::Files,
+        line_comments: DiffLineComments::default(),
+        selected_diff_line_index: 0,
+        preview: DiffPreview::default(),
+        review_comments: None,
+        restore: None,
+        scroll_cache: Some(DiffScrollCache {
+            content_area: viewport_rect(TEST_TERMINAL_SIZE),
+            file_explorer_selected_index: 0,
+            max_scroll_offset: 3,
+        }),
+        scroll_offset: 2,
+        session_id: "session-id".into(),
+    };
+
+    // Act
+    handle(
+        &mut app,
+        TEST_TERMINAL_SIZE,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+    );
+
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::Diff {
+            focus: DiffFocus::Files,
+            review_comments: None,
+            scroll_cache: Some(_),
+            scroll_offset: 2,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
 async fn test_handle_c_focuses_linked_review_comments() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
