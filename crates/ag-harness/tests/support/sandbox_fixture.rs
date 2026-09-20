@@ -39,7 +39,7 @@ impl Model for ShellModel {
 
 /// Executors covered by the shared execution-conformance behavior. Native
 /// enforcement suites remain the sandboxed executor's qualification.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Selected {
     Native,
     Unsandboxed,

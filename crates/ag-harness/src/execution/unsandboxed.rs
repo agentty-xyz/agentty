@@ -48,6 +48,7 @@ impl BashExecutor for UnsandboxedExecutor {
         Ok(Box::new(UnsandboxedProcess {
             child: None,
             exit_delivered: false,
+            group: None,
             launch: None,
             quiescent: false,
             stderr: None,
@@ -59,6 +60,7 @@ impl BashExecutor for UnsandboxedExecutor {
 struct UnsandboxedProcess {
     child: Option<Child>,
     exit_delivered: bool,
+    group: Option<u32>,
     launch: Option<tokio::process::Command>,
     quiescent: bool,
     stderr: Option<ChildStderr>,
@@ -90,6 +92,10 @@ impl BashProcess for UnsandboxedProcess {
     async fn start(&mut self) -> Result<(), ExecutionError> {
         let mut launch = self.launch.take().ok_or(ExecutionError::Setup)?;
         let mut child = launch.spawn().map_err(|_| ExecutionError::Setup)?;
+        // The spawned leader is its own process group. Its identifier must
+        // survive the reap in `next_event`, where the child stops reporting
+        // one, so cleanup can still signal detached descendants.
+        self.group = child.id();
         self.stdout = child.stdout.take();
         self.stderr = child.stderr.take();
         self.child = Some(child);
@@ -134,6 +140,9 @@ impl BashProcess for UnsandboxedProcess {
                 self.exit_delivered = true;
                 Ok(ProcessEvent::MainExit(main_exit(status?)))
             }
+            // Driving an unstarted or fully acknowledged process disables
+            // every branch; report a typed error instead of a select panic.
+            else => Err(ExecutionError::Process)
         }
     }
 
@@ -141,19 +150,19 @@ impl BashProcess for UnsandboxedProcess {
         self.launch = None;
         self.stdout = None;
         self.stderr = None;
-        let Some(child) = &mut self.child else {
-            return Ok(());
-        };
-        if let Some(id) = child.id() {
+        if let Some(id) = self.group {
             let pid = Pid::from_raw(i32::try_from(id).map_err(|_| ExecutionError::Cleanup)?)
                 .ok_or(ExecutionError::Cleanup)?;
             match kill_process_group(pid, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                 Err(_) => return Err(ExecutionError::Cleanup),
             }
+            self.group = None;
         }
-        child.wait().await.map_err(|_| ExecutionError::Cleanup)?;
-        self.child = None;
+        if let Some(child) = &mut self.child {
+            child.wait().await.map_err(|_| ExecutionError::Cleanup)?;
+            self.child = None;
+        }
 
         Ok(())
     }

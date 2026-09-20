@@ -1,4 +1,5 @@
-//! Explicit host policy and bounded results for sandboxed Bash commands.
+//! Explicit host policy and bounded results for Bash commands run through the
+//! host-selected executor.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -17,6 +18,9 @@ pub(crate) const NATIVE_EXECUTOR: &str = "native";
 
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read grants.
+/// Grants and denials state policy; their enforcement is the selected
+/// executor's documented scope, and an unenforcing executor such as
+/// [`crate::UnsandboxedExecutor`] applies none of them.
 /// The default native executor requires the matching `ag-harness-sandbox`
 /// launcher at a trusted location outside the command workspace;
 /// [`BashConfig::for_executor`] selects an explicit host executor instead.
@@ -204,11 +208,11 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Explicitly grants native host-information exposure. Required by both
-    /// backends; native execution cannot conceal all host details. On macOS
-    /// this also grants filesystem metadata and root-directory enumeration
-    /// needed by the qualified Bash runtime. File contents still require
-    /// separate read grants.
+    /// Explicitly grants host-information exposure. Required by every
+    /// executor; commands cannot conceal all host details. On macOS the
+    /// native executor additionally grants filesystem metadata and
+    /// root-directory enumeration needed by the qualified Bash runtime. File
+    /// contents still require separate read grants.
     #[must_use]
     pub fn with_host_information(mut self) -> Self {
         self.snapshot.host_information = true;
@@ -230,7 +234,10 @@ impl BashConfig {
         Ok(self)
     }
 
-    /// Networking is deny-only on every backend.
+    /// Networking cannot be granted: the policy always denies it. Enforcing
+    /// the denial is the selected executor's documented scope; an unenforcing
+    /// executor such as [`crate::UnsandboxedExecutor`] applies no network
+    /// boundary of its own.
     ///
     /// # Errors
     /// Always returns unsupported; this does not modify the configuration.

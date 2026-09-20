@@ -21,12 +21,13 @@ pub struct CommandIntent {
     pub workspace: PathBuf,
 }
 
-/// Recorded sandbox result. Exit, timeout, output, and cleanup are independent.
+/// Recorded command result. Exit, timeout, output, and cleanup are independent.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommandOutcome {
-    /// Whether the backend could not acknowledge its cleanup scope.
+    /// Whether the executor could not acknowledge its cleanup scope.
     pub cleanup_failed: bool,
-    /// Scope of cleanup; macOS never proves detached descendants stopped.
+    /// Scope of cleanup; a best-effort scope never proves detached
+    /// descendants stopped.
     pub cleanup_scope: CommandCleanupScope,
     /// Content-free execution error classification, if any.
     pub execution_failure: Option<crate::BashError>,
@@ -44,14 +45,18 @@ pub struct CommandOutcome {
     pub truncated: bool,
 }
 
-/// Native completion scope, carried with every result and durable record.
+/// Completion scope of the selected executor, carried with every result and
+/// durable record.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandCleanupScope {
     /// Linux PID namespace termination includes detached descendants.
     PidNamespace,
-    /// macOS process-group observation and cleanup are best effort. Detached
-    /// descendants may still execute within their inherited Seatbelt policy.
+    /// Process-group observation and cleanup are best effort. Descendants
+    /// that escape the group may keep executing with whatever isolation the
+    /// selected executor documents — the native macOS sandbox leaves them
+    /// their inherited Seatbelt policy, while the unsandboxed executor
+    /// applies none.
     ProcessGroupBestEffort,
 }
 
