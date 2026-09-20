@@ -103,6 +103,16 @@ impl SessionStore for GatedStore {
         self.database.load_session(id).await
     }
 
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        self.database
+            .publish_checkpoint(session_id, checkpoint)
+            .await
+    }
+
     async fn switch_model(
         &self,
         id: &str,

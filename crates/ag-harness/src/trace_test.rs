@@ -803,6 +803,14 @@ impl SessionStore for TracedWriteStore {
         self.store.load_session(id).await
     }
 
+    async fn publish_checkpoint(
+        &self,
+        session_id: &str,
+        checkpoint: &crate::SessionCheckpoint,
+    ) -> Result<(), SessionError> {
+        self.store.publish_checkpoint(session_id, checkpoint).await
+    }
+
     async fn switch_model(
         &self,
         id: &str,

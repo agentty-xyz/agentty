@@ -16,9 +16,9 @@ use std::time::Duration;
 use ag_harness::{
     AcquiredTurn, CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination, Harness,
     ImageContent, ImageMediaType, InputBlock, MemoryStore, Model, ModelCompletion, ModelError,
-    ModelMessage, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError,
-    SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, ToolPolicy, TurnError, TurnInput,
-    TurnLimits, TurnOptions, TurnOwner, WriteStatus,
+    ModelMessage, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionCheckpoint,
+    SessionError, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, ToolPolicy,
+    TurnError, TurnInput, TurnLimits, TurnOptions, TurnOwner, WriteStatus,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -359,6 +359,83 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
                 ModelMessage::Assistant("described".to_string()),
             ]]
         );
+    }
+}
+
+#[tokio::test]
+async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publications() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("checkpoints", schema()), None, 4096)
+            .await
+            .expect("create");
+        for turn in ["zero", "one"] {
+            let acquired = store
+                .begin_turn(
+                    Arc::clone(&store),
+                    "checkpoints",
+                    &TurnInput::from(turn),
+                    &options(),
+                    0,
+                )
+                .await
+                .expect("begin");
+            store
+                .complete_turn(
+                    acquired.owner(),
+                    &[ModelMessage::Assistant(format!("{turn}-answer"))],
+                    None,
+                )
+                .await
+                .expect("complete");
+        }
+        let summary = json!({"context": "c", "decisions": [], "state": "s"});
+        let checkpoint =
+            SessionCheckpoint::new(0, 0, None, None, summary.clone()).expect("checkpoint");
+
+        // Act
+        store
+            .publish_checkpoint("checkpoints", &checkpoint)
+            .await
+            .expect("publish");
+        let regressed = SessionCheckpoint::new(0, 0, None, None, summary.clone()).expect("record");
+        // Republishing the same coverage is idempotent, never a regression.
+        store
+            .publish_checkpoint("checkpoints", &regressed)
+            .await
+            .expect("republish current boundary");
+        let beyond = SessionCheckpoint::new(9, 0, None, None, summary.clone()).expect("record");
+        let beyond = store.publish_checkpoint("checkpoints", &beyond).await;
+        let wrong_generation = SessionCheckpoint::new(1, 7, None, None, summary).expect("record");
+        let wrong_generation = store
+            .publish_checkpoint("checkpoints", &wrong_generation)
+            .await;
+        let missing = store.publish_checkpoint("missing", &checkpoint).await;
+
+        // Assert
+        assert!(matches!(missing, Err(SessionError::NotFound { .. })));
+        assert!(matches!(beyond, Err(SessionError::CheckpointStale { .. })));
+        assert!(matches!(
+            wrong_generation,
+            Err(SessionError::CheckpointStale { .. })
+        ));
+        let loaded = store.load_session("checkpoints").await.expect("load");
+        assert_eq!(loaded.latest_completed_turn, Some(1));
+        assert_eq!(
+            loaded.checkpoint.expect("checkpoint").covered_through(),
+            0,
+            "the rejected publications changed nothing"
+        );
+        assert_eq!(
+            loaded.turns.len(),
+            1,
+            "turn zero is covered by the checkpoint"
+        );
+        assert!(matches!(
+            &loaded.turns[0][0],
+            ModelMessage::User(text) if text == "one"
+        ));
     }
 }
 

@@ -149,6 +149,12 @@ request. Canonical messages, host requests, model provenance, and write journals
 intact, and the stored byte-based replay budget still bounds history loading. Switching
 models applies the target registration's budget to subsequent turns.
 
+Model-aware accounting supersedes the byte-based image rejection: when the effective
+registration declares a `ContextBudget`, image-bearing input is weighed through the
+estimator during mandatory-content admission, and input that cannot fit fails with the
+same typed budget error before acquisition rather than the data-URL history check.
+Registrations without a budget keep the byte-based rejection.
+
 ## Session model switching
 
 `Session::switch_model` selects an existing registration for an idle session. Switching
@@ -166,6 +172,33 @@ switching rather than silently discarding content; validation includes history o
 the replay budget. SQLite validates paginated history outside its writer transaction and
 rechecks the source revision before mutation. A cancelled waiter retains admission until
 the switch finishes; hosts resume to observe an uncertain acknowledgment.
+
+## Compaction checkpoints
+
+`Session::compact` summarizes a session's completed turns into a versioned,
+schema-validated `SessionCheckpoint` and publishes it through the store. Generation runs
+the session's current model through the shared engine with every tool denied, outside
+store writer transactions, and bounded by the effective context budget: the previous
+checkpoint and the most recent uncovered turns that fit are rendered into one bounded
+source, dropping older turns first when the budget is tight. Dropping the returned
+future cancels generation before anything is published, and a session with no uncovered
+completed turn returns without a model call.
+
+A checkpoint records the covered-history boundary, the structured summary, the source
+model generation, and model/provenance identity. Publication is atomic and rejected as
+stale unless the session's model generation still matches and coverage never regresses
+below an existing checkpoint; a rejected publication changes nothing. Both stores
+enforce the same contract and return the current checkpoint alongside bounded history
+from load and acquisition.
+
+Request projection replays the checkpoint summary ahead of the uncovered turns that fit
+the remaining budget, as ordinary user-role conversation data rather than
+higher-priority instructions. When even the summary cannot fit, projection falls back to
+bounded recent history. A checkpointed session replays projected history instead of
+native continuation. Generation, validation, or persistence failure leaves the previous
+checkpoint and its projection intact. Canonical messages, host requests, model
+provenance, and write journals are never rewritten; the summary only changes outgoing
+requests.
 
 ## Repository comparisons
 
@@ -323,13 +356,8 @@ emits cancellation once.
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
 construction and idle-session model switching, ordered text/image input, model-aware
-context projection, and journaled sandboxed Bash are delivered library capabilities.
-
-1. **Compaction checkpoints**
-
-   Persist structured compaction checkpoints and project them together with uncovered
-   recent turns under the delivered budget. Model-aware image accounting replaces the
-   byte-based replay budget and its image-input rejection.
+context projection, journaled sandboxed Bash, and structured compaction checkpoints are
+delivered library capabilities.
 
 1. **Host-selected Bash executor**
 

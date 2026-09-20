@@ -72,6 +72,7 @@ fn rejects_oversized_schema() {
     // Assert
     assert_eq!(error, OutputSchemaError::TooLarge);
     assert_eq!(error.to_string(), "output schema exceeds the size limit");
+    assert_eq!(error.clone(), error);
 }
 
 #[test]

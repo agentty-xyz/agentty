@@ -146,7 +146,7 @@ impl PartialEq for OutputSchema {
 impl Eq for OutputSchema {}
 
 /// Failure returned while constructing a structured-output schema.
-#[derive(Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum OutputSchemaError {
     /// The serialized schema exceeds the harness safety limit.
     #[error("output schema exceeds the size limit")]

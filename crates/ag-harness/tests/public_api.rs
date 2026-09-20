@@ -24,6 +24,10 @@ mod repository_fixture;
 #[path = "support/store_conformance.rs"]
 mod store_conformance_test;
 
+#[cfg(test)]
+#[path = "support/compaction.rs"]
+mod compaction_test;
+
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};

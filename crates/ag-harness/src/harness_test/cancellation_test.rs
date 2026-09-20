@@ -177,6 +177,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         started_first: Arc::clone(&first_started),
     });
     let mut first = Session {
+        checkpoint: None,
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.snapshot(),
@@ -187,6 +188,7 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
+        checkpoint: None,
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
@@ -277,6 +279,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         started: Arc::clone(&first_started),
     });
     let mut first = Session {
+        checkpoint: None,
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness: harness.snapshot(),
@@ -287,6 +290,7 @@ async fn recovered_lease_cancels_the_original_model_request() {
         system_prompt: None,
     };
     let mut second = Session {
+        checkpoint: None,
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,
@@ -365,6 +369,7 @@ END
         started_first: Arc::clone(&request_started),
     });
     let mut session = Session {
+        checkpoint: None,
         model_generation: 0,
         database: Arc::new(database.clone()),
         harness,

@@ -6,11 +6,11 @@ use tempfile::tempdir;
 use super::support::{
     SessionTimestampsRow, create_version_one_database, read_call, schema, turn, write_call,
 };
-use crate::ToolCall;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
 use crate::store_conformance_test::image_input;
+use crate::{SessionCheckpoint, ToolCall};
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {
@@ -329,6 +329,42 @@ async fn database_rejects_incomplete_or_invalid_registration_identity() {
         // Assert
         assert!(matches!(result, Err(SessionError::InvalidData { .. })));
     }
+}
+
+#[tokio::test]
+async fn database_rejects_an_unsupported_stored_checkpoint_version() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session");
+    database
+        .append_turn("session-a", &turn("question", "answer"))
+        .await
+        .expect("turn");
+    let checkpoint = SessionCheckpoint::new(
+        0,
+        0,
+        None,
+        None,
+        serde_json::json!({"context": "c", "decisions": [], "state": "s"}),
+    )
+    .expect("checkpoint");
+    database
+        .publish_checkpoint("session-a", &checkpoint)
+        .await
+        .expect("publish");
+
+    // Act
+    sqlx::query("UPDATE session_checkpoint SET version = 2 WHERE session_id = 'session-a'")
+        .execute(database.pool())
+        .await
+        .expect("corrupt version");
+    let result = database.load_session("session-a").await;
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::InvalidData { .. })));
 }
 
 #[tokio::test]
