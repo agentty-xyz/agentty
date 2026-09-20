@@ -4,13 +4,24 @@
 //! Wheel input is injected as raw SGR mouse sequences (`ESC [ < 64 ; col ; row
 //! M` for wheel-up, `65` for wheel-down) written straight to the PTY, the same
 //! way the CSI-u and bracketed-paste tests inject their escape sequences.
+//!
+//! The semantic PTY run and the VHS recording share one environment, so each
+//! scenario seeds its starting tab instead of pressing `Tab` (which persists
+//! the active tab) and leaves every persisted setting as it found it.
+//!
+//! The wheel scenario has no feature page or GIF: VHS types every character as
+//! a separate browser key event, so the leading `ESC` reaches crossterm alone
+//! and is parsed as a plain `Esc` key instead of a mouse event. Only the PTY
+//! executor can deliver the SGR sequence atomically.
 
+use agentty::app::Tab;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::test_support::persist_active_tab_for_test;
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -26,7 +37,8 @@ const WHEEL_UP_OVER_TRANSCRIPT: &str = "\x1b[<64;40;10M";
 /// One SGR wheel-down notch over the middle of the transcript panel.
 const WHEEL_DOWN_OVER_TRANSCRIPT: &str = "\x1b[<65;40;10M";
 
-/// Seeds one review-ready session whose transcript is taller than the view.
+/// Seeds one review-ready session whose transcript is taller than the view and
+/// starts the app on the Sessions tab.
 ///
 /// Paragraph labels avoid spaces because testty's text search skips blank
 /// cells the terminal never repainted.
@@ -52,7 +64,8 @@ async fn seed_session_with_long_transcript(env: &BuilderEnv) -> E2eResult {
                 SessionMessageKind::AssistantAnswer,
                 &transcript,
             )
-            .await
+            .await?;
+        persist_active_tab_for_test(&database, Tab::Sessions).await
     })
     .await?;
 
@@ -68,16 +81,10 @@ async fn mouse_wheel_scrolls_session_output() {
     // Arrange, Act, Assert
     FeatureTest::new("mouse_wheel_scroll")
         .setup(|env| Box::pin(async move { seed_session_with_long_transcript(env).await }))
-        .zola(
-            "Mouse wheel scrolling",
-            "Scroll the session transcript with the mouse wheel and drag its scrollbar.",
-            127,
-        )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .wait_for_text("transcript_line_40", 5000)
                     .viewing_pause_ms(1500)
@@ -127,23 +134,36 @@ async fn mouse_wheel_scrolls_session_output() {
         .expect("feature test failed");
 }
 
+/// Starts the app on the Settings tab so the scenario never presses `Tab`.
+async fn seed_settings_tab(env: &BuilderEnv) -> E2eResult {
+    (async {
+        let database = common::open_database(env).await?;
+        persist_active_tab_for_test(&database, Tab::Settings).await
+    })
+    .await?;
+
+    Ok(())
+}
+
 /// Verify that the `Mouse Support` switch lives in the global settings section
-/// and can be turned off from its dropdown.
+/// and can be turned off and back on from its dropdown.
+///
+/// The switch is restored to `Enabled` at the end so the VHS recording starts
+/// from the same persisted state as the semantic run.
 #[tokio::test]
 async fn settings_mouse_support_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_mouse_support")
+        .setup(|env| Box::pin(async move { seed_settings_tab(env).await }))
         .zola(
             "Mouse support switch",
-            "Turn terminal mouse capture off from the global settings.",
+            "Turn terminal mouse capture off and back on from the global settings.",
             157,
         )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
                     .wait_for_text("Mouse Support", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("enabled", "Mouse Support enabled by default")
@@ -163,13 +183,21 @@ async fn settings_mouse_support_switch() {
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("disabled", "Mouse Support turned off")
+                    .press_key("Enter")
+                    .wait_for_text("Select setting value", 3000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .press_key("Enter")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("restored", "Mouse Support turned back on")
             },
             |frame, report| {
                 Box::pin(async move {
                     assert_eq!(
                         report.captures.len(),
-                        3,
-                        "Expected 3 captures (enabled, dropdown, disabled)"
+                        4,
+                        "Expected 4 captures (enabled, dropdown, disabled, restored)"
                     );
 
                     let enabled_frame = common::frame_from_capture(&report.captures[0]);
@@ -186,10 +214,20 @@ async fn settings_mouse_support_switch() {
                     );
                     assertion::assert_match_count(&enabled_frame, "Enabled", 2);
 
+                    let disabled_frame = common::frame_from_capture(&report.captures[2]);
+                    let disabled_full = Region::full(disabled_frame.cols(), disabled_frame.rows());
+                    assertion::assert_text_in_region(
+                        &disabled_frame,
+                        "Mouse Support",
+                        &disabled_full,
+                    );
+                    assertion::assert_match_count(&disabled_frame, "Enabled", 1);
+                    assertion::assert_match_count(&disabled_frame, "Disabled", 2);
+
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Mouse Support", &full);
-                    assertion::assert_match_count(frame, "Enabled", 1);
-                    assertion::assert_match_count(frame, "Disabled", 2);
+                    assertion::assert_match_count(frame, "Enabled", 2);
+                    assertion::assert_match_count(frame, "Disabled", 1);
                 })
             },
         )
