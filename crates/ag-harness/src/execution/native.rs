@@ -15,17 +15,21 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, ChildStderr, ChildStdout};
 
-use super::contract::{Access, Command, ExecutionError, MainExit, Policy, Stream};
-use super::supervisor::{Backend, Clock, Event, Process};
+use super::contract::{
+    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    MainExit, OutputStream, ProcessEvent,
+};
+use super::supervisor::Clock;
 use super::wire::{Launch, Notice};
 use crate::bash::BashConfig;
+use crate::command_journal::CommandCleanupScope;
 
 pub(super) struct Native {
     pub(super) configuration: BashConfig,
 }
 
 impl Native {
-    fn bind_for_platform(&self, platform: &str) -> Result<Box<dyn Process>, ExecutionError> {
+    fn bind_for_platform(&self, platform: &str) -> Result<Box<dyn BashProcess>, ExecutionError> {
         if !matches!(platform, "linux" | "macos") {
             return Err(ExecutionError::Unsupported);
         }
@@ -43,8 +47,21 @@ impl Native {
     }
 }
 
-impl Backend for Native {
-    fn bind(&self) -> Result<Box<dyn Process>, ExecutionError> {
+impl BashExecutor for Native {
+    fn identity(&self) -> &str {
+        crate::bash::NATIVE_EXECUTOR
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        #[cfg(target_os = "linux")]
+        let scope = CommandCleanupScope::PidNamespace;
+        #[cfg(not(target_os = "linux"))]
+        let scope = CommandCleanupScope::ProcessGroupBestEffort;
+
+        scope
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
         self.bind_for_platform(std::env::consts::OS)
     }
 }
@@ -76,8 +93,8 @@ struct NativeProcess {
 impl NativeProcess {
     fn launch(
         &self,
-        command: &Command,
-        policy: &Policy,
+        command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
         git_metadata: Vec<PathBuf>,
     ) -> Result<Launch, ExecutionError> {
         let arguments = command
@@ -107,7 +124,12 @@ impl NativeProcess {
             external_reads: policy.external_reads().to_vec(),
             git_metadata,
             host_information: policy.exposes_host_information(),
-            launcher: self.configuration.snapshot.launcher.clone(),
+            launcher: self
+                .configuration
+                .snapshot
+                .launcher
+                .clone()
+                .ok_or(ExecutionError::Unsupported)?,
             linux_bubblewrap: self.configuration.snapshot.linux_bubblewrap.clone(),
             workspace: policy.workspace().to_path_buf(),
             workspace_writes: policy.workspace_writes().to_vec(),
@@ -116,8 +138,12 @@ impl NativeProcess {
 }
 
 #[async_trait]
-impl Process for NativeProcess {
-    async fn prepare(&mut self, command: &Command, policy: &Policy) -> Result<(), ExecutionError> {
+impl BashProcess for NativeProcess {
+    async fn prepare(
+        &mut self,
+        command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
+    ) -> Result<(), ExecutionError> {
         let snapshot = &self.configuration.snapshot;
         if !policy.exposes_host_information() {
             return Err(ExecutionError::Unsupported);
@@ -129,14 +155,18 @@ impl Process for NativeProcess {
         if !policy.workspace_writes().is_empty() {
             return Err(ExecutionError::Unsupported);
         }
-        if policy
-            .requested_access(command.executable())
-            .map_err(|_| ExecutionError::Setup)?
-            == Access::Denied
-        {
+        if policy.requested_access(command.executable()) == ExecutionAccess::Denied {
             return Err(ExecutionError::Unsupported);
         }
-        validate_executable(&LocalInspection, &snapshot.launcher, policy.workspace()).await?;
+        validate_executable(
+            &LocalInspection,
+            snapshot
+                .launcher
+                .as_deref()
+                .ok_or(ExecutionError::Unsupported)?,
+            policy.workspace(),
+        )
+        .await?;
         validate_executable(&LocalInspection, command.executable(), policy.workspace()).await?;
         if cfg!(target_os = "linux") {
             validate_executable(
@@ -226,7 +256,13 @@ impl Process for NativeProcess {
             UnixStream::from_std(parent).map_err(|_| ExecutionError::Setup)?,
         ));
         let child: OwnedFd = child.into();
-        let mut command = tokio::process::Command::new(&self.configuration.snapshot.launcher);
+        let launcher = self
+            .configuration
+            .snapshot
+            .launcher
+            .as_deref()
+            .ok_or(ExecutionError::Setup)?;
+        let mut command = tokio::process::Command::new(launcher);
         command
             .env_clear()
             .current_dir("/")
@@ -251,7 +287,7 @@ impl Process for NativeProcess {
         Ok(())
     }
 
-    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<Event, ExecutionError> {
+    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<ProcessEvent, ExecutionError> {
         let capacity = buffer.len().min(4096);
         if capacity == 0 {
             return Err(ExecutionError::Process);
@@ -264,19 +300,19 @@ impl Process for NativeProcess {
                 let length = result?;
                 if length == 0 {
                     self.stdout = None;
-                    return Ok(Event::Eof(Stream::Stdout));
+                    return Ok(ProcessEvent::Eof(OutputStream::Stdout));
                 }
                 buffer[..length].copy_from_slice(&output[..length]);
-                Ok(Event::Output(Stream::Stdout, length))
+                Ok(ProcessEvent::Output(OutputStream::Stdout, length))
             }
             result = async { self.stderr.as_mut().ok_or(ExecutionError::Process)?.read(&mut errors[..capacity]).await.map_err(|_| ExecutionError::Process) }, if self.stderr.is_some() => {
                 let length = result?;
                 if length == 0 {
                     self.stderr = None;
-                    return Ok(Event::Eof(Stream::Stderr));
+                    return Ok(ProcessEvent::Eof(OutputStream::Stderr));
                 }
                 buffer[..length].copy_from_slice(&errors[..length]);
-                Ok(Event::Output(Stream::Stderr, length))
+                Ok(ProcessEvent::Output(OutputStream::Stderr, length))
             }
             result = input.read_until(b'\n', &mut self.notice), if !self.finished => {
                 if result.map_err(|_| ExecutionError::Process)? == 0 || self.notice.len() > 256 {
@@ -288,13 +324,13 @@ impl Process for NativeProcess {
                     Notice::Configure if cfg!(target_os = "linux") && !self.encoded.is_empty() => {
                         input.get_mut().write_all(&self.encoded).await.map_err(|_| ExecutionError::Process)?;
                         self.encoded.clear();
-                        Ok(Event::Progress)
+                        Ok(ProcessEvent::Progress)
                     }
-                    Notice::MainExit { code, signal } => Ok(Event::MainExit(code.map(MainExit::Code).or_else(|| signal.map(MainExit::Signal)).unwrap_or(MainExit::Unavailable))),
+                    Notice::MainExit { code, signal } => Ok(ProcessEvent::MainExit(code.map(MainExit::Code).or_else(|| signal.map(MainExit::Signal)).unwrap_or(MainExit::Unavailable))),
                     Notice::Finished => {
                         self.finished = true;
                         input.get_mut().write_all(b"x").await.map_err(|_| ExecutionError::Process)?;
-                        Ok(Event::Quiescent)
+                        Ok(ProcessEvent::Quiescent)
                     }
                     Notice::Configure | Notice::Failed => Err(ExecutionError::Process),
                 }

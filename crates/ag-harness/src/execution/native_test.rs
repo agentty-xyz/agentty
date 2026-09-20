@@ -16,9 +16,30 @@ use super::{
     validate_executable,
 };
 use crate::BashConfig;
-use crate::execution::contract::{Command, ExecutionError, Grants, MainExit, Policy};
-use crate::execution::supervisor::{Event, Process};
+use crate::command_journal::CommandCleanupScope;
+use crate::execution::contract::{
+    BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,
+    ProcessEvent,
+};
 use crate::execution::wire::Notice;
+
+#[test]
+fn native_executor_states_identity_and_platform_cleanup_scope() {
+    // Arrange
+    let native = Native {
+        configuration: process().configuration,
+    };
+
+    // Act / Assert
+    assert_eq!(native.identity(), "native");
+    #[cfg(target_os = "linux")]
+    assert_eq!(native.cleanup_scope(), CommandCleanupScope::PidNamespace);
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(
+        native.cleanup_scope(),
+        CommandCleanupScope::ProcessGroupBestEffort
+    );
+}
 
 fn process() -> NativeProcess {
     NativeProcess {
@@ -49,9 +70,9 @@ fn launcher_encoding_rejects_non_utf8_arguments_and_environment() {
         (vec![], vec![(invalid.clone(), "value".into())]),
         (vec![], vec![("NAME".into(), invalid)]),
     ] {
-        let command =
-            Command::new("/bin/bash".into(), arguments, ".".into()).expect("byte arguments");
-        let policy = Policy::new(
+        let command = ExecutionCommand::new("/bin/bash".into(), arguments, ".".into())
+            .expect("byte arguments");
+        let policy = ExecutionPolicy::new(
             "/workspace".into(),
             vec!["/workspace/.git".into()],
             Grants {
@@ -138,14 +159,14 @@ async fn notice_channel_preserves_main_exit_and_requires_completion_acknowledgme
         bytes.push(b'\n');
         sender.write_all(&bytes).await.expect("send");
         assert!(
-            matches!(process.next_event(&mut [0; 16]).await, Ok(Event::MainExit(exit)) if exit == expected)
+            matches!(process.next_event(&mut [0; 16]).await, Ok(ProcessEvent::MainExit(exit)) if exit == expected)
         );
         assert!(!process.finished);
     }
     sender.write_all(b"\"Finished\"\n").await.expect("finish");
     assert!(matches!(
         process.next_event(&mut [0; 16]).await,
-        Ok(Event::Quiescent)
+        Ok(ProcessEvent::Quiescent)
     ));
     assert!(process.finished);
     assert_eq!(sender.read_u8().await.expect("acknowledgment"), b'x');
@@ -300,7 +321,7 @@ async fn metadata_indirections_reject_invalid_oversized_or_missing_targets() {
 async fn unavailable_launcher_never_creates_a_child() {
     // Arrange
     let mut process = process();
-    process.configuration.snapshot.launcher = Path::new("/missing/ag-harness-launcher").into();
+    process.configuration.snapshot.launcher = Some("/missing/ag-harness-launcher".into());
 
     // Act / Assert
     assert_eq!(process.start().await, Err(ExecutionError::Setup));

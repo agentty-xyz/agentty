@@ -41,6 +41,11 @@ flowchart LR
   creating `Harness` or move into spawned tasks.
 - `TurnInput` is the shared user-input type for one-shot and durable turns: ordered,
   bounded text and image blocks with plain-string conversion for text-only input.
+- `BashExecutor` and `BashProcess` form the public object-safe Bash execution boundary.
+  `BashConfig::new` selects the default native sandbox launcher;
+  `BashConfig::for_executor` selects an explicit host executor, including the shipped
+  `UnsandboxedExecutor::without_isolation` for hosts already inside a container or VM.
+  Selection is always explicit, with no fallback and no environment-based choice.
 - `Model` is the object-safe provider boundary. `ModelCompletion` carries the response,
   optional metadata, and an optional native continuation identifier.
 - `run_once` executes a turn without durable history.
@@ -74,18 +79,25 @@ behavior. Mutable counters, cancellation, and shared provider-call budget accoun
 remain execution state rather than configuration. Agentty permission mapping remains
 later work.
 
-Sandboxed Bash consumes the shared private execution supervisor through explicit
-per-turn host policy and a separate tool permission. Workspace reads are the default;
-writes, runtime reads, environment values, and host-information exposure require grants.
-Git metadata stays read-only, networking is deny-only, and unsupported policy fails
-closed. Linux currently rejects workspace write grants before execution, because static
-Bubblewrap mounts cannot protect Git metadata created later beneath a writable
-directory; macOS enforces write grants through Seatbelt metadata denials. A dedicated
-trusted launcher clears inherited descriptors before running untrusted code. Linux uses
-Bubblewrap, seccomp, and a PID namespace. macOS uses Seatbelt and reports best-effort
-process-group cleanup: escaped descendants may remain alive under the inherited sandbox.
-Neither pipe EOF nor the main shell exit establishes completion of the backend's cleanup
-scope.
+Bash runs through the host-selected executor behind explicit per-turn host policy and a
+separate tool permission. The harness retains policy validation, intent persistence
+before any spawn, the original deadline, the combined output budget, cancellation, and
+bounded cleanup retries; the selected executor owns process launch, its documented
+enforcement, output capture, and cleanup, and declares the cleanup scope carried on
+every recorded outcome. Each executor's stable identity enters durable policy snapshots
+and host-request fingerprints; legacy snapshots decode as the native default without
+changing their recorded fingerprints. Workspace reads are the default; writes, runtime
+reads, environment values, and host-information exposure require grants. Git metadata
+stays read-only, networking is deny-only, and unsupported policy fails closed for
+enforcing executors; the unsandboxed executor applies only launch configuration and
+enforces no boundary of its own. On the native executor, Linux currently rejects
+workspace write grants before execution, because static Bubblewrap mounts cannot protect
+Git metadata created later beneath a writable directory; macOS enforces write grants
+through Seatbelt metadata denials. A dedicated trusted launcher clears inherited
+descriptors before running untrusted code. Linux uses Bubblewrap, seccomp, and a PID
+namespace. macOS uses Seatbelt and reports best-effort process-group cleanup: escaped
+descendants may remain alive under the inherited sandbox. Neither pipe EOF nor the main
+shell exit establishes completion of the executor's cleanup scope.
 
 A combined stdout/stderr budget and the original monotonic deadline bound preparation,
 execution, and capture. The supervisor retains cleanup after caller drop and preserves
@@ -356,26 +368,20 @@ emits cancellation once.
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
 construction and idle-session model switching, ordered text/image input, model-aware
-context projection, journaled sandboxed Bash, and structured compaction checkpoints are
-delivered library capabilities.
-
-1. **Host-selected Bash executor**
-
-   Separate command enforcement from the harness. The harness keeps the policy values,
-   separate tool permission, command journal, deadlines, bounded output, and the
-   no-replay rule; the host supplies the executor. Offer a library-backed OS sandbox and
-   an explicitly named unsandboxed executor for hosts that already run inside a
-   container or VM. Adopt a sandbox library only after proving it can keep existing and
-   newly created Git metadata read-only and deny networking; otherwise retain the native
-   launcher as one executor. Once replaced, retire the launcher, seccomp filter, and
-   AppArmor provisioning, verify generated sandbox profiles with platform-independent
-   unit tests, and keep a small native suite that proves kernel enforcement.
+context projection, journaled sandboxed Bash with host-selected executors, and
+structured compaction checkpoints are delivered library capabilities. Sandbox-library
+adoption remains rejected: no evaluated candidate denies writes to Git metadata created
+after launch on Linux, so the native launcher, seccomp filter, and AppArmor provisioning
+stay.
 
 1. **Linux Bash write access**
 
-   Restore Linux workspace write grants through the selected executor, keeping newly
-   created Git metadata read-only beneath writable directories to match the macOS
-   contract.
+   Restore Linux workspace write grants by adding Landlock write rules inside the
+   existing Bubblewrap launcher. Protect Git metadata that exists at launch, including
+   linked-worktree administrative directories resolved through `.git` pointer files. A
+   repository the command itself creates inside a writable grant is the command's own
+   output and is not retroactively protected; macOS keeps its stronger pattern-based
+   metadata denial.
 
 1. **Agentty runtime adapters**
 

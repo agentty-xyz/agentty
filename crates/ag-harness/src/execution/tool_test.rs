@@ -3,13 +3,16 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use super::BashTool;
+use super::{BashTool, command_outcome};
 use crate::command_settlement::Commands;
 use crate::execution::contract::{
-    Command, Execution, ExecutionControl, ExecutionError, ExecutionResult, Executor, Limits,
-    MainExit, Output, Policy, PreparedExecution, Stream, Termination,
+    Execution, ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy,
+    ExecutionResult, Executor, Limits, MainExit, Output, OutputStream, PreparedExecution,
+    Termination,
 };
-use crate::{BashArguments, BashConfig, BashError, CommandOutcome, CommandTermination, TurnError};
+use crate::{
+    BashArguments, BashConfig, BashError, CommandCleanupScope, CommandTermination, TurnError,
+};
 
 struct FailingExecutor {
     panic: bool,
@@ -18,8 +21,8 @@ struct FailingExecutor {
 impl Executor for FailingExecutor {
     fn prepare(
         &self,
-        _: Command,
-        _: Policy,
+        _: ExecutionCommand,
+        _: ExecutionPolicy,
         _: Limits,
     ) -> Result<PreparedExecution, ExecutionError> {
         if !self.panic {
@@ -120,6 +123,7 @@ async fn invalid_policy_and_executor_failure_never_register_effects() {
         configuration.snapshot.timeout = timeout;
         let commands = Commands::default();
         let tool = BashTool {
+            cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
             commands: commands.clone(),
             configuration,
             executor: Arc::new(FailingExecutor { panic: false }),
@@ -142,6 +146,7 @@ async fn executor_panic_retains_cleanup_authority_and_unknown_outcome() {
     // Arrange
     let commands = Commands::default();
     let tool = BashTool {
+        cleanup_scope: CommandCleanupScope::ProcessGroupBestEffort,
         commands: commands.clone(),
         configuration: configuration(),
         executor: Arc::new(FailingExecutor { panic: true }),
@@ -182,17 +187,20 @@ fn outcome_keeps_exit_output_and_each_failure_dimension() {
     ] {
         let mut output =
             Output::new(Limits::new(Instant::now(), Duration::from_secs(1), 4).expect("limits"));
-        output.capture(Stream::Stdout, b"ok");
-        output.capture(Stream::Stderr, b"bad");
+        output.capture(OutputStream::Stdout, b"ok");
+        output.capture(OutputStream::Stderr, b"bad");
 
         // Act
-        let outcome = CommandOutcome::from(ExecutionResult {
-            cleanup_failure: Some(ExecutionError::Cleanup),
-            execution_failure: Some(failure),
-            main_exit: MainExit::Signal(15),
-            output,
-            termination: Termination::Failed,
-        });
+        let outcome = command_outcome(
+            &ExecutionResult {
+                cleanup_failure: Some(ExecutionError::Cleanup),
+                execution_failure: Some(failure),
+                main_exit: MainExit::Signal(15),
+                output,
+                termination: Termination::Failed,
+            },
+            CommandCleanupScope::ProcessGroupBestEffort,
+        );
 
         // Assert
         assert_eq!(outcome.execution_failure, Some(expected));

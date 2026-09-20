@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use super::{
-    Access, Command, Execution, ExecutionControl, ExecutionError, ExecutionResult, Executor,
-    Grants, Limits, MainExit, Output, Policy, PreparedExecution, Stream, Termination,
-    ValidationError,
+    Execution, ExecutionAccess, ExecutionCommand, ExecutionControl, ExecutionError,
+    ExecutionPolicy, ExecutionResult, Executor, Grants, Limits, MainExit, Output, OutputStream,
+    PreparedExecution, Termination, ValidationError,
 };
 
 #[test]
@@ -20,7 +20,7 @@ fn command_preserves_literal_argv_and_workspace_relative_directory() {
     let arguments = vec![OsString::from(""), OsString::from("$(hostile); *\n--flag")];
 
     // Act
-    let command = Command::new("/runtime/tool".into(), arguments.clone(), "src".into())
+    let command = ExecutionCommand::new("/runtime/tool".into(), arguments.clone(), "src".into())
         .expect("valid literal command");
 
     // Assert
@@ -38,21 +38,45 @@ fn command_rejects_ambiguous_paths_and_nul_but_allows_root_directory() {
     // Act / Assert
     for executable in invalid_executables {
         assert_eq!(
-            Command::new(executable.into(), vec![], ".".into()).err(),
+            ExecutionCommand::new(executable.into(), vec![], ".".into()).err(),
             Some(ValidationError::InvalidPath)
         );
     }
     for directory in invalid_directories {
         assert_eq!(
-            Command::new("/tool".into(), vec![], directory.into()).err(),
+            ExecutionCommand::new("/tool".into(), vec![], directory.into()).err(),
             Some(ValidationError::InvalidPath)
         );
     }
     assert_eq!(
-        Command::new("/tool".into(), vec!["bad\0argument".into()], ".".into()).err(),
+        ExecutionCommand::new("/tool".into(), vec!["bad\0argument".into()], ".".into()).err(),
         Some(ValidationError::InvalidArgument)
     );
-    assert!(Command::new("/tool".into(), vec![], ".".into()).is_ok());
+    assert!(ExecutionCommand::new("/tool".into(), vec![], ".".into()).is_ok());
+}
+
+#[test]
+fn execution_errors_render_content_free_messages() {
+    // Arrange
+    let cases = [
+        (
+            ExecutionError::Unsupported,
+            "execution unsupported for this policy or platform",
+        ),
+        (ExecutionError::Setup, "execution setup failed"),
+        (ExecutionError::Process, "process execution failed"),
+        (ExecutionError::Supervision, "execution supervision failed"),
+        (ExecutionError::Cleanup, "execution cleanup failed"),
+        (
+            ExecutionError::CleanupUnconfirmed,
+            "execution cleanup remains unconfirmed",
+        ),
+    ];
+
+    // Act / Assert
+    for (error, message) in cases {
+        assert_eq!(error.to_string(), message);
+    }
 }
 
 #[test]
@@ -71,7 +95,7 @@ fn default_policy_is_read_only_without_ambient_grants() {
     for path in ["/workspace", "/workspace/src", "/workspace/.git/config"] {
         assert_eq!(
             policy.requested_access(Path::new(path)),
-            Ok(Access::ReadOnly)
+            ExecutionAccess::ReadOnly
         );
     }
     for path in [
@@ -79,13 +103,13 @@ fn default_policy_is_read_only_without_ambient_grants() {
         "/workspace-sibling",
         "/admin/repo/config",
         "/",
+        "/workspace/../secret",
     ] {
-        assert_eq!(policy.requested_access(Path::new(path)), Ok(Access::Denied));
+        assert_eq!(
+            policy.requested_access(Path::new(path)),
+            ExecutionAccess::Denied
+        );
     }
-    assert_eq!(
-        policy.requested_access(Path::new("/workspace/../secret")),
-        Err(ValidationError::InvalidPath)
-    );
 }
 
 #[test]
@@ -118,22 +142,25 @@ fn explicit_grants_are_scoped_and_do_not_make_external_reads_writable() {
     assert_eq!(policy.workspace_writes(), [PathBuf::from("src")]);
     assert!(policy.exposes_host_information());
     for (path, expected) in [
-        ("/workspace/src", Access::ReadWrite),
-        ("/workspace/src/file", Access::ReadWrite),
-        ("/workspace/src-other/file", Access::ReadOnly),
-        ("/workspace/other", Access::ReadOnly),
-        ("/runtime/tool", Access::ReadOnly),
-        ("/runtime-other/tool", Access::Denied),
-        ("/admin/repo/worktrees/linked/index", Access::ReadOnly),
+        ("/workspace/src", ExecutionAccess::ReadWrite),
+        ("/workspace/src/file", ExecutionAccess::ReadWrite),
+        ("/workspace/src-other/file", ExecutionAccess::ReadOnly),
+        ("/workspace/other", ExecutionAccess::ReadOnly),
+        ("/runtime/tool", ExecutionAccess::ReadOnly),
+        ("/runtime-other/tool", ExecutionAccess::Denied),
+        (
+            "/admin/repo/worktrees/linked/index",
+            ExecutionAccess::ReadOnly,
+        ),
     ] {
-        assert_eq!(policy.requested_access(Path::new(path)), Ok(expected));
+        assert_eq!(policy.requested_access(Path::new(path)), expected);
     }
 }
 
 #[test]
 fn git_protection_overrides_whole_workspace_write_grants() {
     // Arrange
-    let policy = Policy::new(
+    let policy = ExecutionPolicy::new(
         "/workspace".into(),
         vec!["/workspace/admin".into(), "/common/git".into()],
         Grants {
@@ -154,7 +181,7 @@ fn git_protection_overrides_whole_workspace_write_grants() {
     ] {
         assert_eq!(
             policy.requested_access(Path::new(path)),
-            Ok(Access::ReadOnly)
+            ExecutionAccess::ReadOnly
         );
     }
     for path in [
@@ -164,7 +191,7 @@ fn git_protection_overrides_whole_workspace_write_grants() {
     ] {
         assert_eq!(
             policy.requested_access(Path::new(path)),
-            Ok(Access::ReadWrite)
+            ExecutionAccess::ReadWrite
         );
     }
 }
@@ -214,7 +241,7 @@ fn policy_rejects_invalid_roots() {
     // Act / Assert
     for (workspace, metadata, grants, expected) in cases {
         assert_eq!(
-            Policy::new(
+            ExecutionPolicy::new(
                 workspace.into(),
                 metadata.into_iter().map(PathBuf::from).collect(),
                 grants
@@ -288,7 +315,7 @@ fn policy_rejects_invalid_grants_and_network_enablement() {
     // Act / Assert
     for (workspace, metadata, grants, expected) in cases {
         assert_eq!(
-            Policy::new(
+            ExecutionPolicy::new(
                 workspace.into(),
                 metadata.into_iter().map(PathBuf::from).collect(),
                 grants
@@ -320,7 +347,7 @@ fn environment_rejects_invalid_names_values_and_duplicates() {
             ..Grants::default()
         };
         assert_eq!(
-            Policy::new("/workspace".into(), vec!["/admin".into()], grants).err(),
+            ExecutionPolicy::new("/workspace".into(), vec!["/admin".into()], grants).err(),
             Some(ValidationError::InvalidEnvironment)
         );
     }
@@ -354,8 +381,8 @@ fn capture_budget_is_shared_binary_and_truncation_is_sticky() {
     let mut output = Output::new(limits(5));
 
     // Act
-    output.capture(Stream::Stderr, &[0, 255]);
-    output.capture(Stream::Stdout, b"abc");
+    output.capture(OutputStream::Stderr, &[0, 255]);
+    output.capture(OutputStream::Stdout, b"abc");
 
     // Assert
     assert_eq!(output.stderr(), &[0, 255]);
@@ -363,8 +390,8 @@ fn capture_budget_is_shared_binary_and_truncation_is_sticky() {
     assert!(!output.truncated());
 
     // Act
-    output.capture(Stream::Stderr, b"discarded");
-    output.capture(Stream::Stdout, b"");
+    output.capture(OutputStream::Stderr, b"discarded");
+    output.capture(OutputStream::Stdout, b"");
 
     // Assert
     assert_eq!(output.stderr(), &[0, 255]);
@@ -379,9 +406,9 @@ fn partial_chunks_and_zero_budget_retain_only_the_shared_prefix() {
     let mut zero = Output::new(limits(0));
 
     // Act
-    partial.capture(Stream::Stdout, b"a");
-    partial.capture(Stream::Stderr, b"bcd");
-    zero.capture(Stream::Stderr, b"");
+    partial.capture(OutputStream::Stdout, b"a");
+    partial.capture(OutputStream::Stderr, b"bcd");
+    zero.capture(OutputStream::Stderr, b"");
 
     // Assert
     assert_eq!(partial.stdout(), b"a");
@@ -390,7 +417,7 @@ fn partial_chunks_and_zero_budget_retain_only_the_shared_prefix() {
     assert!(!zero.truncated());
 
     // Act
-    zero.capture(Stream::Stdout, b"dropped");
+    zero.capture(OutputStream::Stdout, b"dropped");
 
     // Assert
     assert_eq!(zero.stdout(), b"");
@@ -419,7 +446,7 @@ fn result_dimensions_do_not_overwrite_each_other() {
         for termination in reasons {
             for cleanup_failure in [None, Some(ExecutionError::Cleanup)] {
                 let mut output = Output::new(limits(2));
-                output.capture(Stream::Stdout, b"out");
+                output.capture(OutputStream::Stdout, b"out");
                 let result = ExecutionResult {
                     cleanup_failure,
                     execution_failure: None,
@@ -518,12 +545,13 @@ fn injection_can_reject_unsupported_or_failed_preparation_without_starting() {
     }
 }
 
-fn policy(grants: Grants) -> Policy {
-    Policy::new("/workspace".into(), vec!["/admin/repo".into()], grants).expect("valid policy")
+fn policy(grants: Grants) -> ExecutionPolicy {
+    ExecutionPolicy::new("/workspace".into(), vec!["/admin/repo".into()], grants)
+        .expect("valid policy")
 }
 
-fn command() -> Command {
-    Command::new("/runtime/tool".into(), vec![], ".".into()).expect("valid command")
+fn command() -> ExecutionCommand {
+    ExecutionCommand::new("/runtime/tool".into(), vec![], ".".into()).expect("valid command")
 }
 
 fn limits(bytes: usize) -> Limits {
@@ -545,14 +573,14 @@ struct FakeExecutor {
 impl Executor for FakeExecutor {
     fn prepare(
         &self,
-        command: Command,
-        policy: Policy,
+        command: ExecutionCommand,
+        policy: ExecutionPolicy,
         limits: Limits,
     ) -> Result<PreparedExecution, ExecutionError> {
         assert_eq!(command.executable(), Path::new("/runtime/tool"));
         assert_eq!(
             policy.requested_access(command.executable()),
-            Ok(Access::Denied)
+            ExecutionAccess::Denied
         );
         if let Some(error) = self.rejection {
             return Err(error);

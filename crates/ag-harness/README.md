@@ -200,10 +200,22 @@ fencing, or proof that remote providers and unrelated processes have stopped.
 
 Bash requires both `ToolPolicy::allow(Tool::Bash)` and an explicit
 `TurnOptions::with_bash(BashConfig)` for each turn. The companion CLI does not enable
-it. Install the matching `ag-harness-sandbox` binary from this crate at a trusted
-location outside the execution workspace, then supply its absolute path and the trusted
-Bash executable to `BashConfig::new`. Both native backends require the explicit
-`with_host_information` grant: native commands cannot conceal all host details.
+it. `BashConfig::new` selects the default native sandbox executor: install the matching
+`ag-harness-sandbox` binary from this crate at a trusted location outside the execution
+workspace, then supply its absolute path and the trusted Bash executable. Every executor
+requires the explicit `with_host_information` grant: commands cannot conceal all host
+details.
+
+`BashConfig::for_executor` instead selects a host-supplied implementation of the public
+object-safe `BashExecutor`/`BashProcess` contract. The harness keeps policy validation,
+intent persistence before spawning, the deadline, the combined output budget,
+cancellation, and cleanup retries; the executor owns launch, its documented enforcement,
+capture, and cleanup, and declares the `CommandCleanupScope` recorded on every outcome
+plus a stable identity stored in durable policy snapshots. The shipped
+`UnsandboxedExecutor::without_isolation` runs commands with the harness process's own
+operating-system access for hosts that already execute inside a container or VM; it
+enforces no filesystem, network, or Git-metadata boundary. Executor selection is always
+explicit — there is no fallback and no environment-based choice.
 
 Workspace access defaults to read-only. Grant writes to existing relative directories
 with `with_write`, external runtime reads with `with_read`, and individual environment
@@ -221,9 +233,9 @@ namespaces, read-only mounts, and seccomp restrictions including keyring denial.
 libraries and executable paths must be readable through explicit grants. macOS uses
 Seatbelt through the system `sandbox-exec`. Its Bash runtime currently requires
 `with_host_information`, including root-directory enumeration and filesystem metadata;
-file contents still require separate grants. Unsupported policies fail closed. Workspace
-symlinks, multiply linked workspace files, special files, overlapping read grants, and
-oversized preparation trees are rejected. There is no unsandboxed or VM fallback.
+file contents still require separate grants. Unsupported policies fail closed on the
+native executor. Workspace symlinks, multiply linked workspace files, special files,
+overlapping read grants, and oversized preparation trees are rejected.
 
 `CommandOutcome` preserves main exit, termination reason, combined output truncation,
 execution failure, and cleanup failure separately. `PidNamespace` cleanup includes Linux
@@ -243,7 +255,9 @@ explicitly call `Session::reconcile_command` with its original record; this pres
 unknown history and cannot reconcile another owner.
 
 Native qualification tests are in `tests/sandbox.rs`; missing enforcement fails the
-suite. CI targets native Ubuntu 24.04 and macOS 26. Ubuntu's AppArmor policy must allow
+suite. Its lifecycle and persistence conformance behavior runs against both the native
+and the unsandboxed executor, while enforcement tests qualify only the native one. CI
+targets native Ubuntu 24.04 and macOS 26. Ubuntu's AppArmor policy must allow
 Bubblewrap's namespace setup capabilities. CI loads a profile scoped to `bwrap` that
 denies capabilities to executed children, then probes startup without `sudo`. It does
 not disable AppArmor or the host's user-namespace restrictions. A CI target is not a

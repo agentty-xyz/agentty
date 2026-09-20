@@ -10,10 +10,12 @@ use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use super::{Backend, Clock, Control, Event, Process, Running, Supervisor, Worker};
+use super::{Clock, Control, Running, Supervisor, Worker};
+use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
-    Command, Execution, ExecutionControl, ExecutionError, Executor, Grants, Limits, MainExit,
-    Policy, PreparedExecution, Stream, Termination,
+    BashExecutor, BashProcess, Execution, ExecutionCommand, ExecutionControl, ExecutionError,
+    ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream, PreparedExecution,
+    ProcessEvent, Termination,
 };
 
 #[test]
@@ -83,11 +85,11 @@ async fn inert_binding_rejects_without_starting() {
 async fn completion_requires_main_exit_both_eofs_and_quiescence() {
     // Arrange
     let fixture = Fixture::ready();
-    fixture.output(Stream::Stdout, &[0, 255]);
-    fixture.output(Stream::Stderr, b"error");
-    fixture.event(Event::MainExit(MainExit::Code(7)));
-    fixture.event(Event::Eof(Stream::Stdout));
-    fixture.event(Event::Eof(Stream::Stderr));
+    fixture.output(OutputStream::Stdout, &[0, 255]);
+    fixture.output(OutputStream::Stderr, b"error");
+    fixture.event(ProcessEvent::MainExit(MainExit::Code(7)));
+    fixture.event(ProcessEvent::Eof(OutputStream::Stdout));
+    fixture.event(ProcessEvent::Eof(OutputStream::Stderr));
     let PreparedExecution { control, execution } = fixture.prepare(5);
     let running = tokio::spawn(execution.run());
 
@@ -99,7 +101,7 @@ async fn completion_requires_main_exit_both_eofs_and_quiescence() {
     assert_eq!(fixture.state.cleaning.load(Ordering::SeqCst), 0);
 
     // Act
-    fixture.event(Event::Quiescent);
+    fixture.event(ProcessEvent::Quiescent);
     let result = running.await.expect("supervised result");
 
     // Assert
@@ -225,8 +227,8 @@ async fn preparation_and_start_failures_keep_the_original_error_when_cleanup_fai
 async fn event_failure_keeps_main_exit_and_truncated_output_with_unconfirmed_cleanup() {
     // Arrange
     let fixture = Fixture::new(Mode::Ready, Mode::Ready, vec![Mode::Stall; 2]);
-    fixture.event(Event::MainExit(MainExit::Signal(9)));
-    fixture.output(Stream::Stderr, b"diagnostic");
+    fixture.event(ProcessEvent::MainExit(MainExit::Signal(9)));
+    fixture.output(OutputStream::Stderr, b"diagnostic");
     fixture.send(Input::Failure);
     let PreparedExecution { control, execution } = fixture.prepare(4);
     let before = TestClock.now();
@@ -521,7 +523,7 @@ async fn cleanup_timeout_can_recover_within_the_bounded_attempts() {
 async fn backend_length_violation_fails_without_indexing_outside_the_read_buffer() {
     // Arrange
     let fixture = Fixture::ready();
-    fixture.event(Event::Output(Stream::Stdout, usize::MAX));
+    fixture.event(ProcessEvent::Output(OutputStream::Stdout, usize::MAX));
     let PreparedExecution { control, execution } = fixture.prepare(0);
 
     // Act
@@ -650,9 +652,9 @@ async fn preparation_and_start_spend_the_same_deadline_while_cleanup_has_its_own
         Mode::Delay(Duration::from_secs(3)),
         vec![Mode::Stall; 2],
     );
-    fixture.event(Event::MainExit(MainExit::Code(7)));
-    fixture.event(Event::Eof(Stream::Stdout));
-    fixture.event(Event::Eof(Stream::Stderr));
+    fixture.event(ProcessEvent::MainExit(MainExit::Code(7)));
+    fixture.event(ProcessEvent::Eof(OutputStream::Stdout));
+    fixture.event(ProcessEvent::Eof(OutputStream::Stderr));
     let PreparedExecution { control, execution } = fixture.prepare(0);
     let before = TestClock.now();
 
@@ -738,11 +740,11 @@ impl Fixture {
         assert!(self.input.try_send(input).is_ok());
     }
 
-    fn event(&self, event: Event) {
+    fn event(&self, event: ProcessEvent) {
         self.send(Input::Event(event));
     }
 
-    fn output(&self, stream: Stream, bytes: &[u8]) {
+    fn output(&self, stream: OutputStream, bytes: &[u8]) {
         self.send(Input::Bytes(stream, bytes.to_vec()));
     }
 
@@ -753,21 +755,21 @@ impl Fixture {
     }
 }
 
-fn completion_events() -> [Event; 4] {
+fn completion_events() -> [ProcessEvent; 4] {
     [
-        Event::MainExit(MainExit::Code(0)),
-        Event::Eof(Stream::Stdout),
-        Event::Eof(Stream::Stderr),
-        Event::Quiescent,
+        ProcessEvent::MainExit(MainExit::Code(0)),
+        ProcessEvent::Eof(OutputStream::Stdout),
+        ProcessEvent::Eof(OutputStream::Stderr),
+        ProcessEvent::Quiescent,
     ]
 }
 
-fn command() -> Command {
-    Command::new("/runtime/tool".into(), vec![], ".".into()).expect("command")
+fn command() -> ExecutionCommand {
+    ExecutionCommand::new("/runtime/tool".into(), vec![], ".".into()).expect("command")
 }
 
-fn policy() -> Policy {
-    Policy::new(
+fn policy() -> ExecutionPolicy {
+    ExecutionPolicy::new(
         "/workspace".into(),
         vec!["/admin/repo".into()],
         Grants::default(),
@@ -814,16 +816,32 @@ struct State {
 
 struct RejectBackend;
 
-impl Backend for RejectBackend {
-    fn bind(&self) -> Result<Box<dyn Process>, ExecutionError> {
+impl BashExecutor for RejectBackend {
+    fn identity(&self) -> &'static str {
+        "reject"
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
         Err(ExecutionError::Unsupported)
     }
 }
 
 struct FakeBackend(Mutex<Option<FakeProcess>>);
 
-impl Backend for FakeBackend {
-    fn bind(&self) -> Result<Box<dyn Process>, ExecutionError> {
+impl BashExecutor for FakeBackend {
+    fn identity(&self) -> &'static str {
+        "fake"
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
         Ok(Box::new(
             self.0
                 .try_lock()
@@ -858,8 +876,8 @@ impl Mode {
 }
 
 enum Input {
-    Event(Event),
-    Bytes(Stream, Vec<u8>),
+    Event(ProcessEvent),
+    Bytes(OutputStream, Vec<u8>),
     Failure,
 }
 
@@ -872,8 +890,12 @@ struct FakeProcess {
 }
 
 #[async_trait]
-impl Process for FakeProcess {
-    async fn prepare(&mut self, command: &Command, policy: &Policy) -> Result<(), ExecutionError> {
+impl BashProcess for FakeProcess {
+    async fn prepare(
+        &mut self,
+        command: &ExecutionCommand,
+        policy: &ExecutionPolicy,
+    ) -> Result<(), ExecutionError> {
         assert_eq!(command.executable(), Path::new("/runtime/tool"));
         assert_eq!(policy.workspace(), Path::new("/workspace"));
         self.state.preparing.fetch_add(1, Ordering::SeqCst);
@@ -885,17 +907,17 @@ impl Process for FakeProcess {
         self.start.apply().await
     }
 
-    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<Event, ExecutionError> {
+    async fn next_event(&mut self, buffer: &mut [u8]) -> Result<ProcessEvent, ExecutionError> {
         self.state.reading.fetch_add(1, Ordering::SeqCst);
         if self.state.flood.load(Ordering::SeqCst) {
             buffer.fill(255);
-            return Ok(Event::Output(Stream::Stdout, buffer.len()));
+            return Ok(ProcessEvent::Output(OutputStream::Stdout, buffer.len()));
         }
         match self.events.recv().await.expect("fixture retains input") {
             Input::Event(event) => Ok(event),
             Input::Bytes(stream, bytes) => {
                 buffer[..bytes.len()].copy_from_slice(&bytes);
-                Ok(Event::Output(stream, bytes.len()))
+                Ok(ProcessEvent::Output(stream, bytes.len()))
             }
             Input::Failure => Err(ExecutionError::Process),
         }
@@ -923,7 +945,7 @@ impl Drop for FakeProcess {
 async fn progress_does_not_replace_exit_or_completion_observation() {
     // Arrange
     let fixture = Fixture::ready();
-    fixture.event(Event::Progress);
+    fixture.event(ProcessEvent::Progress);
     fixture.complete();
     let PreparedExecution { control, execution } = fixture.prepare(0);
 

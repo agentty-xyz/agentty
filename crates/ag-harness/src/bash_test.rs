@@ -1,10 +1,13 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
 
+use crate::command_journal::CommandCleanupScope;
 use crate::{
-    BashArguments, BashConfig, BashError, OutputSchema, StoredTurnOptions, Tool, ToolCall,
-    ToolCallArguments, ToolDefinition, ToolPolicy, TurnLimits, TurnOptions,
+    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, ExecutionError, OutputSchema,
+    StoredTurnOptions, Tool, ToolCall, ToolCallArguments, ToolDefinition, ToolPolicy, TurnLimits,
+    TurnOptions, UnsandboxedExecutor,
 };
 
 fn configuration() -> BashConfig {
@@ -16,6 +19,32 @@ fn configuration() -> BashConfig {
         1024,
     )
     .expect("configuration")
+}
+
+fn executor_configuration(executor: Arc<dyn BashExecutor>) -> Result<BashConfig, BashError> {
+    BashConfig::for_executor(
+        executor,
+        "/bin/bash".into(),
+        "revision-1".into(),
+        Duration::from_secs(5),
+        1024,
+    )
+}
+
+struct NamedExecutor(String);
+
+impl BashExecutor for NamedExecutor {
+    fn identity(&self) -> &str {
+        &self.0
+    }
+
+    fn cleanup_scope(&self) -> CommandCleanupScope {
+        CommandCleanupScope::ProcessGroupBestEffort
+    }
+
+    fn bind(&self) -> Result<Box<dyn BashProcess>, ExecutionError> {
+        Err(ExecutionError::Unsupported)
+    }
 }
 
 #[test]
@@ -159,6 +188,71 @@ fn policy_is_immutable_and_snapshots_identify_environment_without_values() {
 }
 
 #[test]
+fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots() {
+    // Arrange
+    let native = configuration();
+    let selected = executor_configuration(Arc::new(UnsandboxedExecutor::without_isolation()))
+        .expect("executor configuration");
+    let equivalent = executor_configuration(Arc::new(UnsandboxedExecutor::without_isolation()))
+        .expect("executor configuration");
+    let native_options = options(native.clone());
+    let selected_options = options(selected.clone());
+
+    // Act
+    let native_encoded = StoredTurnOptions::encode(&native_options);
+    let selected_encoded = StoredTurnOptions::encode(&selected_options);
+
+    // Assert
+    assert_eq!(
+        selected, equivalent,
+        "identity, not the instance, compares executors"
+    );
+    assert_ne!(native, selected);
+    assert_eq!(selected.snapshot.executor, "unsandboxed");
+    assert_eq!(selected.snapshot.launcher, None);
+    assert!(
+        !native_encoded.contains("executor"),
+        "native snapshots keep their pre-executor encoding: {native_encoded}"
+    );
+    assert!(selected_encoded.contains("unsandboxed"));
+    let decoded = StoredTurnOptions::decode(&selected_encoded).expect("snapshot");
+    assert!(decoded.continuation_compatible(&selected_options));
+    assert!(!decoded.continuation_compatible(&native_options));
+    assert!(
+        StoredTurnOptions::decode(&native_encoded)
+            .expect("legacy-shaped snapshot")
+            .continuation_compatible(&native_options)
+    );
+}
+
+#[test]
+fn executor_identities_are_validated_and_cannot_claim_the_native_default() {
+    // Arrange
+    let long = "x".repeat(257);
+    let invalid = ["", " \n", &long, "nul\0id", "native"];
+
+    // Act / Assert
+    for identity in invalid {
+        assert_eq!(
+            executor_configuration(Arc::new(NamedExecutor(identity.to_string()))).err(),
+            Some(BashError::InvalidPolicy)
+        );
+    }
+    assert!(executor_configuration(Arc::new(NamedExecutor("container".to_string()))).is_ok());
+    assert_eq!(
+        BashConfig::for_executor(
+            Arc::new(NamedExecutor("container".to_string())),
+            "relative-bash".into(),
+            "revision".into(),
+            Duration::from_secs(5),
+            1024,
+        )
+        .err(),
+        Some(BashError::InvalidPolicy)
+    );
+}
+
+#[test]
 fn malformed_or_unsupported_host_grants_are_rejected() {
     // Arrange
     let valid = configuration();
@@ -195,6 +289,17 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .expect("grant")
             .with_environment("KEY".into(), "two".into())
             .is_err()
+    );
+    assert_eq!(
+        BashConfig::new(
+            "relative-launcher".into(),
+            "/bin/bash".into(),
+            "revision".into(),
+            Duration::from_secs(5),
+            1024,
+        )
+        .err(),
+        Some(BashError::InvalidPolicy)
     );
     for (revision, duration, budget) in [
         ("", Duration::from_secs(1), 1),

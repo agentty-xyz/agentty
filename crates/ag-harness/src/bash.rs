@@ -3,27 +3,36 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::execution::BashExecutor;
+
+/// Identity recorded for the default native sandbox executor.
+pub(crate) const NATIVE_EXECUTOR: &str = "native";
+
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read grants.
-/// The launcher must be the matching `ag-harness-sandbox` binary at a trusted
-/// location outside the command workspace.
-#[derive(Clone, Eq, PartialEq)]
+/// The default native executor requires the matching `ag-harness-sandbox`
+/// launcher at a trusted location outside the command workspace;
+/// [`BashConfig::for_executor`] selects an explicit host executor instead.
+#[derive(Clone)]
 pub struct BashConfig {
     pub(crate) environment: BTreeMap<String, String>,
+    pub(crate) executor: Option<Arc<dyn BashExecutor>>,
     pub(crate) snapshot: BashPolicySnapshot,
 }
 
 impl BashConfig {
-    /// Configures trusted launcher and Bash executables and a nonsecret policy
-    /// revision. Change the revision whenever executable contents or granted
-    /// environment values change. Paths must be absolute and outside the
-    /// workspace; launch performs filesystem validation.
+    /// Configures the default native sandbox executor with trusted launcher
+    /// and Bash executables and a nonsecret policy revision. Change the
+    /// revision whenever executable contents or granted environment values
+    /// change. Paths must be absolute and outside the workspace; launch
+    /// performs filesystem validation.
     ///
     /// # Errors
     /// Rejects invalid identities, paths, deadlines, and capture bounds.
@@ -34,8 +43,58 @@ impl BashConfig {
         timeout: Duration,
         capture_bytes: usize,
     ) -> Result<Self, BashError> {
-        if !valid_path(&launcher, true)
-            || !valid_path(&bash, true)
+        if !valid_path(&launcher, true) {
+            return Err(BashError::InvalidPolicy);
+        }
+
+        Self::with_snapshot(Some(launcher), None, bash, revision, timeout, capture_bytes)
+    }
+
+    /// Configures an explicit host-selected executor instead of the default
+    /// native sandbox launcher. Selection is always explicit: the harness
+    /// never falls back to another executor or consults the environment. The
+    /// executor identity is recorded in durable policy snapshots and
+    /// host-request fingerprints; hosts must supply a new identity or
+    /// revision when executor behavior changes.
+    ///
+    /// # Errors
+    /// Rejects invalid executor identities, paths, deadlines, and capture
+    /// bounds.
+    pub fn for_executor(
+        executor: Arc<dyn BashExecutor>,
+        bash: PathBuf,
+        revision: String,
+        timeout: Duration,
+        capture_bytes: usize,
+    ) -> Result<Self, BashError> {
+        let identity = executor.identity().to_string();
+        if identity.trim().is_empty()
+            || identity.len() > 256
+            || identity.contains('\0')
+            || identity == NATIVE_EXECUTOR
+        {
+            return Err(BashError::InvalidPolicy);
+        }
+
+        Self::with_snapshot(
+            None,
+            Some((executor, identity)),
+            bash,
+            revision,
+            timeout,
+            capture_bytes,
+        )
+    }
+
+    fn with_snapshot(
+        launcher: Option<PathBuf>,
+        executor: Option<(Arc<dyn BashExecutor>, String)>,
+        bash: PathBuf,
+        revision: String,
+        timeout: Duration,
+        capture_bytes: usize,
+    ) -> Result<Self, BashError> {
+        if !valid_path(&bash, true)
             || revision.trim().is_empty()
             || revision.len() > 256
             || timeout.is_zero()
@@ -45,13 +104,19 @@ impl BashConfig {
         {
             return Err(BashError::InvalidPolicy);
         }
+        let (executor, identity) = match executor {
+            Some((executor, identity)) => (Some(executor), identity),
+            None => (None, NATIVE_EXECUTOR.to_string()),
+        };
 
         Ok(Self {
             environment: BTreeMap::new(),
+            executor,
             snapshot: BashPolicySnapshot {
                 bash,
                 capture_bytes,
                 environment_names: Vec::new(),
+                executor: identity,
                 external_reads: Vec::new(),
                 host_information: false,
                 launcher,
@@ -187,19 +252,45 @@ impl fmt::Debug for BashConfig {
     }
 }
 
+/// Executor instances compare through their recorded snapshot identity, so
+/// equal policies with separately constructed equivalent executors are equal.
+impl PartialEq for BashConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.environment == other.environment && self.snapshot == other.snapshot
+    }
+}
+
+impl Eq for BashConfig {}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct BashPolicySnapshot {
     pub(crate) bash: PathBuf,
     pub(crate) capture_bytes: usize,
     pub(crate) environment_names: Vec<String>,
+    /// Selected executor identity. Legacy snapshots predate executor
+    /// selection and decode as the native default; the native identity is
+    /// skipped on write so their recorded fingerprints stay stable.
+    #[serde(
+        default = "native_executor_identity",
+        skip_serializing_if = "is_native_executor"
+    )]
+    pub(crate) executor: String,
     pub(crate) external_reads: Vec<PathBuf>,
     pub(crate) host_information: bool,
-    pub(crate) launcher: PathBuf,
+    pub(crate) launcher: Option<PathBuf>,
     pub(crate) linux_bubblewrap: Option<PathBuf>,
     pub(crate) revision: String,
     pub(crate) timeout: Duration,
     pub(crate) workspace_writes: Vec<PathBuf>,
+}
+
+fn native_executor_identity() -> String {
+    NATIVE_EXECUTOR.to_string()
+}
+
+fn is_native_executor(identity: &str) -> bool {
+    identity == NATIVE_EXECUTOR
 }
 
 /// Validated shell source. Working directory, executable, grants, deadline,
@@ -261,8 +352,8 @@ pub enum BashError {
     /// Invalid shell source.
     #[error("invalid Bash arguments")]
     InvalidArguments,
-    /// Native isolation cannot enforce the requested policy.
-    #[error("native Bash sandbox unavailable for this policy or platform")]
+    /// The selected executor cannot execute the requested policy or platform.
+    #[error("Bash executor unavailable for this policy or platform")]
     Unavailable,
     /// Preparation, spawning, or supervision failed.
     #[error("sandboxed Bash execution failed")]

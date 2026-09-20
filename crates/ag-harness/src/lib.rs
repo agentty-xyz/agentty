@@ -83,6 +83,10 @@ pub use compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
 pub use context::{ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator};
 pub use effect::EffectSettlementError;
+pub use execution::{
+    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
+};
 pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
