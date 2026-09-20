@@ -71,25 +71,36 @@ read content; they govern current tool execution.
 The future Agentty adapters will resolve new options from each request's protocol
 profile, permission mode, and host-selected comparison context. Agentty owns review-loop
 behavior. Mutable counters, cancellation, and shared provider-call budget accounting
-remain execution state rather than configuration. Sandboxed Bash and Agentty permission
-mapping remain later work.
+remain execution state rather than configuration. Agentty permission mapping remains
+later work.
 
-Private execution contracts define immutable command and sandbox policy values, explicit
-workspace-write, external-read, environment, and host-information grants, and deny-only
-networking. Git metadata remains read-only, including linked-worktree administration. A
-shared stdout/stderr byte budget and monotonic deadline bound the execution contract;
-retained cancellation and cleanup control survives a dropped execution future. Results
-keep the main exit, execution error, termination reason, output truncation, and cleanup
-failure separate. Applied writes are not rolled back; aggregate memory, process-count,
-and disk quotas are excluded. These contracts have no production executor or public
-entry point. Future backends must enforce the policy against hostile commands,
-descendants, and repository contents before launching anything.
+Sandboxed Bash consumes the shared private execution supervisor through explicit
+per-turn host policy and a separate tool permission. Workspace reads are the default;
+writes, runtime reads, environment values, and host-information exposure require grants.
+Git metadata stays read-only, networking is deny-only, and unsupported policy fails
+closed. Linux currently rejects workspace write grants before execution, because static
+Bubblewrap mounts cannot protect Git metadata created later beneath a writable
+directory; macOS enforces write grants through Seatbelt metadata denials. A dedicated
+trusted launcher clears inherited descriptors before running untrusted code. Linux uses
+Bubblewrap, seccomp, and a PID namespace. macOS uses Seatbelt and reports best-effort
+process-group cleanup: escaped descendants may remain alive under the inherited sandbox.
+Neither pipe EOF nor the main shell exit establishes completion of the backend's cleanup
+scope.
 
-Private platform-independent supervision uses injected backends to bound execution,
-output, and cleanup. Cancellation and deadlines apply throughout the lifecycle, and
-retained control survives dropped callers. Completion includes descendant cleanup;
-cleanup failures remain separate from execution results. Production backends remain
-unavailable.
+A combined stdout/stderr budget and the original monotonic deadline bound preparation,
+execution, and capture. The supervisor retains cleanup after caller drop and preserves
+main exit, termination, output truncation, execution failure, and cleanup failure
+separately. Applied writes survive failure; aggregate memory, process-count, and disk
+quotas are excluded.
+
+Both stores commit command intent before spawning and record outcomes separately from
+patch writes. Pending or unresolved commands block admission atomically; duplicate host
+IDs return their recorded status without spawning. `commands_settled()` and
+`retry_commands()` observe and retry retained cleanup/recording independently of
+persistence and filesystem replacement settlement. Explicit owner-scoped reconciliation
+can unblock a stopped command after the host accounts for its effects without
+fabricating a missing outcome. Policy fingerprints include a host revision for secrets
+and executable configuration, but snapshots and telemetry exclude environment values.
 
 ## Turn input
 
@@ -115,6 +126,28 @@ image parts for text-only models and invent their content, so support is never i
 from a model family. Other configurations reject current and replayed image content with
 a typed error before network access. Image payloads stay out of telemetry and bounded
 diagnostics.
+
+## Context projection
+
+A registered model may declare an approximate `ContextBudget` in its
+`ModelCapabilities`. When the effective registration declares one, request construction
+weighs the system prompt, current input, advertised tool definitions, and reserved
+output through an injectable `ContextEstimator` — a byte-ratio heuristic by default —
+and keeps the most recent complete turns that fit the remaining weight. Weights are
+deterministic approximations, never exact provider token counts; images weigh their
+encoded data-URL length.
+
+Selection drops only whole turns, so tool-call/result groups are never split, and it
+never drops the current input: mandatory content that cannot fit fails with a typed
+error before acquisition and before any provider request. The budget covers every
+provider request of a turn — tool traffic grows the request between model calls, and a
+grown request that no longer fits fails with the same typed error before the next call.
+Budgeted registrations always replay the projected normalized history and never reuse
+native continuation, because the provider-side conversation can retain turns the byte
+replay budget already evicted from loading. Projection changes only the outgoing
+request. Canonical messages, host requests, model provenance, and write journals remain
+intact, and the stored byte-based replay budget still bounds history loading. Switching
+models applies the target registration's budget to subsequent turns.
 
 ## Session model switching
 
@@ -289,19 +322,32 @@ emits cancellation once.
 
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
-construction and idle-session model switching, and ordered text/image input are
-delivered library capabilities.
+construction and idle-session model switching, ordered text/image input, model-aware
+context projection, and journaled sandboxed Bash are delivered library capabilities.
 
-1. **Sandboxed Bash**
+1. **Compaction checkpoints**
 
-   Add a cancellable command tool with fixed workspace scope, timeouts, output limits,
-   and explicit network policy.
+   Persist structured compaction checkpoints and project them together with uncovered
+   recent turns under the delivered budget. Model-aware image accounting replaces the
+   byte-based replay budget and its image-input rejection.
 
-1. **Context management**
+1. **Host-selected Bash executor**
 
-   Preserve the durable log while projecting model-aware recent history and structured
-   compaction checkpoints. Model-aware image accounting replaces the byte-based replay
-   budget and its image-input rejection.
+   Separate command enforcement from the harness. The harness keeps the policy values,
+   separate tool permission, command journal, deadlines, bounded output, and the
+   no-replay rule; the host supplies the executor. Offer a library-backed OS sandbox and
+   an explicitly named unsandboxed executor for hosts that already run inside a
+   container or VM. Adopt a sandbox library only after proving it can keep existing and
+   newly created Git metadata read-only and deny networking; otherwise retain the native
+   launcher as one executor. Once replaced, retire the launcher, seccomp filter, and
+   AppArmor provisioning, verify generated sandbox profiles with platform-independent
+   unit tests, and keep a small native suite that proves kernel enforcement.
+
+1. **Linux Bash write access**
+
+   Restore Linux workspace write grants through the selected executor, keeping newly
+   created Git metadata read-only beneath writable directories to match the macOS
+   contract.
 
 1. **Agentty runtime adapters**
 

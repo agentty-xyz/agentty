@@ -1141,8 +1141,14 @@ local session execution, not unrelated processes or distributed workspace access
 
 Private `ag-harness` supervision runs independently of its caller on a host-owned
 runtime. Retained control observes bounded cleanup, including after cancellation or
-partial preparation. The host keeps the runtime running until cleanup settles. This path
-has no Agentty runtime integration.
+partial preparation. Bash commits command intent before the supervisor starts native
+preparation and records its observed outcome afterward. Pending or unresolved commands
+block new reservations atomically. `commands_settled()` observes the native cleanup
+scope and outcome recording separately; `retry_commands()` never reruns commands. Linux
+namespace completion includes detached descendants. macOS process-group cleanup remains
+best effort and can release admission while escaped, sandboxed descendants remain alive.
+The host keeps the runtime running until cleanup settles. This path has no Agentty
+runtime integration.
 
 ## Headless execution ownership
 

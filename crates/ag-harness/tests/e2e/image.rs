@@ -117,6 +117,7 @@ async fn test_qwen_text_model_rejects_images() -> Result<(), DynError> {
 async fn test_image_history_switches_between_providers() -> Result<(), DynError> {
     // Arrange
     let vision_capabilities = ModelCapabilities {
+        context_budget: None,
         image_input: true,
         native_continuation: false,
         tool_calls: true,

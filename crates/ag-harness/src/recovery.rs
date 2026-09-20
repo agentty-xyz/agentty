@@ -84,10 +84,12 @@ pub enum HostTurnAcquisition {
     Recorded(HostTurnRecord),
 }
 
-/// Snapshot of a host request and its known filesystem effects.
-/// Pending writes remain unknown; this is not proof that effects have stopped.
+/// Snapshot of a host request and its known write and command effects.
+/// Pending records remain unknown; this is not proof that effects have stopped.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostTurnRecord {
+    /// Command intents and observed results belonging only to this turn.
+    pub commands: Vec<crate::CommandRecord>,
     /// Immutable model provenance; absent for turns predating model switching.
     pub model: Option<crate::RecordedModel>,
     /// Immutable request identity.

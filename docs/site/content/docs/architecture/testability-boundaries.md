@@ -93,9 +93,12 @@ Private `ag-harness` supervision injects an inert backend binding, a resource-ow
 process interface, and a monotonic clock. Deterministic tests cover stalled preparation
 and partial startup, independent descendant lifetime and pipe EOFs, output floods,
 cancellation, dropped callers, bounded cleanup retries, and combined failures. Contract
-tests also exercise grants, shared output budgets, and independent result fields. There
-is no production backend; filesystem isolation and actual descendant cleanup require
-future backend enforcement and are not established by these tests.
+tests also exercise grants, shared output budgets, and independent result fields. Bash
+uses this supervisor with native backends and a dedicated descriptor-clearing launcher.
+Native public-surface tests exercise allowed access, confinement, capture, cancellation,
+and retained controls. Linux namespace completion and macOS best-effort process-group
+cleanup are distinct contracts; mock tests cannot establish native enforcement. Missing
+native infrastructure is a failed qualification, not a skipped success.
 
 Persistent `ag-harness` execution uses a public object-safe transactional store. An
 independent external test implementation exercises public construction, reservation,

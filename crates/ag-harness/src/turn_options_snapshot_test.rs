@@ -18,7 +18,7 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     let snapshot: Value = serde_json::from_str(&encoded).expect("snapshot JSON");
     let mut invalid = Vec::new();
     for (key, value) in [
-        ("version", json!(4)),
+        ("version", json!(5)),
         ("max_tool_calls", json!(0)),
         ("output_schema", json!({"type":"invalid"})),
         ("tool_policy", json!({"read":true})),

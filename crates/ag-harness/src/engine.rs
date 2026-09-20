@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::effect::Effects;
+use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{LifecycleEmitter, LifecycleId, ToolErrorType, ToolLifecycle};
 use crate::model::{
@@ -11,17 +12,18 @@ use crate::model::{
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
 use crate::session::WriteJournal;
-use crate::tool::{
-    ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
-};
+use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
 use crate::turn::{
     ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOptions, TurnOutcome,
     TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
+use crate::{BashArguments, BashError, context};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
+    pub(crate) context_budget: Option<context::ContextBudget>,
+    pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
@@ -39,7 +41,7 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
         let started_at = Instant::now();
-        let (mut request, read_tool, write_tool) = self.prepare_request(request, journal)?;
+        let (mut request, tools) = self.prepare_request(request, journal)?;
         let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
@@ -77,13 +79,7 @@ impl Engine<'_> {
                 }
                 ModelResponse::ToolCall(call) => {
                     let (result, activity) = self
-                        .execute_tool_call(
-                            &call,
-                            read_tool.as_ref(),
-                            write_tool.as_ref(),
-                            completed_tool_calls,
-                            turn_id,
-                        )
+                        .execute_tool_call(&call, &tools, completed_tool_calls, turn_id)
                         .await?;
                     request.record_tool_result(call, result);
                     tool_calls.push(activity);
@@ -109,13 +105,7 @@ impl Engine<'_> {
                     let mut results = Vec::with_capacity(calls.len());
                     for call in &calls {
                         let (result, activity) = self
-                            .execute_tool_call(
-                                call,
-                                read_tool.as_ref(),
-                                write_tool.as_ref(),
-                                completed_tool_calls,
-                                turn_id,
-                            )
+                            .execute_tool_call(call, &tools, completed_tool_calls, turn_id)
                             .await?;
                         results.push(result);
                         tool_calls.push(activity);
@@ -124,6 +114,12 @@ impl Engine<'_> {
                     request.record_tool_results(calls, results);
                 }
             }
+            // Tool traffic grows the request between model calls; a grown
+            // request that no longer fits fails typed here instead of
+            // overflowing the provider context.
+            if let Some(budget) = self.context_budget {
+                context::admit_grown_request(self.context_estimator, budget, &request)?;
+            }
         }
     }
 
@@ -131,7 +127,7 @@ impl Engine<'_> {
         &self,
         mut request: ModelRequest,
         journal: Option<WriteJournal>,
-    ) -> Result<(ModelRequest, Option<ReadTool>, Option<WriteTool>), TurnError> {
+    ) -> Result<(ModelRequest, Tools), TurnError> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
         }
@@ -149,19 +145,18 @@ impl Engine<'_> {
         }
         let read_allowed = self.options.tool_policy().allows(Tool::Read);
         let write_allowed = self.options.tool_policy().allows(Tool::Write);
-        if !read_allowed && !write_allowed {
-            return Ok((request, None, None));
+        let bash_allowed = self.options.tool_policy().allows(Tool::Bash);
+        if !read_allowed && !write_allowed && !bash_allowed {
+            return Ok((request, Tools::default()));
         }
         let repository = self
             .repository
             .as_ref()
             .ok_or(TurnError::RepositoryRequired)?;
+        for tool in context::advertised_tools(self.options) {
+            request = request.with_tool(tool);
+        }
         let read_tool = read_allowed.then(|| {
-            request = request
-                .clone()
-                .with_tool(ToolDefinition::read_with_comparison_base(
-                    self.options.comparison_base(),
-                ));
             ReadTool::with_git(
                 Arc::clone(self.file_system),
                 repository.root().to_path_buf(),
@@ -170,18 +165,38 @@ impl Engine<'_> {
             )
         });
         let write_tool = write_allowed.then(|| {
-            request = request.clone().with_tool(ToolDefinition::write());
             let mut tool = WriteTool::new(
                 Arc::clone(self.file_system),
                 repository.root().to_path_buf(),
             );
-            tool.journal = journal;
+            tool.journal.clone_from(&journal);
             tool.effects = self.effects.clone();
 
             tool
         });
 
-        Ok((request, read_tool, write_tool))
+        let bash_tool = if bash_allowed {
+            Some(BashTool::new(
+                self.options
+                    .bash()
+                    .cloned()
+                    .ok_or(BashError::InvalidPolicy)?,
+                repository.root().to_path_buf(),
+                self.effects.commands().clone(),
+                journal,
+            )?)
+        } else {
+            None
+        };
+
+        Ok((
+            request,
+            Tools {
+                read: read_tool,
+                write: write_tool,
+                bash: bash_tool,
+            },
+        ))
     }
 
     async fn complete_model_request(
@@ -317,8 +332,7 @@ impl Engine<'_> {
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
-        read_tool: Option<&ReadTool>,
-        write_tool: Option<&WriteTool>,
+        tools: &Tools,
         completed_tool_calls: usize,
         turn_id: Option<LifecycleId>,
     ) -> Result<(String, ToolActivity), TurnError> {
@@ -326,12 +340,18 @@ impl Engine<'_> {
             self.lifecycle
                 .request_tool(call.id().to_string(), call.name().to_string(), turn_id);
         let execution = match call.arguments() {
-            ToolCallArguments::Read(arguments) => {
-                read_tool.map(|tool| ToolExecution::Read(tool, arguments))
-            }
-            ToolCallArguments::Write(arguments) => {
-                write_tool.map(|tool| ToolExecution::Write(tool, arguments))
-            }
+            ToolCallArguments::Bash(arguments) => tools
+                .bash
+                .as_ref()
+                .map(|tool| ToolExecution::Bash(tool, arguments)),
+            ToolCallArguments::Read(arguments) => tools
+                .read
+                .as_ref()
+                .map(|tool| ToolExecution::Read(tool, arguments)),
+            ToolCallArguments::Write(arguments) => tools
+                .write
+                .as_ref()
+                .map(|tool| ToolExecution::Write(tool, arguments)),
         };
         let Some(execution) = execution else {
             if let Some(tool_lifecycle) = tool_lifecycle {
@@ -395,7 +415,15 @@ impl Engine<'_> {
     }
 }
 
+#[derive(Default)]
+struct Tools {
+    bash: Option<BashTool>,
+    read: Option<ReadTool>,
+    write: Option<WriteTool>,
+}
+
 enum ToolExecution<'a> {
+    Bash(&'a BashTool, &'a BashArguments),
     Read(&'a ReadTool, &'a ReadArguments),
     Write(&'a WriteTool, &'a WriteArguments),
 }
@@ -412,6 +440,17 @@ async fn execute_tool(
     let started_at = Instant::now();
 
     match execution {
+        ToolExecution::Bash(tool, arguments) => {
+            let outcome = tool.execute(arguments, call_id).await?;
+            let result = serde_json::to_string(&outcome).map_err(|_| BashError::Execution)?;
+
+            Ok((
+                result,
+                ToolActivity::Bash {
+                    duration: started_at.elapsed(),
+                },
+            ))
+        }
         ToolExecution::Read(read_tool, arguments) => {
             execute_read_tool(read_tool, arguments, started_at).await
         }

@@ -18,6 +18,9 @@ name = "lifecycle"
 name = "public_api"
 
 [[test]]
+name = "sandbox"
+
+[[test]]
 name = "telemetry"
 
 [[test]]
@@ -36,18 +39,22 @@ harness = false
 [dependencies]
 async-trait.workspace = true
 base64.workspace = true
+close_fds.workspace = true
 hex.workspace = true
 jsonschema.workspace = true
 opentelemetry.workspace = true
 reqwest.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["stdio"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 sha2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libproc.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true

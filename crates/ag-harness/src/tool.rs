@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
-use crate::{ComparisonBase, model, schema_contract};
+use crate::{BashArguments, ComparisonBase, model, schema_contract};
 
 const READ_DESCRIPTION: &str = concat!(
     "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",
@@ -30,6 +30,8 @@ const WRITE_NAME: &str = "write";
 /// Built-in tool that can be enabled for a harness run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tool {
+    /// Sandboxed Bash with explicit host capabilities.
+    Bash,
     /// Read-only repository inspection.
     Read,
     /// Repository-relative patch writes.
@@ -48,6 +50,18 @@ pub struct ToolDefinition {
 }
 
 impl ToolDefinition {
+    /// Defines shell source; the host fixes executable, grants, and limits.
+    pub fn bash() -> Self {
+        Self {
+            description: "Run Bash inside the host sandbox. Workspace reads are allowed; writes \
+                          require host grants. Network access is denied. Output and duration are \
+                          bounded. Applied writes are not rolled back."
+                .into(),
+            name: "bash",
+            parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),
+        }
+    }
+
     /// Defines the native `read` function tool.
     pub fn read() -> Self {
         Self {
@@ -204,6 +218,7 @@ impl ToolCall {
                 .map_err(model::ModelError::from)?;
         }
         let arguments = match name {
+            "bash" => serde_json::from_str(arguments).map(ToolArguments::Bash),
             READ_NAME => serde_json::from_str(arguments).map(ToolArguments::Read),
             WRITE_NAME => serde_json::from_str(arguments).map(ToolArguments::Write),
             _ => {
@@ -226,6 +241,7 @@ impl ToolCall {
     /// Returns the typed arguments for this native tool call.
     pub fn arguments(&self) -> ToolCallArguments<'_> {
         match &self.arguments {
+            ToolArguments::Bash(arguments) => ToolCallArguments::Bash(arguments),
             ToolArguments::Read(arguments) => ToolCallArguments::Read(arguments),
             ToolArguments::Write(arguments) => ToolCallArguments::Write(arguments),
         }
@@ -235,14 +251,14 @@ impl ToolCall {
     pub fn read_arguments(&self) -> Option<&ReadArguments> {
         match &self.arguments {
             ToolArguments::Read(arguments) => Some(arguments),
-            ToolArguments::Write(_) => None,
+            ToolArguments::Write(_) | ToolArguments::Bash(_) => None,
         }
     }
 
     /// Returns typed `write` arguments when this is a `write` call.
     pub fn write_arguments(&self) -> Option<&WriteArguments> {
         match &self.arguments {
-            ToolArguments::Read(_) => None,
+            ToolArguments::Read(_) | ToolArguments::Bash(_) => None,
             ToolArguments::Write(arguments) => Some(arguments),
         }
     }
@@ -255,6 +271,7 @@ impl ToolCall {
     /// Returns the requested native function name.
     pub fn name(&self) -> &'static str {
         match self.arguments {
+            ToolArguments::Bash(_) => "bash",
             ToolArguments::Read(_) => READ_NAME,
             ToolArguments::Write(_) => WRITE_NAME,
         }
@@ -266,6 +283,7 @@ impl ToolCall {
     /// Returns an error if the argument values cannot be serialized as JSON.
     pub fn arguments_json(&self) -> Result<String, serde_json::Error> {
         match &self.arguments {
+            ToolArguments::Bash(arguments) => serde_json::to_string(arguments),
             ToolArguments::Read(arguments) => serde_json::to_string(arguments),
             ToolArguments::Write(arguments) => serde_json::to_string(arguments),
         }
@@ -319,6 +337,7 @@ impl fmt::Debug for ToolCall {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ToolArguments {
+    Bash(BashArguments),
     Read(ReadArguments),
     Write(WriteArguments),
 }
@@ -326,6 +345,8 @@ enum ToolArguments {
 /// Borrowed typed arguments for one native tool call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolCallArguments<'a> {
+    /// Arguments for sandboxed Bash.
+    Bash(&'a BashArguments),
     /// Arguments for a repository read.
     Read(&'a ReadArguments),
     /// Arguments for a repository patch write.

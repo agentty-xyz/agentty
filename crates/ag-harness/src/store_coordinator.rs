@@ -207,6 +207,34 @@ impl AdmittedStore {
 
 #[async_trait]
 impl SessionStore for AdmittedStore {
+    async fn load_commands(
+        &self,
+        session: &str,
+    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+        self.store.load_commands(session).await
+    }
+
+    async fn command_intent(
+        &self,
+        owner: &TurnOwner,
+        intent: &crate::CommandIntent,
+    ) -> Result<i64, SessionError> {
+        self.store.command_intent(owner, intent).await
+    }
+
+    async fn finish_command(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        outcome: &crate::CommandOutcome,
+    ) -> Result<(), SessionError> {
+        self.store.finish_command(owner, id, outcome).await
+    }
+
+    async fn reconcile_command(&self, owner: &TurnOwner, id: i64) -> Result<(), SessionError> {
+        self.store.reconcile_command(owner, id).await
+    }
+
     fn identity(&self) -> &StoreIdentity {
         self.store.identity()
     }

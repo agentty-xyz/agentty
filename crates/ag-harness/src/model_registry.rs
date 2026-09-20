@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{ExecutionIdentity, Model, ModelMetadata, TurnInput};
+use crate::{ContextBudget, ExecutionIdentity, Model, ModelMetadata, TurnInput};
 
 /// Host-declared capabilities of a registered adapter, not tool permissions.
 ///
@@ -13,6 +13,8 @@ use crate::{ExecutionIdentity, Model, ModelMetadata, TurnInput};
 /// output are required by the model contract.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ModelCapabilities {
+    /// Approximate request budget enabling model-aware context projection.
+    pub context_budget: Option<ContextBudget>,
     /// Whether the adapter accepts image-bearing user input and history.
     pub image_input: bool,
     /// Whether the adapter can resume provider-native continuation identifiers.

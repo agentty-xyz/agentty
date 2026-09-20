@@ -582,13 +582,15 @@ WHERE id = ?
         }
         if let Some(request) = request
             && let Some(record) =
-                load_request_from(&mut transaction, session_id, request.id()).await?
+                load_request_from(&mut transaction, &self.identity, session_id, request.id())
+                    .await?
         {
             record.check_request(request)?;
             transaction.commit().await.session_context(operation)?;
 
             return Ok(Reservation::Recorded(record));
         }
+        check_command_admission(&mut transaction, session_id).await?;
         if !acquisition.is_current(&mut transaction, session_id).await? {
             transaction.commit().await.session_context(operation)?;
 
@@ -624,25 +626,13 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         )
         .fetch_one(&mut *transaction)
         .await;
-        let owner_token = result.map_err(|error| {
-            if is_unique_violation(&error) {
-                SessionError::Busy {
-                    id: session_id.to_string(),
-                }
-            } else {
-                SessionError::QueryContext {
-                    operation: "begin persistent session turn",
-                    source: error,
-                }
-            }
-        })?;
-        let owner = TurnOwner {
-            database: self.identity.clone(),
-            interruption_error_type: "interrupted",
-            session_id: session_id.to_string(),
-            token: owner_token,
-            turn_position: acquisition.turn_position,
-        };
+        let owner_token = result.map_err(|error| Self::reservation_error(error, session_id))?;
+        let owner = TurnOwner::new(
+            self.identity.clone(),
+            session_id.to_string(),
+            acquisition.turn_position,
+            owner_token,
+        );
         let guard = TurnGuard::new(store, owner, deadline);
         insert_message(
             &mut transaction,
@@ -664,6 +654,19 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         self.commit_reservation(transaction, guard, &abandoned_turns, deadline)
             .await
             .map(Reservation::Acquired)
+    }
+
+    fn reservation_error(error: sqlx::Error, session_id: &str) -> SessionError {
+        if is_unique_violation(&error) {
+            SessionError::Busy {
+                id: session_id.to_string(),
+            }
+        } else {
+            SessionError::QueryContext {
+                operation: "begin persistent session turn",
+                source: error,
+            }
+        }
     }
 
     async fn commit_reservation(
@@ -736,6 +739,120 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
 
 #[async_trait]
 impl SessionStore for Database {
+    async fn load_commands(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+        let mut connection = self.pool.acquire().await.session_context("load commands")?;
+        load_turn_configuration(&mut connection, session_id).await?;
+        load_commands_from(&mut connection, &self.identity, session_id, None).await
+    }
+
+    async fn command_intent(
+        &self,
+        owner: &TurnOwner,
+        intent: &crate::CommandIntent,
+    ) -> Result<i64, SessionError> {
+        self.validate_owner(owner)?;
+        let intent = serialize_payload(intent)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context("begin command intent")?;
+        let id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO session_command (session_id, turn_position, owner_token, intent) SELECT \
+             session_id, turn_position, owner_token, ? FROM session_turn WHERE session_id = ? AND \
+             turn_position = ? AND owner_token = ? AND status = 'running' AND lease_expires_at > \
+             ? RETURNING id",
+        )
+        .bind(intent)
+        .bind(&owner.session_id)
+        .bind(owner.turn_position)
+        .bind(&owner.token)
+        .bind(self.timestamp_source.now_timestamp_seconds())
+        .fetch_optional(&mut *transaction)
+        .await
+        .session_context("persist command intent")?
+        .ok_or_else(|| owner.lost())?;
+        transaction
+            .commit()
+            .await
+            .session_context("commit command intent")?;
+
+        Ok(id)
+    }
+
+    async fn finish_command(
+        &self,
+        owner: &TurnOwner,
+        id: i64,
+        outcome: &crate::CommandOutcome,
+    ) -> Result<(), SessionError> {
+        self.validate_owner(owner)?;
+        let unresolved = outcome.cleanup_failed;
+        let outcome = serialize_payload(outcome)?;
+        let result = sqlx::query(
+            "UPDATE session_command SET outcome = ?, unresolved = ? WHERE id = ? AND session_id = \
+             ? AND turn_position = ? AND owner_token = ? AND (outcome IS NULL OR outcome = ?)",
+        )
+        .bind(&outcome)
+        .bind(unresolved)
+        .bind(id)
+        .bind(&owner.session_id)
+        .bind(owner.turn_position)
+        .bind(&owner.token)
+        .bind(outcome)
+        .execute(&self.pool)
+        .await
+        .session_context("persist command outcome")?;
+        if result.rows_affected() != 1 {
+            return Err(owner.lost());
+        }
+
+        Ok(())
+    }
+
+    async fn reconcile_command(&self, owner: &TurnOwner, id: i64) -> Result<(), SessionError> {
+        self.validate_owner(owner)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context("reconcile command")?;
+        recover_stale_turns(
+            &mut transaction,
+            &owner.session_id,
+            self.timestamp_source.now_timestamp_seconds(),
+        )
+        .await?;
+        let result = sqlx::query(
+            "UPDATE session_command SET reconciled = 1 WHERE id = ? AND session_id = ? AND \
+             turn_position = ? AND owner_token = ? AND EXISTS (SELECT 1 FROM session_turn WHERE \
+             session_id = ? AND turn_position = ? AND owner_token = ? AND status NOT IN \
+             ('pending', 'running'))",
+        )
+        .bind(id)
+        .bind(&owner.session_id)
+        .bind(owner.turn_position)
+        .bind(&owner.token)
+        .bind(&owner.session_id)
+        .bind(owner.turn_position)
+        .bind(&owner.token)
+        .execute(&mut *transaction)
+        .await
+        .session_context("reconcile command")?;
+        if result.rows_affected() != 1 {
+            return Err(owner.lost());
+        }
+        transaction
+            .commit()
+            .await
+            .session_context("commit command reconciliation")?;
+
+        Ok(())
+    }
+
     fn identity(&self) -> &StoreIdentity {
         &self.identity
     }
@@ -896,6 +1013,7 @@ WHERE id = ?
             if active != 0 {
                 return Err(SessionError::Busy { id: id.to_string() });
             }
+            check_command_admission(&mut transaction, id).await?;
             if latest_completed_turn(&mut transaction, id).await? != revision {
                 transaction.commit().await.session_context(operation)?;
                 continue;
@@ -972,7 +1090,8 @@ WHERE id = ?
             self.timestamp_source.now_timestamp_seconds(),
         )
         .await?;
-        let record = load_request_from(&mut transaction, session_id, host_id).await?;
+        let record =
+            load_request_from(&mut transaction, &self.identity, session_id, host_id).await?;
         transaction
             .commit()
             .await
@@ -1667,6 +1786,29 @@ pub(crate) struct WriteJournal {
 }
 
 impl WriteJournal {
+    pub(crate) fn owner(&self) -> &TurnOwner {
+        &self.owner
+    }
+
+    pub(crate) async fn reconcile_command(&self, id: i64) -> Result<(), SessionError> {
+        self.database.reconcile_command(&self.owner, id).await
+    }
+
+    pub(crate) async fn command_intent(
+        &self,
+        intent: &crate::CommandIntent,
+    ) -> Result<i64, SessionError> {
+        self.database.command_intent(&self.owner, intent).await
+    }
+
+    pub(crate) async fn finish_command(
+        &self,
+        id: i64,
+        outcome: &crate::CommandOutcome,
+    ) -> Result<(), SessionError> {
+        self.database.finish_command(&self.owner, id, outcome).await
+    }
+
     pub(crate) async fn intent(
         &self,
         call_id: &str,
@@ -2028,6 +2170,15 @@ impl StoredToolCall {
 
     fn into_call(self) -> Result<ToolCall, SessionError> {
         match self.name.as_str() {
+            "bash" => ToolCall::from_json(
+                self.id,
+                "bash",
+                &self.arguments.to_string(),
+                self.reasoning_content,
+            )
+            .map_err(|error| SessionError::InvalidData {
+                reason: error.to_string(),
+            }),
             "read" => serde_json::from_value::<ReadArguments>(self.arguments)
                 .map(|arguments| ToolCall::read(self.id, arguments, self.reasoning_content))
                 .map_err(|error| invalid_json(&error)),
@@ -2101,6 +2252,7 @@ async fn clear_incompatible_continuation(
 
 async fn load_request_from(
     connection: &mut SqliteConnection,
+    identity: &StoreIdentity,
     session_id: &str,
     host_id: &str,
 ) -> Result<Option<HostTurnRecord>, SessionError> {
@@ -2148,7 +2300,10 @@ async fn load_request_from(
         .map(WriteRecordRow::into_record)
         .collect::<Result<Vec<_>, _>>()?;
 
+    let commands = load_commands_from(connection, identity, session_id, Some(position)).await?;
+
     Ok(Some(HostTurnRecord {
+        commands,
         model: row
             .model_snapshot
             .as_deref()
@@ -2553,3 +2708,72 @@ fn system_timestamp_source() -> Arc<dyn TimestampSource> {
 #[cfg(test)]
 #[path = "session_test.rs"]
 mod tests;
+
+#[derive(sqlx::FromRow)]
+struct CommandRow {
+    id: i64,
+    intent: String,
+    outcome: Option<String>,
+    owner_token: Vec<u8>,
+    reconciled: bool,
+    turn_position: i64,
+}
+
+async fn load_commands_from(
+    connection: &mut SqliteConnection,
+    identity: &StoreIdentity,
+    session_id: &str,
+    position: Option<i64>,
+) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    let rows = sqlx::query_as::<_, CommandRow>(
+        "SELECT id, intent, outcome, owner_token, reconciled, turn_position FROM session_command \
+         WHERE session_id = ? AND (? IS NULL OR turn_position = ?) ORDER BY id",
+    )
+    .bind(session_id)
+    .bind(position)
+    .bind(position)
+    .fetch_all(connection)
+    .await
+    .session_context("load command records")?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(crate::CommandRecord {
+                id: row.id,
+                intent: deserialize_payload(&row.intent)?,
+                outcome: row
+                    .outcome
+                    .as_deref()
+                    .map(deserialize_payload)
+                    .transpose()?,
+                reconciled: row.reconciled,
+                owner: TurnOwner::new(
+                    identity.clone(),
+                    session_id.into(),
+                    row.turn_position,
+                    row.owner_token,
+                ),
+            })
+        })
+        .collect()
+}
+
+async fn check_command_admission(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+) -> Result<(), SessionError> {
+    let blocked = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM session_command WHERE session_id = ? AND unresolved = 1 AND \
+         reconciled = 0)",
+    )
+    .bind(session_id)
+    .fetch_one(connection)
+    .await
+    .session_context("check command admission")?;
+    if blocked {
+        return Err(SessionError::Busy {
+            id: session_id.into(),
+        });
+    }
+
+    Ok(())
+}

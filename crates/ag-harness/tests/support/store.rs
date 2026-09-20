@@ -170,6 +170,7 @@ impl ExternalStore {
         )?;
         if let Some(request) = request {
             session.requests.push(HostTurnRecord {
+                commands: Vec::new(),
                 model: Some(session.loaded.recorded_model()),
                 request: request.clone(),
                 status: HostTurnStatus::InProgress,

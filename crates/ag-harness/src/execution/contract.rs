@@ -1,7 +1,7 @@
-//! Private contracts, not an isolation implementation or a callable tool.
+//! Private command contracts consumed by the native Bash executor.
 //!
 //! Commands, descendants, and repository contents are hostile. The configuring
-//! host and other host processes are trusted. A future executor must enforce
+//! host and other host processes are trusted. Native executors enforce
 //! the complete policy before starting anything, including against path
 //! aliases, symlinks, hard links, renames, and races. Lexical validation is not
 //! enforcement. Git metadata includes `.git` entries, resolved Git directories,
@@ -318,8 +318,8 @@ pub(super) struct ExecutionResult {
 }
 
 /// Control is obtained before starting; dropping a start/wait future must not
-/// discard the authority needed to stop descendants and clean up. No production
-/// implementation exists. Preparation must be inert (no processes or writes).
+/// discard the cleanup authority. Preparation is inert (no processes or
+/// writes).
 pub(super) trait Executor: Send + Sync {
     fn prepare(
         &self,
@@ -337,25 +337,26 @@ pub(super) struct PreparedExecution {
 #[async_trait]
 pub(super) trait Execution: Send {
     /// Enforces the policy for the entire process tree or fails before launch.
-    /// Start failure still requires cleanup through the separately retained
-    /// control. Completion requires descendant quiescence and bounded draining.
+    /// Start failure still requires retained cleanup. Completion uses the
+    /// backend scope: Linux descendants, or best-effort macOS process groups.
     async fn run(self: Box<Self>) -> ExecutionResult;
 }
 
 #[async_trait]
-pub(super) trait ExecutionControl: Send + Sync {
-    /// Idempotent cancellation, including before launch; covers all
-    /// descendants.
+pub(crate) trait ExecutionControl: Send + Sync {
+    /// Idempotent cancellation, including before launch. macOS group cleanup
+    /// does not establish that escaped descendants stopped.
     fn cancel(&self);
 
-    /// Idempotently stop/reap all descendants and release resources, even after
-    /// cancellation, a dropped run future, or deadline expiry. A failed cleanup
-    /// can be retried. The owner retains its failure separately in the result.
+    /// Idempotently settle the backend cleanup scope and release resources
+    /// after cancellation, a dropped run future, or deadline expiry. A
+    /// failed cleanup can be retried. The owner retains its failure
+    /// separately in the result.
     async fn cleanup(&self) -> Result<(), ExecutionError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ExecutionError {
+pub(crate) enum ExecutionError {
     Unsupported,
     Setup,
     Process,

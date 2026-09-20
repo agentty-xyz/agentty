@@ -66,6 +66,7 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut registry = registry("primary", "1", &calls);
     let capabilities = ModelCapabilities {
+        context_budget: None,
         image_input: false,
         native_continuation: true,
         tool_calls: true,
@@ -187,6 +188,7 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
                     name: "first",
                 },
                 ModelCapabilities {
+                    context_budget: None,
                     image_input: false,
                     native_continuation: false,
                     tool_calls: true,
@@ -291,6 +293,7 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
         let metadata = client.metadata().clone();
         let mut registry = ModelRegistry::new();
         let capabilities = ModelCapabilities {
+            context_budget: None,
             image_input: false,
             native_continuation: false,
             tool_calls: true,

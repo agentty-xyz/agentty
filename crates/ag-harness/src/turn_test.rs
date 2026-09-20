@@ -11,6 +11,20 @@ use crate::model::{CompletionMetadata, CompletionUsage, ModelError, ModelErrorTy
 use crate::tool::ReadAction;
 
 #[test]
+fn bash_activity_exposes_only_its_name_and_duration() {
+    // Arrange
+    let activity = ToolActivity::Bash {
+        duration: Duration::from_millis(12),
+    };
+
+    // Act / Assert
+    assert_eq!(activity.name(), "bash");
+    assert_eq!(activity.path(), "");
+    assert_eq!(activity.duration(), Duration::from_millis(12));
+    assert_eq!(activity.to_string(), "bash (12 ms)");
+}
+
+#[test]
 fn outcome_exposes_output_and_report() {
     // Arrange
     let completion = CompletionMetadata::new(
@@ -169,4 +183,23 @@ fn repository_required_error_has_stable_classification() {
 
     // Assert
     assert_eq!(error_type, TurnErrorType::RepositoryRequired);
+}
+
+#[test]
+fn context_budget_error_has_stable_classification() {
+    // Arrange
+    let error = TurnError::ContextBudgetExceeded {
+        budget: 8,
+        required: 21,
+    };
+
+    // Act
+    let error_type = error.error_type();
+
+    // Assert
+    assert_eq!(error_type, TurnErrorType::ContextBudget);
+    assert_eq!(
+        error.to_string(),
+        "mandatory request content weighs 21 but the model context budget is 8"
+    );
 }

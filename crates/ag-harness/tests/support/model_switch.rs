@@ -53,6 +53,7 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                     requests: Arc::clone(requests),
                 },
                 ModelCapabilities {
+                    context_budget: None,
                     image_input: name.ends_with("vision"),
                     native_continuation: true,
                     tool_calls: name != "no-tools",
@@ -590,6 +591,7 @@ async fn independent_store_admission_checks_generation_atomically() {
     for store in stores().await {
         let identity = ExecutionIdentity::new("b", "1").expect("identity");
         let capabilities = ModelCapabilities {
+            context_budget: None,
             image_input: false,
             native_continuation: true,
             tool_calls: true,
@@ -646,6 +648,7 @@ async fn switching_checks_adapter_schema_without_network_access() {
             })
             .expect("client"),
             ModelCapabilities {
+                context_budget: None,
                 image_input: false,
                 native_continuation: false,
                 tool_calls: true,

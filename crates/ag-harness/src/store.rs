@@ -24,6 +24,52 @@ use crate::{
 /// fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
+    /// Returns command records independently of completed history. Stores that
+    /// support Bash must also atomically block new acquisitions while any
+    /// command has an unknown or unresolved outcome.
+    async fn load_commands(
+        &self,
+        _session_id: &str,
+    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "command storage unsupported".into(),
+        })
+    }
+
+    /// Commits command intent under a live owner before spawning. Unsupported
+    /// stores fail closed. Duplicate host IDs must never call this again.
+    async fn command_intent(
+        &self,
+        _owner: &TurnOwner,
+        _intent: &crate::CommandIntent,
+    ) -> Result<i64, SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "command storage unsupported".into(),
+        })
+    }
+
+    /// Settles an existing command under its original owner, including after
+    /// lease expiry. Accept only pending or identical outcomes.
+    async fn finish_command(
+        &self,
+        _owner: &TurnOwner,
+        _id: i64,
+        _outcome: &crate::CommandOutcome,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "command storage unsupported".into(),
+        })
+    }
+
+    /// Records an explicit host assertion that conflicting execution is safe.
+    /// Validate the original owner and reject live turns. Preserve the original
+    /// outcome, including unknown status; never automatically rerun a command.
+    async fn reconcile_command(&self, _owner: &TurnOwner, _id: i64) -> Result<(), SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "command storage unsupported".into(),
+        })
+    }
+
     /// Independent handles for the same backing store share this identity.
     fn identity(&self) -> &StoreIdentity;
 
@@ -41,7 +87,8 @@ pub trait SessionStore: Send + Sync {
     /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
     /// Switch an idle session atomically with turn admission. Recover expired
-    /// owners, reject active owners and a mismatched generation, validate all
+    /// owners, reject active owners, unresolved commands, and a mismatched
+    /// generation, validate all
     /// completed history with the target capabilities, then update identity,
     /// increment the generation, and clear continuation in the same mutation.
     /// Rejections leave model selection unchanged. Never rewrite turn
