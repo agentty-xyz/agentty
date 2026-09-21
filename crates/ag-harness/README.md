@@ -256,13 +256,13 @@ unknown history and cannot reconcile another owner.
 
 Native qualification tests are in `tests/sandbox.rs`; missing enforcement fails the
 suite. Its lifecycle and persistence conformance behavior runs against both the native
-and the unsandboxed executor, while enforcement tests qualify only the native one. CI
-targets native Ubuntu 24.04 and macOS 26. Ubuntu's AppArmor policy must allow
-Bubblewrap's namespace setup capabilities. CI loads a profile scoped to `bwrap` that
-denies capabilities to executed children, then probes startup without `sudo`. It does
-not disable AppArmor or the host's user-namespace restrictions. A CI target is not a
-claim of a successful qualification run; validate the suite on the deployment
-environment.
+and the unsandboxed executor (executor-independent lease-loss persistence runs once,
+natively), while enforcement tests qualify only the native one. CI targets native Ubuntu
+24.04 and macOS 26. Ubuntu's AppArmor policy must allow Bubblewrap's namespace setup
+capabilities. CI loads a profile scoped to `bwrap` that denies capabilities to executed
+children, then probes startup without `sudo`. It does not disable AppArmor or the host's
+user-namespace restrictions. A CI target is not a claim of a successful qualification
+run; validate the suite on the deployment environment.
 
 ## Custom session stores
 

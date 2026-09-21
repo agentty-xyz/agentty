@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -55,15 +56,15 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
                 .expect("record");
 
             // Assert
-            assert_eq!(first, duplicate);
-            assert_eq!(records.len(), 1);
-            assert_eq!(session.writes().await.expect("writes"), []);
-            assert_eq!(recovered.commands, records);
-            assert!(!records[0].blocks_admission());
+            assert_eq!(first, duplicate, "{selected:?}");
+            assert_eq!(records.len(), 1, "{selected:?}");
+            assert_eq!(session.writes().await.expect("writes"), [], "{selected:?}");
+            assert_eq!(recovered.commands, records, "{selected:?}");
+            assert!(!records[0].blocks_admission(), "{selected:?}");
             assert_eq!(
                 records[0].outcome.as_ref().expect("outcome").stdout,
                 "done",
-                "{records:?}"
+                "{selected:?}: {records:?}"
             );
             session
                 .submit(
@@ -77,35 +78,50 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
                 .submit("command-id", command, options)
                 .await
                 .expect("old ID after another turn");
-            assert_eq!(retry, first);
-            assert_eq!(session.commands().await.expect("two commands").len(), 2);
-            let changed = workspace.executor_options(selected, Duration::from_secs(6), 128);
-            assert!(matches!(
-                session.submit("command-id", command, changed).await,
-                Err(ag_harness::SessionError::HostTurnConflict)
-            ));
-        }
-        let reopened = SqliteStore::open(&path).await.expect("reopen");
-        assert_eq!(
-            reopened
-                .load_commands("session")
-                .await
-                .expect("reopened commands")
-                .len(),
-            2
-        );
-        // The read-only native Linux policy denies the redirect, so it observes
-        // no filesystem effect; every other combination records one effect per
-        // executed command.
-        if selected.observes_markers() {
+            assert_eq!(retry, first, "{selected:?}");
             assert_eq!(
-                std::fs::read_to_string(workspace.path().join("output/executions"))
-                    .expect("effects"),
-                "xyxy"
+                session.commands().await.expect("two commands").len(),
+                2,
+                "{selected:?}"
             );
-        } else {
-            assert!(!workspace.path().join("output/executions").exists());
+            let changed = workspace.executor_options(selected, Duration::from_secs(6), 128);
+            assert!(
+                matches!(
+                    session.submit("command-id", command, changed).await,
+                    Err(ag_harness::SessionError::HostTurnConflict)
+                ),
+                "{selected:?}"
+            );
         }
+        assert_reopened_effects(selected, &workspace, &path).await;
+    }
+}
+
+async fn assert_reopened_effects(selected: Selected, workspace: &Workspace, path: &Path) {
+    let reopened = SqliteStore::open(path).await.expect("reopen");
+    assert_eq!(
+        reopened
+            .load_commands("session")
+            .await
+            .expect("reopened commands")
+            .len(),
+        2,
+        "{selected:?}"
+    );
+    // The read-only native Linux policy denies the redirect, so it observes
+    // no filesystem effect; every other combination records one effect per
+    // executed command.
+    if selected.observes_markers() {
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("output/executions")).expect("effects"),
+            "xyxy",
+            "{selected:?}"
+        );
+    } else {
+        assert!(
+            !workspace.path().join("output/executions").exists(),
+            "{selected:?}"
+        );
     }
 }
 
@@ -217,21 +233,15 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     );
 }
 
-// Each executor gets its own test because one lease-loss wait spans a full
-// ~100-second renewal interval; a loop over both executors would exceed the CI
-// runner's per-test termination budget.
+/// Lease expiry cancelling execution and recording a late outcome is
+/// harness persistence logic shared by every executor; only the startup
+/// synchronization differs. One native case keeps this ~100s renewal wait
+/// from repeating per executor in the serialized sandbox group, whose
+/// per-test CI termination budget it already approaches.
 #[tokio::test]
 async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
-    lease_loss_cancels_execution_and_records_late_outcome(Selected::Native).await;
-}
-
-#[tokio::test]
-async fn unsandboxed_lease_loss_cancels_execution_and_records_late_outcome() {
-    lease_loss_cancels_execution_and_records_late_outcome(Selected::Unsandboxed).await;
-}
-
-async fn lease_loss_cancels_execution_and_records_late_outcome(selected: Selected) {
     // Arrange
+    let selected = Selected::Native;
     let workspace = Workspace::new();
     let storage = tempfile::tempdir().expect("storage");
     let path = storage.path().join("lease.sqlite");

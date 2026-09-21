@@ -319,4 +319,15 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .is_err()
         );
     }
+    assert_eq!(
+        BashConfig::new(
+            "relative-launcher".into(),
+            "/bin/bash".into(),
+            "ok".into(),
+            Duration::from_secs(1),
+            1,
+        )
+        .err(),
+        Some(BashError::InvalidPolicy)
+    );
 }

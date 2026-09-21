@@ -25,14 +25,18 @@ async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() 
         let result: CommandOutcome = serde_json::from_value(output.into_output()).expect("outcome");
 
         // Assert
-        assert_eq!(result.exit_code, Some(7), "{result:?}");
+        assert_eq!(result.exit_code, Some(7), "{selected:?}: {result:?}");
         assert_eq!(
             result.termination,
             CommandTermination::Completed,
-            "{result:?}"
+            "{selected:?}: {result:?}"
         );
-        assert!(result.truncated, "{result:?}");
-        assert_eq!(result.stdout.len() + result.stderr.len(), 17);
+        assert!(result.truncated, "{selected:?}: {result:?}");
+        assert_eq!(
+            result.stdout.len() + result.stderr.len(),
+            17,
+            "{selected:?}: {result:?}"
+        );
         // The read-only native Linux policy leaves no observable marker; the
         // wire-level launcher test proves completion waits for descendants
         // there.
@@ -40,7 +44,8 @@ async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() 
             assert_eq!(
                 std::fs::read_to_string(workspace.path().join("output/child"))
                     .expect("descendant completed"),
-                "finished"
+                "finished",
+                "{selected:?}"
             );
         }
     }
@@ -99,9 +104,9 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
         assert_eq!(
             timeout.termination,
             CommandTermination::Deadline,
-            "{timeout:?}"
+            "{selected:?}: {timeout:?}"
         );
-        assert!(!timeout.cleanup_failed);
+        assert!(!timeout.cleanup_failed, "{selected:?}: {timeout:?}");
         control.retry_commands().await.expect("stale cleanup");
     }
 }
@@ -189,10 +194,14 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
         assert_eq!(
             result.termination,
             CommandTermination::Deadline,
-            "{result:?}"
+            "{selected:?}: {result:?}"
         );
-        assert!(!result.cleanup_failed);
-        assert!(result.truncated, "{result:?}");
-        assert_eq!(result.stdout.len() + result.stderr.len(), 37);
+        assert!(!result.cleanup_failed, "{selected:?}: {result:?}");
+        assert!(result.truncated, "{selected:?}: {result:?}");
+        assert_eq!(
+            result.stdout.len() + result.stderr.len(),
+            37,
+            "{selected:?}: {result:?}"
+        );
     }
 }

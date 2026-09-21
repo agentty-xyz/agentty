@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
+use rustix::process::{Pid, test_kill_process};
+
 use super::{UnsandboxedExecutor, main_exit};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
@@ -185,6 +187,46 @@ async fn cleanup_terminates_a_running_process_group_and_start_failures_stay_type
 }
 
 #[tokio::test]
+async fn cleanup_signals_the_group_after_the_reaped_main_exit() {
+    // Arrange
+    let (_directory, workspace) = workspace();
+    let policy = policy(workspace, Grants::default());
+    let command = command("/bin/sleep 300 >/dev/null 2>&1 & printf %d $!");
+    let mut process = UnsandboxedExecutor::without_isolation()
+        .bind()
+        .expect("binding");
+    process.prepare(&command, &policy).await.expect("prepare");
+    process.start().await.expect("start");
+    let (stdout, _, exit) = drive(&mut process).await;
+    let descendant = Pid::from_raw(
+        String::from_utf8_lossy(&stdout)
+            .trim()
+            .parse()
+            .expect("numeric descendant pid"),
+    )
+    .expect("nonzero descendant pid");
+    assert_eq!(exit, MainExit::Code(0));
+    assert_eq!(
+        test_kill_process(descendant),
+        Ok(()),
+        "the stdio-detached descendant survives the reaped main exit"
+    );
+
+    // Act
+    process.cleanup().await.expect("cleanup");
+
+    // Assert
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while test_kill_process(descendant) != Err(rustix::io::Errno::SRCH) {
+        assert!(
+            Instant::now() < deadline,
+            "cleanup must terminate the detached descendant"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
 async fn zero_capacity_buffers_are_rejected() {
     // Arrange
     let mut empty: [u8; 0] = [];
@@ -195,6 +237,21 @@ async fn zero_capacity_buffers_are_rejected() {
     // Act / Assert
     assert_eq!(
         process.next_event(&mut empty).await.err(),
+        Some(ExecutionError::Process)
+    );
+}
+
+#[tokio::test]
+async fn unstarted_processes_report_typed_supervision_errors() {
+    // Arrange
+    let mut buffer = [0; 16];
+    let mut process = UnsandboxedExecutor::without_isolation()
+        .bind()
+        .expect("binding");
+
+    // Act / Assert
+    assert_eq!(
+        process.next_event(&mut buffer).await.err(),
         Some(ExecutionError::Process)
     );
 }
