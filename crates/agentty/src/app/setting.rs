@@ -5,6 +5,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
     SpeedMode,
 };
+use crate::domain::mouse::MouseSupport;
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
     MAX_ORCHESTRATION_PARALLELISM, SettingName,
@@ -270,6 +271,11 @@ pub struct SettingsManager {
     pub default_smart_speed_mode: SpeedMode,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
+    /// Whether the terminal reports mouse wheel and scrollbar drag events.
+    ///
+    /// Global because it controls terminal mouse capture, which also decides
+    /// whether plain click-drag text selection stays with the terminal.
+    pub mouse_support: MouseSupport,
     /// Maximum number of orchestration child sessions run concurrently.
     pub orchestration_parallelism: u8,
     /// Active terminal color theme for the whole application.
@@ -368,14 +374,11 @@ impl SettingsManager {
             false,
         )
         .await;
-        let theme = load_theme_setting_from_repositories(&repositories).await;
-        let orchestration_parallelism =
-            load_orchestration_parallelism_setting_from_repositories(&repositories).await;
-        let auto_approve_orchestration_research =
-            load_auto_approve_orchestration_research_setting_from_repositories(&repositories).await;
+        let global_settings = load_global_settings_from_repositories(&repositories).await;
 
         Self {
-            auto_approve_orchestration_research,
+            auto_approve_orchestration_research: global_settings
+                .auto_approve_orchestration_research,
             default_fast_reasoning_level: default_fast.reasoning_level,
             default_fast_selection: default_fast.selection,
             default_fast_speed_mode: default_fast.speed_mode,
@@ -387,10 +390,11 @@ impl SettingsManager {
             default_smart_selection: default_smart.selection,
             default_smart_speed_mode: default_smart.speed_mode,
             launch_configuration,
-            theme,
+            mouse_support: global_settings.mouse_support,
+            theme: global_settings.theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
-            orchestration_parallelism,
+            orchestration_parallelism: global_settings.orchestration_parallelism,
             project_id,
             repositories,
             use_last_used_model_as_default,
@@ -425,6 +429,7 @@ impl SettingsManager {
             default_smart_speed_mode: self.default_smart_speed_mode,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
+            mouse_support: self.mouse_support,
             orchestration_parallelism: self.orchestration_parallelism,
             theme: self.theme,
             use_last_used_model_as_default: self.use_last_used_model_as_default,
@@ -485,6 +490,10 @@ impl SettingsManager {
             SettingsOperation::LaunchConfiguration(value) => {
                 self.launch_configuration = value;
                 self.persist_launch_configuration_setting().await;
+            }
+            SettingsOperation::MouseSupport(value) => {
+                self.mouse_support = MouseSupport::from_enabled(value);
+                self.persist_mouse_support_setting().await;
             }
             SettingsOperation::OrchestrationParallelism(value) => {
                 self.orchestration_parallelism = value.clamp(1, MAX_ORCHESTRATION_PARALLELISM);
@@ -681,6 +690,16 @@ impl SettingsManager {
                 SettingName::IncludeCoauthoredByAgentty,
                 &include_coauthored_by_agentty,
             )
+            .await;
+    }
+
+    /// Persists the global `MouseSupport` setting value.
+    async fn persist_mouse_support_setting(&self) {
+        // Best-effort: settings persistence failure is non-critical.
+        let _ = self
+            .repositories
+            .settings()
+            .upsert_setting(SettingName::MouseSupport, self.mouse_support.as_str())
             .await;
     }
 
@@ -926,6 +945,45 @@ async fn load_theme_setting_from_repositories(repositories: &AppRepositories) ->
         .await
         .unwrap_or(None)
         .and_then(|setting_value| ColorTheme::parse_persisted(&setting_value))
+        .unwrap_or_default()
+}
+
+/// App-wide settings that do not depend on the active project.
+struct GlobalSettings {
+    auto_approve_orchestration_research: bool,
+    mouse_support: MouseSupport,
+    orchestration_parallelism: u8,
+    theme: ColorTheme,
+}
+
+/// Loads every project-independent setting through the settings repository.
+async fn load_global_settings_from_repositories(repositories: &AppRepositories) -> GlobalSettings {
+    GlobalSettings {
+        auto_approve_orchestration_research:
+            load_auto_approve_orchestration_research_setting_from_repositories(repositories).await,
+        mouse_support: load_mouse_support_setting_from_repositories(repositories).await,
+        orchestration_parallelism: load_orchestration_parallelism_setting_from_repositories(
+            repositories,
+        )
+        .await,
+        theme: load_theme_setting_from_repositories(repositories).await,
+    }
+}
+
+/// Loads the persisted global mouse-support switch.
+///
+/// Missing or unparsable values default to enabled so wheel scrolling works
+/// out of the box; users who prefer terminal-native text selection can turn it
+/// off from the settings page.
+async fn load_mouse_support_setting_from_repositories(
+    repositories: &AppRepositories,
+) -> MouseSupport {
+    repositories
+        .settings()
+        .get_setting(SettingName::MouseSupport)
+        .await
+        .unwrap_or(None)
+        .and_then(|setting_value| MouseSupport::parse_persisted(&setting_value))
         .unwrap_or_default()
 }
 

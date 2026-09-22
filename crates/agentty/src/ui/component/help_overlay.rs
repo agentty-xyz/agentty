@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::presentation::app_mode::HelpContext;
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, layout_snapshot, overlay};
 
 const MIN_OVERLAY_WIDTH: u16 = 30;
 
@@ -84,11 +84,15 @@ impl Component for HelpOverlay<'_> {
             ]));
         }
 
+        let block = overlay::overlay_block(self.context.title(), palette::accent());
+        layout_snapshot::record_help_overlay(layout_snapshot::scroll_region(
+            popup_area,
+            None,
+            lines.len(),
+            block.inner(popup_area).height,
+        ));
         let paragraph = Paragraph::new(lines)
-            .block(overlay::overlay_block(
-                self.context.title(),
-                palette::accent(),
-            ))
+            .block(block)
             .scroll((self.scroll_offset, SCROLL_X_OFFSET));
 
         f.render_widget(paragraph, popup_area);

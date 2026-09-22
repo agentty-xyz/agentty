@@ -11,6 +11,29 @@ For session states and transition behavior, see [Workflow](@/docs/usage/workflow
 
 <!-- more -->
 
+## Mouse
+
+<a id="usage-mouse"></a> Mouse support is on by default. The `Mouse Support` switch
+under `Global settings` on the Settings tab turns it off.
+
+| Gesture        | Where                                      | Action                                                        |
+| -------------- | ------------------------------------------ | ------------------------------------------------------------- |
+| Wheel          | Session view, prompt input, question input | Scroll the transcript; reaching the bottom follows new output |
+| Wheel          | Diff mode right panel                      | Scroll the diff or preview panel                              |
+| Wheel          | Diff mode file list                        | Select the next or previous file                              |
+| Wheel          | Help overlay                               | Scroll the help content under the pointer                     |
+| Drag scrollbar | Session view transcript, diff panel        | Drag the thumb, or click the track to jump                    |
+
+Scrolling the transcript with the wheel while composing a prompt leaves the composer,
+its cursor, and question focus untouched.
+
+While mouse support is enabled the terminal hands clicks to Agentty, so plain click-drag
+text selection is unavailable. Hold `Shift` while dragging in iTerm2, Kitty, Alacritty,
+WezTerm, and GNOME Terminal, or `Option` in Terminal.app, to select text. Inside `tmux`,
+keep `set -g mouse on` in `.tmux.conf`: tmux forwards wheel events to the Agentty pane
+and `prefix [` still opens copy mode. Set `Mouse Support` to `Disabled` to return
+click-drag selection to the terminal.
+
 ## Shared Text Editing
 
 Prompt, question, publish-branch, and launch-configuration inputs share the same basic
@@ -124,14 +147,15 @@ highlighted in the table with a `* ` prefix and accented row text.
 </table>
 
 <a id="usage-settings-options"></a> The page is split into `Global settings` for the
-app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`) and
-`'<project>' settings` for Smart, Fast, and Review `agent/model [reasoning]` defaults,
-the commit coauthor toggle, and `Launch Configurations` rows described in
-[Workflow](@/docs/usage/workflow.md). Selector rows open dropdowns; use `j` / `k` to
-move through the dropdown. For a role default, press `Enter` after choosing the model,
-then choose and save its reasoning level with `Enter`. Other selectors save directly.
-The `Launch Configurations` row opens a list browser where each command is added,
-edited, deleted, or reordered as its own entry.
+app-wide `Theme` row (`Agentty Default`, `Agentty Green`, or `Dark Horizon`), the
+orchestration rows, and the `Mouse Support` switch (`Enabled` by default; see the Mouse
+section above), and `'<project>' settings` for Smart, Fast, and Review
+`agent/model [reasoning]` defaults, the commit coauthor toggle, and
+`Launch Configurations` rows described in [Workflow](@/docs/usage/workflow.md). Selector
+rows open dropdowns; use `j` / `k` to move through the dropdown. For a role default,
+press `Enter` after choosing the model, then choose and save its reasoning level with
+`Enter`. Other selectors save directly. The `Launch Configurations` row opens a list
+browser where each command is added, edited, deleted, or reordered as its own entry.
 
 ## Session View
 
@@ -154,6 +178,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `j` / `k`           | Scroll output                                       |
 | `g` / `G`           | Scroll to top / bottom                              |
 | `Ctrl+d` / `Ctrl+u` | Half page down / up                                 |
+| `Wheel`             | Scroll output; drag the scrollbar to jump           |
 | `?`                 | Help                                                |
 
 State-specific differences:
@@ -319,6 +344,7 @@ comment together in the next turn from any Diff pane.
 | `Enter`                     | Focus a file, or edit/finish a comment         |
 | `l`                         | Focus the selected file's changes              |
 | `Up` / `Down`               | Scroll file/preview, or select a diff row      |
+| `Wheel`                     | Scroll panel or file list under pointer        |
 | `Left` / `h` / `f`          | Return to Files                                |
 | `p`                         | Toggle markdown preview                        |
 | `c`                         | Focus linked review comments                   |
@@ -464,14 +490,15 @@ or press `Ctrl+C` while the answer input is focused.
 
 When chat output is focused (press `Tab` to switch):
 
-| Key                       | Action                            |
-| ------------------------- | --------------------------------- |
-| `j` / `k` / `Up` / `Down` | Scroll chat output                |
-| `g` / `G`                 | Scroll to top / bottom            |
-| `Ctrl+d` / `Ctrl+u`       | Half page down / up               |
-| `d`                       | Open available diff or diagnostic |
-| `Tab`                     | Return focus to answer input      |
-| `q`                       | Return to sessions list           |
+| Key                       | Action                             |
+| ------------------------- | ---------------------------------- |
+| `j` / `k` / `Up` / `Down` | Scroll chat output                 |
+| `g` / `G`                 | Scroll to top / bottom             |
+| `Ctrl+d` / `Ctrl+u`       | Half page down / up                |
+| `Wheel`                   | Scroll chat output in either focus |
+| `d`                       | Open available diff or diagnostic  |
+| `Tab`                     | Return focus to answer input       |
+| `q`                       | Return to sessions list            |
 
 <a id="usage-question-input-submit-flow"></a> After the last question is answered,
 Agentty sends one follow-up message with each question and its response, then returns to

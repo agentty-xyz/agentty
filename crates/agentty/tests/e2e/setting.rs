@@ -16,8 +16,8 @@ use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 
-const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 3;
-const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 7;
+const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 4;
+const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 8;
 
 /// Moves from the initial Theme row to a known settings row.
 fn move_to_settings_row(name: &str, row_offset: usize) -> Journey {
@@ -187,6 +187,8 @@ async fn settings_tab_shows_content() {
                     assertion::assert_text_in_region(frame, "Agentty Default", &full);
                     assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
                     assertion::assert_text_in_region(frame, "Auto-approve Research", &full);
+                    assertion::assert_text_in_region(frame, "Mouse Support", &full);
+                    assertion::assert_text_in_region(frame, "Enabled", &full);
                 })
             },
         )
@@ -234,6 +236,9 @@ async fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -247,7 +252,7 @@ async fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("moved_down", "Selection moved down five rows")
+                    .capture_labeled("moved_down", "Selection moved down six rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -321,6 +326,8 @@ async fn settings_dropdown_selects_value() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(2000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("j")

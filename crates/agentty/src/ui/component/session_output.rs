@@ -18,7 +18,7 @@ use crate::ui::component::vertical_scrollbar::VerticalScrollbar;
 use crate::ui::icon::{QUEUED_ACTION_WIDTH, TACHYON_LOADER_WIDTH};
 use crate::ui::input_layout::{bottom_pinned_scroll_offset, panel_inner_width};
 use crate::ui::session_output_assembly::{self, SessionOutputBody};
-use crate::ui::{Component, markdown, session_format, style};
+use crate::ui::{Component, layout_snapshot, markdown, session_format, style};
 
 const SCROLLBAR_PADDING_WIDTH: u16 = 1;
 
@@ -952,18 +952,25 @@ impl Component for SessionOutput<'_> {
 
         f.render_widget(paragraph, output_area);
 
-        if resolved_layout.show_scrollbar {
-            let scrollbar_area = Rect::new(
+        let scrollbar_area = resolved_layout.show_scrollbar.then(|| {
+            Rect::new(
                 output_area
                     .x
                     .saturating_add(output_area.width.saturating_sub(SCROLLBAR_WIDTH)),
                 output_area.y.saturating_add(1),
                 SCROLLBAR_WIDTH,
                 viewport_height,
-            );
-
+            )
+        });
+        if let Some(scrollbar_area) = scrollbar_area {
             VerticalScrollbar::new(final_scroll, layout.lines.len()).render(f, scrollbar_area);
         }
+        layout_snapshot::record_chat_output(layout_snapshot::scroll_region(
+            output_area,
+            scrollbar_area,
+            layout.lines.len(),
+            viewport_height,
+        ));
 
         if let Some(loader_area) = active_loader_area {
             self.apply_tachyon_loader_effect(f.buffer_mut(), loader_area, spinner_frame);

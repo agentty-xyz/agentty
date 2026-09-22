@@ -3,6 +3,7 @@ use super::support::{
     test_services,
 };
 use crate::domain::agent::ResponseStyle;
+use crate::domain::mouse::MouseSupport;
 use crate::domain::setting::{MAX_ORCHESTRATION_PARALLELISM, SettingName};
 use crate::presentation::setting::{SettingsAction, SettingsOperation};
 
@@ -16,7 +17,7 @@ async fn move_selected_launch_configuration_down_persists_reordered_commands() {
         "cargo test\nnpm run dev\nlazygit",
     )
     .await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
 
     // Act
@@ -47,7 +48,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 8);
+    select_row(&mut manager, "Default Response Style");
 
     // Act
     manager.handle_enter();
@@ -76,7 +77,7 @@ async fn selector_dropdown_persists_bounded_orchestration_parallelism() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 1);
+    select_row(&mut manager, "Orchestrator Parallelism");
 
     // Act
     manager.handle_enter();
@@ -107,7 +108,7 @@ async fn selector_dropdown_persists_research_auto_approval() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 2);
+    select_row(&mut manager, "Auto-approve Research");
 
     // Act
     manager.handle_enter();
@@ -127,11 +128,36 @@ async fn selector_dropdown_persists_research_auto_approval() {
     );
 }
 
+#[tokio::test]
+async fn selector_dropdown_disables_mouse_support_and_persists_value() {
+    // Arrange
+    let (services, project_id) = test_services().await;
+    let mut manager = settings_manager(&services, project_id).await;
+    select_row(&mut manager, "Mouse Support");
+
+    // Act
+    manager.handle_enter();
+    manager.next_selector_dropdown_option();
+    manager.select_selector_dropdown_option().await;
+
+    // Assert
+    assert_eq!(manager.settings().mouse_support, MouseSupport::Disabled);
+    assert_eq!(
+        services
+            .db()
+            .settings()
+            .get_setting(SettingName::MouseSupport)
+            .await
+            .expect("failed to load mouse support setting"),
+        Some("false".to_string())
+    );
+}
+
 #[test]
 fn navigation_actions_do_not_request_launch_configuration_persistence() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
 
     // Act

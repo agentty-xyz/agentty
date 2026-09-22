@@ -37,12 +37,13 @@ const LIST_BASE_ACTIONS: [HelpAction; 2] = [
 ];
 
 /// Full session-view scroll shortcuts shown in the help overlay.
-const VIEW_OUTPUT_SCROLL_ACTIONS: [HelpAction; 5] = [
+const VIEW_OUTPUT_SCROLL_ACTIONS: [HelpAction; 6] = [
     HelpAction::new("scroll", "j/k", "Scroll output"),
     HelpAction::new("top", "g", "Scroll to top"),
     HelpAction::new("bottom", "G", "Scroll to bottom"),
     HelpAction::new("half down", "Ctrl+d", "Half page down"),
     HelpAction::new("half up", "Ctrl+u", "Half page up"),
+    HelpAction::new("wheel", "Wheel", "Scroll output with the mouse wheel"),
 ];
 
 /// Compact trailing session-view footer shortcuts.
@@ -760,6 +761,11 @@ pub(crate) fn diff_actions(can_comment: bool) -> Vec<HelpAction> {
     let mut actions = vec![
         HelpAction::new("back", "q", "Back to session"),
         HelpAction::new("select item", "j/k", "Select file or comment"),
+        HelpAction::new(
+            "wheel",
+            "Wheel",
+            "Scroll panel or file list under the pointer",
+        ),
         HelpAction::new(
             if can_comment { "open/comment" } else { "open" },
             "Enter/l",

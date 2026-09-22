@@ -4,6 +4,8 @@ pub mod composer;
 pub mod file_entry;
 /// Editable text-input state and cursor operations.
 pub mod input;
+/// Terminal mouse-capture preference.
+pub mod mouse;
 /// Orchestration and orchestration-task lifecycle states.
 pub mod orchestration;
 /// Workspace personality definitions and frontmatter parsing.

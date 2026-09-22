@@ -17,7 +17,9 @@ use crate::domain::input::InputCommand;
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::mode::chat_scroll::ChatScrollBatch;
-use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode};
+use crate::runtime::{
+    EventResult, FRAME_INTERVAL, PresentationState, key_handler, mode, mouse_handler,
+};
 use crate::ui::RenderCacheStore;
 
 /// Maximum terminal input events processed in one foreground cycle.
@@ -322,6 +324,8 @@ where
 ///
 /// `Event::Paste` is handled in text-input modes so multiline clipboard
 /// content is inserted as text instead of interpreted as navigation keys.
+/// `Event::Mouse` is hit-tested against the last rendered frame and only marks
+/// the app dirty when a scroll position actually changed.
 async fn process_event<B: Backend>(
     app: &mut App,
     presentation: Rc<PresentationState>,
@@ -331,6 +335,14 @@ async fn process_event<B: Backend>(
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
+    if let Some(Event::Mouse(mouse)) = event {
+        if mouse_handler::handle_mouse_event(app, presentation.as_ref(), mouse) {
+            app.mark_dirty();
+        }
+
+        return Ok(EventResult::Continue);
+    }
+
     process_event_with_key_handler(app, terminal, event, |app, terminal, key| {
         let presentation = Rc::clone(&presentation);
 

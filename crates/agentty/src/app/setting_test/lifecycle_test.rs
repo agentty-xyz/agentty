@@ -11,7 +11,7 @@ async fn delete_selected_launch_configuration_persists_remaining_commands() {
         "cargo test\nnpm run dev\nlazygit",
     )
     .await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, "Launch Configurations");
     manager.handle_enter();
     manager.next_launch_configuration_list_editor_item();
 

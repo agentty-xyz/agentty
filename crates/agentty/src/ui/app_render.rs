@@ -4,16 +4,21 @@ use ratatui::Frame;
 use ratatui::widgets::TableState;
 
 use crate::app::AppViewSnapshot;
-use crate::ui::{RenderCacheStore, RenderContext, SessionReviewSnapshot, style};
+use crate::presentation::viewport::LayoutSnapshot;
+use crate::ui::{RenderCacheStore, RenderContext, SessionReviewSnapshot, layout_snapshot, style};
 
 /// Projects application data into one terminal frame.
+///
+/// Returns the scrollable-panel geometry recorded while painting so the
+/// runtime can hit-test mouse input against the frame the user is looking at.
 pub(crate) fn render_app(
     snapshot: &AppViewSnapshot<'_>,
     frame: &mut Frame,
     project_table_state: &mut TableState,
     render_cache_store: &RenderCacheStore,
     session_table_state: &mut TableState,
-) {
+) -> LayoutSnapshot {
+    layout_snapshot::begin_frame();
     project_table_state.select(snapshot.project_selected_index);
     session_table_state.select(snapshot.session_selected_index);
     let session_review_snapshot =
@@ -65,4 +70,6 @@ pub(crate) fn render_app(
             working_dir: snapshot.working_dir,
         },
     );
+
+    layout_snapshot::take_frame()
 }

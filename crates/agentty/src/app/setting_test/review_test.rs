@@ -16,7 +16,7 @@ fn settings_rows_show_default_review_model_value() {
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[5].1, "claude/claude-opus-5 [xhigh, Normal]");
+    assert_eq!(rows[6].1, "claude/claude-opus-5 [xhigh, Normal]");
 }
 
 #[test]

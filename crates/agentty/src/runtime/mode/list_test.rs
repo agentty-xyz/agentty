@@ -694,7 +694,7 @@ async fn test_settings_previous_key_wraps_to_default_response_style_row() {
         app.settings_presentation
             .snapshot(&app.settings.view())
             .selected_row_index,
-        Some(8)
+        Some(9)
     );
 }
 

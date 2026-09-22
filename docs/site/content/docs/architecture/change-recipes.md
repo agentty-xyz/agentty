@@ -77,6 +77,17 @@ through the correct modules without crossing layer boundaries.
    needed.
 1. Update `docs/site/content/docs/usage/keybindings.md`.
 
+## Add a Mouse Interaction
+
+1. Record the panel geometry during render with the
+   `crates/agentty/src/ui/layout_snapshot.rs` helpers, extending `LayoutSnapshot` in
+   `crates/agentty/src/presentation/viewport.rs` when a new panel needs hit-testing.
+1. Route the gesture in `crates/agentty/src/runtime/mouse_handler.rs`, reusing
+   `ScrollRegion` math for clamping and follow-tail behavior.
+1. Keep terminal capture changes in `crates/agentty/src/runtime/terminal.rs` behind
+   `TerminalOperation` and `MouseCapture`.
+1. Update the Mouse section of `docs/site/content/docs/usage/keybindings.md`.
+
 ## Add or Change Database Schema
 
 1. Add a new migration file in `crates/ag-store/migrations/` (`NNN_description.sql`).

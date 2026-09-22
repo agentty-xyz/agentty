@@ -14,6 +14,7 @@ use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::InputCommand;
+use crate::domain::mouse::MouseSupport;
 use crate::domain::setting::{
     DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM, SettingName,
 };
@@ -103,6 +104,7 @@ impl SettingsTestHarness {
                 default_smart_speed_mode: SpeedMode::Normal,
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
+                mouse_support: MouseSupport::Enabled,
                 orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
                 theme: ColorTheme::Current,
                 use_last_used_model_as_default: false,
@@ -260,8 +262,20 @@ impl SettingsTestHarness {
     }
 }
 
-/// Selects one settings row through the screen navigation action.
-pub(super) fn select_row(manager: &mut SettingsTestHarness, row_index: usize) {
+/// Selects the settings row with the given label through the screen
+/// navigation action.
+///
+/// The index is derived from the rendered global and project rows so tests
+/// follow the production row order instead of hardcoding positions.
+pub(super) fn select_row(manager: &mut SettingsTestHarness, label: &str) {
+    let snapshot = manager.presentation.snapshot(&manager.view);
+    let row_index = snapshot
+        .global_rows
+        .iter()
+        .chain(snapshot.project_rows.iter())
+        .position(|(row_label, _)| *row_label == label)
+        .expect("settings row label must be rendered");
+
     for _ in 0..row_index {
         manager.next();
     }

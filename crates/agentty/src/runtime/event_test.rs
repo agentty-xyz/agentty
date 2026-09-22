@@ -7,15 +7,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use mockall::Sequence;
 use mockall::predicate::eq;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use tokio::sync::mpsc;
 
 use super::{
-    EventSource, MockEventSource, TERMINAL_EVENT_DRAIN_BUDGET, process_event_with_key_handler,
-    process_events, process_events_with_handler, process_events_with_scroll_handler,
-    process_paste_event, spawn_event_reader, spawn_event_reader_with_source,
+    EventSource, MockEventSource, TERMINAL_EVENT_DRAIN_BUDGET, process_event,
+    process_event_with_key_handler, process_events, process_events_with_handler,
+    process_events_with_scroll_handler, process_paste_event, spawn_event_reader,
+    spawn_event_reader_with_source,
 };
 use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
@@ -25,10 +30,12 @@ use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget, DiffLineComments,
-    DiffLineSide, DiffPreview,
+    DiffLineSide, DiffPreview, HelpContext, ViewportRect,
 };
+use crate::presentation::help_action::HelpAction;
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::SettingsAction;
+use crate::presentation::viewport::{LayoutSnapshot, ScrollRegion};
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
 
 /// Continues a test cycle while asserting no terminal event was produced.
@@ -522,7 +529,7 @@ async fn test_process_paste_event_updates_launch_configuration_input() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.tabs.set(crate::app::Tab::Settings);
-    for _ in 0..7 {
+    for _ in 0..8 {
         let view = app.settings.view();
         let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
     }
@@ -1058,4 +1065,100 @@ async fn test_event_batch_propagates_scroll_measurement_error() {
             ..
         }
     ));
+}
+
+/// Builds a help-overlay app plus presentation state whose last frame
+/// recorded an overflowing help popup.
+async fn help_overlay_fixture() -> (App, Rc<PresentationState>) {
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = AppMode::Help {
+        context: HelpContext::List {
+            keybindings: vec![HelpAction::new("quit", "q", "Quit"); 20],
+        },
+        scroll_offset: 0,
+    };
+    app.clear_redraw();
+    let presentation = Rc::new(PresentationState::default());
+    presentation.set_layout_snapshot(LayoutSnapshot {
+        help_overlay: Some(ScrollRegion {
+            area: ViewportRect {
+                height: 14,
+                width: 48,
+                x: 16,
+                y: 5,
+            },
+            scrollbar: None,
+            total_lines: 20,
+            viewport_height: 12,
+        }),
+        ..LayoutSnapshot::default()
+    });
+
+    (app, presentation)
+}
+
+/// Verifies wheel events reach the mouse handler and request a redraw.
+#[tokio::test]
+async fn test_process_event_routes_mouse_wheel_and_marks_dirty() {
+    // Arrange
+    let (mut app, presentation) = help_overlay_fixture().await;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+    // Act
+    let result = process_event(
+        &mut app,
+        presentation,
+        &mut terminal,
+        Some(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 20,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        })),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            scroll_offset: 3,
+            ..
+        }
+    ));
+    assert!(app.needs_redraw());
+}
+
+/// Verifies pointer motion neither changes state nor forces a redraw.
+#[tokio::test]
+async fn test_process_event_ignores_mouse_motion() {
+    // Arrange
+    let (mut app, presentation) = help_overlay_fixture().await;
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+
+    // Act
+    let result = process_event(
+        &mut app,
+        presentation,
+        &mut terminal,
+        Some(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 20,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        })),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            scroll_offset: 0,
+            ..
+        }
+    ));
+    assert!(!app.needs_redraw());
 }

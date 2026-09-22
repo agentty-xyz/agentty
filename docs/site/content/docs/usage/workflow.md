@@ -296,7 +296,9 @@ comment input, opening above it when space allows and below it near the top edge
 `Down` navigate matches, and `Tab` / `Enter` insert the selected path without finishing
 the comment. `Esc` dismisses the lookup while preserving the draft; press it again to
 finish editing. With no matches, `Tab` / `Enter` dismiss the lookup. Modified `Enter`
-still inserts a newline.
+still inserts a newline. The diff panel, its file list, and the session transcript also
+scroll with the mouse wheel, and their scrollbars can be dragged; see
+[Keybindings](@/docs/usage/keybindings.md#usage-mouse).
 
 Finishing empty text removes the comment and its source highlight. Completed comments
 keep a distinct inset background, and the active editor uses the stronger selection
