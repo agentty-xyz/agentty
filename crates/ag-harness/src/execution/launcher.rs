@@ -52,6 +52,7 @@ fn launch() -> io::Result<()> {
         }
         notice(&Notice::Configure)?;
         let configuration = configuration()?;
+        super::landlock::confine(&configuration)?;
 
         return supervise(shell(&configuration));
     }

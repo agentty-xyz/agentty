@@ -40,6 +40,7 @@ hex = "0.4.3"
 ignore = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "gif"] }
 jsonschema = { version = "0.56.0", default-features = false }
+libc = "0.2"
 libproc = "0.14.11"
 mockall = "0.15"
 objc2 = "0.6"

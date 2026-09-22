@@ -18,6 +18,10 @@ pub(super) struct Launch {
     pub(super) launcher: PathBuf,
     pub(super) linux_bubblewrap: Option<PathBuf>,
     pub(super) workspace: PathBuf,
+    /// Validated `(device, inode)` identity of each write grant, in grant
+    /// order; Linux launch fails when a mounted grant no longer matches.
+    #[serde(default)]
+    pub(super) workspace_write_nodes: Vec<(u64, u64)>,
     pub(super) workspace_writes: Vec<PathBuf>,
 }
 

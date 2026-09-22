@@ -89,6 +89,7 @@ dependencies = [
  "close_fds",
  "hex",
  "jsonschema",
+ "libc",
  "libproc",
  "mockall",
  "opentelemetry",

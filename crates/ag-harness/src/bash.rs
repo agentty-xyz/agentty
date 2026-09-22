@@ -151,10 +151,12 @@ impl BashConfig {
     }
 
     /// Grants writes beneath an existing workspace-relative directory. Git
-    /// metadata remains protected. Writes are never rolled back. Native Linux
-    /// execution currently rejects write grants before launch, because its
-    /// static mounts cannot protect Git metadata created later beneath a
-    /// writable directory.
+    /// metadata existing at launch remains protected; a repository the
+    /// command itself creates inside a grant is the command's own output.
+    /// Writes are never rolled back. Native Linux enforcement adds Landlock
+    /// rules inside the launcher and fails closed before execution on kernels
+    /// without the required ABI (Linux 6.2); macOS additionally denies
+    /// metadata by name pattern, including names created after launch.
     ///
     /// # Errors
     /// Rejects absolute paths, traversal, and Git metadata components.

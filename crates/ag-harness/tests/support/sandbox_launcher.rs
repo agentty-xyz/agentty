@@ -161,10 +161,9 @@ impl Drop for ProcessGroup {
     }
 }
 
-/// A launched Linux namespace driven at the launcher wire. The wire retains
-/// write mounts so these tests can observe namespace semantics and persist
-/// inner launcher coverage even though the production policy rejects Linux
-/// write grants.
+/// A launched Linux namespace driven at the launcher wire, with a write grant
+/// so descendants can leave observable markers and the inner launcher can
+/// persist its coverage profile.
 #[cfg(target_os = "linux")]
 struct Namespace {
     child: tokio::process::Child,
@@ -177,6 +176,25 @@ struct Namespace {
 impl Namespace {
     async fn start(workspace: &super::fixture::Workspace, command: &str) -> Self {
         let root = workspace.path();
+        let output = std::fs::metadata(root.join("output")).expect("grant metadata");
+
+        Self::start_with_nodes(
+            workspace,
+            command,
+            json!([[
+                std::os::unix::fs::MetadataExt::dev(&output),
+                std::os::unix::fs::MetadataExt::ino(&output)
+            ]]),
+        )
+        .await
+    }
+
+    async fn start_with_nodes(
+        workspace: &super::fixture::Workspace,
+        command: &str,
+        workspace_write_nodes: serde_json::Value,
+    ) -> Self {
+        let root = workspace.path();
         let external_reads: Vec<std::path::PathBuf> =
             super::fixture::runtime_reads(&[]).into_iter().collect();
         let configuration = json!({
@@ -185,7 +203,8 @@ impl Namespace {
             "external_reads": external_reads,
             "git_metadata": [root.join(".git")], "host_information": true,
             "launcher": workspace.launcher(), "linux_bubblewrap": "/usr/bin/bwrap",
-            "workspace": root, "workspace_writes": ["output"],
+            "workspace": root, "workspace_write_nodes": workspace_write_nodes,
+            "workspace_writes": ["output"],
         });
         let (parent, child) = std::os::unix::net::UnixStream::pair().expect("channel");
         parent.set_nonblocking(true).expect("nonblocking");
@@ -268,6 +287,31 @@ async fn namespace_completion_waits_for_surviving_descendants_and_persists_inner
     .await
     .expect("bounded namespace completion");
     workspace.assert_phase_profiles(&["outer-", "inner-"]);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn namespace_rejects_write_grants_whose_identity_changed() {
+    // Arrange
+    let workspace = super::fixture::Workspace::new();
+    let mut namespace = Namespace::start_with_nodes(
+        &workspace,
+        "printf escaped > output/escaped",
+        serde_json::json!([[0, 0]]),
+    )
+    .await;
+
+    // Act / Assert
+    tokio::time::timeout(Duration::from_secs(10), async {
+        assert_eq!(namespace.notice().await, "\"Failed\"");
+        assert!(
+            !namespace.child.wait().await.expect("exit").success(),
+            "identity mismatch must fail the launch"
+        );
+    })
+    .await
+    .expect("bounded identity rejection");
+    assert!(!workspace.path().join("output/escaped").exists());
 }
 
 #[cfg(target_os = "linux")]

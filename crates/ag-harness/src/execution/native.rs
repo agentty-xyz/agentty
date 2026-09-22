@@ -96,6 +96,7 @@ impl NativeProcess {
         command: &ExecutionCommand,
         policy: &ExecutionPolicy,
         git_metadata: Vec<PathBuf>,
+        workspace_write_nodes: Vec<(u64, u64)>,
     ) -> Result<Launch, ExecutionError> {
         let arguments = command
             .arguments()
@@ -132,6 +133,7 @@ impl NativeProcess {
                 .ok_or(ExecutionError::Unsupported)?,
             linux_bubblewrap: self.configuration.snapshot.linux_bubblewrap.clone(),
             workspace: policy.workspace().to_path_buf(),
+            workspace_write_nodes,
             workspace_writes: policy.workspace_writes().to_vec(),
         })
     }
@@ -148,13 +150,13 @@ impl BashProcess for NativeProcess {
         if !policy.exposes_host_information() {
             return Err(ExecutionError::Unsupported);
         }
-        // Bubblewrap binds cannot deny Git metadata created later beneath a
-        // writable directory, so Linux rejects write grants until dedicated
-        // filesystem enforcement lands.
+        // Linux write grants rely on Landlock rules applied inside the
+        // launcher; kernels without the required ABI fail closed here.
         #[cfg(target_os = "linux")]
-        if !policy.workspace_writes().is_empty() {
-            return Err(ExecutionError::Unsupported);
-        }
+        super::landlock::validate_write_grants(
+            policy.workspace_writes().len(),
+            super::landlock::abi(),
+        )?;
         if policy.requested_access(command.executable()) == ExecutionAccess::Denied {
             return Err(ExecutionError::Unsupported);
         }
@@ -222,21 +224,21 @@ impl BashProcess for NativeProcess {
             )
             .await?;
         }
+        let mut workspace_write_nodes = Vec::new();
         for write in policy.workspace_writes() {
             let path = policy.workspace().join(write);
             let canonical = tokio::fs::canonicalize(&path)
                 .await
                 .map_err(|_| ExecutionError::Setup)?;
-            if canonical != path
-                || !tokio::fs::metadata(&path)
-                    .await
-                    .map_err(|_| ExecutionError::Setup)?
-                    .is_dir()
-            {
+            let metadata = tokio::fs::metadata(&path)
+                .await
+                .map_err(|_| ExecutionError::Setup)?;
+            if canonical != path || !metadata.is_dir() {
                 return Err(ExecutionError::Unsupported);
             }
+            workspace_write_nodes.push((metadata.dev(), metadata.ino()));
         }
-        let launch = self.launch(command, policy, git_metadata)?;
+        let launch = self.launch(command, policy, git_metadata, workspace_write_nodes)?;
         self.encoded = serde_json::to_vec(&launch).map_err(|_| ExecutionError::Setup)?;
         if self.encoded.len() > 1024 * 1024 {
             return Err(ExecutionError::Setup);

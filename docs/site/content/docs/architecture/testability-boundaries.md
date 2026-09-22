@@ -97,9 +97,10 @@ selected executor: the default native launcher with descriptor clearing, or the
 explicitly selected unsandboxed executor. The shared execution-conformance suite runs
 lifecycle and persistence behavior against both shipped executors. Native public-surface
 tests exercise allowed access, confinement, capture, cancellation, and retained
-controls. Linux namespace completion and macOS best-effort process-group cleanup are
-distinct contracts; mock tests cannot establish native enforcement. Missing native
-infrastructure is a failed qualification, not a skipped success.
+controls, including Linux Landlock write-grant confinement on real isolated processes.
+Linux namespace completion and macOS best-effort process-group cleanup are distinct
+contracts; mock tests cannot establish native enforcement. Missing native infrastructure
+is a failed qualification, not a skipped success.
 
 Persistent `ag-harness` execution uses a public object-safe transactional store. An
 independent external test implementation exercises public construction, reservation,

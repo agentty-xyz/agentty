@@ -90,10 +90,15 @@ changing their recorded fingerprints. Workspace reads are the default; writes, r
 reads, environment values, and host-information exposure require grants. Git metadata
 stays read-only, networking is deny-only, and unsupported policy fails closed for
 enforcing executors; the unsandboxed executor applies only launch configuration and
-enforces no boundary of its own. On the native executor, Linux currently rejects
-workspace write grants before execution, because static Bubblewrap mounts cannot protect
-Git metadata created later beneath a writable directory; macOS enforces write grants
-through Seatbelt metadata denials. A dedicated trusted launcher clears inherited
+enforces no boundary of its own. On the native executor, macOS enforces write grants
+through Seatbelt metadata denials, including names created after launch. Linux enforces
+them through Landlock rules inside the Bubblewrap launcher: writes stay confined to the
+granted directories, Git metadata existing at launch — including linked-worktree
+administrative directories resolved through `.git` pointer files — stays read-only
+through mounts, and a repository the command itself creates inside a grant is the
+command's own output. Each grant's validated identity is re-verified inside the
+namespace before the shell starts, and kernels without the required Landlock ABI (Linux
+6.2) fail closed before execution. A dedicated trusted launcher clears inherited
 descriptors before running untrusted code. Linux uses Bubblewrap, seccomp, and a PID
 namespace. macOS uses Seatbelt and reports best-effort process-group cleanup: escaped
 descendants may remain alive under the inherited sandbox. Neither pipe EOF nor the main
@@ -368,20 +373,12 @@ emits cancellation once.
 Owned session handles, injected transactional stores, memory storage, observable
 cancellation and filesystem-effect settlement, host-turn recovery, registry-based model
 construction and idle-session model switching, ordered text/image input, model-aware
-context projection, journaled sandboxed Bash with host-selected executors, and
-structured compaction checkpoints are delivered library capabilities. Sandbox-library
-adoption remains rejected: no evaluated candidate denies writes to Git metadata created
-after launch on Linux, so the native launcher, seccomp filter, and AppArmor provisioning
-stay.
-
-1. **Linux Bash write access**
-
-   Restore Linux workspace write grants by adding Landlock write rules inside the
-   existing Bubblewrap launcher. Protect Git metadata that exists at launch, including
-   linked-worktree administrative directories resolved through `.git` pointer files. A
-   repository the command itself creates inside a writable grant is the command's own
-   output and is not retroactively protected; macOS keeps its stronger pattern-based
-   metadata denial.
+context projection, journaled sandboxed Bash with host-selected executors including the
+hardened unsandboxed executor, structured compaction checkpoints, and Linux workspace
+write grants enforced through Landlock inside the Bubblewrap launcher are delivered
+library capabilities. Sandbox-library adoption remains rejected: no evaluated candidate
+denies writes to Git metadata created after launch on Linux, so the native launcher,
+seccomp filter, and AppArmor provisioning stay.
 
 1. **Agentty runtime adapters**
 

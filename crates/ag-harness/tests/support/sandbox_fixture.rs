@@ -47,15 +47,6 @@ pub(super) enum Selected {
 
 pub(super) const CONFORMANCE_EXECUTORS: [Selected; 2] = [Selected::Native, Selected::Unsandboxed];
 
-impl Selected {
-    /// Whether commands can leave observable markers through the `output`
-    /// directory: the native Linux policy rejects write grants, while the
-    /// unsandboxed executor never restricts writes.
-    pub(super) fn observes_markers(self) -> bool {
-        matches!(self, Self::Unsandboxed) || cfg!(target_os = "macos")
-    }
-}
-
 pub(super) struct Workspace {
     coverage: Option<Coverage>,
     directory: TempDir,
@@ -91,6 +82,15 @@ impl Workspace {
     }
 
     pub(super) fn options(&self, timeout: Duration, capture: usize) -> TurnOptions {
+        self.options_with_runtime(&[], timeout, capture)
+    }
+
+    pub(super) fn options_with_runtime(
+        &self,
+        extra: &[PathBuf],
+        timeout: Duration,
+        capture: usize,
+    ) -> TurnOptions {
         let launcher = self.launcher();
         let configuration = BashConfig::new(
             launcher,
@@ -100,20 +100,16 @@ impl Workspace {
             capture,
         )
         .expect("configuration")
-        .with_host_information();
-        // Linux rejects directory-write grants before execution, so only the
-        // macOS policy grants the shared output directory.
-        #[cfg(target_os = "macos")]
-        let configuration = configuration
-            .with_write("output".into())
-            .expect("write grant");
+        .with_host_information()
+        .with_write("output".into())
+        .expect("write grant");
 
         TurnOptions::new(
             schema(),
             ToolPolicy::default().allow(Tool::Bash),
             TurnLimits::default(),
         )
-        .with_bash(with_runtime(configuration, &[]))
+        .with_bash(with_runtime(configuration, extra))
     }
 
     pub(super) fn executor_options(
@@ -153,16 +149,10 @@ impl Workspace {
             .map_or_else(coverage::launcher, Coverage::launcher)
     }
 
-    /// Production Linux commands run without write grants, so their inner
-    /// launcher profiles stay inside the discarded namespace; the wire-level
-    /// launcher tests assert inner profiles explicitly.
+    /// With the shared `output` write grant, both platforms persist the outer
+    /// launcher profile and the inner profile written inside the sandbox.
     pub(super) fn assert_launcher_profiles(&self) {
-        let phases: &[&str] = if cfg!(target_os = "macos") {
-            &["outer-", "inner-"]
-        } else {
-            &["outer-"]
-        };
-        self.assert_phase_profiles(phases);
+        self.assert_phase_profiles(&["outer-", "inner-"]);
     }
 
     pub(super) fn assert_phase_profiles(&self, phases: &[&str]) {
@@ -222,7 +212,8 @@ pub(super) fn runtime_reads(extra: &[PathBuf]) -> BTreeSet<PathBuf> {
     {
         paths.extend(["/bin/bash", "/bin/cat", "/bin/sleep"].map(PathBuf::from));
         for executable in paths.clone() {
-            // Only host binaries and fixtures compiled by this suite reach ldd.
+            // Host binaries, fixtures compiled by this suite, and fixture
+            // shell scripts reach ldd; scripts carry no dynamic dependencies.
             let output = std::process::Command::new("/usr/bin/ldd")
                 .arg(&executable)
                 .env_clear()
@@ -230,11 +221,16 @@ pub(super) fn runtime_reads(extra: &[PathBuf]) -> BTreeSet<PathBuf> {
                 .output()
                 .expect("inspect trusted runtime dependencies");
             let libraries = String::from_utf8(output.stdout).expect("dependency paths");
+            let diagnostics = String::from_utf8_lossy(&output.stderr).into_owned();
+            if libraries.contains("not a dynamic executable")
+                || diagnostics.contains("not a dynamic executable")
+            {
+                continue;
+            }
             assert!(
                 output.status.success() && !libraries.contains("not found"),
-                "ldd {}: {libraries}{}",
+                "ldd {}: {libraries}{diagnostics}",
                 executable.display(),
-                String::from_utf8_lossy(&output.stderr)
             );
             paths.extend(
                 libraries
@@ -337,7 +333,7 @@ impl Drop for Descendant {
 }
 
 /// Waits for a marker written through a write grant or the unsandboxed
-/// executor; the read-only native Linux policy leaves no marker to observe.
+/// executor.
 pub(super) async fn wait_file(path: &Path) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while !path.exists() {

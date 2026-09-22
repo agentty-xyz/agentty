@@ -219,19 +219,21 @@ explicit — there is no fallback and no environment-based choice.
 
 Workspace access defaults to read-only. Grant writes to existing relative directories
 with `with_write`, external runtime reads with `with_read`, and individual environment
-values with `with_environment`. Native Linux execution currently rejects write grants
-before launch because its static mounts cannot protect Git metadata created later
-beneath a writable directory; macOS enforces them. Git metadata remains read-only,
-including linked worktree administration. Network enablement is unsupported.
+values with `with_environment`. Git metadata existing at launch remains read-only,
+including linked worktree administration; a repository the command itself creates inside
+a write grant is the command's own output on Linux, while macOS also denies metadata
+names created after launch. Native Linux write grants require Landlock (Linux 6.2) and
+fail closed before execution on older kernels. Network enablement is unsupported.
 Configuration revisions must change when executable contents or environment values
 change; durable snapshots store environment names and the revision, never their values.
 Shell source and captured output are sensitive journal content and are excluded from
 lifecycle telemetry.
 
 Linux uses a host-selected `with_linux_bubblewrap` executable, user/PID/network
-namespaces, read-only mounts, and seccomp restrictions including keyring denial. Runtime
-libraries and executable paths must be readable through explicit grants. macOS uses
-Seatbelt through the system `sandbox-exec`. Its Bash runtime currently requires
+namespaces, read-only mounts, seccomp restrictions including keyring denial, and
+Landlock write rules that confine writes to the granted directories. Runtime libraries
+and executable paths must be readable through explicit grants. macOS uses Seatbelt
+through the system `sandbox-exec`. Its Bash runtime currently requires
 `with_host_information`, including root-directory enumeration and filesystem metadata;
 file contents still require separate grants. Unsupported policies fail closed on the
 native executor. Workspace symlinks, multiply linked workspace files, special files,
