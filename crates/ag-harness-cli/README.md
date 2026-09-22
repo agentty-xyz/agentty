@@ -37,7 +37,5 @@ cargo run --locked -p ag-harness-cli -- \
 - The first valid Git in `PATH` is used; `--git-executable <FILE>` overrides it.
 - Muse is the default provider. Run `cargo run --locked -p ag-harness-cli -- run --help`
   for Kimi, Qwen, model, and credential options.
-- CLI chats default to low model reasoning to reduce latency; pass
-  `--reasoning-effort <LEVEL>` to select deeper reasoning. Direct `ag-harness` library
-  users retain provider defaults unless they configure `Harness::model_reasoning_effort`
-  or `ModelRequest::with_model_reasoning_effort`.
+- Chats default to low model reasoning to reduce latency; pass
+  `--reasoning-effort <LEVEL>` to select deeper reasoning.
