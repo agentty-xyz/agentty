@@ -2,6 +2,7 @@
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
+mod features;
 #[path = "support/greeting.rs"]
 mod greeting;
 mod image;

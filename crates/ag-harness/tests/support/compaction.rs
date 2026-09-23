@@ -185,11 +185,13 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
             .await
             .expect("compact")
             .expect("checkpoint");
-        session.send("third").await.expect("post-compaction turn");
+        let third_outcome = session.send("third").await.expect("post-compaction turn");
         let reopened = harness.resume("reopen").await.expect("resume");
 
         // Assert
         assert_eq!(published.covered_through(), 1);
+        assert!(third_outcome.report().history().checkpoint_replayed());
+        assert_eq!(third_outcome.report().history().replayed_turns(), 0);
         assert_eq!(published.model(), Some("keeper"));
         assert_eq!(
             reopened.checkpoint().expect("checkpoint").summary(),
@@ -638,7 +640,7 @@ async fn heavy_summary_is_dropped_from_projection_and_rejected_as_a_source() {
 
         // Act: projection admits recent turns without the summary, while
         // generation cannot admit the summary-bearing source at all.
-        session.send("two").await.expect("post-checkpoint turn");
+        let two = session.send("two").await.expect("post-checkpoint turn");
         let rejected = session.compact().await;
 
         // Assert
@@ -646,6 +648,11 @@ async fn heavy_summary_is_dropped_from_projection_and_rejected_as_a_source() {
             summary_message(requests.lock().expect("requests").last().expect("request")).is_none(),
             "a summary beyond the budget falls back to recent history"
         );
+        // The checkpoint covers the only completed turn, so nothing is
+        // replayed and the dropped summary is visible in the report.
+        assert!(!two.report().history().checkpoint_replayed());
+        assert_eq!(two.report().history().replayed_turns(), 0);
+        assert_eq!(two.report().history().evicted_turns(), 0);
         assert!(matches!(
             rejected,
             Err(SessionError::Turn(TurnError::ContextBudgetExceeded { .. }))

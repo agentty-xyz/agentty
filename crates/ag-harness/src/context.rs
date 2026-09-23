@@ -203,12 +203,13 @@ pub(crate) fn admit_grown_request(
 
 /// Flattens the most recent complete turns whose combined weight fits
 /// `available_weight`, dropping every turn older than the first that does
-/// not, so a turn's tool groups are never split.
+/// not, so a turn's tool groups are never split. Returns the projected
+/// messages with the number of loaded turns that projection evicted.
 pub(crate) fn select_recent_turns(
     estimator: &dyn ContextEstimator,
     turns: &VecDeque<Vec<ModelMessage>>,
     available_weight: u64,
-) -> Vec<ModelMessage> {
+) -> (Vec<ModelMessage>, usize) {
     let mut kept = 0_usize;
     let mut remaining = available_weight;
     for turn in turns.iter().rev() {
@@ -222,12 +223,13 @@ pub(crate) fn select_recent_turns(
         kept += 1;
     }
     let dropped_turns = turns.len().saturating_sub(kept);
-
-    turns
+    let messages = turns
         .iter()
         .skip(dropped_turns)
         .flat_map(|turn| turn.iter().cloned())
-        .collect()
+        .collect();
+
+    (messages, dropped_turns)
 }
 
 /// Returns the definitions the engine advertises for these options, in order.

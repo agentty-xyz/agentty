@@ -4,7 +4,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOutcome, TurnReport,
+    HistoryActivity, ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOutcome,
+    TurnReport,
 };
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage, ModelError, ModelErrorType};
@@ -64,6 +65,36 @@ fn outcome_exposes_output_and_report() {
     assert_eq!(activity.duration(), Duration::from_millis(2));
     assert_eq!(activity.response_type(), ModelResponseType::Output);
     assert_eq!(outcome.into_output(), output);
+}
+
+#[test]
+fn history_activity_defaults_and_decodes_legacy_reports() {
+    // Arrange
+    let mut outcome = TurnOutcome::new(
+        json!({}),
+        TurnReport::new(Duration::from_millis(1), Vec::new(), Vec::new()),
+    );
+    let legacy = json!({
+        "output": {},
+        "report": {"duration": {"secs": 0, "nanos": 1_000_000}, "model_requests": [], "tool_calls": []}
+    });
+
+    // Act
+    let default_history = outcome.report().history();
+    outcome.set_history(HistoryActivity::new(true, 2, 3));
+    let decoded: TurnOutcome = serde_json::from_value(legacy).expect("legacy report");
+    let encoded = serde_json::to_value(&outcome).expect("encoded report");
+
+    // Assert
+    assert_eq!(default_history, HistoryActivity::default());
+    assert!(!default_history.checkpoint_replayed());
+    assert_eq!(default_history.evicted_turns(), 0);
+    assert_eq!(default_history.replayed_turns(), 0);
+    assert!(outcome.report().history().checkpoint_replayed());
+    assert_eq!(outcome.report().history().evicted_turns(), 2);
+    assert_eq!(outcome.report().history().replayed_turns(), 3);
+    assert_eq!(decoded.report().history(), HistoryActivity::default());
+    assert_eq!(encoded["report"]["history"]["replayed_turns"], 3);
 }
 
 #[test]

@@ -141,12 +141,18 @@ impl TurnOutcome {
     pub(crate) fn set_duration(&mut self, duration: Duration) {
         self.report.duration = duration;
     }
+
+    pub(crate) fn set_history(&mut self, history: HistoryActivity) {
+        self.report.history = history;
+    }
 }
 
 /// Observable, content-free activity from one successful model turn.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct TurnReport {
     duration: Duration,
+    #[serde(default)]
+    history: HistoryActivity,
     model_requests: Vec<ModelRequestActivity>,
     tool_calls: Vec<ToolActivity>,
 }
@@ -158,6 +164,13 @@ impl TurnReport {
     /// identical.
     pub fn duration(&self) -> Duration {
         self.duration
+    }
+
+    /// Returns how the durable session history was projected into the turn's
+    /// initial request. One-shot turns and reports recorded before this
+    /// field existed report no replayed, evicted, or summarized history.
+    pub fn history(&self) -> HistoryActivity {
+        self.history
     }
 
     /// Returns one entry for every provider request made during the turn.
@@ -177,8 +190,51 @@ impl TurnReport {
     ) -> Self {
         Self {
             duration,
+            history: HistoryActivity::default(),
             model_requests,
             tool_calls,
+        }
+    }
+}
+
+/// Content-free facts about how loaded session history entered a turn's
+/// initial request, so hosts can observe context loss instead of inferring
+/// it from model answers.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct HistoryActivity {
+    checkpoint_replayed: bool,
+    evicted_turns: usize,
+    replayed_turns: usize,
+}
+
+impl HistoryActivity {
+    /// Whether a checkpoint summary was replayed ahead of the retained turns.
+    /// False when the session has no checkpoint or the summary did not fit
+    /// the context budget.
+    pub fn checkpoint_replayed(self) -> bool {
+        self.checkpoint_replayed
+    }
+
+    /// Loaded turns the context budget evicted from the initial request. The
+    /// byte-based replay budget bounds loading itself and is not counted.
+    pub fn evicted_turns(self) -> usize {
+        self.evicted_turns
+    }
+
+    /// Loaded turns replayed in the initial request.
+    pub fn replayed_turns(self) -> usize {
+        self.replayed_turns
+    }
+
+    pub(crate) fn new(
+        checkpoint_replayed: bool,
+        evicted_turns: usize,
+        replayed_turns: usize,
+    ) -> Self {
+        Self {
+            checkpoint_replayed,
+            evicted_turns,
+            replayed_turns,
         }
     }
 }

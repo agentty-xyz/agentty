@@ -224,10 +224,11 @@ fn selection_keeps_the_most_recent_whole_turns() {
     ]);
 
     // Act
-    let projected = select_recent_turns(&FixedEstimator, &turns, 21);
+    let (projected, evicted) = select_recent_turns(&FixedEstimator, &turns, 21);
 
     // Assert
     // The two-message oldest turn is dropped wholesale.
+    assert_eq!(evicted, 1);
     assert_eq!(projected.len(), 3);
     assert_eq!(projected[0], ModelMessage::User("middle".into()));
     assert!(matches!(
@@ -255,8 +256,8 @@ fn selection_stops_at_the_first_turn_that_does_not_fit() {
     // Assert
     // The older single-message turn would fit, but selection never skips the
     // two-message turn between it and the retained suffix.
-    assert_eq!(partial, vec![ModelMessage::User("recent".into())]);
-    assert_eq!(empty, Vec::new());
+    assert_eq!(partial, (vec![ModelMessage::User("recent".into())], 2));
+    assert_eq!(empty, (Vec::new(), 3));
 }
 
 #[test]

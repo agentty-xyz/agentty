@@ -126,7 +126,8 @@ pub use tool::{
 };
 pub use trace::LifecycleTraceObserver;
 pub use turn::{
-    ModelRequestActivity, ToolActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome, TurnReport,
+    HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnLimits, TurnOptions,
+    TurnOutcome, TurnReport,
 };
 pub use turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use write::{WriteError, WriteOutput};
