@@ -1,12 +1,101 @@
 # `ag-harness`
 
-`ag-harness` runs structured LLM turns with explicit repository permissions and durable
-SQLite sessions, process-local memory sessions, or host-provided session stores.
+`ag-harness` runs structured LLM turns with deny-by-default repository permissions and
+durable sessions. Every turn validates against a caller-supplied output schema, and the
+selected session store — not the provider — is the source of truth for conversation
+state.
 
-## Registered models
+## One-shot turn
 
-Use `ModelRegistry` to select built-in clients or injected `Model` implementations by a
-stable host key:
+```rust
+use ag_harness::{Harness, Muse, MUSE_SPARK_1_3};
+
+let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?);
+let result = harness.run_once("Summarize Cargo.toml", output_schema).await?;
+```
+
+`run_once` executes one turn without storage. Use it for stateless utility calls.
+
+## Durable sessions
+
+```rust
+use ag_harness::{Harness, Muse, MUSE_SPARK_1_3, Repository, Tool};
+
+let repository = Repository::new(".", git_executable)?;
+let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?)
+    .database("harness.db")
+    .repository(repository)
+    .allow(Tool::Read);
+
+let mut session = harness
+    .session("review-42", output_schema.clone())
+    .system_prompt("Keep the review concise.")
+    .create()
+    .await?;
+let result = session.send("Review the current changes").await?;
+
+// Later, in the same or another process:
+let mut session = harness.resume("review-42").await?;
+let result = session.send("Now focus on error handling").await?;
+```
+
+Completed turns are replayed on resume; failed and interrupted turns stay visible in the
+store but never re-enter model context. Sessions run concurrently, with one active turn
+per session. The library never picks a database location — configure it with
+`Harness::database()` (the companion CLI defaults to `~/.ag-harness/db/harness.db`).
+
+## Choosing an entry point
+
+| Need                                        | Use                                           |
+| ------------------------------------------- | --------------------------------------------- |
+| One stateless turn                          | `run_once`                                    |
+| Multi-turn conversation                     | `session(...).create()` / `resume` + `send`   |
+| Per-turn schema, permissions, or comparison | `send_with_options` / `run_once_with_options` |
+| Cancellation and shutdown observation       | `send_controlled` / `run_once_controlled`     |
+| Idempotent retries by host-assigned ID      | `submit` + `recover`                          |
+
+Explicit `TurnOptions` replace harness defaults for that turn; they are never merged.
+Controlled turns return a `TurnControl` that can `cancel()` and then observe
+`settled()`, `effects_settled()`, and `commands_settled()` independently of the caller's
+future. `submit` fingerprints the effective request so a matching retry returns the
+recorded outcome without executing a provider or tool again.
+
+## Tools and permissions
+
+Tools are denied by default and enabled through `ToolPolicy`:
+
+- `Tool::Read` — file, list, search, and `show(head)` inspection. Comparisons (`diff`,
+  `show(base)`) additionally require a host-pinned `ComparisonBase` in `TurnOptions`.
+- `Tool::Write` — applies one bounded unified diff.
+- `Tool::Bash` — additionally requires an explicit `TurnOptions::with_bash(BashConfig)`
+  per turn.
+
+Both repository tools need a `Repository` with a trusted Git executable outside the
+containing worktree.
+
+## Sandboxed Bash
+
+`BashConfig::new` selects the native sandbox: install the matching `ag-harness-sandbox`
+binary from this crate outside the execution workspace and supply its absolute path plus
+a trusted Bash. Linux uses Bubblewrap, Landlock (Linux 6.2+), and seccomp; macOS uses
+Seatbelt with best-effort process-group cleanup. `BashConfig::for_executor` selects a
+host-supplied `BashExecutor` instead, including the shipped
+`UnsandboxedExecutor::without_isolation` for hosts already inside a container or VM.
+Selection is always explicit — no fallback, no environment-based choice.
+
+Workspace access defaults to read-only. Grant writes with `with_write`, external reads
+with `with_read`, environment values with `with_environment`, and host-detail exposure
+with the mandatory `with_host_information`. Git metadata stays read-only and networking
+is denied; unsupported policy fails closed on the native executor. Command intents
+persist before spawning; await `commands_settled()` (and `retry_commands()` after
+failures) so unresolved commands never silently block new turns. See `CommandOutcome`
+and `Session::commands()` for recorded results.
+
+## Models
+
+Built-in Muse, Kimi, and Qwen clients construct from the environment, or implement the
+object-safe `Model` trait to inject a provider. `ModelRegistry` selects models by stable
+host keys with declared `ModelCapabilities`:
 
 ```rust
 use ag_harness::{ExecutionIdentity, Harness, ModelCapabilities, ModelRegistry, Muse, MUSE_SPARK_1_3};
@@ -23,408 +112,39 @@ models.register(
     },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
-let result = harness.run_once("Review this proposal", output_schema).await?;
 ```
 
-Clients constructed through `ModelConfiguration::client_from_environment` can be
-registered the same way. Duplicate keys fail without replacing the existing model,
-including when the revision differs. Unknown keys fail before provider execution.
-Harnesses, session builders, and sessions retain their registration after the registry
-is dropped. `Harness::model_registration` exposes the captured identity, adapter
-metadata, and capabilities; direct `Harness::new(model)` remains supported.
+Capabilities are host declarations, not detection. A declared `ContextBudget` enables
+model-aware context projection: requests keep the most recent whole turns that fit, and
+mandatory content that cannot fit fails with a typed error before any provider call.
+Registered sessions resume only with the same registration key and revision; revise the
+revision whenever configuration, credentials scope, or injected behavior changes, and
+never embed secrets. `session.switch_model(&models, "other-model")` selects another
+registration for an idle session; `session.compact()` publishes a schema-validated
+summary checkpoint that projection replays ahead of recent turns.
 
-Use `ModelRegistry::register_shared` for an existing `Arc<dyn Model>`. A boxed model can
-use the same method through `Arc::from(boxed_model)`.
+## Session stores
 
-Capabilities are host declarations about the configured adapter, not tool permissions or
-automatic feature detection. They do not bypass provider validation. The `image_input`
-declaration additionally gates image-bearing turns before acquisition and image-bearing
-history during model switching. The registration supplies the `ExecutionIdentity`
-required for host-ID submissions. Revise it when configuration, endpoints, credential
-scope, capability declarations, or injected behavior changes; never include secrets. A
-host can override `Harness::execution_identity` for additional injected execution
-configuration, while the registration identity and capabilities remain part of the
-request fingerprint. Direct and registered construction have distinct request
-fingerprints. Recreate the same registration to recover a registered request after
-restart. Durable sessions persist the registration key and revision; resuming requires
-the same registration even when adapter metadata matches or is absent. Direct
-construction cannot resume registered sessions, and legacy or directly created sessions
-must resume through direct construction. Call
-`session.switch_model(&models, "other-model").await?` to select a registered model for
-an idle session. The switch commits its identity and clears native continuation
-atomically. Other handles become stale, including after switching back to their original
-model; resume a fresh handle before executing another turn. Existing host requests can
-still be recovered, and matching retries return recorded outcomes without execution.
-Explicit host execution-identity overrides survive switching.
+SQLite is the default (`Harness::database` or an explicit `SqliteStore`). `MemoryStore`
+provides resumable in-process sessions without restart durability. Custom backends
+implement the public `SessionStore` contract and are injected with `Harness::store`; the
+shared conformance suite lives in `tests/support/store_conformance.rs`.
 
-A registration may declare an approximate `ContextBudget` to enable model-aware context
-projection. Budgeted requests keep the most recent complete turns that fit after the
-system prompt, current input, advertised tool definitions, and reserved output are
-weighed by an injectable `ContextEstimator` (`Harness::context_estimator`, a byte-ratio
-heuristic by default). Estimates are deterministic approximations, never exact provider
-token counts, and images weigh their encoded data-URL length. Whole turns are dropped so
-tool groups stay intact; mandatory content that cannot fit fails with
-`TurnError::ContextBudgetExceeded` before acquisition. The budget covers every provider
-request of a turn: tool traffic grows the request between model calls, and a grown
-request that no longer fits fails with the same typed error instead of overflowing at
-the provider. Budgeted registrations always replay projected normalized history and
-never reuse native continuation, because the provider-side conversation can retain turns
-the replay budget already evicted. Projection changes only the outgoing request —
-canonical history, host requests, provenance, and write journals stay intact, and the
-byte-based replay budget still bounds loading. Revise the registration identity when the
-declared budget changes.
-
-Switching preserves ordinary completed messages and tool-call/result groups. A target
-without tool capability rejects tool history. Provider-specific reasoning is currently
-nonportable and rejects the switch explicitly, even if that history falls outside the
-replay budget. Unknown registrations, incompatible history, active turns, and unsettled
-local effects leave the selected model unchanged. Dropping the switch waiter can leave a
-committed switch: resume to observe the durable selection.
-
-Custom stores must atomically compare the supplied model generation during admission,
-record each turn's selected identity, and implement `SessionStore::switch_model` against
-the same reservation boundary. `HostTurnRecord::model` exposes execution provenance;
-turns created before this capability retain `None`.
-
-Call `session.compact().await?` to summarize completed turns into a versioned,
-schema-validated `SessionCheckpoint`. Generation runs the session's current model with
-tools denied, bounded by the effective context budget, and publishes atomically through
-`SessionStore::publish_checkpoint`; a session with no uncovered completed turn returns
-`None` without a model call. Publication is rejected as `SessionError::CheckpointStale`
-when the model generation has advanced or coverage would regress, and generation,
-validation, or persistence failure leaves the previous checkpoint intact. Request
-projection then replays the summary as ordinary user-role conversation data ahead of the
-uncovered turns that fit the budget, falling back to bounded recent history when even
-the summary does not fit. Custom stores implement `publish_checkpoint` against the same
-validation contract and return the current checkpoint and latest completed turn from
-`load_session`; when a registration declares a `ContextBudget`, image-bearing input is
-weighed through the estimator instead of the byte-based history rejection.
-
-## Durable sessions
-
-```rust
-use ag_harness::{
-    ComparisonBase, Harness, Muse, MUSE_SPARK_1_3, Repository, Tool, ToolPolicy,
-    TurnLimits, TurnOptions,
-};
-
-let repository = Repository::new(".", git_executable)?;
-let options = TurnOptions::new(
-    output_schema.clone(),
-    ToolPolicy::default().allow(Tool::Read),
-    TurnLimits::default(),
-)
-.with_comparison_base(ComparisonBase::resolve(&repository, "HEAD").await?);
-let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?)
-    .database("harness.db")
-    .repository(repository)
-    .allow(Tool::Read);
-
-let mut session = harness
-    .session("review-42", output_schema.clone())
-    .system_prompt("Keep the review concise.")
-    .create()
-    .await?;
-
-let result = session
-    .send_with_options("Review the current changes", options.clone())
-    .await?;
-println!("{}", result.output());
-```
-
-Resume a stored session and supply the desired options for the next turn:
-
-```rust
-let mut session = harness.resume("review-42").await?;
-let result = session.send_with_options("Now focus on error handling", options).await?;
-```
-
-The selected store is the source of truth. A completed turn retains the user prompt,
-assistant messages, tool calls, and tool results. Failed and interrupted turns remain
-visible in the database but are not replayed. Different sessions can run concurrently;
-one session accepts only one active turn at a time.
-
-Write intents and outcomes remain available through `session.writes().await?` after
-failure, reopen, or history eviction. These records describe past operations, not the
-current filesystem. `run_once` does not create a durable write journal.
-
-The library does not choose a database location. Configure it once with
-`Harness::database()`. The companion CLI defaults to `~/.ag-harness/db/harness.db`;
-override that with `AG_HARNESS_ROOT` or `--database`.
-
-## Cancellation and settlement
-
-Use `Session::send_controlled` or the storage-free `Harness::run_once_controlled` with
-explicit `TurnOptions`. The returned `ControlledTurn` starts when polled. Retain its
-`TurnControl` independently to cancel or observe settlement after dropping the future:
-
-```rust
-let turn = session.send_controlled("Review the changes", options);
-let control = turn.control();
-tokio::pin!(turn);
-let result = tokio::select! {
-    result = &mut turn => Some(result),
-    () = shutdown_signal => {
-        control.cancel();
-        None
-    }
-};
-control.settled().await?;
-control.effects_settled().await?;
-```
-
-Cancellation stops the waiter promptly; an in-progress terminal commit can still
-succeed. Keep the Tokio runtime running until `settled()` acknowledges execution and
-persistence cleanup. Failed cleanup returns a bounded `SettlementError` and retains
-local admission; after fixing storage, `retry_settlement()` retries only that turn's
-owner, then `settled()` observes the result. Repeated cancellation and stale controls
-cannot stop a successor turn. Acquisition abandoned before acknowledgment never starts
-model or tool execution.
-
-`effects_settled()` separately waits until the turn can start no more writes and all
-managed replacements have acknowledged completion and attempted journal recording.
-Started replacements and outcome recording survive cancellation and caller-future drop,
-including ordinary turns. Local session admission stays protected through both
-persistence cleanup and managed effects. Existing write intents can settle after lease
-expiry; cancellation never replays a replacement.
-
-An `EffectSettlementError` with `is_unresolved()` means a worker stopped without
-acknowledging filesystem completion; local admission stays blocked until process exit,
-even if controls are dropped. A journal-recording error reports known filesystem
-completion but leaves the durable outcome pending. `retry_settlement()` only retries
-owner cleanup, not writes or outcome recording. Inspect durable history and write
-records after cancellation. Neither boundary provides rollback, distributed workspace
-fencing, or proof that remote providers and unrelated processes have stopped.
-
-## Sandboxed Bash
-
-Bash requires both `ToolPolicy::allow(Tool::Bash)` and an explicit
-`TurnOptions::with_bash(BashConfig)` for each turn. The companion CLI does not enable
-it. `BashConfig::new` selects the default native sandbox executor: install the matching
-`ag-harness-sandbox` binary from this crate at a trusted location outside the execution
-workspace, then supply its absolute path and the trusted Bash executable. Every executor
-requires the explicit `with_host_information` grant: commands cannot conceal all host
-details.
-
-`BashConfig::for_executor` instead selects a host-supplied implementation of the public
-object-safe `BashExecutor`/`BashProcess` contract. The harness keeps policy validation,
-intent persistence before spawning, the deadline, the combined output budget,
-cancellation, and cleanup retries; the executor owns launch, its documented enforcement,
-capture, and cleanup, and declares the `CommandCleanupScope` recorded on every outcome
-plus a stable identity stored in durable policy snapshots. The shipped
-`UnsandboxedExecutor::without_isolation` runs commands with the harness process's own
-operating-system access for hosts that already execute inside a container or VM; it
-enforces no filesystem, network, or Git-metadata boundary. Executor selection is always
-explicit — there is no fallback and no environment-based choice.
-
-Workspace access defaults to read-only. Grant writes to existing relative directories
-with `with_write`, external runtime reads with `with_read`, and individual environment
-values with `with_environment`. Git metadata existing at launch remains read-only,
-including linked worktree administration; a repository the command itself creates inside
-a write grant is the command's own output on Linux, while macOS also denies metadata
-names created after launch. Native Linux write grants require Landlock (Linux 6.2) and
-fail closed before execution on older kernels. Network enablement is unsupported.
-Configuration revisions must change when executable contents or environment values
-change; durable snapshots store environment names and the revision, never their values.
-Shell source and captured output are sensitive journal content and are excluded from
-lifecycle telemetry.
-
-Linux uses a host-selected `with_linux_bubblewrap` executable, user/PID/network
-namespaces, read-only mounts, seccomp restrictions including keyring denial, and
-Landlock write rules that confine writes to the granted directories. Runtime libraries
-and executable paths must be readable through explicit grants. macOS uses Seatbelt
-through the system `sandbox-exec`. Its Bash runtime currently requires
-`with_host_information`, including root-directory enumeration and filesystem metadata;
-file contents still require separate grants. Unsupported policies fail closed on the
-native executor. Workspace symlinks, multiply linked workspace files, special files,
-overlapping read grants, and oversized preparation trees are rejected.
-
-`CommandOutcome` preserves main exit, termination reason, combined output truncation,
-execution failure, and cleanup failure separately. `PidNamespace` cleanup includes Linux
-detached descendants. **macOS reports `ProcessGroupBestEffort`: detached descendants may
-remain alive under their inherited Seatbelt restrictions.** A completed command or
-successful cleanup on macOS does not prove that those descendants stopped. Applied
-writes are not rolled back; aggregate memory, process-count, and disk quotas are absent.
-
-Retain `TurnControl` and await `commands_settled()` independently of `settled()` and
-`effects_settled()`. `retry_commands()` retries retained cleanup and outcome recording,
-never command execution. `command_outcomes()` exposes observed results even after a
-caller drops its future. Both stores commit command intent before spawning and retain
-unknown outcomes across interruption. `Session::commands()` and host-request recovery
-expose these records separately from patch writes. Unknown or unresolved commands block
-new durable turns. After externally accounting for a stopped command, a host can
-explicitly call `Session::reconcile_command` with its original record; this preserves
-unknown history and cannot reconcile another owner.
-
-Native qualification tests are in `tests/sandbox.rs`; missing enforcement fails the
-suite. Its lifecycle and persistence conformance behavior runs against both the native
-and the unsandboxed executor (executor-independent lease-loss persistence runs once,
-natively), while enforcement tests qualify only the native one. CI targets native Ubuntu
-24.04 and macOS 26. Ubuntu's AppArmor policy must allow Bubblewrap's namespace setup
-capabilities. CI loads a profile scoped to `bwrap` that denies capabilities to executed
-children, then probes startup without `sudo`. It does not disable AppArmor or the host's
-user-namespace restrictions. A CI target is not a claim of a successful qualification
-run; validate the suite on the deployment environment.
-
-## Custom session stores
-
-Implement `SessionStore` and pass a shared instance to `Harness::store`. SQLite remains
-available through `Harness::database` or an explicitly opened `SqliteStore`:
-
-```rust
-use std::{path::Path, sync::Arc};
-use ag_harness::{Harness, SessionStore, SqliteStore};
-
-let store: Arc<dyn SessionStore> = Arc::new(SqliteStore::open(Path::new("harness.db")).await?);
-let harness = Harness::new(model).store(store);
-```
-
-Use the built-in `MemoryStore` for resumable sessions within one process:
-
-```rust
-use std::sync::Arc;
-use ag_harness::{Harness, MemoryStore};
-
-let store = MemoryStore::new();
-let harness = Harness::new(model).store(Arc::new(store.clone()));
-let mut session = harness.session("scratch", output_schema).create().await?;
-let result = session.send("Summarize the task").await?;
-```
-
-Clones share state and identity; separately constructed stores are independent. Memory
-storage retains turn history and write journals only while its shared state lives and
-provides no restart durability. Its history budget bounds replay, not total retained
-memory. Filesystem changes made by tools outlive the memory journal.
-
-The latest `store` or `database` selection applies to new handles; existing builders and
-sessions retain their captured store. One-shot execution never accesses storage.
-
-Independent handles for one backing store must share a `StoreIdentity`. The harness
-coordinates local admission; each backend must atomically enforce ownership and leases
-across processes. Build an `AcquiredTurn` before committing its reservation, retain it
-through acknowledgment, then activate it. Forward the supplied store handle unchanged so
-decorators and admission remain attached to renewal, journals, and cleanup. Failed
-cleanup retains admission until owner-scoped recovery succeeds. Keep the Tokio runtime
-driven until cleanup settles; this does not establish completion of filesystem effects.
-
-Use `StoredTurnOptions` for historical encoding and continuation compatibility, and
-`ModelMessage::retained_bytes` for bounded whole-turn history. `SessionError::Store`
-retains backend errors without requiring SQL types. The external test implementation and
-shared conformance cases are in `tests/support/store_conformance.rs`.
-
-## Host turn recovery
-
-Configure a stable execution identity before submitting host-assigned turn IDs:
-
-```rust
-use ag_harness::ExecutionIdentity;
-
-let harness = harness.execution_identity(ExecutionIdentity::new("my-model-config", "v1")?);
-let mut session = harness.resume("task").await?;
-let result = session.submit("request-42", "Summarize the task", options).await?;
-let recorded = session.recover("request-42").await?;
-```
-
-The identity is a host assertion covering model configuration and injected execution
-behavior, including custom filesystems. Revise it when endpoints, credential scopes,
-model configuration, or injected implementations change; never embed secrets. Input,
-schema, permissions, limits, comparison identity, repository scope, system prompt,
-reasoning settings, and the stored history budget are fingerprinted separately from
-`StoredTurnOptions` compatibility. Conversation history and remote continuation IDs do
-not change a retry's identity.
-
-Host IDs are unique within a session. Matching completed retries return the original
-`TurnOutcome`, including its recorded activity report. Active retries return
-`SessionError::HostTurnInProgress`; failed or interrupted retries return
-`SessionError::HostTurnStopped`. Both contain the recorded state and known writes. A
-changed effective request returns `SessionError::HostTurnConflict`. Retries never
-execute a provider or tool, including when a terminal acknowledgment was lost. SQLite
-retains these records across reopen and history projection; memory storage retains them
-only for its lifetime. Calls without host IDs remain supported.
-
-Use `submit_controlled` for a retained cancellation control. After cancellation settles,
-`recover` reports the canonical outcome, which may be completed if cancellation raced
-its commit. Pending write intents remain unknown. A deliberate new attempt needs a new
-ID; neither a new ID nor persistence settlement proves earlier effects stopped or
-provides exactly-once external effects.
-
-External `SessionStore` implementations must implement atomic `begin_request`,
-`complete_request`, and `load_request`. Duplicate classification precedes busy
-detection; terminal output and messages commit together. Decorators forward the
-reservation's original store handle. Host-turn activity duration is the engine duration
-recorded before the terminal commit, so recovery returns the identical report.
-
-## One turn
-
-Use `run_once` when no resumable history is needed:
-
-```rust
-let result = harness.run_once("Summarize Cargo.toml", output_schema).await?;
-```
-
-## Text and image input
+## Input
 
 Every entry point accepts `impl Into<TurnInput>`, so plain strings keep working. Ordered
-text and image content uses explicit blocks:
+text and image content uses explicit `InputBlock`s with validated PNG/JPEG bytes. Image
+support is opt-in per model and checked before any provider request.
 
-```rust
-let input = TurnInput::from_blocks(vec![
-    InputBlock::Text("What changed in this screenshot?".into()),
-    InputBlock::Image(ImageContent::new(ImageMediaType::Png, png_bytes)?),
-])?;
-let result = session.send(input).await?;
-```
-
-`ImageContent` accepts nonempty PNG or JPEG bytes whose container signature matches the
-declared media type; signature checks do not decode the image. Construction enforces the
-per-image, image-count, aggregate, and encoded-request limits published as constants on
-`ImageContent` and `TurnInput`, so invalid input fails before any acquisition or
-provider request. Text-only input is normalized to one text message, which keeps legacy
-stored strings and recorded text host-request fingerprints unchanged. Image-bearing
-input preserves exact block order across persistence and replay, and its host-request
-fingerprint covers each image's media type and content digest. Stored input is restored
-with integrity checks only, so lowering a published limit keeps existing history
-readable.
-
-Images count toward the whole-turn replay budget at their base64 data-URL length. A turn
-larger than the budget leaves later replay together with every older turn, so durable
-turns reject image-bearing input that alone exceeds the session's budget with
-`SessionError::ImageInputExceedsHistory` before acquisition. Create sessions that accept
-images with `Harness::max_history_bytes` above the default 256 KiB.
-
-Built-in providers translate image blocks to Chat Completions `image_url` data URLs for
-configurations whose image support is documented or qualified by the live image checks:
-the Kimi K2.6, K2.7 Code, and K3 models, the Qwen VL families plus `qwen-plus` and the
-`qwen3.8-27b`, `qwen3.8-flash`, and `qwen3.8-max` models, and the Muse Spark 1.3 models.
-Other Qwen models accept image parts but ignore or invent their content, so support is
-never inferred from a model family. Other configurations, replay of image history
-included, fail with an explicit unsupported-image error before network access. Image
-payloads never enter telemetry or bounded diagnostics.
-
-Image support is opt-in for injected models. `Model::validate_input` rejects
-image-bearing input by default before acquisition; override it to accept the images a
-model reads from `ModelMessage::UserInput`. A registered model must also declare
-`image_input`. Switching a session with image history requires both: a declaration the
-target adapter rejects does not admit the switch.
-
-## Permissions and models
-
-Tools are denied by default. `Tool::Read` enables file, list, search, and `show(head)`.
-Comparisons (`diff` and `show(base)`) also require a host-selected `ComparisonBase` in
-`TurnOptions`; no base is chosen implicitly. The base stays pinned while worktree and
-`HEAD` reads remain live. The companion CLI requires `--comparison-base <REV>` for
-comparisons.
-
-`Tool::Write` applies one bounded unified diff. Either tool requires a `Repository` with
-a trusted Git executable outside the containing worktree.
-
-External providers implement the single `Model` trait and return `ModelCompletion`. They
-receive the complete ordered history in `ModelRequest::messages()`. A provider may also
-return an opaque continuation identifier; if native resume is unavailable, the harness
-retries once using the stored history and retains any replacement continuation returned
-by that replay.
+## Observability
 
 Attach `Harness::with_lifecycle_observer()` for content-free turn, model, and tool
-events. The rejected resume and replay are separate model attempts in lifecycle events
-and `TurnOutcome::report()`. Host-ID submissions begin execution observation only after
-acquiring a new turn; recorded retries and recovery lookups emit no execution events.
+events. `LifecycleMetrics` and `LifecycleTraceObserver` project the stream to
+OpenTelemetry without storing prompts or tool output in telemetry.
+
+## Going deeper
+
+The Rust API docs on each type carry the detailed contracts — settlement and recovery
+semantics, store conformance, Bash grant validation, and image limits. The
+[design page](https://agentty.xyz/docs/architecture/ag-harness-design/) covers runtime
+and persistence boundaries.
