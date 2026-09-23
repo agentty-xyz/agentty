@@ -56,24 +56,24 @@ runs:
 
     - name: Install `cargo-llvm-cov`
       if: ${{ inputs['cargo-llvm-cov'] == 'true' }}
-      uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+      uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
       with:
         tool: cargo-llvm-cov
 
     - name: Install `cargo-audit`
       if: ${{ inputs['cargo-audit'] == 'true' }}
-      uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+      uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
       with:
         tool: cargo-audit
 
     - name: Install `cargo-machete`
       if: ${{ inputs['cargo-machete'] == 'true' }}
-      uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+      uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
       with:
         tool: cargo-machete
 
     - name: Install `cargo-nextest`
-      uses: taiki-e/install-action@9534c84618278caac52cb373bb164ed464dbd8af # v2.87.11
+      uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
       with:
         tool: nextest
 
