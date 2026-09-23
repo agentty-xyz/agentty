@@ -28,34 +28,16 @@ post-processing; isolated utility runs execute concurrently with a bounded capac
 session workflow can await a utility child directly without placing that child behind
 itself in the session queue.
 
-Application composition configures worker clients, which obtain their adapters through
-`ag-runtime`. Session workflows submit turns through `SessionRunClient`; utility
-workflows use `RunClient`. Both keep runtime execution and cancellation inside
-`ag-worker`. `SessionWorkerHandle` owns the session mailbox, task spawning, wakeups, and
-shared submission ordering. The application host supplies pause policy, durable command
-admission, and ordered workflow effects. Utility admission is persisted before harness
-execution. Records retain the repository, purpose, optional session/project ownership,
-and optional parent operation. Draft title generation can belong to a session before any
-parent operation exists. Provider retries and protocol repairs remain attempts inside
-that supervised run. Per-turn filesystem permissions and provider-call budgets pass
-through unchanged.
+Application composition supplies worker configuration and host policy. Session turns use
+`SessionRunClient`; utilities use `RunClient`. Admission persists ownership and purpose
+before execution. Retries and protocol repairs remain attempts within the same
+supervised run and retain its per-turn filesystem permissions and provider-call budget.
 
-Dropping a utility caller, canceling its parent, or shutting down the application stops
-the owned execution. Nested scopes retain every enclosing cancellation source, including
-when a child adds its own token. The worker waits for adapter cleanup before recording
-terminal state; provider-turn panics still trigger session shutdown before returning
-failure. Session deletion waits for its utilities before removing resources. Terminal
-cancellation remains responsive while background resource cleanup waits for those
-utilities. Settled session trackers are reclaimed; durable admission closures reject
-late submissions even after session deletion. If closure persistence fails, the worker
-retains its in-memory cancellation marker. A session rebase shares one cancellation
-token across native assistance and utility child calls. Application shutdown closes
-admission and gives workers, creation, and cleanup tasks one shared five-second grace
-period. At expiry it drops unfinished worker execution and forces detached runtime tasks
-to stop, releasing their owned processes. Forced shutdown can leave unfinished records
-for startup recovery. Heartbeats track running work; startup recovery fails abandoned
-runs under exclusive application ownership rather than automatically replaying
-potentially mutating requests.
+Caller drop, parent cancellation, or shutdown stops owned execution. Nested scopes
+retain parent cancellation. Cleanup precedes terminal bookkeeping and resource deletion;
+durable admission closures reject late session work. Shutdown has one shared five-second
+grace period before forcing unfinished runtime work to stop. Startup recovery fails
+abandoned runs rather than replaying potentially mutating requests.
 
 ### Execution Policy
 
@@ -112,15 +94,10 @@ integrations.
 
 ## Supporting Boundaries
 
-`ag-session` owns session models and the built-in agent/model catalog. `ag-store`
-provides SQLite persistence, including the worker's operation records. Agentty wires
-these components together and supplies application workflows. Only `ag-worker` depends
-on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`. Adapter construction
-belongs in `ag-runtime`; applications receive worker handles and configuration. Import
-shared execution types from `ag-contracts` and selections from `ag-session`. Worker test
-facilities provide scripted adapter injection. Automated source and Cargo metadata
-checks reject execution bypasses and forbidden dependencies, including aliases, optional
-dependencies, and test dependencies.
+`ag-session` owns session models and model selection; `ag-store` supplies persistence.
+Only `ag-worker` depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`.
+Applications configure worker handles and import shared types from `ag-contracts`.
+Automated dependency and source checks enforce this boundary, including test code.
 
-See [Module Map](@/docs/architecture/module-map.md) for ownership details and
-[Runtime Flow](@/docs/architecture/runtime-flow.md) for orchestration.
+See [Module Map](@/docs/architecture/module-map.md) for ownership and
+[Runtime Flow](@/docs/architecture/runtime-flow.md) for orchestration and recovery.

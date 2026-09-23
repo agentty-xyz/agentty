@@ -14,7 +14,7 @@ implementation.
 ## Design Status
 
 <a id="architecture-orchestrator-design-status"></a> **Current Model** and **Current
-Limits** describe the preview feature that ships today. **Target Model**, **Delivery
+Limits** describe the preview feature that ships today. **Target Model**, **Rollout
 Phases**, and **Invariants to Preserve** are design targets, not shipped behavior.
 
 See [Parallel Orchestration](@/docs/usage/workflow.md) for user-facing instructions.
@@ -53,51 +53,38 @@ unobserved.
 <a id="architecture-orchestrator-verification"></a>
 <a id="architecture-orchestrator-integration"></a>
 
-One campaign-global status moves from approval through execution, verification, and
-integration. Every task ever added belongs to that same phase.
+A campaign has one shared phase from approval through integration. All tasks belong to
+that phase, including tasks added later.
 
 ```mermaid
-sequenceDiagram
-    participant U as User
-    participant C as Controller
-    participant O as Coordinator
-    participant W as Child sessions
-    U->>C: Request goal
-    C->>O: Propose flat plan
-    O->>U: Request approval
-    U->>O: Approve plan
-    O->>W: Run parallel tasks
-    W->>O: Return reports and diffs
-    O->>C: Verify all tasks
-    C->>O: Return verdicts
-    O->>U: Request integration
-    U->>O: Choose merge or review
-    O->>W: Integrate in plan order
+flowchart TD
+  Plan --> Approve[Approve tasks]
+  Approve --> Execute[Run children]
+  Execute --> Review[Review and remediate]
+  Review --> Verify[Controller verification]
+  Verify --> Integrate[User selects integration]
+  Integrate --> Done
 ```
 
-The controller emits `subtasks` of one kind per response. Initial implementation plans
-need at least two tasks; research waves and retries may contain one. Every task needs a
-unique valid key, prompt, and acceptance criteria. Safe touched-area validation applies
-only to implementation tasks. Valid tasks persist before approval. Research
-auto-approves when **Auto-approve Research** is enabled, which is the default.
+One response proposes at most eight tasks of one kind. Initial implementation needs at
+least two; research and retries may contain one. Each task has a stable key, prompt, and
+acceptance criteria. Implementation touched areas are planning references, not edit
+restrictions. Plans persist before approval; research auto-approval is enabled by
+default.
 
-The coordinator claims tasks before creating children, links each child before sending
-its prompt, and limits live children by **Orchestrator Parallelism**: three by default,
-up to eight. Eight is a per-response fan-out limit, not a campaign limit. All children
-start from the controller's base; plan order affects integration only.
+Claims and persisted child links prevent duplicate creation. Parallelism defaults to
+three, with a maximum of eight. All children start from the controller's base; plan
+order controls integration, not dependencies.
 
-Implementation workers receive up to three focused-review remediation passes. When all
-tasks settle, the controller receives one inert verification envelope containing
-acceptance criteria, reports or branch evidence, review outcomes, and changed paths.
-Each research report is limited to 32 KiB after JSON encoding, including quotes and an
-explicit truncation notice when evidence is omitted. This bounds escaped report content
-without dropping task keys or acceptance criteria; the aggregate envelope is not capped.
-The response accepts at most eight verdicts. Explicit `pass` verdicts advance; flagged
-or missing verdicts park. Reusing a task key starts a correction or a fresh researcher.
+Implementation workers get up to three review/remediation passes. Once tasks settle, the
+controller verifies an inert envelope of criteria, results, and evidence. Research
+reports are individually capped at 32 KiB after JSON encoding; the aggregate is not
+capped. At most eight verdicts fit one response. Explicit passes advance; missing or
+flagged verdicts park. Reused keys continue an implementation child or start a fresh
+researcher.
 
-The user then makes one campaign-wide choice between local merge and forge review
-requests. Local integration follows plan order. Research-only campaigns need no
-integration choice and complete automatically.
+The user chooses local merges or review requests for the campaign. Research-only work
+needs no integration.
 
 ### Controls and Recovery
 
@@ -132,140 +119,75 @@ review, continuation, or roll-up work without duplicating it.
 - **Weak control surface.** The board clips, hides task detail, cannot edit a plan, and
   exposes no per-task recovery actions.
 - **Serialized questions.** Only one worker question can reach the controller at a time.
-- **Leaky boundary.** Orchestration policy lives in the app layer, while child creation
-  exposes persistence row identifiers through the session API.
+- **Persistence-coupled API.** Child creation exposes storage identifiers through the
+  session API.
 
 ## Target Model
 
 ### Intended Workflow
 
-<a id="architecture-orchestrator-target-goals"></a> A campaign becomes a durable
-conversation that can alternate research, implementation, and review rounds while
-independent work continues.
+<a id="architecture-orchestrator-target-goals"></a>
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant C as Controller
-    participant O as Coordinator
-    participant W as Workers
-    U->>C: Request complex goal
-    C->>O: Propose research wave
-    O->>W: Run research tasks
-    W->>O: Return reports
-    O->>C: Verify research
-    C->>O: Propose implementation
-    O->>W: Run dependency graph
-    W->>O: Return branch evidence
-    O->>C: Verify implementation
-    C->>O: Return verdicts
-    O->>U: Offer integration
-```
+A proposed campaign remains open across research, implementation, and review waves,
+allowing independent work to continue while the controller plans the next round.
 
 ### Waves and Controller Dispatch
 
 <a id="architecture-orchestrator-target-waves"></a>
 <a id="architecture-orchestrator-target-dispatch"></a>
 
-A persisted wave owns its tasks, kind, phase, and verification generation. Waves
-schedule and verify independently, so research and implementation can coexist in
-different waves. The campaign status is their roll-up.
+Each persisted wave owns its kind, phase, tasks, and verification generation. Approved
+membership freezes at eight keys; new scope creates another wave. Waves schedule
+independently, but each verification dispatch must cover all ready/reported tasks in its
+wave. Every task needs a generation-matched verdict before verification completes.
 
-Wave membership freezes at approval and is capped at eight task keys, matching the
-verdict response limit. New scope creates another wave. One dispatch verifies every
-`Ready` or `Reported` task in the wave. Its verification generation completes only after
-each has a generation-matched verdict; only explicit passes advance. The initial design
-never splits one verification generation across controller turns.
+Execution history links task generations to sessions and predecessors, preserving old
+terminal sessions while identifying one active execution. One durable controller queue
+serializes dispatch by wave, message kind, and generation.
 
-Waves also introduce execution history. Each task execution row is unique by task and
-generation, links one session and an optional predecessor, and the task points to its
-active execution. This replaces the current single child-session link and lets stale
-root work continue in a managed successor without reopening a terminal session.
+Responses persist before application. A compare-and-set transaction checks the open
+campaign and originating wave's lifecycle versions, then applies verdicts, corrections,
+at most one follow-up wave, approval state, and dispatch completion. Mismatches
+supersede the response without effects. Cancel/close invalidate outstanding dispatches;
+captured research authorization survives restart.
 
-The one controller session remains serialized. Ready waves enter a durable dispatch
-queue keyed by wave, message kind, and generation. A campaign claim allows one
-controller turn in flight; other waves keep running or wait visibly.
-
-The provider response is saved before application. Each dispatch records the expected
-campaign and originating-wave lifecycle versions. User lifecycle actions advance the
-relevant version. Cancel and close atomically advance the campaign version and
-invalidate every queued or in-flight dispatch.
-
-One compare-and-set transaction applies a response only while the campaign remains open
-and both lifecycle versions match. It records verdicts, correction generations, at most
-one follow-up wave, its approval state, and dispatch completion. A mismatch marks the
-response superseded without mutating work. Replay cannot duplicate work. The dispatch
-also captures the research auto-approval authorization so restart cannot change the
-result.
-
-A campaign closes only through a board action after every wave is settled. Closing
-persists `Done` and releases the controller. Settled includes passed reports,
-integrated, blocked, detached, failed, or canceled tasks, but not pending integration or
-remediation. Cancel abandons open work; an ineligible close action shows the blocker.
+Explicit close requires all waves settled, with no pending integration or remediation.
+Cancel abandons open work; ineligible close explains its blocker.
 
 ### Dependency Graph
 
-<a id="architecture-orchestrator-target-graph"></a> Implementation tasks gain
-`depends_on`. The initial version allows one same-wave dependency, rejects cycles and
-unknown keys, and rejects multiple parents until a materialized multi-parent base has
-defined conflict and cleanup semantics.
+<a id="architecture-orchestrator-target-graph"></a>
 
-A prerequisite is dependency-ready only when it is `Ready`, still owns its managed
-branch, and has a persisted branch-tip generation. Gating on a verdict would deadlock:
-wave verification waits for all tasks, including the dependent.
+Implementation tasks gain one same-wave `depends_on` prerequisite. Reject unknown keys,
+cycles, and multiple parents until multi-parent conflict and cleanup semantics exist.
 
-Failure, cancellation, or detachment persists `DependencyBlocked` on every descendant
-before cleanup. Each block records the root cause and the immediate prerequisite
-generation it awaits.
+A prerequisite becomes dependency-ready at `Ready` with managed branch ownership and a
+persisted tip generation. Waiting for its verdict would deadlock wave verification.
+Failure, cancellation, or detachment blocks descendants before cleanup and records the
+cause and awaited generation.
 
-When a retried prerequisite reaches a newer `Ready` generation, a unique recovery
-transition keyed by blocked task, prerequisite task, and successful generation advances
-the direct-child frontier. A child that never started returns to `Planned` against the
-new tip. A child with prior work gets one successor execution and enters restack; its
-last branch stays retained until that succeeds or the campaign is abandoned. Replays do
-not create another execution, and deeper descendants remain blocked until their own
-prerequisite becomes `Ready`. Graph-aware cancellation previews and stops descendants
-without touching unrelated work.
+A newer ready prerequisite advances only its direct-child frontier through an idempotent
+recovery transition. Unstarted children return to `Planned`; existing work receives a
+successor execution and restack, retaining its old branch until success or abandonment.
+Deeper descendants wait for their own prerequisites. Cancellation stops the affected
+subtree without touching unrelated work.
 
 ### Managed Stacks and Generations
 
-<a id="architecture-orchestrator-target-stacking"></a> The user-facing `Stacked` mode
-cannot launch dependencies: `Ready` managed sessions are terminal, while that mode
-requires an active parent and creates an unlinked draft.
+<a id="architecture-orchestrator-target-stacking"></a>
 
-The session API therefore adds `OrchestrationStackedChild`. A durable claim pins the
-prerequisite tip, eagerly creates a managed worktree, persists both task and parent
-links, assigns `OrchestrationWorker`, and submits the prompt automatically. A task uses
-the execution history introduced with waves, preserving old terminal sessions as
-evidence while naming one active generation.
+Ordinary `Stacked` mode cannot launch managed dependencies: it requires an active parent
+and creates an unlinked draft. The proposed `OrchestrationStackedChild` API instead
+claims a prerequisite tip, creates the worktree, persists task/parent links, assigns the
+managed role, and submits work automatically.
 
-```mermaid
-sequenceDiagram
-    participant O as Coordinator
-    participant P as Parent task
-    participant D as Dependent task
-    participant S as Store
-    O->>P: Run prerequisite
-    P->>S: Save ready tip
-    O->>D: Start at parent tip
-    D->>S: Save task evidence
-    O->>P: Apply correction
-    P->>S: Save new tip
-    S->>O: Descendants are stale
-    O->>D: Create successor
-    D->>S: Save restack evidence
-    O->>D: Reverify if changed
-```
+Prerequisite changes synchronize the full descendant chain. Terminal sessions never
+reopen; successor sessions restack retained work. Verdicts record task, prerequisite,
+branch, and base generations.
 
-Every prerequisite-tip change, including a correction, synchronizes the full descendant
-chain. A terminal dependent is never reopened; a successor execution session restacks
-from its retained tip. Each verdict records the task, prerequisite, branch, and base
-generations it verified.
-
-A canonical patch fingerprint decides whether a clean restack preserved both the
-child-owned patch and its dependency context. Only then may a new verdict explicitly
-carry forward the old one. Corrections, changed context, conflicts, and failures forbid
-carry-forward; they trigger re-verification or park the affected subtree.
+A canonical patch fingerprint may justify explicitly carrying a verdict forward only
+when both the child patch and dependency context survive a clean restack. Corrections,
+changed context, conflicts, or failures require re-verification or a parked subtree.
 
 ### Durable Operations
 
@@ -285,113 +207,73 @@ supersede older pending work; an unknown in-flight result is never duplicated.
 
 ### Campaign-Wide Integration
 
-<a id="architecture-orchestrator-target-integration"></a> All waves target one campaign
-base, so local merges and review requests share a durable queue and one claim. The
-campaign records the base commit, tree, and monotonic generation; tasks and verdicts
-record which generation they used.
+<a id="architecture-orchestrator-target-integration"></a>
 
-The integration approach is persisted per implementation wave. At its integration gate,
-the board offers `LocalMerge` or `ReviewRequest`. A compare-and-set against the open
-campaign and wave lifecycle versions saves the choice and approval generation, then
-enqueues its passed tasks. Research waves skip the gate, and one wave cannot mix
-approaches.
+All waves share one campaign base, durable integration queue, and claim. The campaign
+tracks base commit, tree, and generation; task verdicts identify the generation
+verified.
 
-Queue entries copy that approval generation and approach. A retry keeps the approach and
-increments a durable task integration generation. The user may change the approach only
-before the first entry is claimed; the replacement approval invalidates unclaimed
-entries through the same lifecycle compare-and-set.
+Each implementation wave persists one approved approach: `LocalMerge` or
+`ReviewRequest`. Queue entries carry that approval generation. Retries retain the
+approach; users may change it only before the first claim, invalidating unclaimed
+entries atomically. Research skips integration.
 
-Before verification and integration, the coordinator resolves the actual base. A stale
-root task gets a new managed successor session, rebases from its retained tip, then
-repeats focused review and wave verification. Dependents use transitive restacking.
-Conflicts park the queue entry with evidence.
+Before verification or integration, resolve the actual base. Stale root tasks receive
+successor sessions for refresh, focused review, and verification; dependents restack
+transitively. Conflicts park with evidence. Prerequisites integrate first, and
+descendant verdicts must match all resulting generations.
 
-Queue eligibility follows the dependency graph. A prerequisite integrates before its
-descendants. A descendant can claim the queue only after required ancestor restacks
-finish and its verdict matches the resulting task, prerequisite, branch, and campaign
-base generations.
+Every accepted integration advances the base and invalidates older queued evidence,
+including same-wave siblings. Local merges reconcile Git effects before acceptance.
+Review-request attempts persist head, target, expected result, request identity, and
+generation, holding the claim through terminal reconciliation. Forge status alone is
+insufficient: target history and tree must match before accepting integration.
 
-Each accepted integration advances the base generation and makes older queued evidence
-stale, including later tasks from the same wave. A local merge is accepted after its Git
-operation reconciles. The coordinator transitively restacks affected descendants and
-refreshes and re-verifies changed work before it can re-enter the queue.
-
-A review-request attempt records its head, target base commit and tree, request
-identity, and integration generation. It holds the claim until terminal reconciliation,
-closure, or detachment. Forge state only wakes reconciliation. Before the task can
-become `Integrated`, the coordinator compares the actual target history and tree with
-the recorded base and expected merge result. A match atomically accepts the integration.
-
-An intervening base change makes the attempt stale. While the request is open, the task
-refreshes against the new base, repeats focused review and wave verification, then
-updates the request or supersedes it with one persisted replacement attempt. If it
-already merged, the landed tree remains under reconciliation until the same checks pass;
-failure parks corrective or revert evidence. A request closed without merge retries
-under the wave's persisted approach. Restart resumes the recorded attempt before any new
-side effect.
+Base changes make an attempt stale. Open requests refresh, re-review, and reverify
+before update or persisted replacement. Already-merged requests remain under
+reconciliation; failed checks park corrective or revert evidence. Closed requests retry
+under the saved approach. Restart reconciles the recorded attempt before new effects.
 
 ### Interactive Campaign Board
 
-<a id="architecture-orchestrator-target-board"></a> The board becomes a selectable,
-scrollable task table with a detail pane for prompts, acceptance criteria, touched
-areas, evidence, verdicts, dependencies, questions, and integration state.
+<a id="architecture-orchestrator-target-board"></a>
 
-Users can edit or drop tasks before approval; approve a plan wave; choose the
-integration approach for a passed implementation wave; retry, cancel, or detach a task;
-answer any queued worker question; and close or cancel a campaign. Canceling a non-leaf
-task previews affected descendants.
-
-Every visible action requires an E2E feature test.
+The proposed board is a scrollable task table with detail for criteria, evidence,
+verdicts, dependencies, questions, and integration. Users can edit/drop unapproved
+tasks, approve waves, select integration, retry/cancel/detach tasks, answer queued
+questions, and close/cancel campaigns. Non-leaf cancellation previews affected
+descendants. Every visible action requires E2E coverage.
 
 ### Nested Campaigns and API Boundary
 
 <a id="architecture-orchestrator-target-nesting"></a>
 <a id="architecture-orchestrator-target-api"></a>
 
-Session roles split into ownership (user or managed) and capability (worker or
-orchestrator). A managed orchestrator may own a depth-capped sub-campaign after waves
-and dependencies are proven.
+Roles separate ownership from capability. After waves and dependencies are proven,
+managed orchestrators may own depth-capped sub-campaigns.
 
-Orchestration policy moves into `ag-session` behind plan, wave, task, and graph
-operations. The frontend-neutral API uses opaque handles instead of database row IDs;
-the app layer supplies runtime, persistence, Git, and forge adapters.
+Extend the frontend-neutral orchestration/session APIs with opaque plan, wave, task, and
+graph handles instead of storage row identifiers. Keep campaign policy in the shared
+orchestration layer; the application supplies execution, persistence, Git, and forge
+adapters.
 
 ## Rollout Phases
 
 <a id="architecture-orchestrator-phases"></a>
 
-These are product milestones, not individual PRs. They ship in order; each phase starts
-after the previous phase is complete.
+Ship these milestones in order; incomplete workflow shapes stay internal.
 
-| Phase | Scope                      | Depends on | Outcome                                 |
-| ----- | -------------------------- | ---------- | --------------------------------------- |
-| 1     | Control surface and safety | —          | Usable, enforceable flat campaigns      |
-| 2     | Durable waves              | 1          | Multi-round research and explicit close |
-| 3     | Safe independent work      | 2          | Concurrent implementation waves         |
-| 4     | Dependency graphs          | 3          | Single-parent stacked DAG workflows     |
-| 5     | Nested orchestration       | 4          | Depth-capped recursive campaigns        |
+| Phase | Deliverable                                                                 |
+| ----- | --------------------------------------------------------------------------- |
+| 1     | Interactive controls, worker questions, enforced controller read-only mode  |
+| 2     | Durable waves, execution history, fenced dispatch, explicit close           |
+| 3     | Shared integration claim, base refresh, re-verification, recovery           |
+| 4     | Single-parent dependencies, block recovery, restacking, ordered integration |
+| 5     | Depth-capped nested campaigns and hierarchy controls                        |
 
-Phase 1 delivers the interactive board, plan and task actions, queued worker questions,
-and enforced controller read-only permissions.
-
-Phase 2 adds bounded wave persistence, execution generations, opaque handles, serialized
-lifecycle-fenced dispatch, atomic follow-up creation, and campaign close. Existing
-campaigns migrate as wave one.
-
-Phase 3 adds wave-scoped integration approval, the campaign integration claim, base
-generations, successor refresh, focused review, re-verification, and restart
-reconciliation. Implementation waves do not integrate independently before this phase.
-
-Phase 4 adds managed stacked creation and exposes `depends_on` only when validation,
-dependency-ready scheduling, block recovery, graph-aware cancellation, transitive
-restacking, and topological integration work end to end.
-
-Phase 5 splits ownership from capability and adds managed orchestrators, sub-campaign
-roll-up, cancellation, recovery, and hierarchy rendering.
-
-A phase may span several reviewable PRs, but incomplete workflow shapes stay internal.
-Schema changes include migration and restart coverage; visible behavior includes usage
-docs and an E2E feature test.
+Existing campaigns migrate as wave one. Concurrent implementation integration waits for
+phase 3; `depends_on` waits for complete phase-4 lifecycle support. Schema changes need
+migration/restart tests; visible behavior needs usage docs and E2E tests.
 
 ## Invariants to Preserve
 

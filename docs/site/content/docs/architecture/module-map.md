@@ -14,198 +14,70 @@ For file-level detail, read the module docstrings directly.
 
 ## Workspace Crates
 
-- `crates/ag-clipboard/`: Read-only clipboard support crate with the narrow text,
-  file-list, and RGBA image read surface used by prompt image capture. Platform backends
-  own macOS pasteboard access, X11 selection reads, Wayland `wl-paste` reads, and
-  unsupported-backend reporting.
-- `crates/ag-contracts/`: Transport-independent session and one-shot execution
-  contracts, continuation state, settings, usage, events, and errors. It has no
-  dependency on provider implementations, persistence, or a frontend.
-- `crates/ag-runtime/`: Worker-consumed runtime composition, harness dispatch, and
-  provider lifecycle. It is the sole consumer of `ag-agent`.
-- `crates/ag-worker/`: Session mailboxes and execution clients, bounded utility runs,
-  cancellation, heartbeats, completion, restart recovery, and harness execution-policy
-  configuration. Hosts supply queue policy and ordered workflow effects; storage
-  implements worker-owned operation contracts.
-- `crates/ag-agent/`: External-agent adapters, prompt templates, provider discovery, and
-  CLI/app-server transport ownership. It implements `ag-contracts` interfaces and owns
-  cancellation of provider resources and enforcement of worker-selected harness policy.
-- `crates/ag-forge/`: Shared forge review-request library crate with normalized
-  review-request and comment-thread types, GitHub/GitLab remote detection, thread
-  reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and
-  `ForgeCommandRunner` boundaries.
-- `crates/ag-git/`: Shared git library crate with worktree creation, repository
-  metadata, commit/diff/push/pull sync, merge-conflict preflights, rebase/conflict
-  handling, and squash-merge workflows behind the `GitClient` boundary.
-- `crates/ag-harness/`: Provider-neutral structured model turns with a shared engine for
-  durable sessions and one-shot calls. Immutable `TurnOptions` define output schemas,
-  permissions, budgets, and optional comparison bases. Ordered `TurnInput` carries
-  bounded text and image blocks for both entry points, validated before acquisition and
-  translated only for provider configurations with declared image support. Owned
-  sessions and builders capture harness configuration and share lazy SQLite
-  initialization. The library owns a host model registry used by harness construction;
-  registrations carry capability declarations and the recovery contract's execution
-  identity, and a declared context budget bounds request projection to recent whole
-  turns through an injectable estimator. `Session::compact` summarizes covered turns
-  into a versioned `SessionCheckpoint` that the store publishes atomically and
-  projection replays ahead of uncovered history. It also owns history, leases, terminal
-  transitions, and write journals through a public transactional `SessionStore` with
-  SQLite and process-local `MemoryStore` backends. The store also owns atomic
-  host-request deduplication and complete result recovery. Hosts can inject stores;
-  shared local admission retains acquisition and cleanup ownership. Controlled turn
-  futures expose turn-scoped cancellation with independent persistence and managed
-  filesystem-effect settlement after caller drop. Retained write workers own replacement
-  completion and journal recording; local admission remains protected until both settle,
-  with unacknowledged completion blocking admission for the process lifetime. Its
-  `SqliteStore` implementation encapsulates pool access and row decoding. Bounded tools
-  use validated `Repository` and injectable `FileSystem` boundaries. Hosts own prompts,
-  comparison-base selection, permissions, and telemetry setup; the engine enforces a
-  validated, pinned commit for comparisons. The public `BashExecutor` contract lets
-  hosts select command execution, while platform-independent supervision retains bounded
-  preparation, output draining, and retained cleanup for Bash. The default native
-  executor's trusted launcher implements Linux namespace isolation with Landlock-scoped
-  write grants and macOS Seatbelt with explicitly best-effort process-group cleanup; an
-  explicitly named unsandboxed executor exists for hosts already inside a container or
-  VM. Command journals and settlement remain separate from patch-write effects.
-- `crates/ag-harness-cli/`: Interactive `ag-harness` command-line application and its
-  process-level tests. It derives provider parsing and help from `ag-harness`, then owns
-  command-line defaults, application prompts, bounded repository permission selection,
-  terminal-safe output, and creation and resumption of durable sessions.
-- `crates/ag-orchestration/`: Frontend-neutral campaign planning, approval,
-  reconciliation, verification, integration, and controller/child prompt templates.
-  Hosts inject `SessionService`, persistence repositories, `OrchestrationEventSink`, and
-  `OrchestrationSchedule`; the crate does not depend on `agentty` or terminal UI.
-- `crates/ag-protocol/`: Shared structured response protocol library crate with
-  transport-neutral response models, schema generation, parser diagnostics, protocol
-  prompt envelopes, repair prompts, review-comment outcomes, and turn prompt payload
-  helpers.
-- `crates/ag-session/`: Frontend-neutral session library with stable identity,
-  lifecycle, built-in agent/model catalog, orchestration, project, personality,
-  review-link, setting, clarification, and transcript models; complete session
-  aggregates; pure policy and parsing helpers; and the object-safe `SessionBackend` port
-  exposed through the owned, cloneable `SessionService` for creation, lookup, messaging,
-  structured question answers, durable coordinator submissions, cancellation, merge, and
-  review-request workflows.
-- `crates/ag-store/`: Reusable persistence library with narrow repository contracts,
-  SQLite adapters, WAL/foreign-key connection setup, offline SQLx query metadata, and
-  embedded migrations. Host applications may inject a `TimestampSource` while the
-  default constructors use the system clock.
-- `crates/ag-tui-text/`: Shared Ratatui text-rendering library crate with Markdown
-  parsing/styling, forge HTML normalization, bounded mermaid-to-terminal diagram
-  rendering, and terminal-width wrapping/truncation helpers. Host applications inject
-  semantic palette and cache version settings at the render boundary.
-- `crates/agentty/`: Main TUI application crate with composition root, application,
-  domain, infrastructure, runtime, and UI layers.
-- `crates/testty/`: Rust-native TUI end-to-end testing framework with PTY-driven
-  semantic assertions and VHS visual capture. Also ships the language-agnostic `testty`
-  command-line binary for non-Rust projects.
-- `crates/ag-xtask/`: Workspace maintenance commands, including SQL migration numbering
-  and instruction integrity checks.
+| Crate              | Responsibility                                                   |
+| ------------------ | ---------------------------------------------------------------- |
+| `ag-clipboard`     | Host clipboard reads                                             |
+| `ag-contracts`     | Transport-independent execution types and interfaces             |
+| `ag-runtime`       | Adapter composition and dispatch                                 |
+| `ag-worker`        | Scheduling, cancellation, heartbeats, recovery, execution policy |
+| `ag-agent`         | External CLI and app-server adapters, policy enforcement         |
+| `ag-forge`         | GitHub/GitLab review requests and comments                       |
+| `ag-git`           | Worktrees, diffs, sync, rebase, merge                            |
+| `ag-harness`       | Standalone model loop, tools, durable sessions                   |
+| `ag-harness-cli`   | Companion harness CLI                                            |
+| `ag-orchestration` | Campaign planning, verification, integration                     |
+| `ag-protocol`      | Response schemas, parsing, prompt envelopes                      |
+| `ag-session`       | Session models, policies, catalog, lifecycle API                 |
+| `ag-store`         | Persistence contracts, SQLite adapters, migrations               |
+| `ag-tui-text`      | Markdown, forge HTML, terminal diagrams and text layout          |
+| `agentty`          | Application composition and TUI                                  |
+| `testty`           | PTY assertions and visual recordings                             |
+| `ag-xtask`         | Workspace maintenance checks                                     |
+
+All crates live under `crates/`. See
+[`ag-harness` Design](@/docs/architecture/ag-harness-design.md) and
+[Orchestrator Design](@/docs/architecture/orchestrator.md) for their component
+contracts.
 
 ## Application Layers (`crates/agentty/src/`)
 
-- `main.rs` / `lib.rs`: Composition root — database bootstrap, `App` construction,
-  runtime launch, and public module exports.
-- `app/`: Orchestration layer. Owns the `App` state, the `AppEvent` reducer, project and
-  settings persistence manager, the merge queue, the project sync orchestrator, campaign
-  workflow wiring, managed-worker capability routing, the application adapter for
-  `ag-orchestration` notifications, branch publish, review, generation-matched
-  background full-diff requests, typed prompt workflow requests and outcomes, the
-  `session_api.rs` adapter for `ag-session`, the bounded `session_runtime.rs` command
-  actor, prepared background session creation with foreground completion, and the
-  session module (`app/session/`) with its worker handles, queue policy, and workflow
-  steps (`lifecycle`, `turn`, `post_turn`, `merge`, `task`, `worker`). Prompt composers,
-  slash-menu state, and mode navigation remain presentation-owned. No direct process,
-  filesystem, or clock calls — everything external goes through `infra/` traits.
-- `domain/`: Pure Agentty-specific business entities and logic — render/runtime session
-  snapshots, themes, clarification input progress, explicit transient-message slots and
-  lifecycles, prompt-composer logic, the shared `InputState` command and undo/redo
-  model, stable input-revision and character-offset identities used to bind prompt
-  attachments to exact placeholder occurrences and history states, session
-  action-eligibility and list-ordering policies, and fuzzy file-entry ranking shared by
-  runtime selection and UI suggestions. Thin compatibility modules re-export
-  `ag-session` provider metadata, agent/model selections and session models, and shared
-  protocol turn prompt payloads, plus settings and execution types from `ag-contracts`.
-  No I/O.
-- `infra/`: External integrations behind traits — Agentty data-root resolution and
-  `ag-store` composition, git (`GitClient`, backed by `ag-git`), filesystem
-  (`FsClient`), the session-worktree-only personality catalog, tmux, clipboard images,
-  version checks, project discovery, and file indexing. Clipboard image capture
-  delegates host clipboard reads to `ag-clipboard`, then owns temp-file persistence and
-  attachment metadata. Agentty accesses provider lifecycle through `ag-worker`; provider
-  registry, router, parser, and transport internals stay private to `crates/ag-agent/`.
-- `runtime/`: Terminal lifecycle and the event loop — terminal setup, the event-reader
-  thread, key dispatch, mode-focused handlers under `runtime/mode/`, and shared handlers
-  for common interactions such as review-request detail navigation, session-output
-  metrics, transcript scrolling, `KeyEvent` mapping to domain input commands, and
-  session review-comment navigation, address/deny marking, and batch submission. Runtime
-  owns `PresentationState`, including the shared `RenderCacheStore` used by input
-  metrics and frame rendering.
-- `presentation.rs` and `presentation/`: Frontend-neutral interaction state shared by
-  runtime input and UI output. They expose mode, help-action, prompt, settings-screen
-  actions, editor, scroll, viewport, semantic list-selection contracts, and one coherent
-  `FrameTime` value per render pass without importing Ratatui or `ui/` formatting.
-  `presentation/review_comment.rs` owns review comment group ordering and headings while
-  preserving forge-thread selection and batch actions across grouped snapshot refreshes.
-  `presentation/setting.rs` owns settings row selection, selectors, launch-configuration
-  editing through the shared `InputState`, and render-ready settings snapshots; it
-  returns typed persistence operations to `app/setting.rs`.
-- `ui/`: Rendering — frame composition, mode-to-page routing, pages under `ui/page/`,
-  reusable widgets under `ui/component/`, application-to-frame projection in
-  `ui/app_render.rs`, Agentty theme adapters for `ag-tui-text`, plus diff, layout,
-  review-comment formatting, the unified Diff Files/Comments workspace, and theme
-  helpers. `ui/session_output_assembly.rs` owns the pure transcript-to-display-line
-  projection; the `SessionOutput` component retains layout caching, scrollbar metrics,
-  loader effects, and Ratatui painting.
+| Layer                | Owns                                                            |
+| -------------------- | --------------------------------------------------------------- |
+| `main.rs` / `lib.rs` | Bootstrap and composition                                       |
+| `app/`               | Workflows, state transitions, event reduction, service adapters |
+| `domain/`            | Pure Agentty entities and interaction policies                  |
+| `infra/`             | External integrations behind injectable traits                  |
+| `runtime/`           | Terminal lifecycle, event loop, input dispatch                  |
+| `presentation/`      | Shared interaction, selection, editor, and viewport state       |
+| `ui/`                | Snapshot projection, layout, and rendering                      |
 
 ## Layer Rules
 
-Session process accounting follows these boundaries: `infra` samples the host through
-`ResourceClient` and validates native process identities, `app` owns sampling and cache
-invalidation, `domain` defines resource totals, and `ui` formats the immutable snapshot
-for session chat.
+- Keep workflow changes in `app/` and external effects behind `infra/` traits.
+- Keep frontend-neutral session models in `ag-session` and persistence in `ag-store`.
+- Runtime converts presentation state into typed app requests and applies returned
+  navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
+- `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot
+  access concrete application services; runtime owns render caches and table viewports.
+- Resolve the injected clock once per frame. Persist activity timestamps explicitly and
+  apply the clock's UTC offset when grouping events, avoiding host-timezone dependence.
+- Share semantic interaction calculations in `domain/` or `presentation/`; keep these
+  independent of Ratatui rendering.
+- Keep paired `module.rs` routers free of implementation details.
 
-- Workflow and state transitions live in `app/`, not in UI rendering modules.
-- `App` does not render terminal frames or own concrete render caches; runtime passes
-  its presentation cache into the UI projection boundary.
-- `App::view_snapshot()` creates the immutable borrowed application view consumed by
-  frontends. `ui/app_render.rs` receives that snapshot plus runtime-owned Ratatui state
-  and does not access the concrete `App`, services, or managers directly. The snapshot
-  resolves the injected clock once into `FrameTime`, including Unix seconds,
-  milliseconds, and the clock-provided UTC offset used by deterministic timers, loaders,
-  and activity-day projections. Fixed clocks own both their timestamp and offset, so
-  render projections do not depend on the host timezone.
-- Session activity persistence stores timestamps supplied by the injected `Clock`.
-  Session loading retrieves those immutable timestamps and applies the clock-provided
-  offset for each event before aggregating local-day counts; SQLite does not read the
-  host clock or timezone for this projection.
-- Application managers retain semantic selected-row indexes through
-  `domain::selection::SelectionState`; runtime owns Ratatui table viewport state and
-  synchronizes selection at the frame projection boundary.
-- `app/` must not import runtime mode handlers. Shared interaction calculations belong
-  in `domain/` or `presentation.rs`, while application task registries belong in `app/`.
-- Runtime converts presentation-owned prompt state into typed app requests, then applies
-  returned navigation and composer effects. `app/` must not inspect or mutate `AppMode`.
-- Frontend-neutral session entities, enums, and policies live in `ag-session`; keep only
-  Agentty-specific entities and interaction state in `domain/`.
-- SQLite repositories, offline query metadata, and migrations live in `ag-store`.
-  Operation contracts belong to `ag-worker`; other persistence contracts stay in
-  `ag-store`. Agentty's `infra/db.rs` owns application-specific database location and
-  timestamp-source composition.
-- External side effects live in `infra/` behind mockable traits; see
-  [Testability Boundaries](@/docs/architecture/testability-boundaries.md).
-- `module.rs` files paired with a `module/` directory stay router-only.
-- Change-path guidance for common scenarios lives in
-  [Change Recipes](@/docs/architecture/change-recipes.md).
+For example, resource accounting puts host sampling in `infra/`, scheduling and cache
+invalidation in `app/`, totals in `domain/`, and display formatting in `ui/`.
+
+See [Testability Boundaries](@/docs/architecture/testability-boundaries.md) for external
+ports and [Change Recipes](@/docs/architecture/change-recipes.md) for contribution
+paths.
 
 ## Worker-owned model execution
 
-Application workflows use `ag-worker::SessionRunClient` for session turns and
-`ag-worker::RunClient` for isolated model work. The worker owns runtime handles,
-mailboxes, utility admission, concurrency, cancellation, and execution lifecycle;
-`ag-runtime` constructs and dispatches adapters, and `ag-agent` implements harness
-transports. `ag-contracts` owns shared execution data and interfaces. Only `ag-worker`
-depends on `ag-runtime`; only `ag-runtime` depends on `ag-agent`. `ag-store` persists
-utility runs independently of session-only workflow operations.
+Application workflows submit session turns through `SessionRunClient` and isolated
+utilities through `RunClient`. Only `ag-worker` depends on `ag-runtime`; only
+`ag-runtime` depends on `ag-agent`. Shared execution contracts live in `ag-contracts`.
+The worker owns runtime lifecycle and cancellation; applications configure workers
+rather than construct adapters.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.
