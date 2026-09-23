@@ -7,10 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.1] - 2026-09-22
+
+### Added
+
+- `ag-harness`: sandboxed Bash execution with durable command recovery and a public
+  execution contract that lets hosts select or plug in their own Bash executor.
+- `ag-harness`: ordered text and image turn input, model-declared context budgets, and
+  history compaction into replayable session checkpoints.
+- `ag-harness`: durable session model switching, registry-based model construction,
+  durable host-request recovery, controlled turn cancellation, and injectable
+  transactional and process-local session stores.
+
 ### Changed
 
-- agentty: replace Opus 5 and GPT-5.6 Sol/Luna with `claude-opus-5-5`, `gpt-6-sol`, and
-  `gpt-6-luna`, including saved selections and defaults.
+- `agentty`: replace Opus 5 and GPT-5.6 Sol/Luna with `claude-opus-5-5`, `gpt-6-sol`,
+  and `gpt-6-luna`, including saved selections and defaults.
+- `agentty`: centralize execution contracts, enforce worker-mediated sessions, and
+  harden agent workflows with typed contracts and bounded evidence.
+- `agentty`: persist focused reviews so they resume safely, and centralize session
+  channel composition.
+- `ag-harness`: separate persistence from filesystem-effect settlement and condense
+  crate documentation into concise overviews.
+- workspace: update the Rust toolchain, dependencies, GitHub Actions, and the E2E CI
+  image.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.1`.
+
+### Fixed
+
+- `ag-harness`: restore Linux workspace write grants through Landlock confinement.
+- workspace: unblock the containerized E2E run and publish the locally verified E2E
+  image.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
 
 ## [v0.16.0] - 2026-09-16
 
