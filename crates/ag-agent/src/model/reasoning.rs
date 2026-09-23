@@ -28,7 +28,7 @@ pub(crate) fn antigravity(level: ReasoningLevel) -> &'static str {
 /// Returns the Claude `--effort` value for this level.
 ///
 /// Maps `XHigh` and `Max` to `"max"`, which is currently only supported on
-/// `claude-opus-5`. The Claude CLI enforces this
+/// `claude-opus-5-5`. The Claude CLI enforces this
 /// restriction and will surface an error for other models.
 pub(crate) fn claude(level: ReasoningLevel) -> &'static str {
     match level {

@@ -97,7 +97,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
             run_client: Arc::new(run_client),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                crate::domain::agent::AgentModel::Gpt56Sol,
+                crate::domain::agent::AgentModel::Gpt6Sol,
             ),
         },
         review_request_client: Arc::new(review_request_client),
@@ -1096,7 +1096,7 @@ fn metadata_sync_input(
             run_client: Arc::new(ag_worker::MockRunClient::new()),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                crate::domain::agent::AgentModel::Gpt56Sol,
+                crate::domain::agent::AgentModel::Gpt6Sol,
             ),
         },
         review_request_client: Arc::new(review_request_client),

@@ -97,7 +97,7 @@ async fn archived_diff_repositories(
         .expect("project fixture should persist");
     repositories
         .sessions()
-        .insert_session("session-id", "gpt-5.6-sol", "main", "Merging", project_id)
+        .insert_session("session-id", "gpt-6-sol", "main", "Merging", project_id)
         .await
         .expect("session fixture should persist");
     repositories

@@ -247,7 +247,7 @@ fn test_settings_selector_dropdown_renders_stage_title() {
     // Arrange
     let selector_dropdown = SettingsSelectorDropdown {
         options: vec![SettingsSelectorDropdownOption {
-            label: "codex/gpt-5.6-sol".to_string(),
+            label: "codex/gpt-6-sol".to_string(),
         }],
         row_index: 2,
         selected_index: 0,
@@ -280,7 +280,7 @@ fn test_settings_selector_dropdown_renders_stage_title() {
 
     // Assert
     assert!(rendered_text.contains("Select model"));
-    assert!(rendered_text.contains("codex/gpt-5.6-sol"));
+    assert!(rendered_text.contains("codex/gpt-6-sol"));
 }
 
 #[test]

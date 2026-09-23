@@ -44,7 +44,7 @@ async fn review_app_with_mock_backend() -> (App, tempfile::TempDir, SessionId) {
         .sessions()
         .insert_session(
             &session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             app.projects.active_project_id(),
@@ -388,13 +388,7 @@ async fn inactive_auto_review_diff_load_rejects_invalid_persisted_metadata() {
         app.services
             .db()
             .sessions()
-            .insert_session(
-                session_id.as_str(),
-                "gpt-5.6-sol",
-                "main",
-                status,
-                project_id,
-            )
+            .insert_session(session_id.as_str(), "gpt-6-sol", "main", status, project_id)
             .await
             .expect("failed to insert inactive session fixture");
     }
@@ -443,7 +437,7 @@ async fn automatic_review_diff_completion_continues_for_inactive_project() {
         .sessions()
         .insert_session(
             session_id.as_str(),
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             inactive_project_id,
@@ -494,7 +488,7 @@ async fn transient_deferred_auto_review_persistence_failure_retains_and_retries_
         .sessions()
         .insert_session(
             session_id.as_str(),
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             inactive_project_id,
@@ -822,7 +816,7 @@ async fn review_diff_baseline_tolerates_invalid_hash_and_database_failure() {
         .sessions()
         .insert_session(
             &session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             app.projects.active_project_id(),

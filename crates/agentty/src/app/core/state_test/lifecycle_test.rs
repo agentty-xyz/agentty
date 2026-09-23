@@ -186,7 +186,7 @@ async fn test_continue_terminal_session_opens_draft_prompt_for_done_session_with
     app.services
         .db()
         .sessions()
-        .insert_session("done-source", "gpt-5.6-sol", "release", "Done", project_id)
+        .insert_session("done-source", "gpt-6-sol", "release", "Done", project_id)
         .await
         .expect("failed to insert source session row");
     let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";

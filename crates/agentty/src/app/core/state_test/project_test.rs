@@ -149,7 +149,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .upsert_project_setting(
             second_project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gpt56Sol.as_str(),
+            AgentModel::Gpt6Sol.as_str(),
         )
         .await
         .expect("failed to persist second project smart model");
@@ -190,7 +190,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     // Assert
     assert_eq!(
         app.settings.default_smart_selection.model(),
-        AgentModel::Gpt56Sol
+        AgentModel::Gpt6Sol
     );
     assert_eq!(app.settings.launch_configuration, "cargo test");
     assert!(!app.settings_presentation.is_selector_dropdown_open());

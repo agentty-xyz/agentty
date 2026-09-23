@@ -184,7 +184,7 @@ pub(super) async fn seed_review_ready_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("review-shortcut-0001", "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular("review-shortcut-0001", "gpt-6-sol", "main", "Review")
             .with_title("Review-ready session shortcuts"),
     )
     .await?;
@@ -332,7 +332,7 @@ pub(super) async fn seed_running_stop_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-5.6-sol", "main", "InProgress")
+        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-6-sol", "main", "InProgress")
             .with_title("Running session stop"),
     )
     .await?;

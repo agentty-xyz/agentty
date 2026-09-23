@@ -56,7 +56,7 @@ async fn settings_manager_new_loads_project_scoped_values() {
             vec![
                 (
                     SettingName::DefaultSmartModel,
-                    AgentModel::Gpt56Sol.as_str().to_string(),
+                    AgentModel::Gpt6Sol.as_str().to_string(),
                 ),
                 (
                     SettingName::DefaultFastModel,
@@ -64,7 +64,7 @@ async fn settings_manager_new_loads_project_scoped_values() {
                 ),
                 (
                     SettingName::DefaultReviewModel,
-                    AgentModel::ClaudeOpus5.as_str().to_string(),
+                    AgentModel::ClaudeOpus55.as_str().to_string(),
                 ),
                 (
                     SettingName::DefaultSmartReasoningLevel,
@@ -123,15 +123,15 @@ async fn settings_manager_new_loads_project_scoped_values() {
     // Assert
     assert_eq!(
         settings.default_smart_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
     assert_eq!(
         settings.default_fast_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
     assert_eq!(
         settings.default_review_selection,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     );
     assert_eq!(settings.launch_configuration, "nvim .");
     assert_eq!(settings.default_smart_reasoning_level, ReasoningLevel::High);
@@ -160,7 +160,7 @@ async fn load_default_smart_model_setting_prefers_project_override() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gpt56Sol.as_str(),
+            AgentModel::Gpt6Sol.as_str(),
         )
         .await
         .expect("failed to persist smart model");
@@ -174,5 +174,5 @@ async fn load_default_smart_model_setting_prefers_project_override() {
     .await;
 
     // Assert
-    assert_eq!(loaded_model, AgentModel::Gpt56Sol);
+    assert_eq!(loaded_model, AgentModel::Gpt6Sol);
 }

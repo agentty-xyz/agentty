@@ -84,7 +84,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0002",
         input_tokens: 12_000,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         output_tokens: 3_900,
         size: "L",
         status: "InProgress",
@@ -129,7 +129,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0007",
         input_tokens: 0,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         output_tokens: 0,
         size: "L",
         status: "Queued",
@@ -437,7 +437,7 @@ async fn seed_dashboard_activity(
                 .sessions()
                 .insert_session(
                     &session_id,
-                    "gpt-5.6-sol",
+                    "gpt-6-sol",
                     "main",
                     "Done",
                     activity_project_id,

@@ -70,7 +70,7 @@ fn test_validate_generated_commit_message_rejects_agentty_trailer() {
 async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")
@@ -100,7 +100,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     let smart_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await;
 
@@ -121,14 +121,14 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     let session_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await;
 
     // Assert
     assert_eq!(
         session_fallback_agent,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
 }
 
@@ -138,7 +138,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
 async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
+    insert_review_session(&database, AgentModel::ClaudeOpus55.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let child_pid = Arc::new(Mutex::new(None));
@@ -167,7 +167,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
-        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     })
@@ -202,7 +202,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
 async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
 
     // Act
     let include_coauthored_by_agentty =
@@ -219,7 +219,7 @@ async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
 async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")

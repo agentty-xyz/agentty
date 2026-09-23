@@ -187,12 +187,12 @@ override still takes precedence for that session's turns. Antigravity receives
 `--effort low`, `--effort medium`, or `--effort high`; `xhigh` and `max` map to its
 highest supported value, `--effort high`. Codex receives `max` as a distinct reasoning
 effort. For Claude, both `xhigh` and `max` map to `--effort max`, which is currently
-only supported by `claude-opus-5`.
+supported by `claude-opus-5-5`.
 
 Smart speed becomes the default for new sessions, Fast speed is used for title and
 commit-message utility prompts, and Review speed is used for focused review assists.
 Fast is available only for Claude and Codex. It applies the same compatible-model
-adjustment as `/speed`: Claude uses `claude-opus-5`, and Codex Spark uses `gpt-5.6-sol`.
+adjustment as `/speed`: Claude uses `claude-opus-5-5`, and Codex Spark uses `gpt-6-sol`.
 
 ## Available Models
 
@@ -210,16 +210,16 @@ Both providers share the same Gemini model ids:
 ### Claude Models
 
 - `claude-fable-5` (default): Claude Fable model for creative, narrative-heavy tasks.
-- `claude-opus-5`: Latest Claude Opus model for complex tasks.
+- `claude-opus-5-5`: Latest Claude Opus model for complex agentic tasks.
 - `claude-sonnet-5`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.
 
 ### Codex Models
 
 - `gpt-6-astra`: Most capable Codex model for the hardest end-to-end work.
-- `gpt-5.6-sol` (default): Flagship Codex model for complex professional work.
+- `gpt-6-sol` (default): Codex model for complex coding and agentic workflows.
+- `gpt-6-luna`: Efficient Codex model for focused, high-volume tasks.
 - `gpt-5.6-terra`: Current Codex model for balanced coding performance.
-- `gpt-5.6-luna`: Current Codex model for lighter coding iterations.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
 
 ### Stored Model Upgrades
@@ -249,9 +249,9 @@ routing or Fast for lower latency at higher provider cost. Agentty persists the 
 per session and displays it after reasoning in the session header and beside the prompt
 title. Gemini and Antigravity sessions have no speed control, so they show neither the
 command nor the speed display. Claude Fast uses the noninteractive `fastMode` setting
-and requires `claude-opus-5`, so Agentty switches other Claude models to Opus 5 when
+and supports `claude-opus-5-5`; Agentty switches other Claude models to Opus 5.5 when
 Fast is enabled. Codex Fast uses the app-server `fast` service tier; Agentty switches
-`gpt-5.3-codex-spark` to `gpt-5.6-sol` first. Selecting Normal restores the provider's
+`gpt-5.3-codex-spark` to `gpt-6-sol` first. Selecting Normal restores the provider's
 standard tier without reverting that model change. These automatic compatibility
 switches do not change the project's default model. Selecting a model that cannot use
 Fast resets the session to Normal before switching. See the provider guides for

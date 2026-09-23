@@ -39,7 +39,7 @@ fn build_api_session_returns_complete_settings_and_messages() {
     assert_eq!(session.settings.personality_id.as_deref(), Some("reviewer"));
     assert_eq!(
         session.settings.agent,
-        ag_session::AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        ag_session::AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
     assert_eq!(session.settings.reasoning_level, ReasoningLevel::XHigh);
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);

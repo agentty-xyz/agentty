@@ -486,7 +486,7 @@ async fn model_switch_rolls_back_selection_conversations_and_defaults_on_any_wri
     let sessions = database.sessions();
     let selection = ag_session::AgentSelection::new(
         ag_session::AgentKind::Claude,
-        ag_session::AgentModel::ClaudeOpus5,
+        ag_session::AgentModel::ClaudeOpus55,
     );
     let original: (String, String, Option<String>, Option<String>) = sqlx::query_as(
         "SELECT agent, model, provider_conversation_id, \
@@ -557,7 +557,7 @@ async fn model_switch_commits_optional_conversation_reset_and_project_defaults()
     let sessions = database.sessions();
     let selection = ag_session::AgentSelection::new(
         ag_session::AgentKind::Claude,
-        ag_session::AgentModel::ClaudeOpus5,
+        ag_session::AgentModel::ClaudeOpus55,
     );
 
     // Act / Assert

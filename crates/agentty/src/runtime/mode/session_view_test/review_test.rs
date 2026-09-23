@@ -258,7 +258,7 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
     );
     app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     app.sessions.sessions_mut()[0].status = Status::AgentReview;
     let output_width = 14;
@@ -629,7 +629,7 @@ async fn test_open_review_output_mode_starts_loading_when_diff_exists() {
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeOpus5,
+        AgentModel::ClaudeOpus55,
     );
     app.sessions.sessions_mut()[0].status = Status::Review;
     let session_folder = app.sessions.sessions()[0].folder.clone();
@@ -738,7 +738,7 @@ async fn test_open_review_output_mode_shows_loading_for_cache_loading_entry() {
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     app.settings.default_review_selection = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeOpus5,
+        AgentModel::ClaudeOpus55,
     );
     let review_agent = app.review_agent();
     app.review_cache.insert(

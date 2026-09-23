@@ -26,7 +26,7 @@ async fn test_session_host_cpu_temperature() -> E2eResult {
                         ("DefaultSmartAgent", "claude"),
                         ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
                         ("DefaultFastAgent", "codex"),
-                        ("DefaultFastModel", "gpt-5.6-sol"),
+                        ("DefaultFastModel", "gpt-6-sol"),
                     ],
                 ).await?;
                 let scripts = [

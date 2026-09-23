@@ -24,7 +24,7 @@ async fn second_instance_preserves_live_operations() -> E2eResult {
         .await?;
     database
         .sessions()
-        .insert_session("live", "gpt-5.6-sol", "main", "InProgress", project_id)
+        .insert_session("live", "gpt-6-sol", "main", "InProgress", project_id)
         .await?;
     database
         .sessions()

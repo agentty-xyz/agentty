@@ -46,7 +46,7 @@ fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::er
 /// Seeds deterministic Claude selector values for settings feature tests.
 ///
 /// Persists the three model selectors to `claude-opus-4-6` so the test can
-/// verify Agentty upgrades retired stored model ids to `claude-opus-5`
+/// verify Agentty upgrades retired stored model ids to `claude-opus-5-5`
 /// before row navigation changes the visible selector values.
 async fn seed_settings_navigation_models(
     env: &BuilderEnv,
@@ -199,12 +199,13 @@ async fn settings_tab_shows_content() {
 /// Opens the Settings tab and presses `j` multiple times to move the
 /// selection down, then `k` to move back up. The test confirms the selected
 /// row by seeding deterministic retired Opus model values, observing startup
-/// migration to `claude-opus-5`, and then checking which role reasoning
+/// migration to `claude-opus-5-5`, and then checking which role reasoning
 /// value advances after each dropdown selection.
 #[tokio::test]
 async fn settings_jk_navigation() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_navigation")
+        .with_terminal_size(100, 24)
         .setup(|env| Box::pin(async move { seed_settings_navigation_models(env).await }))
         .zola(
             "Settings navigation",
@@ -279,17 +280,17 @@ async fn settings_jk_navigation() {
 
                     let initial_frame = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_match_count(&initial_frame, "claude-opus-4-6", 0);
-                    assertion::assert_match_count(&initial_frame, "claude/claude-opus-5", 3);
+                    assertion::assert_match_count(&initial_frame, "claude/claude-opus-5-5", 3);
 
                     let moved_down_frame = common::frame_from_capture(&report.captures[1]);
                     assertion::assert_match_count(&moved_down_frame, "claude-opus-4-6", 0);
-                    assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5", 3);
+                    assertion::assert_match_count(&moved_down_frame, "claude/claude-opus-5-5", 3);
                     assertion::assert_match_count(&moved_down_frame, "[high, Normal]", 2);
                     assertion::assert_match_count(&moved_down_frame, "[xhigh, Normal]", 1);
 
                     let moved_up_frame = common::frame_from_capture(&report.captures[2]);
                     assertion::assert_match_count(&moved_up_frame, "claude-opus-4-6", 0);
-                    assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5", 3);
+                    assertion::assert_match_count(&moved_up_frame, "claude/claude-opus-5-5", 3);
                     assertion::assert_match_count(&moved_up_frame, "[high, Normal]", 1);
                     assertion::assert_match_count(&moved_up_frame, "[xhigh, Normal]", 2);
                 })

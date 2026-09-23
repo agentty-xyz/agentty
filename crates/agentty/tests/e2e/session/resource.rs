@@ -20,7 +20,7 @@ async fn seed_gemini_resource_runtime(env: &BuilderEnv) -> E2eResult {
             ("DefaultSmartAgent", "gemini"),
             ("DefaultSmartModel", "gemini-3.1-pro-preview"),
             ("DefaultFastAgent", "codex"),
-            ("DefaultFastModel", "gpt-5.6-sol"),
+            ("DefaultFastModel", "gpt-6-sol"),
         ],
     )
     .await?;
@@ -96,7 +96,7 @@ async fn test_session_resources() -> E2eResult {
                     ("DefaultSmartAgent", "claude"),
                     ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
                     ("DefaultFastAgent", "codex"),
-                    ("DefaultFastModel", "gpt-5.6-sol"),
+                    ("DefaultFastModel", "gpt-6-sol"),
                 ],
             ).await?;
             let scripts = [
@@ -176,7 +176,7 @@ async fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
         env,
         &[
             ("DefaultSmartAgent", "codex"),
-            ("DefaultSmartModel", "gpt-5.6-sol"),
+            ("DefaultSmartModel", "gpt-6-sol"),
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],

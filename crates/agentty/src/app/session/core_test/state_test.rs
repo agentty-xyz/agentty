@@ -73,7 +73,7 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .expect("failed to create session");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("failed to set app-server model");
@@ -326,7 +326,7 @@ async fn test_load_existing_sessions_ordered_by_updated_at_desc() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()

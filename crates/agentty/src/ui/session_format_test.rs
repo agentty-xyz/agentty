@@ -177,14 +177,14 @@ fn test_session_metadata_text_prints_agent_before_model() {
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
 
     // Act
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains("Agent: codex  Model: gpt-5.6-sol"));
+    assert!(metadata_text.contains("Agent: codex  Model: gpt-6-sol"));
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn test_session_metadata_text_prints_speed_after_reasoning() {
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     session.speed_mode = crate::domain::agent::SpeedMode::Fast;
 
@@ -232,7 +232,7 @@ fn test_session_metadata_and_prompt_status_show_non_default_response_style() {
     let prompt_status_without_speed = prompt_session_status(&session);
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
     let prompt_status = prompt_session_status(&session);
@@ -249,7 +249,7 @@ fn test_session_speed_display_reports_speed_only_for_supported_provider() {
     let mut codex_session = SessionFixtureBuilder::new().build();
     codex_session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     let mut antigravity_session = SessionFixtureBuilder::new().build();
     antigravity_session.agent = crate::domain::agent::AgentSelection::new(

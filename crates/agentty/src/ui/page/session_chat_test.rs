@@ -407,15 +407,15 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        crate::domain::agent::AgentModel::Gpt56Sol,
+        crate::domain::agent::AgentModel::Gpt6Sol,
     );
 
     // Act
     let text = rendered_prompt_mode_text(&session);
 
     // Assert
-    assert!(text.contains("[gpt-5.6-sol] · Normal · Auto Edit"));
-    assert!(!text.contains("[gpt-5.6-sol]  · Normal · Auto Edit"));
+    assert!(text.contains("[gpt-6-sol] · Normal · Auto Edit"));
+    assert!(!text.contains("[gpt-6-sol]  · Normal · Auto Edit"));
 }
 
 #[test]
@@ -436,7 +436,7 @@ fn test_render_prompt_composer_shows_read_only_after_speed_status() {
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        crate::domain::agent::AgentModel::Gpt56Sol,
+        crate::domain::agent::AgentModel::Gpt6Sol,
     );
     session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
 

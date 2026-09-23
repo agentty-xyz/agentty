@@ -30,7 +30,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
         .times(1)
         .returning(|_| Box::pin(async { Err(GitError::OutputParse("commit failed".to_string())) }));
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let mut run_client = MockRunClient::new();
@@ -46,7 +46,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -106,7 +106,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
         Ok(one_shot_submission("Preserve pending changes", 0, 0))
     });
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
@@ -117,7 +117,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -186,7 +186,7 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
             })
         });
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let mut run_client = MockRunClient::new();
@@ -202,7 +202,7 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -235,7 +235,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
         .times(1)
         .returning(|_| Box::pin(async { Ok::<_, GitError>(true) }));
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
@@ -246,7 +246,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(MockRunClient::new()),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -318,7 +318,7 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
     let message = SessionTaskService::generate_session_commit_message_with_client(
         Path::new("."),
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             ReasoningLevel::Medium,
             crate::domain::agent::SpeedMode::Normal,
         ),
@@ -345,7 +345,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
     // Arrange
     for assist_fails in [false, true] {
         let database = AppRepositories::in_memory().await.expect("db should open");
-        insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+        insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
         let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
         let child_pid = Arc::new(Mutex::new(Some(4242)));
         let mut run_client = MockRunClient::new();
@@ -373,7 +373,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
             git_client: Arc::new(MockGitClient::new()),
             id: "session-id".to_string(),
             run_client: Arc::new(run_client),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             session_update_versions: Arc::default(),
             transcript: Arc::clone(&transcript),
         };
@@ -613,7 +613,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
             Path::new("project"),
             "main",
             (
-                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+                AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
                 ReasoningLevel::Low,
                 SpeedMode::Normal,
             ),
@@ -647,7 +647,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
             })
         });
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
@@ -658,7 +658,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(MockRunClient::new()),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -774,7 +774,7 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
         Path::new("project"),
         "main",
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             ReasoningLevel::Low,
             SpeedMode::Normal,
         ),

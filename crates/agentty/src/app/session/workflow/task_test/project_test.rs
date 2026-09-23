@@ -12,7 +12,7 @@ use crate::domain::setting::SettingName;
 async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")
@@ -51,7 +51,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
     let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await;
 
@@ -68,7 +68,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
 async fn test_load_auto_commit_reasoning_level_uses_project_fast_setting() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")
@@ -102,7 +102,7 @@ async fn test_load_auto_commit_reasoning_level_uses_project_fast_setting() {
 async fn test_load_auto_commit_speed_mode_uses_project_fast_setting() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")

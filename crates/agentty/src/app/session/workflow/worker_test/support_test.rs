@@ -1239,19 +1239,13 @@ pub(super) async fn seed_existing_session_rebase_metadata(
         .expect("failed to upsert project");
     if let Some(parent_session_id) = parent_session_id {
         db.sessions()
-            .insert_session(
-                parent_session_id,
-                "gpt-5.6-sol",
-                "main",
-                "Review",
-                project_id,
-            )
+            .insert_session(parent_session_id, "gpt-6-sol", "main", "Review", project_id)
             .await
             .expect("failed to insert parent session");
         db.sessions()
             .insert_stacked_draft_session(
                 "sess1",
-                "gpt-5.6-sol",
+                "gpt-6-sol",
                 "main",
                 "Rebasing",
                 parent_session_id,
@@ -1261,7 +1255,7 @@ pub(super) async fn seed_existing_session_rebase_metadata(
             .expect("failed to insert stacked session");
     } else {
         db.sessions()
-            .insert_session("sess1", "gpt-5.6-sol", "main", "Rebasing", project_id)
+            .insert_session("sess1", "gpt-6-sol", "main", "Rebasing", project_id)
             .await
             .expect("failed to insert session");
     }
@@ -1492,7 +1486,7 @@ pub(super) fn rebase_assist_worker_harness(
         session_id: "sess1".into(),
         session_agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt56Sol,
+            AgentModel::Gpt6Sol,
         ),
         status: Arc::clone(&status),
     };

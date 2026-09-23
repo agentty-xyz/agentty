@@ -87,7 +87,7 @@ async fn review_request_metadata_preserves_user_details_from_semantic_evaluation
         "Adds the release dashboard.",
         "Build release dashboard",
         &run_client,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("metadata evaluation should parse");
@@ -140,7 +140,7 @@ async fn review_request_metadata_preserves_forged_checksum_valid_sections() {
             "New detail",
             "Current title",
             &run_client,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         )
         .await;
 
@@ -178,7 +178,7 @@ async fn review_request_metadata_rejects_invalid_json() {
         "Generated body",
         "Generated title",
         &run_client,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect_err("invalid JSON should fail reconciliation");
@@ -214,7 +214,7 @@ async fn review_request_metadata_rejects_invalid_title() {
         "Generated body",
         "Generated title",
         &run_client,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect_err("multiline title should fail reconciliation");
@@ -250,7 +250,7 @@ async fn review_request_metadata_rejects_dropped_current_reference() {
         "Generated body",
         "Generated title",
         &run_client,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect_err("dropping a current issue reference should fail reconciliation");
@@ -287,7 +287,7 @@ async fn review_request_metadata_rejects_dropped_current_note_without_reference(
         "Updated generated details.",
         "Generated title",
         &run_client,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect_err("dropping a current reviewer note should fail reconciliation");

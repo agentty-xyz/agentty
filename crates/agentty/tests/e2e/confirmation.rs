@@ -16,7 +16,7 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 async fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
-        SessionSeed::draft("draft-cancel-0001", "gpt-5.6-sol", "main", "Draft")
+        SessionSeed::draft("draft-cancel-0001", "gpt-6-sol", "main", "Draft")
             .with_title("Cancel staged draft from list"),
     )
     .await
@@ -28,7 +28,7 @@ async fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Draft")
+        SessionSeed::regular(session_id, "gpt-6-sol", "main", "Draft")
             .with_title("Cancel draft orchestrator"),
     )
     .await?;
@@ -60,7 +60,7 @@ async fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "InProgress")
+        SessionSeed::regular(session_id, "gpt-6-sol", "main", "InProgress")
             .with_title("Cancel running session"),
     )
     .await?;
@@ -80,7 +80,7 @@ async fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(parent_session_id, "gpt-6-sol", "main", "Review")
             .with_title("Parent for child cancel"),
     )
     .await?;
@@ -88,7 +88,7 @@ async fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/parentca",
             "Draft",
             parent_session_id,
@@ -111,7 +111,7 @@ async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv)
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(parent_session_id, "gpt-6-sol", "main", "Review")
             .with_title("Cancel cascade parent"),
     )
     .await?;
@@ -119,7 +119,7 @@ async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv)
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/cascadep",
             "Review",
             parent_session_id,
@@ -131,7 +131,7 @@ async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv)
         env,
         SessionSeed::stacked_draft(
             grandchild_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/cascadec",
             "Question",
             child_session_id,

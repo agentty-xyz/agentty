@@ -30,7 +30,7 @@ async fn test_refresh_sessions_loads_question_detail_when_another_session_is_sel
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()

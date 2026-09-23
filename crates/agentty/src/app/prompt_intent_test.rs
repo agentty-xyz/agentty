@@ -119,7 +119,7 @@ async fn compatibility_model_switch_preserves_last_used_project_default() {
             .session_for_id(&session_id)
             .map(|session| (session.agent, session.speed_mode)),
         Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             SpeedMode::Fast,
         ))
     );
@@ -136,7 +136,7 @@ async fn incompatible_prompt_model_switch_disables_fast_mode() {
     );
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("initial model should update");
@@ -179,7 +179,7 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
             .await
             .expect("session should be created"),
     );
-    let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+    let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
     app.set_session_model(&session_id, fast_agent)
         .await
         .expect("initial model should update");

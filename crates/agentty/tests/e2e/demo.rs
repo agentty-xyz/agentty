@@ -328,7 +328,7 @@ async fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> 
 /// and pins a `claude-fable-5` default model on the selected project.
 ///
 /// The first live session explicitly selects the Fable default, while the
-/// second selects Codex `gpt-5.6-sol`. The pre-seeded rows never run, so their
+/// second selects Codex `gpt-6-sol`. The pre-seeded rows never run, so their
 /// models are only ever read by the list renderer to decide the per-row agent
 /// badge.
 async fn seed_database(
@@ -641,7 +641,7 @@ fn repo_demo_dir() -> PathBuf {
 /// Each session starts from the `New Session` type picker (confirming
 /// `Regular`). The first session explicitly keeps the current Claude default,
 /// `claude-fable-5`. The second walks the `/model` picker to Codex and selects
-/// `gpt-5.6-sol`, so two current agents work in parallel.
+/// `gpt-6-sol`, so two current agents work in parallel.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
@@ -759,7 +759,7 @@ Sleep 400ms
 /// Returns the tape steps that launch the parallel Codex session and then
 /// reopen the completed Fable session.
 fn second_session_tape_steps() -> &'static str {
-    r#"# Session 2: New Session picker -> Regular, then choose Codex gpt-5.6-sol.
+    r#"# Session 2: New Session picker -> Regular, then choose Codex gpt-6-sol.
 Type "a"
 Sleep 900ms
 Enter

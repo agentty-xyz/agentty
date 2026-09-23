@@ -262,7 +262,7 @@ async fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std:
 async fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-6-sol", "main", "Review")
             .with_title("Binary diff session"),
     )
     .await?;

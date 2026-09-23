@@ -284,7 +284,7 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
     )
     .await;
     let loading_review_agent = (
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         ReasoningLevel::XHigh,
         SpeedMode::Normal,
     );

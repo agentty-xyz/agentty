@@ -195,7 +195,7 @@ done
         env,
         &[
             ("DefaultReviewAgent", "codex"),
-            ("DefaultReviewModel", "gpt-5.6-sol"),
+            ("DefaultReviewModel", "gpt-6-sol"),
         ],
     )
     .await
@@ -378,7 +378,7 @@ async fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::
             .sessions()
             .insert_session(
                 "agent-review-sync-0001",
-                "gpt-5.6-sol",
+                "gpt-6-sol",
                 "main",
                 "AgentReview",
                 project_id,
@@ -502,7 +502,7 @@ async fn seed_sessions_with_persisted_focused_reviews(
     // Seeding in the other order makes row 0 depend on that boundary.
     common::seed_session(
         env,
-        SessionSeed::regular("second-review-0001", "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular("second-review-0001", "gpt-6-sol", "main", "Review")
             .with_title("Second persisted review"),
     )
     .await?;

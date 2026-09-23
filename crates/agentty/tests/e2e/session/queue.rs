@@ -28,7 +28,7 @@ const QUEUED_SYNC_QUESTION_TEXT: &str = "Should I continue before syncing?";
 async fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-5.6-sol", "main", "Rebasing")
+        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-6-sol", "main", "Rebasing")
             .with_title("Rebasing message queue"),
     )
     .await?;

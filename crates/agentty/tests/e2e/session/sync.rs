@@ -20,7 +20,7 @@ const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
 /// Seeds a review-ready worktree whose committed change conflicts with a
 /// newer commit on the stored base branch.
 async fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_merge_conflict_session_with_model(env, "gpt-5.6-sol").await
+    seed_merge_conflict_session_with_model(env, "gpt-6-sol").await
 }
 
 /// Seeds the merge-conflict fixture with a specific persisted agent model.

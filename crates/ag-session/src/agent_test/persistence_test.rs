@@ -16,26 +16,30 @@ fn test_retired_replacement_maps_only_retired_ids() {
             "gemini-3.1-flash-lite-preview",
             AgentModel::Gemini35FlashLite,
         ),
-        ("claude-opus-4-8", AgentModel::ClaudeOpus5),
-        ("claude-opus-4-6", AgentModel::ClaudeOpus5),
-        ("claude-opus-4-7", AgentModel::ClaudeOpus5),
+        ("claude-opus-5", AgentModel::ClaudeOpus55),
+        ("gpt-5.6-sol", AgentModel::Gpt6Sol),
+        ("gpt-5.6-luna", AgentModel::Gpt6Luna),
+        ("claude-opus-4-8", AgentModel::ClaudeOpus55),
+        ("claude-opus-4-6", AgentModel::ClaudeOpus55),
+        ("claude-opus-4-7", AgentModel::ClaudeOpus55),
         ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
-        ("gpt-5.5", AgentModel::Gpt56Sol),
-        ("gpt-5.4-mini", AgentModel::Gpt56Luna),
-        ("gpt-5.4", AgentModel::Gpt56Sol),
-        ("gpt-5.3-codex", AgentModel::Gpt56Sol),
+        ("gpt-5.5", AgentModel::Gpt6Sol),
+        ("gpt-5.4-mini", AgentModel::Gpt6Luna),
+        ("gpt-5.4", AgentModel::Gpt6Sol),
+        ("gpt-5.3-codex", AgentModel::Gpt6Sol),
         ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
     ];
 
     // Act
     let replacements =
         retired_ids.map(|(retired_id, _)| AgentModel::retired_replacement(retired_id));
+    let persisted_parses = retired_ids.map(|(id, _)| AgentModel::parse_persisted(id));
     let selectable_parses = retired_ids.map(|(retired_id, _)| retired_id.parse::<AgentModel>());
     let current_replacements = [
         "gemini-3.1-pro-preview",
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
-        "claude-opus-5",
+        "claude-opus-5-5",
     ]
     .map(AgentModel::retired_replacement);
     let unknown_replacement = AgentModel::retired_replacement("not-a-model");
@@ -45,6 +49,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
         replacements,
         retired_ids.map(|(_, replacement)| Some(replacement))
     );
+    assert_eq!(persisted_parses, retired_ids.map(|(_, model)| Ok(model)));
     assert!(selectable_parses.iter().all(Result::is_err));
     assert_eq!(current_replacements, [None; 4]);
     assert_eq!(unknown_replacement, None);
@@ -75,12 +80,12 @@ fn test_parse_persisted_handles_supported_and_retired_models() {
         AgentModel::parse_persisted("gemini-3.1-flash-lite-preview");
 
     // Assert
-    assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus5));
-    assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus5));
+    assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus55));
+    assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus55));
     assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet5));
     assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet5));
-    assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt56Luna));
-    assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt56Sol));
+    assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt6Luna));
+    assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt6Sol));
     assert_eq!(parsed_gemini_38_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_37_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini38Flash));
@@ -166,7 +171,7 @@ fn test_parse_persisted_session_agent_model_supports_legacy_rows() {
 
     // Assert
     assert_eq!(selection.kind(), AgentKind::Claude);
-    assert_eq!(selection.model(), AgentModel::ClaudeOpus5);
+    assert_eq!(selection.model(), AgentModel::ClaudeOpus55);
 }
 
 #[test]
@@ -208,7 +213,7 @@ fn test_parse_persisted_session_agent_model_resolves_legacy_gemini_rows() {
 fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
     // Arrange
     let cases = [
-        (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt56Sol),
+        (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt6Sol),
         (
             Some("unknown"),
             "unknown-model",

@@ -319,7 +319,7 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
         applied_personality_id: None,
         applied_personality_prompt_hash: None,
         instruction_conversation_id: None,
-        model: AgentModel::Gpt56Sol.as_str().to_string(),
+        model: AgentModel::Gpt6Sol.as_str().to_string(),
         provider_conversation_id: Some("thread-123".to_string()),
         questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
         review_comment_resolutions: vec![NewSessionReviewCommentResolution {

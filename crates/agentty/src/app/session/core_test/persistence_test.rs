@@ -36,15 +36,15 @@ async fn test_load_sessions_aggregates_daily_activity() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()
-        .insert_session("gamma000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("gamma000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert gamma000");
     let seconds_per_day = 86_400_i64;
@@ -173,7 +173,7 @@ async fn test_load_existing_sessions() {
     assert_eq!(app.sessions.sessions()[0].id, "12345678");
     assert_eq!(
         app.sessions.sessions()[0].agent.model(),
-        AgentModel::ClaudeOpus5
+        AgentModel::ClaudeOpus55
     );
     assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
     let output = session_replay_text(&app.sessions.sessions()[0]);
@@ -280,7 +280,7 @@ async fn test_refresh_sessions_if_needed_reloads_and_preserves_selection() {
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()
@@ -338,7 +338,7 @@ async fn test_refresh_sessions_loads_diff_help_detail_when_another_session_is_se
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.sessions()

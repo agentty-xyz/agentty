@@ -289,7 +289,7 @@ async fn runtime_backend_starts_regular_and_staged_draft_messages() {
     for session_id in [&regular_session_id, &draft_session_id] {
         app.set_session_model(
             session_id,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         )
         .await
         .expect("session model should update");
@@ -409,7 +409,7 @@ async fn finishing_api_creation_schedules_registration_retry_after_load_failure(
         .sessions()
         .insert_session(
             "persisted-session",
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Draft",
             project_id,

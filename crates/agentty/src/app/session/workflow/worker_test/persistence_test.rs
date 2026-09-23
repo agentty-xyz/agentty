@@ -237,7 +237,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("sess1", "gpt-5.6-sol", "main", "InProgress", project_id)
+        .insert_session("sess1", "gpt-6-sol", "main", "InProgress", project_id)
         .await
         .expect("failed to insert session");
 
@@ -293,7 +293,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         review_comment_thread_ids: Vec::new(),
         session_agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt56Sol,
+            AgentModel::Gpt6Sol,
         ),
     };
     let status = apply_worker_turn_result(&context, turn_metadata, turn_result)

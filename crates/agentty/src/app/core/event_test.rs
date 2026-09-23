@@ -639,7 +639,7 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
         .sessions()
         .insert_session(
             session_id.as_str(),
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             inactive_project_id,
@@ -705,7 +705,7 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
                 && *review_agent == (
                     crate::domain::agent::AgentSelection::new(
                         crate::domain::agent::AgentKind::Claude,
-                        crate::domain::agent::AgentModel::ClaudeOpus5,
+                        crate::domain::agent::AgentModel::ClaudeOpus55,
                     ),
                     crate::domain::agent::ReasoningLevel::Low,
                     crate::domain::agent::SpeedMode::Fast,
@@ -740,7 +740,7 @@ async fn late_completed_turn_for_deleted_session_is_not_deferred() {
         .sessions()
         .insert_session(
             session_id.as_str(),
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             inactive_project_id,
@@ -820,7 +820,7 @@ async fn completed_focused_review_persists_for_inactive_project() {
         .sessions()
         .insert_session(
             session_id.as_str(),
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "Review",
             inactive_project_id,
@@ -871,7 +871,7 @@ async fn failed_focused_review_persistence_retries_without_replaying_stale_state
     app.services
         .db()
         .sessions()
-        .insert_session("session-1", "gpt-5.6-sol", "main", "Review", project_id)
+        .insert_session("session-1", "gpt-6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert review session");
     app.review_cache.insert(

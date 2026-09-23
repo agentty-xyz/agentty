@@ -10,7 +10,7 @@ pub(super) fn make_turn_request() -> TurnRequest {
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
-        model: "gpt-5.6-sol".to_string(),
+        model: "gpt-6-sol".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do something".into(),

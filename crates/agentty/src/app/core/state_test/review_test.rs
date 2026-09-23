@@ -219,13 +219,7 @@ async fn test_switch_project_recovers_persisted_deferred_review_after_restart() 
     let session_id = "pending-review";
     database
         .sessions()
-        .insert_session(
-            session_id,
-            "gpt-5.6-sol",
-            "main",
-            "Review",
-            second_project_id,
-        )
+        .insert_session(session_id, "gpt-6-sol", "main", "Review", second_project_id)
         .await
         .expect("failed to insert pending review session");
     fs::create_dir_all(session::session_folder(&base_path, session_id).join(SESSION_DATA_DIR))

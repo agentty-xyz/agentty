@@ -541,7 +541,7 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
         .expect("failed to create session");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("failed to set app-server model");
@@ -702,7 +702,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -1101,7 +1101,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,

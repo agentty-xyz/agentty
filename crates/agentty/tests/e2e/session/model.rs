@@ -159,7 +159,7 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("claude-opus-5", 3000)
+                    .wait_for_text("claude-opus-5-5", 3000)
                     .capture_labeled(
                         "claude_model_picker",
                         "Claude model picker lists current models",
@@ -169,7 +169,7 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "claude-fable-5", &full);
-                    assertion::assert_text_in_region(frame, "claude-opus-5", &full);
+                    assertion::assert_text_in_region(frame, "claude-opus-5-5", &full);
                     assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
                     assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);
                 })
@@ -265,10 +265,12 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_not_visible(frame, "gpt-5.6-sol");
+                    assertion::assert_not_visible(frame, "gpt-5.6-luna");
                     assertion::assert_text_in_region(frame, "gpt-6-astra", &full);
-                    assertion::assert_text_in_region(frame, "gpt-5.6-sol", &full);
+                    assertion::assert_text_in_region(frame, "gpt-6-sol", &full);
+                    assertion::assert_text_in_region(frame, "gpt-6-luna", &full);
                     assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
-                    assertion::assert_text_in_region(frame, "gpt-5.6-luna", &full);
                     assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);
                 })
             },

@@ -30,7 +30,7 @@ fn speed_defaults_normalize_provider_support_and_fast_model_compatibility() {
     assert_eq!(
         fast_codex,
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             SpeedMode::Fast,
         )
     );
@@ -149,13 +149,13 @@ fn settings_rows_show_default_fast_model_value() {
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().default_fast_selection =
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
 
     // Act
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[4].1, "codex/gpt-5.6-sol [low, Normal]");
+    assert_eq!(rows[4].1, "codex/gpt-6-sol [low, Normal]");
 }
 
 #[test]
@@ -225,7 +225,7 @@ async fn settings_manager_new_persists_replacements_for_retired_model_defaults()
     );
     assert_eq!(
         settings.default_review_selection,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     );
 
     let expected_persisted_settings = [
@@ -244,7 +244,7 @@ async fn settings_manager_new_persists_replacements_for_retired_model_defaults()
         (SettingName::DefaultFastAgent, AgentKind::Antigravity.name()),
         (
             SettingName::DefaultReviewModel,
-            AgentModel::ClaudeOpus5.as_str(),
+            AgentModel::ClaudeOpus55.as_str(),
         ),
         (SettingName::DefaultReviewAgent, AgentKind::Claude.name()),
     ];
@@ -302,7 +302,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     );
     assert_eq!(
         persisted_model.as_deref(),
-        Some(AgentModel::Gpt56Sol.as_str())
+        Some(AgentModel::Gpt6Sol.as_str())
     );
     assert_eq!(persisted_agent.as_deref(), Some(AgentKind::Codex.name()));
 
@@ -317,7 +317,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     // Assert
     assert_eq!(
         available_manager.default_smart_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
 }
 
@@ -580,8 +580,8 @@ async fn apply_operation_persists_role_model_reasoning_and_speed_settings() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol);
-    let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5);
+    let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
+    let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
 
     // Act
     manager
@@ -843,7 +843,7 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
     // Assert
     assert_eq!(
         fallback_fast_selection,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     );
 
     // Arrange
@@ -853,7 +853,7 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
         .upsert_project_setting(
             project_id,
             SettingName::DefaultFastModel,
-            AgentModel::Gpt56Sol.as_str(),
+            AgentModel::Gpt6Sol.as_str(),
         )
         .await
         .expect("failed to persist fast model");
@@ -869,7 +869,7 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
     // Assert
     assert_eq!(
         explicit_fast_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
     );
 }
 

@@ -183,7 +183,7 @@ pub(super) fn session_fixture() -> Session {
         queued_messages: Vec::new(),
         review_request: None,
         settings: SessionSettings {
-            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             base_branch: "main".to_string(),
             is_draft: false,
             parent_session_id: None,
