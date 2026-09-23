@@ -265,7 +265,8 @@ repos:
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
-          env CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
+          CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --workspace
@@ -293,7 +294,8 @@ repos:
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_cnts,0x4000
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_bits,0x4000
           -C link-arg=-Wl,-sectalign,__DATA,__llvm_prf_data,0x4000";; esac;
-          env CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
+          env CARGO_LLVM_COV_TARGET_DIR="${CARGO_LLVM_COV_TARGET_DIR:-target/llvm-cov-target}"
+          CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --locked --profile ci -p ag-harness --test sandbox
@@ -347,7 +349,7 @@ repos:
         entry: python .github/tests/test_validation_hooks.py
         language: python
         additional_dependencies: [PyYAML==6.0.3]
-        files: ^(\.pre-commit-config\.yaml|\.github/(actions/(run-coverage|setup-native-sandbox)/|workflows/(harness-sandbox|workspace-validation)\.yml|tests/test_validation_hooks\.py))
+        files: ^(\.cargo/|\.pre-commit-config\.yaml|\.github/(actions/(run-coverage|setup-native-sandbox)/|workflows/(harness-sandbox|workspace-validation)\.yml|tests/test_validation_hooks\.py))
         pass_filenames: false
       - id: check-instructions
         name: instruction integrity
