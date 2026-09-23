@@ -119,6 +119,7 @@ impl RuntimeClientRuntime for TestRuntime {
 
 fn make_request() -> AppServerTurnRequest {
     AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: std::env::temp_dir(),
         live_transcript: None,

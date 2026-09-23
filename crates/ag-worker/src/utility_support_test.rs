@@ -17,6 +17,7 @@ impl RunWorker {
             repository,
             clock,
             concurrency,
+            crate::RuntimeConfig::default().policies,
         )
     }
 }

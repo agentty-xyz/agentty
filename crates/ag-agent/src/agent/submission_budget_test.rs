@@ -18,6 +18,7 @@ use crate::{
 
 fn request(limit: usize) -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         harness: (AgentKind::Codex).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),

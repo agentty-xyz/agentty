@@ -7,6 +7,7 @@ use crate::app_server::AppServerTurnResponse;
 
 pub(super) fn make_turn_request() -> TurnRequest {
     TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),

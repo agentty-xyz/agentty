@@ -28,6 +28,10 @@ fn native_subagent_limits_apply_to_new_resumed_and_utility_sessions() {
                 // Act
                 let command = backend
                     .build_command(BuildCommandRequest {
+                        execution_policy: &ag_contracts::ExecutionPolicy {
+                            max_concurrent_subagents: std::num::NonZeroUsize::new(3),
+                            ..ag_contracts::ExecutionPolicy::default()
+                        },
                         attachments: &[],
                         folder: workspace.path(),
                         main_checkout_root: None,
@@ -47,12 +51,12 @@ fn native_subagent_limits_apply_to_new_resumed_and_utility_sessions() {
                 if kind == AgentKind::Codex {
                     let arguments = command.get_args().collect::<Vec<_>>();
                     assert!(arguments.windows(2).any(|pair| {
-                        pair[0] == "-c" && pair[1] == "agents.max_concurrent_threads_per_session=2"
+                        pair[0] == "-c" && pair[1] == "agents.max_concurrent_threads_per_session=3"
                     }));
                 } else {
                     assert!(command.get_envs().any(|(key, value)| {
                         key == "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
-                            && value == Some(OsStr::new("2"))
+                            && value == Some(OsStr::new("3"))
                     }));
                 }
             }

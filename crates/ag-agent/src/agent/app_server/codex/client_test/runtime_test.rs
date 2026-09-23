@@ -40,6 +40,21 @@ async fn runtime_reuse_requires_matching_permission_mode() {
 }
 
 #[tokio::test]
+async fn runtime_reuse_requires_matching_execution_policy() {
+    // Arrange
+    let mut runtime = build_stopped_session_runtime("thread-policy");
+    let mut request = runtime_request(&runtime);
+    // Act
+    let original_matches = runtime.matches_request(&request);
+    request.execution_policy.max_concurrent_subagents = std::num::NonZeroUsize::new(4);
+    let changed_matches = runtime.matches_request(&request);
+    runtime.shutdown_runtime().await;
+    // Assert
+    assert!(original_matches);
+    assert!(!changed_matches);
+}
+
+#[tokio::test]
 async fn run_turn_forwards_speed_mode_and_surfaces_transport_failures() {
     // Arrange
     let mut runtime = build_stopped_session_runtime("thread-run-turn");
@@ -349,6 +364,7 @@ fn parse_turn_completed_returns_success_for_completed_turn() {
 
 fn runtime_request(runtime: &CodexSessionRuntime) -> AppServerTurnRequest {
     AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: runtime.state.folder.clone(),
         live_transcript: None,

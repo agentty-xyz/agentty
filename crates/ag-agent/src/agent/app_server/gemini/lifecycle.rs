@@ -64,6 +64,7 @@ pub(super) async fn start_runtime(
 > {
     let command = agent::create_backend(AgentKind::Gemini)
         .build_command(agent::BuildCommandRequest {
+            execution_policy: &request.execution_policy,
             attachments: &[],
             folder: request.folder.as_path(),
             main_checkout_root: request.main_checkout_root.as_deref(),

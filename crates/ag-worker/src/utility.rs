@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::poll_fn;
 use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
-use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_contracts::{ExecutionPolicy, OneShotError, OneShotRequest, OneShotSubmission};
 use async_trait::async_trait;
 use tokio::sync::{Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -45,7 +45,13 @@ impl RunWorker {
         clock: Arc<dyn Clock>,
         concurrency: NonZeroUsize,
     ) -> Self {
-        Self::from_runtime(config.factory.utility(), repository, clock, concurrency)
+        Self::from_runtime(
+            config.factory.utility(),
+            repository,
+            clock,
+            concurrency,
+            config.policies.clone(),
+        )
     }
 
     /// Cancels this session's utilities and rejects late submissions from
@@ -95,12 +101,14 @@ impl RunWorker {
         repository: Arc<dyn RunRepository>,
         clock: Arc<dyn Clock>,
         concurrency: NonZeroUsize,
+        policies: BTreeMap<String, ExecutionPolicy>,
     ) -> Self {
         Self {
             admission: Mutex::new(true),
             execution: Arc::new(Execution {
                 sessions: Mutex::new(HashMap::new()),
                 capacity: Semaphore::new(concurrency.get()),
+                policies,
                 clock,
                 force_shutdown: CancellationToken::new(),
                 repository,
@@ -177,6 +185,7 @@ struct Execution {
     capacity: Semaphore,
     clock: Arc<dyn Clock>,
     force_shutdown: CancellationToken,
+    policies: BTreeMap<String, ExecutionPolicy>,
     repository: Arc<dyn RunRepository>,
     runtime: ag_runtime::UtilityRuntime,
     sessions: Mutex<HashMap<String, Arc<SessionExecution>>>,
@@ -298,9 +307,16 @@ impl Execution {
     async fn run(
         &self,
         id: &str,
-        request: OneShotRequest,
+        mut request: OneShotRequest,
         cancellation: CancellationToken,
     ) -> Result<OneShotSubmission, OneShotError> {
+        request.execution_policy = request
+            .harness
+            .parse::<ag_session::AgentKind>()
+            .ok()
+            .and_then(|kind| self.policies.get(&kind.to_string()))
+            .cloned()
+            .unwrap_or_default();
         let permit = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(OneShotError::new("[Stopped] Agent run canceled")),

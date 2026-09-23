@@ -48,6 +48,10 @@ impl AgentBackend for AntigravityBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        super::execution_policy::validate(
+            ag_session::AgentKind::Antigravity,
+            request.execution_policy,
+        )?;
         (self.validate_cached_cli)(self.path_value.as_deref())
             .map_err(AgentBackendError::CommandBuild)?;
         let BuildCommandRequest {

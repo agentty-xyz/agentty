@@ -238,6 +238,7 @@ async fn execute_one_shot_app_server_turns(
     let protocol_profile = request.request_kind.protocol_profile();
     let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let turn_request = AppServerTurnRequest {
+        execution_policy: request.execution_policy.clone(),
         provider_call_budget: request.provider_call_budget.clone(),
         folder: request.folder.clone(),
         live_transcript: None,
@@ -399,6 +400,7 @@ async fn attempt_one_shot_app_server_repair(
 
     let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
     let repair_turn_request = AppServerTurnRequest {
+        execution_policy: request.execution_policy.clone(),
         provider_call_budget: request.provider_call_budget.clone(),
         folder: request.folder,
         live_transcript: None,
@@ -458,6 +460,7 @@ async fn execute_one_shot_command(
     let prompt_payload = ag_protocol::TurnPrompt::from_agent_data(prompt.to_string());
     let agent_kind = request.harness.parse::<AgentKind>()?;
     let build_request = BuildCommandRequest {
+        execution_policy: &request.execution_policy,
         attachments: &prompt_payload.attachments,
         folder: &request.folder,
         main_checkout_root: None,

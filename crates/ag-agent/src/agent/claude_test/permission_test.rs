@@ -7,9 +7,11 @@ use tempfile::tempdir;
 
 use super::support::{session_start_request_kind, settings_argument};
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
-use crate::agent::claude::{
-    CLAUDE_ALLOWED_TOOLS, CLAUDE_READ_ONLY_TOOLS, ClaudeBackend, claude_absolute_permission_path,
-};
+use crate::agent::claude::{ClaudeBackend, claude_absolute_permission_path};
+
+const CLAUDE_ALLOWED_TOOLS: &str =
+    "Bash,Edit,MultiEdit,Write,WebSearch,WebFetch,EnterPlanMode,ExitPlanMode";
+const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Glob,Grep,WebSearch,WebFetch";
 
 #[test]
 /// Verifies Claude permission-rule paths use slash separators for glob
@@ -38,6 +40,13 @@ fn test_claude_auto_edit_mode_uses_write_capable_allowed_tools() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy {
+                max_concurrent_subagents: std::num::NonZeroUsize::new(2),
+                mcp: ag_contracts::McpPolicy::Disabled,
+                tools: ag_contracts::ToolPolicy::AutoApprove(
+                    CLAUDE_ALLOWED_TOOLS.split(',').map(String::from).collect(),
+                ),
+            },
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: Some(main_checkout_root.as_path()),
@@ -112,6 +121,7 @@ fn test_claude_read_only_mode_uses_plan_tools_and_denies_writes() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: Some(main_checkout_root.as_path()),

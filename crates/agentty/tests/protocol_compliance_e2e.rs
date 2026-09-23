@@ -251,6 +251,7 @@ fn resolve_workspace_folder() -> Result<PathBuf, String> {
 /// Builds one standard turn request for protocol-compliance validation.
 fn build_turn_request(folder: PathBuf, model: AgentModel) -> TurnRequest {
     TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder,
         main_checkout_root: None,

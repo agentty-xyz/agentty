@@ -14,6 +14,9 @@ pub struct OneShotRequest {
     /// Optional PID slot for resource accounting while a prompt is running.
     /// Subprocess lifetime and cancellation belong to the runtime adapter.
     pub child_pid: Option<Arc<Mutex<Option<u32>>>>,
+    /// Resolved harness policy. The worker replaces this with its configured
+    /// policy before dispatch; application callers supply the default value.
+    pub execution_policy: crate::ExecutionPolicy,
     /// Working directory where the prompt command runs.
     pub folder: PathBuf,
     /// Harness identifier resolved by the host-selected runtime implementation.

@@ -23,6 +23,7 @@ async fn start_runtime_omits_personality_from_the_process_command() {
     // Arrange
     let runtime_parent = tempdir().expect("create runtime parent");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: runtime_parent.path().join("missing-runtime"),
         live_transcript: None,
@@ -57,6 +58,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
     // Arrange
     let folder = tempdir().expect("create runtime folder");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: folder.path().to_path_buf(),
         live_transcript: None,

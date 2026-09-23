@@ -57,9 +57,15 @@ async fn test_parse_or_repair_cli_response_reports_repair_transport_failure() {
 async fn test_execute_cli_repair_turn_reports_non_zero_exit() {
     // Arrange
     let folder = tempdir().expect("failed to create temp dir");
-    let request = make_turn_request(folder.path().to_path_buf());
+    let mut request = make_turn_request(folder.path().to_path_buf());
+    request.execution_policy.max_concurrent_subagents = std::num::NonZeroUsize::new(7);
     let mut backend = MockAgentBackend::new();
-    backend.expect_build_command().returning(|_| {
+    backend.expect_build_command().returning(|request| {
+        assert_eq!(
+            request.execution_policy.max_concurrent_subagents,
+            std::num::NonZeroUsize::new(7)
+        );
+        assert!(request.permission_mode.is_read_only());
         let mut command = std::process::Command::new("sh");
         command.arg("-c").arg("exit 7");
 
@@ -105,6 +111,7 @@ async fn test_execute_cli_repair_turn_cleans_up_stdin_writer_after_timeout() {
     let repair_prompt = "repair ".repeat(200_000);
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.clone());
     let build_request = BuildCommandRequest {
+        execution_policy: &ag_contracts::ExecutionPolicy::default(),
         attachments: &prompt_payload.attachments,
         folder: folder.path(),
         main_checkout_root: None,

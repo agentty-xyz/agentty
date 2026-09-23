@@ -91,6 +91,7 @@ async fn run_turn_ignores_speed_mode_and_surfaces_transport_failures() {
 
 fn runtime_request(runtime: &GeminiSessionRuntime) -> AppServerTurnRequest {
     AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: runtime.state.folder.clone(),
         live_transcript: None,
@@ -228,6 +229,7 @@ async fn pooled_gemini_repair_retains_process_and_context_until_the_next_submiss
         FixtureGeminiProvider,
     >::new())));
     let request = OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: folder.path().into(),
         harness: "gemini".into(),

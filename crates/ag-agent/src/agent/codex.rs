@@ -24,9 +24,11 @@ impl AgentBackend for CodexBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        super::execution_policy::validate(ag_session::AgentKind::Codex, request.execution_policy)?;
         Ok(build_codex_app_server_command(
             request.folder,
             request.model,
+            request.execution_policy,
         ))
     }
 }

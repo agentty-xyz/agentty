@@ -6,12 +6,6 @@ use std::process::Command;
 use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::TurnPromptAttachment;
 
-/// Maximum concurrent subagents requested from providers with a native limit.
-///
-/// Excludes the parent agent. Provider exceptions still apply; this is not a
-/// host-wide CPU or memory limit.
-pub(super) const MAX_CONCURRENT_SUBAGENTS: usize = 2;
-
 /// Transport runtime used to execute turns for one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentTransport {
@@ -51,6 +45,8 @@ pub(crate) enum AppServerThoughtPolicy {
 pub struct BuildCommandRequest<'a> {
     /// Ordered local image attachments referenced from the prompt body.
     pub attachments: &'a [TurnPromptAttachment],
+    /// Worker-selected policy translated into provider startup settings.
+    pub execution_policy: &'a ag_contracts::ExecutionPolicy,
     /// Working directory where the command will run.
     pub folder: &'a Path,
     /// Main repository checkout that must remain read-only during the turn,

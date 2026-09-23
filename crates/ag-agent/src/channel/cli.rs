@@ -127,6 +127,7 @@ fn build_command_request<'a>(
     prompt_text: &'a str,
 ) -> BuildCommandRequest<'a> {
     BuildCommandRequest {
+        execution_policy: &request.execution_policy,
         attachments: &request.prompt.attachments,
         folder: &request.folder,
         main_checkout_root: request.main_checkout_root.as_deref(),
@@ -328,6 +329,7 @@ async fn execute_cli_repair_turn(
 ) -> Result<String, String> {
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
     let build_request = BuildCommandRequest {
+        execution_policy: &request.execution_policy,
         attachments: &prompt_payload.attachments,
         folder: &request.folder,
         main_checkout_root: None,

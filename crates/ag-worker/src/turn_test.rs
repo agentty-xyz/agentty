@@ -10,10 +10,71 @@ use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::SessionRunClient;
+use crate::test_support::{AppServerTurnResponse, MockAppServerClient};
+use crate::{RuntimeConfig, SessionRunClient};
+
+#[tokio::test]
+async fn configured_session_policy_replaces_request_policy_and_survives_repair() {
+    // Arrange
+    let policy = ag_contracts::ExecutionPolicy {
+        max_concurrent_subagents: std::num::NonZeroUsize::new(4),
+        ..ag_contracts::ExecutionPolicy::default()
+    };
+    let expected = policy.clone();
+    let mut server = MockAppServerClient::new();
+    let mut attempts = 0;
+    server
+        .expect_run_turn()
+        .times(2)
+        .returning(move |request, _| {
+            assert_eq!(request.execution_policy, expected);
+            attempts += 1;
+            let output = if attempts == 1 {
+                "invalid output"
+            } else {
+                r#"{"answer":"done","questions":[]}"#
+            };
+            Box::pin(async move {
+                Ok(AppServerTurnResponse {
+                    assistant_message: output.into(),
+                    context_reset: false,
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    server
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async {}));
+    let config = RuntimeConfig::with_app_server(Arc::new(server))
+        .with_execution_policy(ag_session::AgentKind::Codex, policy);
+    let worker = SessionRunClient::new(
+        "policy-session".into(),
+        ag_session::AgentKind::Codex,
+        &config,
+    );
+    // Act
+    let result = worker
+        .submit(
+            request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        )
+        .await;
+    worker.shutdown().await.expect("shutdown");
+    // Assert
+    assert_eq!(
+        result.expect("repaired turn").assistant_message.answer,
+        "done"
+    );
+}
 
 fn request() -> TurnRequest {
     TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: ".".into(),
         main_checkout_root: None,

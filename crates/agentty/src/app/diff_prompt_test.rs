@@ -18,6 +18,7 @@ use crate::app::session::SessionError;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(MAX_PROVIDER_CALLS)),
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,

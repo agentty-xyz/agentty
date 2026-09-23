@@ -4,6 +4,7 @@ use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnRequest};
 
 pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
     TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder,
         main_checkout_root: None,

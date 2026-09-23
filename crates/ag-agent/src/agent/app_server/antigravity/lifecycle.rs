@@ -51,7 +51,8 @@ impl AntigravityRuntimeState {
     pub(super) fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
         let required_directories = prompt_access_directories(&request.folder, &request.prompt);
 
-        self.folder == request.folder
+        request.execution_policy == ag_contracts::ExecutionPolicy::default()
+            && self.folder == request.folder
             && self.model == request.model
             && self.permission_mode == request.permission_mode
             && self.protocol_profile == request.request_kind.protocol_profile()
@@ -109,6 +110,7 @@ fn start_runtime_with_backend(
     let prompt_text = request.prompt.agent_text();
     let command = backend
         .build_command(agent::BuildCommandRequest {
+            execution_policy: &request.execution_policy,
             attachments: &request.prompt.attachments,
             folder: &request.folder,
             main_checkout_root: request.main_checkout_root.as_deref(),

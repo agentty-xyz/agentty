@@ -266,6 +266,7 @@ fn request(
     effort: ReasoningLevel,
 ) -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: folder.to_path_buf(),
         harness: provider.into(),

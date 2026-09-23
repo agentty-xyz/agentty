@@ -1122,6 +1122,7 @@ async fn test_run_turn_with_cancellation_honours_pre_turn_cancel() {
     };
 
     let req = TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: context.folder.clone(),
         main_checkout_root: None,
@@ -1235,6 +1236,7 @@ async fn test_run_turn_with_cancellation_returns_stopped_after_drain_timeout() {
         };
 
         let req = TurnRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::fresh(),
             folder: context.folder.clone(),
             main_checkout_root: None,

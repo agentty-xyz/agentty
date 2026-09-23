@@ -3,25 +3,13 @@ use std::process::{Command, Stdio};
 
 use ag_protocol::{SchemaRequiredPolicy, protocol_output_schema};
 
-use super::backend::{
-    AgentBackend, AgentBackendError, BuildCommandRequest, MAX_CONCURRENT_SUBAGENTS,
-};
+use super::backend::{AgentBackend, AgentBackendError, BuildCommandRequest};
 use super::prompt::{CliPromptAccessRootMode, append_cli_prompt_access_directories};
 use crate::model::{reasoning, session};
 
-/// Lists the Claude tools Agentty enables for unattended sessions.
-///
-/// `Bash` remains available for Claude workflows that need shell commands,
-/// while `WebSearch` and `WebFetch` let Claude answer current-information
-/// prompts without an interactive permission grant.
-const CLAUDE_ALLOWED_TOOLS: &str =
-    "Bash,Edit,MultiEdit,Write,WebSearch,WebFetch,EnterPlanMode,ExitPlanMode";
-/// Lists the non-mutating Claude tools available to research sessions.
-const CLAUDE_READ_ONLY_TOOLS: &str = "Read,Glob,Grep,WebSearch,WebFetch";
-
 /// Backend implementation for the Claude CLI.
 ///
-/// Commands are built with `--strict-mcp-config` so provider-level MCP
+/// Worker policies can select `--strict-mcp-config` so provider-level MCP
 /// connector defaults (for example Claude.ai account connectors) are ignored
 /// unless explicitly configured by Agentty. Claude runs in `stream-json` mode
 /// so progress and tool-use events can surface live while the final turn still
@@ -38,7 +26,9 @@ impl AgentBackend for ClaudeBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        super::execution_policy::validate(ag_session::AgentKind::Claude, request.execution_policy)?;
         let BuildCommandRequest {
+            execution_policy,
             attachments,
             folder,
             main_checkout_root,
@@ -65,17 +55,11 @@ impl AgentBackend for ClaudeBackend {
         );
 
         command.arg("-p");
-        if permission_mode.is_read_only() {
-            command
-                .arg("--tools")
-                .arg(CLAUDE_READ_ONLY_TOOLS)
-                .arg("--allowedTools")
-                .arg(CLAUDE_READ_ONLY_TOOLS)
-                .arg("--permission-mode")
-                .arg("plan");
-        } else {
-            command.arg("--allowedTools").arg(CLAUDE_ALLOWED_TOOLS);
-        }
+        super::execution_policy::apply_claude_tools(
+            &mut command,
+            &execution_policy.tools,
+            permission_mode,
+        );
         append_claude_workspace_settings(
             &mut command,
             folder,
@@ -87,7 +71,9 @@ impl AgentBackend for ClaudeBackend {
             .arg("--append-system-prompt")
             .arg(ag_protocol::workspace_instructions(folder));
         command.arg("--input-format").arg("text");
-        command.arg("--strict-mcp-config");
+        if execution_policy.mcp == ag_contracts::McpPolicy::Disabled {
+            command.arg("--strict-mcp-config");
+        }
         command.arg("--verbose");
         command
             .arg("--effort")
@@ -102,13 +88,13 @@ impl AgentBackend for ClaudeBackend {
         );
         command
             .env("ANTHROPIC_MODEL", model)
-            .env(
-                "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
-                MAX_CONCURRENT_SUBAGENTS.to_string(),
-            )
             .current_dir(folder)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        if let Some(limit) = execution_policy.max_concurrent_subagents {
+            command.env("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", limit.to_string());
+        }
 
         Ok(command)
     }
