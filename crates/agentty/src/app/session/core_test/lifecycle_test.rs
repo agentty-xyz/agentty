@@ -133,7 +133,7 @@ async fn test_create_session_keeps_default_smart_model_setting_when_session_mode
         .expect("failed to create first session");
     app.set_session_model(
         &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("failed to set session model");
@@ -216,7 +216,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
     // Act
     app.set_session_model(
         &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("failed to set session model");
@@ -244,7 +244,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
     // Assert
     assert_eq!(
         default_smart_model_setting,
-        Some(AgentModel::Gpt56Sol.as_str().to_string())
+        Some(AgentModel::Gpt6Sol.as_str().to_string())
     );
     assert_eq!(
         default_smart_agent_setting,
@@ -257,7 +257,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
         .find(|session| session.id == second_session_id)
         .expect("missing second session");
     assert_eq!(second_session.agent.kind(), AgentKind::Codex);
-    assert_eq!(second_session.agent.model(), AgentModel::Gpt56Sol);
+    assert_eq!(second_session.agent.model(), AgentModel::Gpt6Sol);
 }
 
 #[tokio::test]
@@ -300,7 +300,7 @@ async fn test_create_session_reads_default_smart_model_and_speed_from_db_setting
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing created session");
-    assert_eq!(created_session.agent.model(), AgentModel::ClaudeOpus5);
+    assert_eq!(created_session.agent.model(), AgentModel::ClaudeOpus55);
     assert_eq!(created_session.agent.kind(), AgentKind::Claude);
     assert_eq!(created_session.speed_mode, SpeedMode::Fast);
 }
@@ -600,11 +600,11 @@ async fn test_load_sessions_keeps_daily_activity_after_session_deletion() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("alpha000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("alpha000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert alpha000");
     db.sessions()
-        .insert_session("beta0000", "claude-opus-5", "main", "Done", project_id)
+        .insert_session("beta0000", "claude-opus-5-5", "main", "Done", project_id)
         .await
         .expect("failed to insert beta0000");
     db.activity()
@@ -762,7 +762,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,

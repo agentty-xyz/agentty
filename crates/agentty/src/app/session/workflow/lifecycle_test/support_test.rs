@@ -116,7 +116,7 @@ pub(super) fn session_manager_with_one_session(session: Session) -> SessionManag
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -410,7 +410,7 @@ pub(super) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionMa
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,

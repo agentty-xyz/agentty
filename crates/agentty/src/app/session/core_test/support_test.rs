@@ -38,7 +38,7 @@ pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
         progress: None,
         diff_hash,
         review_agent: (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             ReasoningLevel::High,
             SpeedMode::Normal,
         ),
@@ -763,7 +763,7 @@ pub(super) fn test_session_manager_with_clock(
             role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt56Sol,
+                AgentModel::Gpt6Sol,
             ),
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
@@ -793,7 +793,7 @@ pub(super) fn test_session_manager_with_clock(
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt56Sol,
+            model: AgentModel::Gpt6Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,

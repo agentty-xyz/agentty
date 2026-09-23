@@ -113,7 +113,7 @@ pub(super) async fn seed_materialized_session(
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gpt56Sol.as_str(),
+            AgentModel::Gpt6Sol.as_str(),
             "main",
             &status.to_string(),
             project_id,
@@ -168,7 +168,7 @@ pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
         progress: None,
         diff_hash,
         review_agent: (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             ReasoningLevel::High,
             SpeedMode::Normal,
         ),
@@ -226,7 +226,7 @@ pub(super) async fn persist_selected_session(app: &App) {
     app.services
         .db()
         .sessions()
-        .insert_session("session-1", "gpt-5.6-sol", "main", "Review", project_id)
+        .insert_session("session-1", "gpt-6-sol", "main", "Review", project_id)
         .await
         .expect("failed to insert session");
 }

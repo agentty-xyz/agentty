@@ -15,19 +15,37 @@ fn test_agent_selection_speed_compatibility() {
         (
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             false,
         ),
         (
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             false,
+        ),
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+            SpeedMode::Fast,
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+            true,
         ),
         (
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
             SpeedMode::Fast,
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
+            true,
+        ),
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            SpeedMode::Fast,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            true,
+        ),
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Luna),
+            SpeedMode::Fast,
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Luna),
             true,
         ),
         (
@@ -74,9 +92,9 @@ fn test_selectable_models_for_agent_kinds_uses_provider_order() {
         selectable_models,
         vec![
             AgentModel::Gpt6Astra,
-            AgentModel::Gpt56Sol,
+            AgentModel::Gpt6Sol,
+            AgentModel::Gpt6Luna,
             AgentModel::Gpt56Terra,
-            AgentModel::Gpt56Luna,
             AgentModel::Gpt53CodexSpark,
             AgentModel::Gemini31Pro,
             AgentModel::Gemini38Flash,
@@ -111,7 +129,7 @@ fn test_selectable_models_for_agent_kinds_deduplicates_shared_models() {
 /// when possible.
 fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
     // Arrange
-    let unavailable_model = AgentModel::ClaudeOpus5;
+    let unavailable_model = AgentModel::ClaudeOpus55;
     let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
     let fallback_model = AgentModel::Gpt56Terra;
 
@@ -131,7 +149,7 @@ fn test_resolve_model_for_available_agent_kinds_prefers_available_fallback() {
 /// default when the preferred fallback is also unavailable.
 fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
     // Arrange
-    let unavailable_model = AgentModel::ClaudeOpus5;
+    let unavailable_model = AgentModel::ClaudeOpus55;
     let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
     let unavailable_fallback_model = AgentModel::ClaudeSonnet5;
 
@@ -220,11 +238,8 @@ fn test_available_selected_model_is_preserved() {
     let selected = AgentModel::Gpt6Astra;
 
     // Act
-    let resolved = resolve_model_for_available_agent_kinds(
-        selected,
-        &[AgentKind::Codex],
-        AgentModel::Gpt56Sol,
-    );
+    let resolved =
+        resolve_model_for_available_agent_kinds(selected, &[AgentKind::Codex], AgentModel::Gpt6Sol);
 
     // Assert
     assert_eq!(resolved, selected);

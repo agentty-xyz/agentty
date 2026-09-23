@@ -16,7 +16,7 @@ use crate::domain::session_message::SessionTranscript;
 async fn test_run_agent_assist_task_rejects_plain_text_output() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::ClaudeOpus5.as_str()).await;
+    insert_review_session(&database, AgentModel::ClaudeOpus55.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -36,7 +36,7 @@ async fn test_run_agent_assist_task_rejects_plain_text_output() {
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
         prompt: "Resolve conflict".to_string(),
-        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     })

@@ -49,7 +49,7 @@ fn build_thread_start_payload_uses_unrestricted_auto_edit_policy() {
     // Act
     let payload = lifecycle::build_thread_start_payload(
         folder.path(),
-        AgentModel::Gpt56Sol.as_str(),
+        AgentModel::Gpt6Sol.as_str(),
         ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
@@ -212,7 +212,7 @@ fn build_turn_start_payload_sets_structured_output_schema() {
     // Act
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
-        model: AgentModel::Gpt56Sol.as_str(),
+        model: AgentModel::Gpt6Sol.as_str(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         prompt: "Implement the task".into(),
         protocol_profile: ProtocolRequestProfile::SessionTurn,
@@ -241,7 +241,7 @@ fn build_turn_start_payload_sets_direct_focused_review_schema() {
     // Act
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
-        model: AgentModel::Gpt56Sol.as_str(),
+        model: AgentModel::Gpt6Sol.as_str(),
         permission_mode: ag_contracts::PermissionMode::ReadOnly,
         prompt: "Review the task".into(),
         protocol_profile: ProtocolRequestProfile::FocusedReview,

@@ -33,41 +33,23 @@ fn compaction_timeout_error_includes_timeout_seconds() {
 #[test]
 fn auto_compact_input_token_threshold_uses_1050k_limit_for_codex_models() {
     // Arrange
-    let gpt_6_astra_model = AgentModel::Gpt6Astra.as_str();
-    let gpt_56_sol_model = AgentModel::Gpt56Sol.as_str();
-    let gpt_56_terra_model = AgentModel::Gpt56Terra.as_str();
-    let gpt_56_luna_model = AgentModel::Gpt56Luna.as_str();
-    let gpt_55_model = AgentModel::Gpt56Sol.as_str();
+    let large_context_models = [
+        AgentModel::Gpt6Astra,
+        AgentModel::Gpt6Sol,
+        AgentModel::Gpt6Luna,
+        AgentModel::Gpt56Terra,
+    ];
     let spark_model = AgentModel::Gpt53CodexSpark.as_str();
 
     // Act
-    let gpt_6_astra_threshold = policy::auto_compact_input_token_threshold(gpt_6_astra_model);
-    let gpt_56_sol_threshold = policy::auto_compact_input_token_threshold(gpt_56_sol_model);
-    let gpt_56_terra_threshold = policy::auto_compact_input_token_threshold(gpt_56_terra_model);
-    let gpt_56_luna_threshold = policy::auto_compact_input_token_threshold(gpt_56_luna_model);
-    let gpt_55_threshold = policy::auto_compact_input_token_threshold(gpt_55_model);
+    let large_context_thresholds = large_context_models
+        .map(|model| policy::auto_compact_input_token_threshold(model.as_str()));
     let spark_threshold = policy::auto_compact_input_token_threshold(spark_model);
 
     // Assert
     assert_eq!(
-        gpt_6_astra_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
-    );
-    assert_eq!(
-        gpt_56_sol_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
-    );
-    assert_eq!(
-        gpt_56_terra_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
-    );
-    assert_eq!(
-        gpt_56_luna_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
-    );
-    assert_eq!(
-        gpt_55_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT
+        large_context_thresholds,
+        [policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT; 4]
     );
     assert_eq!(
         spark_threshold,

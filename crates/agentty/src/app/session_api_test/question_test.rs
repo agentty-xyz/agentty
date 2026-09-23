@@ -196,7 +196,7 @@ async fn controller_question_answers_proxy_to_the_managed_worker() {
     let fixture = seed_active_orchestration_child(&mut app, true).await;
     app.set_session_model(
         &fixture.child,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("managed worker model should update");

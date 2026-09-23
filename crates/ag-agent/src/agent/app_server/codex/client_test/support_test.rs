@@ -18,7 +18,7 @@ pub(super) fn build_runtime_state(thread_id: &str, latest_input_tokens: u64) -> 
     ));
     let mut state = CodexRuntimeState::new(
         folder,
-        AgentModel::Gpt56Sol.as_str().to_string(),
+        AgentModel::Gpt6Sol.as_str().to_string(),
         ag_contracts::PermissionMode::AutoEdit,
     );
     state.thread_id = thread_id.to_string();

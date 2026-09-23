@@ -55,13 +55,13 @@ async fn seed_sessions_with_matching_update_times(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("a-older", "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular("a-older", "gpt-6-sol", "main", "Review")
             .with_title("Older created session"),
     )
     .await?;
     common::seed_session(
         env,
-        SessionSeed::regular("z-newer", "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular("z-newer", "gpt-6-sol", "main", "Review")
             .with_title("Newer created session"),
     )
     .await?;
@@ -105,7 +105,7 @@ async fn seed_done_session_for_continuation(
     let merged_commit_hash = "704de31d0f4b5a1234567890abcdef1234567890";
     common::seed_session(
         env,
-        SessionSeed::regular("done-continue-0001", "gpt-5.6-sol", "main", "Done")
+        SessionSeed::regular("done-continue-0001", "gpt-6-sol", "main", "Done")
             .with_title("Continue terminal session"),
     )
     .await?;
@@ -151,7 +151,7 @@ async fn seed_canceled_session_for_continuation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("canceled-continue-0001", "gpt-5.6-sol", "main", "Canceled")
+        SessionSeed::regular("canceled-continue-0001", "gpt-6-sol", "main", "Canceled")
             .with_title("Continue canceled session"),
     )
     .await?;
@@ -324,7 +324,7 @@ async fn session_list_model_reasoning_level() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("gpt-5.6-sol [medium]", 5000)
+                    .wait_for_text("gpt-6-sol [medium]", 5000)
                     .wait_for_text("2m 5s", 5000)
                     .capture_labeled(
                         "model_reasoning",
@@ -334,7 +334,7 @@ async fn session_list_model_reasoning_level() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "gpt-5.6-sol [medium]", &full);
+                    assertion::assert_text_in_region(frame, "gpt-6-sol [medium]", &full);
                     assertion::assert_text_in_region(frame, "2m 5s", &full);
                 })
             },
@@ -410,7 +410,7 @@ async fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("[xhigh]", 5000)
                     .press_key("BackTab")
-                    .wait_for_text("gpt-5.6-sol [high]", 5000)
+                    .wait_for_text("gpt-6-sol [high]", 5000)
                     .capture_labeled(
                         "active_reasoning",
                         "Existing session retains persisted reasoning",
@@ -419,7 +419,7 @@ async fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "gpt-5.6-sol [high]", &full);
+                    assertion::assert_text_in_region(frame, "gpt-6-sol [high]", &full);
                 })
             },
         )
@@ -442,7 +442,7 @@ async fn session_chat_header_agent_model() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Agent: codex  Model: gpt-5.6-sol", 5000)
+                    .wait_for_text("Agent: codex  Model: gpt-6-sol", 5000)
                     .capture_labeled(
                         "agent_model_header",
                         "Session chat header showing agent before model",
@@ -453,7 +453,7 @@ async fn session_chat_header_agent_model() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "Agent: codex  Model: gpt-5.6-sol",
+                        "Agent: codex  Model: gpt-6-sol",
                         &full,
                     );
                 })
@@ -532,7 +532,7 @@ async fn session_list_selected_row_remains_readable_under_dark_horizon() -> E2eR
                     let selected_row_region =
                         Region::new(0, selected_title.rect.row, sessions_frame.cols(), 1);
                     sessions_frame
-                        .find_text_in_region("gpt-5.6-sol", &selected_row_region)
+                        .find_text_in_region("gpt-6-sol", &selected_row_region)
                         .into_iter()
                         .next()
                         .expect("expected selected session model to be visible");

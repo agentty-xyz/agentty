@@ -42,7 +42,7 @@ async fn set_session_model_persists_new_model_and_clears_conversation_state() {
         .set_session_model(
             &services,
             "session-id",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         )
         .await
         .expect("set session model should succeed");
@@ -68,14 +68,14 @@ async fn set_session_model_persists_new_model_and_clears_conversation_state() {
     let emitted_event = event_rx.try_recv().expect("model event expected");
 
     // Assert
-    assert_eq!(persisted_model, AgentModel::Gpt56Sol.as_str());
+    assert_eq!(persisted_model, AgentModel::Gpt6Sol.as_str());
     assert!(cleared_provider.is_none());
     assert!(cleared_instruction.is_none());
     assert_eq!(
         emitted_event,
         AppEvent::SessionModelUpdated {
             session_id: "session-id".into(),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         }
     );
     assert!(session_manager.should_replay_history("session-id"));
@@ -144,7 +144,7 @@ async fn set_session_model_returns_error_for_missing_session() {
         .set_session_model(
             &services,
             "missing",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         )
         .await;
 

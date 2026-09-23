@@ -17,7 +17,7 @@ async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() 
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gpt56Sol.as_str(),
+            AgentModel::Gpt6Sol.as_str(),
             "main",
             "Review",
             app.active_project_id(),

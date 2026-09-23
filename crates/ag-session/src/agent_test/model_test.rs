@@ -22,17 +22,27 @@ fn test_parse_model_parses_current_codex_models() {
 
     // Act
     let parsed_astra = codex_kind.parse_model("gpt-6-astra");
-    let parsed_sol = codex_kind.parse_model("gpt-5.6-sol");
+    let parsed_gpt_6_sol = codex_kind.parse_model("gpt-6-sol");
+    let parsed_gpt_6_luna = codex_kind.parse_model("gpt-6-luna");
     let parsed_terra = codex_kind.parse_model("gpt-5.6-terra");
-    let parsed_luna = codex_kind.parse_model("gpt-5.6-luna");
     let parsed_spark = codex_kind.parse_model("gpt-5.3-codex-spark");
+    let gpt_6_sol_description = AgentModel::Gpt6Sol.description();
+    let gpt_6_luna_description = AgentModel::Gpt6Luna.description();
 
     // Assert
     assert_eq!(parsed_astra, Some(AgentModel::Gpt6Astra));
-    assert_eq!(parsed_sol, Some(AgentModel::Gpt56Sol));
+    assert_eq!(parsed_gpt_6_sol, Some(AgentModel::Gpt6Sol));
+    assert_eq!(parsed_gpt_6_luna, Some(AgentModel::Gpt6Luna));
     assert_eq!(parsed_terra, Some(AgentModel::Gpt56Terra));
-    assert_eq!(parsed_luna, Some(AgentModel::Gpt56Luna));
     assert_eq!(parsed_spark, Some(AgentModel::Gpt53CodexSpark));
+    assert_eq!(
+        gpt_6_sol_description,
+        "Codex model for complex coding and agentic workflows."
+    );
+    assert_eq!(
+        gpt_6_luna_description,
+        "Efficient Codex model for focused, high-volume tasks."
+    );
 }
 
 #[test]
@@ -145,22 +155,20 @@ fn test_parse_model_parses_current_claude_models() {
     let claude_kind = AgentKind::Claude;
 
     // Act
-    let parsed_opus_5 = claude_kind.parse_model("claude-opus-5");
+    let parsed_opus_55 = claude_kind.parse_model("claude-opus-5-5");
     let parsed_sonnet_5 = claude_kind.parse_model("claude-sonnet-5");
     let parsed_fable_5 = claude_kind.parse_model("claude-fable-5");
     let parsed_haiku_45 = claude_kind.parse_model("claude-haiku-4-5-20251001");
-    let opus_5_id = AgentModel::ClaudeOpus5.as_str();
-    let opus_5_description = AgentModel::ClaudeOpus5.description();
 
     // Assert
-    assert_eq!(parsed_opus_5, Some(AgentModel::ClaudeOpus5));
+    assert_eq!(parsed_opus_55, Some(AgentModel::ClaudeOpus55));
     assert_eq!(parsed_sonnet_5, Some(AgentModel::ClaudeSonnet5));
     assert_eq!(parsed_fable_5, Some(AgentModel::ClaudeFable5));
     assert_eq!(parsed_haiku_45, Some(AgentModel::ClaudeHaiku4520251001));
-    assert_eq!(opus_5_id, "claude-opus-5");
+    assert_eq!(AgentModel::ClaudeOpus55.as_str(), "claude-opus-5-5");
     assert_eq!(
-        opus_5_description,
-        "Latest Claude Opus model for complex tasks."
+        AgentModel::ClaudeOpus55.description(),
+        "Latest Claude Opus model for complex agentic tasks."
     );
 }
 
@@ -170,9 +178,9 @@ fn test_codex_models_are_supported_by_codex() {
     // Arrange
     let models = [
         AgentModel::Gpt6Astra,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
+        AgentModel::Gpt6Luna,
         AgentModel::Gpt56Terra,
-        AgentModel::Gpt56Luna,
         AgentModel::Gpt53CodexSpark,
     ];
 
@@ -190,7 +198,7 @@ fn test_codex_models_are_supported_by_codex() {
 fn test_claude_models_are_supported_by_claude() {
     // Arrange
     let models = [
-        AgentModel::ClaudeOpus5,
+        AgentModel::ClaudeOpus55,
         AgentModel::ClaudeSonnet5,
         AgentModel::ClaudeFable5,
         AgentModel::ClaudeHaiku4520251001,
@@ -263,10 +271,10 @@ fn test_antigravity_provider_model_str_returns_raw_gemini_model() {
 #[test]
 fn test_model_strings_respect_provider_ownership() {
     // Arrange
-    let model = AgentModel::ClaudeOpus5;
+    let model = AgentModel::ClaudeOpus55;
 
     // Act / Assert
-    assert_eq!(AgentKind::Claude.model_str(model), Some("claude-opus-5"));
+    assert_eq!(AgentKind::Claude.model_str(model), Some("claude-opus-5-5"));
     assert_eq!(AgentKind::Codex.model_str(model), None);
     assert!("custom-harness".parse::<AgentKind>().is_err());
 }

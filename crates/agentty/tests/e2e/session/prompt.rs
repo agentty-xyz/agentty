@@ -31,7 +31,7 @@ async fn seed_nested_stacked_at_lookup_session(
     let child_session_id = "atchildx-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(ancestor_session_id, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(ancestor_session_id, "gpt-6-sol", "main", "Review")
             .with_title("Ancestor with lookup file"),
     )
     .await?;
@@ -39,7 +39,7 @@ async fn seed_nested_stacked_at_lookup_session(
         env,
         SessionSeed::stacked_draft(
             parent_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/atparent",
             "Draft",
             ancestor_session_id,
@@ -51,7 +51,7 @@ async fn seed_nested_stacked_at_lookup_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/atmiddle",
             "Draft",
             parent_session_id,

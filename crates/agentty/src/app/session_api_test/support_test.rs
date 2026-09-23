@@ -328,7 +328,7 @@ pub(super) fn session_row() -> SessionRow {
         in_progress_total_seconds: 40,
         input_tokens: 50,
         is_draft: true,
-        model: "gpt-5.6-sol".to_string(),
+        model: "gpt-6-sol".to_string(),
         output_tokens: 60,
         parent_session_id: Some("parent-1".to_string()),
         permission_mode: "read_only".to_string(),

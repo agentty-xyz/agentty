@@ -116,13 +116,13 @@ async fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
 async fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
-        SessionSeed::regular(CONTROLLER_ID, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(CONTROLLER_ID, "gpt-6-sol", "main", "Review")
             .with_title("Managed feature delivery"),
     )
     .await?;
     common::seed_session(
         env,
-        SessionSeed::regular(WORKER_ID, "gpt-5.6-sol", "main", "InProgress")
+        SessionSeed::regular(WORKER_ID, "gpt-6-sol", "main", "InProgress")
             .with_title("Implement protocol contract"),
     )
     .await?;

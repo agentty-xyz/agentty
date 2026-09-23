@@ -123,7 +123,7 @@ async fn load_sessions_skips_invalid_permission_mode_without_hiding_valid_siblin
         .expect("project should be created");
     for session_id in ["valid-mode", "invalid-mode"] {
         db.sessions()
-            .insert_draft_session(session_id, "gpt-5.6-sol", "main", "Draft", project_id)
+            .insert_draft_session(session_id, "gpt-6-sol", "main", "Draft", project_id)
             .await
             .expect("session should be created");
     }
@@ -875,7 +875,7 @@ WHERE id = ?
         .expect("failed to load migrated session")
         .expect("missing migrated session");
     assert_eq!(row.agent, "claude");
-    assert_eq!(row.model, "claude-opus-5");
+    assert_eq!(row.model, "claude-opus-5-5");
     assert_eq!(row.updated_at, 123);
 }
 
@@ -948,7 +948,7 @@ async fn test_migrate_active_sessions_off_retired_models_covers_inactive_project
         .await
         .expect("failed to load finished inactive-project session")
         .expect("missing finished inactive-project session");
-    assert_eq!(active_project_row.model, "claude-opus-5");
+    assert_eq!(active_project_row.model, "claude-opus-5-5");
     assert_eq!(active_project_row.agent, "claude");
     assert_eq!(inactive_project_row.model, "gemini-3.5-flash-lite");
     assert_eq!(inactive_project_row.agent, "antigravity");
@@ -1077,7 +1077,7 @@ async fn test_load_sessions_keeps_retired_model_in_db_for_finished_session() {
         .iter()
         .find(|session| session.id == session_id)
         .expect("missing reloaded session");
-    assert_eq!(session.agent.model(), AgentModel::ClaudeOpus5);
+    assert_eq!(session.agent.model(), AgentModel::ClaudeOpus55);
     let row = db
         .sessions()
         .load_session(session_id)
@@ -1385,7 +1385,7 @@ fn parse_review_request_returns_none_for_invalid_row() {
         in_progress_total_seconds: 0,
         input_tokens: 0,
         is_draft: false,
-        model: "gpt-5.6-sol".to_string(),
+        model: "gpt-6-sol".to_string(),
         output_tokens: 0,
         parent_session_id: None,
         permission_mode: "auto_edit".to_string(),

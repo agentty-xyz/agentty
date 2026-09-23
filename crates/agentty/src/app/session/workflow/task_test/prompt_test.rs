@@ -55,7 +55,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         ))
     });
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt56Sol.as_str()).await;
+    insert_review_session(&database, AgentModel::Gpt6Sol.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
@@ -66,7 +66,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };

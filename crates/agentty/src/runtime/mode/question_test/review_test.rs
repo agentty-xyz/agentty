@@ -297,7 +297,7 @@ async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fall
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
             .id(session_id)
-            .model(AgentModel::Gpt56Sol)
+            .model(AgentModel::Gpt6Sol)
             .status(Status::AgentReview)
             .build(),
     );

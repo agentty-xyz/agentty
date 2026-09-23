@@ -84,7 +84,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt56Sol.as_str().to_string(),
+            model: AgentModel::Gpt6Sol.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,

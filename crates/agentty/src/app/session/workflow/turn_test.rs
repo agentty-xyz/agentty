@@ -28,14 +28,14 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+        .insert_session("worker", "gpt-6-sol", "main", "InProgress", project_id)
         .await
         .expect("failed to insert worker session");
     repositories
         .sessions()
         .insert_session(
             "read-only-worker",
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "main",
             "InProgress",
             project_id,
@@ -54,7 +54,7 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
             base_branch: "main",
             id: "researcher",
             is_draft: false,
-            model: "gpt-5.6-sol",
+            model: "gpt-6-sol",
             orchestration_task_id: None,
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
@@ -119,7 +119,7 @@ async fn response_style_load_returns_persisted_value_and_defaults_missing_sessio
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+        .insert_session("worker", "gpt-6-sol", "main", "InProgress", project_id)
         .await
         .expect("failed to insert worker session");
     repositories
@@ -150,7 +150,7 @@ async fn permission_mode_load_rejects_invalid_persisted_values() {
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-5.6-sol", "main", "InProgress", project_id)
+        .insert_session("worker", "gpt-6-sol", "main", "InProgress", project_id)
         .await
         .expect("failed to insert worker session");
     sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'worker'")

@@ -170,7 +170,7 @@ fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
     session.title = Some("This is a very long timer-aware session header title".to_string());
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     session.in_progress_started_at = Some(0);
 
@@ -207,7 +207,7 @@ fn test_session_metadata_text_ticks_live_in_progress_timer() {
     let mut session = session_fixture();
     session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt56Sol,
+        AgentModel::Gpt6Sol,
     );
     session.stats.added_lines = 9;
     session.stats.deleted_lines = 3;
@@ -221,9 +221,9 @@ fn test_session_metadata_text_ticks_live_in_progress_timer() {
     // Assert
     assert!(early_metadata.contains("Lines: +9 / -3"));
     assert!(early_metadata.contains("Timer: 30s"));
-    assert!(early_metadata.contains("Model: gpt-5.6-sol"));
+    assert!(early_metadata.contains("Model: gpt-6-sol"));
     assert!(
-        early_metadata.find("Model: gpt-5.6-sol") < early_metadata.find("Reasoning: high"),
+        early_metadata.find("Model: gpt-6-sol") < early_metadata.find("Reasoning: high"),
         "model should appear before reasoning in metadata text"
     );
     assert!(later_metadata.contains("Timer: 1h 1m 0s"));
@@ -950,7 +950,7 @@ fn test_session_output_status_lines_for_agent_review_use_two_line_hierarchy() {
     let status_lines = session_output_status_lines(
         Status::AgentReview,
         None,
-        Some("Reviewing changes\nCodex · gpt-5.6-sol · Extra-high reasoning · Fast"),
+        Some("Reviewing changes\nCodex · gpt-6-sol · Extra-high reasoning · Fast"),
         None,
     );
 
@@ -962,7 +962,7 @@ fn test_session_output_status_lines_for_agent_review_use_two_line_hierarchy() {
     );
     assert_eq!(
         status_lines[1].to_string(),
-        "    Codex · gpt-5.6-sol · Extra-high reasoning · Fast"
+        "    Codex · gpt-6-sol · Extra-high reasoning · Fast"
     );
     assert_eq!(
         status_lines[0].spans[0].style.fg,

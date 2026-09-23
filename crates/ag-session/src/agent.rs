@@ -25,12 +25,12 @@ pub enum AgentKind {
 pub enum AgentModel {
     /// Codex Astra model backed by `gpt-6-astra`.
     Gpt6Astra,
-    /// Codex Sol model backed by `gpt-5.6-sol`.
-    Gpt56Sol,
+    /// Codex Sol model backed by `gpt-6-sol`.
+    Gpt6Sol,
+    /// Codex Luna model backed by `gpt-6-luna`.
+    Gpt6Luna,
     /// Codex Terra model backed by `gpt-5.6-terra`.
     Gpt56Terra,
-    /// Codex Luna model backed by `gpt-5.6-luna`.
-    Gpt56Luna,
     /// Fast Gemini model backed by `gemini-3.8-flash`.
     Gemini38Flash,
     /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
@@ -39,8 +39,8 @@ pub enum AgentModel {
     Gemini31Pro,
     /// Codex spark model backed by `gpt-5.3-codex-spark`.
     Gpt53CodexSpark,
-    /// Claude Opus model backed by `claude-opus-5`.
-    ClaudeOpus5,
+    /// Claude Opus model backed by `claude-opus-5-5`.
+    ClaudeOpus55,
     /// Claude Sonnet model backed by `claude-sonnet-5`.
     ClaudeSonnet5,
     /// Claude Fable model backed by `claude-fable-5`.
@@ -89,13 +89,13 @@ impl AgentSelection {
     pub fn supports_fast_mode(self) -> bool {
         matches!(
             (self.kind, self.model),
-            (AgentKind::Claude, AgentModel::ClaudeOpus5)
+            (AgentKind::Claude, AgentModel::ClaudeOpus55)
                 | (
                     AgentKind::Codex,
                     AgentModel::Gpt6Astra
-                        | AgentModel::Gpt56Sol
+                        | AgentModel::Gpt6Sol
+                        | AgentModel::Gpt6Luna
                         | AgentModel::Gpt56Terra
-                        | AgentModel::Gpt56Luna
                 )
         )
     }
@@ -112,9 +112,9 @@ impl AgentSelection {
         }
 
         match self.kind {
-            AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus5),
+            AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             AgentKind::Codex if self.model == AgentModel::Gpt53CodexSpark => {
-                Self::new(AgentKind::Codex, AgentModel::Gpt56Sol)
+                Self::new(AgentKind::Codex, AgentModel::Gpt6Sol)
             }
             AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => self,
         }
@@ -136,14 +136,14 @@ impl AgentModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gpt6Astra => "gpt-6-astra",
-            Self::Gpt56Sol => "gpt-5.6-sol",
+            Self::Gpt6Sol => "gpt-6-sol",
+            Self::Gpt6Luna => "gpt-6-luna",
             Self::Gpt56Terra => "gpt-5.6-terra",
-            Self::Gpt56Luna => "gpt-5.6-luna",
             Self::Gemini38Flash => "gemini-3.8-flash",
             Self::Gemini35FlashLite => "gemini-3.5-flash-lite",
             Self::Gemini31Pro => "gemini-3.1-pro-preview",
             Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
-            Self::ClaudeOpus5 => "claude-opus-5",
+            Self::ClaudeOpus55 => "claude-opus-5-5",
             Self::ClaudeSonnet5 => "claude-sonnet-5",
             Self::ClaudeFable5 => "claude-fable-5",
             Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
@@ -200,14 +200,17 @@ impl AgentModel {
                 "gemini-3.1-flash-lite-preview",
                 AgentModel::Gemini35FlashLite,
             ),
-            ("claude-opus-4-8", AgentModel::ClaudeOpus5),
-            ("claude-opus-4-6", AgentModel::ClaudeOpus5),
-            ("claude-opus-4-7", AgentModel::ClaudeOpus5),
+            ("claude-opus-5", AgentModel::ClaudeOpus55),
+            ("gpt-5.6-sol", AgentModel::Gpt6Sol),
+            ("gpt-5.6-luna", AgentModel::Gpt6Luna),
+            ("claude-opus-4-8", AgentModel::ClaudeOpus55),
+            ("claude-opus-4-6", AgentModel::ClaudeOpus55),
+            ("claude-opus-4-7", AgentModel::ClaudeOpus55),
             ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
-            ("gpt-5.5", AgentModel::Gpt56Sol),
-            ("gpt-5.4-mini", AgentModel::Gpt56Luna),
-            ("gpt-5.4", AgentModel::Gpt56Sol),
-            ("gpt-5.3-codex", AgentModel::Gpt56Sol),
+            ("gpt-5.5", AgentModel::Gpt6Sol),
+            ("gpt-5.4-mini", AgentModel::Gpt6Luna),
+            ("gpt-5.4", AgentModel::Gpt6Sol),
+            ("gpt-5.3-codex", AgentModel::Gpt6Sol),
             ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
         ];
 
@@ -399,11 +402,11 @@ impl FromStr for AgentModel {
             "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
             "gpt-6-astra" => Ok(Self::Gpt6Astra),
-            "gpt-5.6-sol" => Ok(Self::Gpt56Sol),
+            "gpt-6-sol" => Ok(Self::Gpt6Sol),
+            "gpt-6-luna" => Ok(Self::Gpt6Luna),
             "gpt-5.6-terra" => Ok(Self::Gpt56Terra),
-            "gpt-5.6-luna" => Ok(Self::Gpt56Luna),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
-            "claude-opus-5" => Ok(Self::ClaudeOpus5),
+            "claude-opus-5-5" => Ok(Self::ClaudeOpus55),
             "claude-sonnet-5" => Ok(Self::ClaudeSonnet5),
             "claude-fable-5" => Ok(Self::ClaudeFable5),
             "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
@@ -425,11 +428,11 @@ impl AgentSelectionMetadata for AgentModel {
                 "Lightweight Gemini model for fast, cost-conscious workloads."
             }
             Self::Gpt6Astra => "Most capable Codex model for the hardest end-to-end work.",
-            Self::Gpt56Sol => "Flagship Codex model for complex professional work.",
+            Self::Gpt6Sol => "Codex model for complex coding and agentic workflows.",
+            Self::Gpt6Luna => "Efficient Codex model for focused, high-volume tasks.",
             Self::Gpt56Terra => "Current Codex model for balanced coding performance.",
-            Self::Gpt56Luna => "Current Codex model for lighter coding iterations.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
-            Self::ClaudeOpus5 => "Latest Claude Opus model for complex tasks.",
+            Self::ClaudeOpus55 => "Latest Claude Opus model for complex agentic tasks.",
             Self::ClaudeSonnet5 => "Balanced Claude model for quality and latency.",
             Self::ClaudeFable5 => "Claude Fable model for creative, narrative-heavy tasks.",
             Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
@@ -461,7 +464,7 @@ impl AgentKind {
         match self {
             Self::Antigravity | Self::Gemini => AgentModel::Gemini31Pro,
             Self::Claude => AgentModel::ClaudeFable5,
-            Self::Codex => AgentModel::Gpt56Sol,
+            Self::Codex => AgentModel::Gpt6Sol,
         }
     }
 
@@ -488,15 +491,15 @@ impl AgentKind {
         ];
         const CLAUDE_MODELS: &[AgentModel] = &[
             AgentModel::ClaudeFable5,
-            AgentModel::ClaudeOpus5,
+            AgentModel::ClaudeOpus55,
             AgentModel::ClaudeSonnet5,
             AgentModel::ClaudeHaiku4520251001,
         ];
         const CODEX_MODELS: &[AgentModel] = &[
             AgentModel::Gpt6Astra,
-            AgentModel::Gpt56Sol,
+            AgentModel::Gpt6Sol,
+            AgentModel::Gpt6Luna,
             AgentModel::Gpt56Terra,
-            AgentModel::Gpt56Luna,
             AgentModel::Gpt53CodexSpark,
         ];
 

@@ -38,7 +38,7 @@ fn empty_session_state() -> SessionState {
 /// text is not under test.
 fn test_review_agent() -> ReviewAgent {
     (
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
         ReasoningLevel::High,
         SpeedMode::Normal,
     )
@@ -171,7 +171,7 @@ fn review_loading_message_uses_normalized_agent_profile() {
     // Assert
     assert_eq!(
         message,
-        "Reviewing changes\nCodex · gpt-5.6-sol · Extra-high reasoning · Fast"
+        "Reviewing changes\nCodex · gpt-6-sol · Extra-high reasoning · Fast"
     );
 }
 
@@ -238,7 +238,7 @@ fn review_agent_speed_normalization_preserves_only_supported_speed() {
     assert_eq!(
         supported,
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
             ReasoningLevel::XHigh,
             SpeedMode::Fast,
         )

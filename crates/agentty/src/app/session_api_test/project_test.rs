@@ -72,7 +72,7 @@ async fn runtime_backend_rejects_cross_project_inheritance() {
         .sessions()
         .insert_session(
             &source_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "develop",
             "Draft",
             inactive_project_id,
@@ -120,7 +120,7 @@ async fn runtime_backend_rejects_stacked_parent_from_another_project() {
         .sessions()
         .insert_session(
             &parent_session_id,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "develop",
             "Review",
             inactive_project_id,

@@ -10,13 +10,13 @@ fn settings_rows_show_default_review_model_value() {
     // Arrange
     let mut manager = new_settings_manager();
     manager.fixture_view_mut().default_review_selection =
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus5);
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
 
     // Act
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[5].1, "claude/claude-opus-5 [xhigh, Normal]");
+    assert_eq!(rows[5].1, "claude/claude-opus-5-5 [xhigh, Normal]");
 }
 
 #[test]
@@ -63,7 +63,7 @@ async fn load_default_review_agent_setting_uses_inactive_project_baseline() {
                 ),
                 (
                     SettingName::DefaultSmartModel,
-                    AgentModel::Gpt56Sol.as_str().to_string(),
+                    AgentModel::Gpt6Sol.as_str().to_string(),
                 ),
             ],
         )

@@ -19,7 +19,7 @@ fn native_subagent_limits_apply_to_new_resumed_and_utility_sessions() {
     ];
 
     for (kind, model) in [
-        (AgentKind::Codex, "gpt-5.6-sol"),
+        (AgentKind::Codex, "gpt-6-sol"),
         (AgentKind::Claude, "claude-sonnet-5"),
     ] {
         let backend = create_backend(kind);

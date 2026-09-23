@@ -27,7 +27,7 @@ async fn start_runtime_omits_personality_from_the_process_command() {
         folder: runtime_parent.path().join("missing-runtime"),
         live_transcript: None,
         main_checkout_root: None,
-        model: AgentModel::Gpt56Sol.as_str().to_string(),
+        model: AgentModel::Gpt6Sol.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true),
         prompt: TurnPrompt::from("Run the turn"),
@@ -61,7 +61,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
         folder: folder.path().to_path_buf(),
         live_transcript: None,
         main_checkout_root: None,
-        model: AgentModel::Gpt56Sol.as_str().to_string(),
+        model: AgentModel::Gpt6Sol.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Run the turn"),
@@ -92,7 +92,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
 fn codex_runtime_state_new_initializes_zero_tokens_and_empty_thread_id() {
     // Arrange
     let folder = PathBuf::from("/tmp/agentty-codex-state");
-    let model = AgentModel::Gpt56Sol.as_str().to_string();
+    let model = AgentModel::Gpt6Sol.as_str().to_string();
 
     // Act
     let state = CodexRuntimeState::new(folder.clone(), model.clone(), PermissionMode::AutoEdit);

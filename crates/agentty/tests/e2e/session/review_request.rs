@@ -162,7 +162,7 @@ async fn seed_session_with_published_branch_push_notice(
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-5.6-sol", "main", "Review")
+        SessionSeed::regular(session_id, "gpt-6-sol", "main", "Review")
             .with_title("Published push notice"),
     )
     .await?;
@@ -242,7 +242,7 @@ async fn seed_merged_stacked_review_requests(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("stack-parent-0001", "gpt-5.6-sol", "main", "Merged")
+        SessionSeed::regular("stack-parent-0001", "gpt-6-sol", "main", "Merged")
             .with_title("Merged stack parent"),
     )
     .await?;
@@ -250,7 +250,7 @@ async fn seed_merged_stacked_review_requests(
         env,
         SessionSeed::stacked_draft(
             "stack-child-0001",
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             "wt/stack-pa",
             "Merged",
             "stack-parent-0001",

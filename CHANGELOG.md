@@ -7,6 +7,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- agentty: replace Opus 5 and GPT-5.6 Sol/Luna with `claude-opus-5-5`, `gpt-6-sol`, and
+  `gpt-6-luna`, including saved selections and defaults.
+
 ## [v0.16.0] - 2026-09-16
 
 ### Added

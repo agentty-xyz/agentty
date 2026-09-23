@@ -35,7 +35,7 @@ async fn runtime_backend_queues_one_question_resume_behind_turn_entering_questio
     .expect("draft session should be created");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt56Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
     )
     .await
     .expect("session model should update");

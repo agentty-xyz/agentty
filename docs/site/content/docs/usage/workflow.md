@@ -951,10 +951,10 @@ the session, shown after the reasoning level in the session header and beside th
 composer title, and applied to following turns. Gemini and Antigravity sessions have no
 speed control, so their header and composer omit the speed display entirely. Fast
 responses use the provider's higher-cost low-latency mode. Enabling Fast moves Claude
-sessions to `claude-opus-5` and Codex Spark sessions to `gpt-5.6-sol` without changing
+sessions to `claude-opus-5-5` and Codex Spark sessions to `gpt-6-sol` without changing
 the project default model. Returning to Normal does not change the selected model.
 Selecting a model that does not support Fast resets the session to Normal before the
-model changes.
+model changes. Claude Opus 5.5 retains Fast when selected.
 
 `/style` is available for every backend. `Concise` keeps the answer compact while
 retaining essential results, caveats, and verification; `Balanced` provides enough
@@ -1009,7 +1009,7 @@ support speed control. Each role persists its independent model, reasoning, and 
 defaults. Smart supplies defaults for new sessions, Fast supplies title and
 commit-message utility prompts, and Review supplies focused review assists. Selecting
 `Fast` also applies the same compatible-model adjustment used by `/speed`: Claude uses
-`claude-opus-5`, and Codex Spark uses `gpt-5.6-sol`.
+`claude-opus-5-5`, and Codex Spark uses `gpt-6-sol`.
 
 `Default Response Style` supplies the initial style for new sessions. Changing the
 project default does not rewrite existing sessions; use `/style` to update an active
