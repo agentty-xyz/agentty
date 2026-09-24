@@ -7,6 +7,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.2] - 2026-09-23
+
+### Changed
+
+- `agentty`: carry subagent, MCP, and tool execution policies through workers and agent
+  runtimes, including retries and reused sessions.
+- workspace: speed up concurrent Rust builds with optional shared compiler caching and
+  CPU-based Cargo parallelism.
+- workspace: update dependencies and GitHub Actions, and condense documentation around
+  current behavior and canonical architecture references.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.2`.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.16.1] - 2026-09-22
 
 ### Added
