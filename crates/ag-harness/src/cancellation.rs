@@ -8,8 +8,8 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::effect::{EffectSettlementError, Effects};
-use crate::session::{SessionError, TurnOwner, recover_abandoned_owner};
-use crate::{ModelError, TurnError, TurnOutcome};
+use crate::session::{SessionError, TurnOwner};
+use crate::{ModelError, TurnError, TurnOutcome, reservation};
 
 /// A lazy turn future with a separately retainable cancellation control.
 ///
@@ -177,7 +177,7 @@ impl TurnControl {
     pub async fn retry_settlement(&self) -> Result<(), SessionError> {
         let failure = self.settlement.0.borrow().failure.clone();
         if let Some((owner, _)) = failure {
-            recover_abandoned_owner(&owner).await?;
+            reservation::recover_owner(&owner).await?;
         }
 
         Ok(())

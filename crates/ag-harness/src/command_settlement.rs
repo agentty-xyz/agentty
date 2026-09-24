@@ -9,7 +9,7 @@ use tokio::sync::{OwnedMutexGuard, watch};
 use crate::SessionError;
 use crate::command_journal::{CommandOutcome, CommandRecord};
 use crate::execution::{ExecutionControl, ExecutionError};
-use crate::session::WriteJournal;
+use crate::reservation::WriteJournal;
 
 /// Command cleanup or outcome recording has not settled. macOS success means
 /// only its documented best-effort process-group scope, never all descendants.

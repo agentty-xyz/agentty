@@ -131,7 +131,7 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
             ..
         })
     ));
-    assert_eq!(replacement.guard.owner.turn_position, 0);
+    assert_eq!(replacement.guard.owner().turn_position, 0);
     assert_eq!(count, 1);
 }
 
@@ -196,7 +196,7 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
         .expect("replacement");
 
     // Assert
-    assert_eq!(replacement.guard.owner.turn_position, 1);
+    assert_eq!(replacement.guard.owner().turn_position, 1);
 }
 
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
     assert!(
         matches!(result, Err(SessionError::InvalidData { reason }) if reason.contains("reservation task failed"))
     );
-    assert_eq!(replacement.guard.owner.turn_position, 0);
+    assert_eq!(replacement.guard.owner().turn_position, 0);
 }
 
 #[tokio::test]
@@ -295,5 +295,5 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
 
     // Assert
     assert!(matches!(result, Err(SessionError::OwnershipLost { .. })));
-    assert_eq!(replacement.guard.owner.turn_position, 1);
+    assert_eq!(replacement.guard.owner().turn_position, 1);
 }

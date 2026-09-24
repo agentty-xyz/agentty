@@ -11,7 +11,8 @@ use tempfile::tempdir;
 use tokio::io::AsyncRead;
 
 use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
-use crate::session::{Database, NewSession, SessionError, TurnGuard, WriteRecordRow};
+use crate::reservation::TurnGuard;
+use crate::session::{Database, NewSession, SessionError, WriteRecordRow};
 use crate::store::SessionStore as _;
 use crate::tool::WriteArguments;
 use crate::write::WriteTool;
@@ -505,35 +506,4 @@ async fn intent_is_committed_before_replacement_and_outcome_before_return() {
             .expect("file"),
         b"new\n"
     );
-}
-
-#[tokio::test]
-async fn journal_handle_retains_temporary_database_and_turn_ownership() {
-    // Arrange
-    let (database, mut guard) = fixture().await;
-    let journal = guard.write_journal();
-    let renewal_task = guard.renewal_task.take().expect("renewal task");
-    guard.disarm();
-    renewal_task.await.expect("renewal stopped");
-    drop(guard);
-    drop(database);
-
-    // Act
-    let id = journal
-        .intent("retained", Path::new("repo"), "file.txt", None, b"new")
-        .await
-        .expect("journal retains its temporary database and owner");
-    journal.finish(id, true).await.expect("persist outcome");
-    let records = journal
-        .database
-        .load_writes("session")
-        .await
-        .expect("records");
-
-    // Assert
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].id, id);
-    assert_eq!(records[0].call_id, "retained");
-    assert_eq!(records[0].status, WriteStatus::Applied);
-    assert_eq!(records[0].turn_position, 0);
 }

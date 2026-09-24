@@ -1,13 +1,11 @@
-//! Durable session ownership and SQLite transactional persistence.
+//! Session protocol types and SQLite transactional persistence.
 
-use std::collections::HashMap;
 use std::ffi::OsString;
-use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -16,13 +14,12 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
+use crate::reservation::{TURN_LEASE_SECONDS, TurnGuard, lease_deadline};
 use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
@@ -31,9 +28,6 @@ use crate::{
     ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
     OutputSchema, OutputSchemaError, TurnError, TurnOptions, TurnOutcome,
 };
-
-pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
-pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
 
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -326,7 +320,6 @@ impl ReservationObserver for () {
 /// SQLite database used by persistent harness sessions.
 #[derive(Clone)]
 pub struct Database {
-    abandoned_turns: Arc<AbandonedTurnRegistry>,
     identity: StoreIdentity,
     pool: SqlitePool,
     reservation_observer: Arc<dyn ReservationObserver>,
@@ -380,7 +373,6 @@ impl Database {
         let identity = StoreIdentity::for_path(path).await?;
 
         Ok(Self {
-            abandoned_turns: shared_abandoned_turn_registry(),
             identity,
             pool,
             reservation_observer: Arc::new(()),
@@ -593,12 +585,6 @@ WHERE id = ?
             .await
             .session_context(operation)?;
         recover_stale_turns(&mut transaction, session_id, recovery_now).await?;
-        let abandoned_turns = self.abandoned_turns.for_session(&self.identity, session_id);
-        for owner in &abandoned_turns {
-            interrupt_owned_turn(&mut transaction, owner, recovery_now)
-                .await
-                .session_context("recover abandoned persistent session turn")?;
-        }
         if let Some(request) = request
             && let Some(record) =
                 load_request_from(&mut transaction, &self.identity, session_id, request.id())
@@ -670,7 +656,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             options,
         )
         .await?;
-        self.commit_reservation(transaction, guard, &abandoned_turns, deadline)
+        self.commit_reservation(transaction, guard)
             .await
             .map(Reservation::Acquired)
     }
@@ -692,8 +678,6 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         &self,
         transaction: Transaction<'static, sqlx::Sqlite>,
         guard: TurnGuard,
-        abandoned_turns: &[TurnOwner],
-        deadline: Instant,
     ) -> Result<TurnGuard, SessionError> {
         let operation = "reserve persistent session turn";
         let observer = Arc::clone(&self.reservation_observer);
@@ -708,11 +692,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             reason: format!("reservation task failed: {error}"),
         })??;
         self.reservation_observer.committed().await;
-        if Instant::now() >= deadline {
-            return Err(guard.owner.lost());
-        }
-        self.abandoned_turns.remove(abandoned_turns);
-        guard.activate();
+        guard.activate()?;
 
         Ok(guard)
     }
@@ -1604,7 +1584,7 @@ pub struct AcquiredTurn {
 impl AcquiredTurn {
     /// Returns the reservation identity used for backend lifecycle operations.
     pub fn owner(&self) -> &TurnOwner {
-        &self.guard.owner
+        self.guard.owner()
     }
 
     /// Arms owner-scoped cleanup before submitting the reservation commit.
@@ -1648,18 +1628,7 @@ impl AcquiredTurn {
     /// # Errors
     /// An expired acknowledgment is interrupted rather than made executable.
     pub fn activate(mut self) -> Result<Self, SessionError> {
-        if Instant::now()
-            >= *self
-                .guard
-                .deadline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
-            return Err(self.guard.owner.lost());
-        }
-        if self.guard.renewal_task.is_none() {
-            self.guard.activate();
-        }
+        self.guard.activate()?;
 
         Ok(self)
     }
@@ -1800,7 +1769,7 @@ impl TurnOwner {
         self.interruption_error_type
     }
 
-    fn lost(&self) -> SessionError {
+    pub(crate) fn lost(&self) -> SessionError {
         SessionError::OwnershipLost {
             id: self.session_id.clone(),
             turn_position: self.turn_position,
@@ -1828,336 +1797,6 @@ impl Eq for TurnOwner {}
 impl Hash for TurnOwner {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.identity().hash(state);
-    }
-}
-
-fn lease_deadline() -> Instant {
-    // Stored timestamps round down to seconds; never promise the fractional
-    // second.
-    Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs() - 1)
-}
-
-#[derive(Default)]
-struct AbandonedTurnRegistry {
-    owners: Mutex<HashMap<TurnOwner, Option<Arc<dyn SessionStore>>>>,
-}
-
-impl AbandonedTurnRegistry {
-    fn for_session(&self, database: &StoreIdentity, session_id: &str) -> Vec<TurnOwner> {
-        self.owners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .keys()
-            .filter(|owner| &owner.database == database && owner.session_id == session_id)
-            .cloned()
-            .collect()
-    }
-
-    fn retain(&self, owner: TurnOwner, store: Arc<dyn SessionStore>) {
-        self.owners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(owner, Some(store));
-    }
-
-    fn remove(&self, owners: &[TurnOwner]) {
-        let mut registered = self
-            .owners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for owner in owners {
-            registered.remove(owner);
-        }
-    }
-}
-
-fn shared_abandoned_turn_registry() -> Arc<AbandonedTurnRegistry> {
-    static REGISTRY: OnceLock<Arc<AbandonedTurnRegistry>> = OnceLock::new();
-
-    Arc::clone(REGISTRY.get_or_init(Arc::default))
-}
-
-pub(crate) async fn recover_abandoned(
-    store: &Arc<dyn SessionStore>,
-    session_id: &str,
-) -> Result<(), SessionError> {
-    let registry = shared_abandoned_turn_registry();
-    for owner in registry.for_session(store.identity(), session_id) {
-        let retained = registry
-            .owners
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&owner)
-            .and_then(Clone::clone)
-            .unwrap_or_else(|| Arc::clone(store));
-        retained.interrupt(&owner).await?;
-        registry.remove(std::slice::from_ref(&owner));
-    }
-
-    Ok(())
-}
-
-pub(crate) async fn recover_abandoned_owner(owner: &TurnOwner) -> Result<(), SessionError> {
-    let registry = shared_abandoned_turn_registry();
-    let store = registry
-        .owners
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(owner)
-        .and_then(Clone::clone);
-    if let Some(store) = store {
-        store.interrupt(owner).await?;
-        registry.remove(std::slice::from_ref(owner));
-    }
-
-    Ok(())
-}
-
-/// Owned journal access scoped to the turn that acquired it.
-#[derive(Clone)]
-pub(crate) struct WriteJournal {
-    database: Arc<dyn SessionStore>,
-    owner: TurnOwner,
-}
-
-impl WriteJournal {
-    pub(crate) fn owner(&self) -> &TurnOwner {
-        &self.owner
-    }
-
-    pub(crate) async fn reconcile_command(&self, id: i64) -> Result<(), SessionError> {
-        self.database.reconcile_command(&self.owner, id).await
-    }
-
-    pub(crate) async fn command_intent(
-        &self,
-        intent: &crate::CommandIntent,
-    ) -> Result<i64, SessionError> {
-        self.database.command_intent(&self.owner, intent).await
-    }
-
-    pub(crate) async fn finish_command(
-        &self,
-        id: i64,
-        outcome: &crate::CommandOutcome,
-    ) -> Result<(), SessionError> {
-        self.database.finish_command(&self.owner, id, outcome).await
-    }
-
-    pub(crate) async fn intent(
-        &self,
-        call_id: &str,
-        root: &Path,
-        path: &str,
-        expected: Option<&[u8]>,
-        resulting: &[u8],
-    ) -> Result<i64, SessionError> {
-        self.database
-            .write_intent(&self.owner, call_id, root, path, expected, resulting)
-            .await
-    }
-
-    pub(crate) async fn finish(&self, id: i64, applied: bool) -> Result<(), SessionError> {
-        self.database.finish_write(&self.owner, id, applied).await
-    }
-}
-
-pub(crate) struct TurnGuard {
-    armed: bool,
-    database: Arc<dyn SessionStore>,
-    deadline: Arc<Mutex<Instant>>,
-    finalization: Arc<tokio::sync::Mutex<()>>,
-    owner: TurnOwner,
-    ownership_failure: Option<oneshot::Receiver<SessionError>>,
-    renewal_stop: Option<oneshot::Sender<()>>,
-    renewal_task: Option<JoinHandle<()>>,
-    runtime: tokio::runtime::Handle,
-}
-
-impl TurnGuard {
-    pub(crate) fn write_journal(&self) -> WriteJournal {
-        WriteJournal {
-            database: Arc::clone(&self.database),
-            owner: self.owner.clone(),
-        }
-    }
-
-    /// Retain cleanup responsibility before committing a reservation. Activate
-    /// only after the commit is acknowledged within the confirmed deadline.
-    pub(crate) fn new(
-        database: Arc<dyn SessionStore>,
-        owner: TurnOwner,
-        deadline: Instant,
-    ) -> Self {
-        Self {
-            armed: true,
-            database,
-            deadline: Arc::new(Mutex::new(deadline)),
-            finalization: Arc::new(tokio::sync::Mutex::new(())),
-            owner,
-            ownership_failure: None,
-            renewal_stop: None,
-            renewal_task: None,
-            runtime: tokio::runtime::Handle::current(),
-        }
-    }
-
-    pub(crate) fn activate(&mut self) {
-        self.owner.interruption_error_type = "cancelled";
-        let owner = self.owner.clone();
-        let interval = Duration::from_secs(TURN_LEASE_RENEWAL_INTERVAL_SECONDS);
-        let mut confirmed_at = Instant::now();
-        let database = Arc::clone(&self.database);
-        let deadline = Arc::clone(&self.deadline);
-        let finalization = Arc::clone(&self.finalization);
-        let (renewal_stop, mut stop_requested) = oneshot::channel();
-        let (ownership_failed, ownership_failure) = oneshot::channel();
-        self.renewal_stop = Some(renewal_stop);
-        self.ownership_failure = Some(ownership_failure);
-        self.renewal_task = Some(self.runtime.spawn(async move {
-            let monitor = async {
-                loop {
-                    let confirmed = *deadline
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let renew_at = confirmed_at
-                        + interval.min(confirmed.saturating_duration_since(confirmed_at) / 2);
-                    let renewal = async {
-                        tokio::time::sleep_until(renew_at).await;
-                        let _exclusive = finalization.lock().await;
-                        let renewed = database.renew(&owner).await?;
-                        *deadline
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) = renewed;
-                        confirmed_at = Instant::now();
-
-                        Ok::<_, SessionError>(())
-                    };
-                    tokio::select! {
-                        biased;
-                        () = tokio::time::sleep_until(confirmed) => return owner.lost(),
-                        result = renewal => if let Err(error) = result { return error; },
-                    }
-                }
-            };
-            tokio::select! {
-                error = monitor => { let _ = ownership_failed.send(error); }
-                _ = &mut stop_requested => {}
-            }
-        }));
-    }
-
-    pub(crate) async fn ownership_failure(&mut self) -> SessionError {
-        if Instant::now()
-            >= *self
-                .deadline
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
-            return self.owner.lost();
-        }
-        let Some(failure) = self.ownership_failure.as_mut() else {
-            return self.owner.lost();
-        };
-        let result = failure.await.unwrap_or_else(|_| self.owner.lost());
-        self.ownership_failure = None;
-
-        result
-    }
-
-    /// Renewal and finalization cannot race their acknowledgements. Waiting
-    /// for a stalled renewal remains bounded by its last confirmed deadline.
-    pub(crate) async fn complete(
-        &mut self,
-        messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
-    ) -> Result<(), SessionError> {
-        let database = Arc::clone(&self.database);
-        let owner = self.owner.clone();
-        self.finalize(database.complete_turn(&owner, messages, provider_session_id))
-            .await
-    }
-
-    pub(crate) async fn complete_request(
-        &mut self,
-        messages: &[ModelMessage],
-        continuation: Option<&str>,
-        outcome: &TurnOutcome,
-    ) -> Result<(), SessionError> {
-        let database = Arc::clone(&self.database);
-        let owner = self.owner.clone();
-        self.finalize(database.complete_request(&owner, messages, continuation, outcome))
-            .await
-    }
-
-    pub(crate) async fn fail(&mut self, error: &TurnError) -> Result<(), SessionError> {
-        let database = Arc::clone(&self.database);
-        let owner = self.owner.clone();
-        self.finalize(database.fail_turn(&owner, error)).await
-    }
-
-    async fn finalize(
-        &mut self,
-        persistence: impl Future<Output = Result<(), SessionError>>,
-    ) -> Result<(), SessionError> {
-        let finalization = Arc::clone(&self.finalization);
-        let _exclusive = tokio::select! {
-            biased;
-            error = self.ownership_failure() => return Err(error),
-            exclusive = finalization.lock() => exclusive,
-        };
-        self.stop_renewal();
-        let deadline = *self
-            .deadline
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if Instant::now() >= deadline {
-            return Err(self.owner.lost());
-        }
-        let result = tokio::time::timeout_at(deadline, persistence)
-            .await
-            .unwrap_or_else(|_| Err(self.owner.lost()));
-        if result.is_ok() {
-            self.disarm();
-        }
-
-        result
-    }
-
-    pub(crate) fn disarm(&mut self) {
-        self.stop_renewal();
-        self.armed = false;
-    }
-
-    pub(crate) fn mark_interrupted(&mut self) {
-        self.owner.interruption_error_type = "interrupted";
-    }
-
-    fn stop_renewal(&mut self) {
-        if let Some(stop) = self.renewal_stop.take() {
-            let _ = stop.send(());
-        }
-        if let Some(task) = self.renewal_task.take() {
-            task.abort();
-        }
-    }
-}
-
-impl Drop for TurnGuard {
-    fn drop(&mut self) {
-        self.stop_renewal();
-        if !self.armed {
-            return;
-        }
-        let owner = self.owner.clone();
-        let registry = shared_abandoned_turn_registry();
-        registry.retain(owner.clone(), Arc::clone(&self.database));
-        let database = Arc::clone(&self.database);
-        std::mem::drop(self.runtime.spawn(async move {
-            if database.interrupt(&owner).await.is_ok() {
-                registry.remove(std::slice::from_ref(&owner));
-            }
-        }));
     }
 }
 

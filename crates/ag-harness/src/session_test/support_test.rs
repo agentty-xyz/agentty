@@ -7,15 +7,17 @@ use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{SqlSafeStr as _, SqlitePool};
 
+use crate::effect::Effects;
 use crate::input::TurnInput;
 use crate::model::{MockModel, ModelMessage, ModelMetadata};
+use crate::reservation;
 use crate::schema_contract::OutputSchema;
 use crate::session::{
-    AbandonedTurnRegistry, Database, DbResultExt as _, EncodedMessage, NewSession,
-    ReservationObserver, SessionError, StoreIdentity, TimestampSource, TurnOwner, connect_options,
-    next_turn_position, shared_abandoned_turn_registry, system_timestamp_source,
+    Database, DbResultExt as _, EncodedMessage, NewSession, ReservationObserver, SessionError,
+    StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
+    system_timestamp_source,
 };
-use crate::store::SessionStore as _;
+use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 
 pub(super) struct SessionTimestampsRow {
@@ -102,7 +104,7 @@ pub(super) async fn complete_native_turn(database: &Database, provider_session_i
     database
         .complete_turn(
             "session-a",
-            acquired.guard.owner.turn_position,
+            acquired.guard.owner().turn_position,
             &turn("first", "first")[1..],
             Some(provider_session_id),
         )
@@ -300,7 +302,6 @@ impl Database {
         sqlx::migrate!("./migrations").run(&pool).await?;
 
         Ok(Self {
-            abandoned_turns: shared_abandoned_turn_registry(),
             identity: StoreIdentity::temporary(),
             pool,
             reservation_observer: Arc::new(()),
@@ -433,8 +434,37 @@ pub(super) fn turn_options() -> crate::TurnOptions {
     )
 }
 
-impl AbandonedTurnRegistry {
-    pub(crate) fn register(&self, owner: crate::session::TurnOwner) {
-        self.owners.lock().expect("registry").insert(owner, None);
-    }
+/// Makes every owned-turn interruption fail until [`allow_interrupts`].
+pub(super) async fn reject_interrupts(database: &Database) {
+    sqlx::raw_sql(
+        "CREATE TRIGGER reject_interrupt BEFORE UPDATE OF status ON session_turn WHEN NEW.status \
+         = 'interrupted' BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END;",
+    )
+    .execute(&database.pool)
+    .await
+    .expect("cleanup fault");
+}
+
+pub(super) async fn allow_interrupts(database: &Database) {
+    sqlx::query("DROP TRIGGER reject_interrupt")
+        .execute(&database.pool)
+        .await
+        .expect("remove fault");
+}
+
+/// Acquires a turn through the reservation lifecycle used by sessions.
+pub(super) async fn acquire(
+    store: Arc<dyn SessionStore>,
+    session_id: &str,
+    prompt: &str,
+) -> Result<crate::AcquiredTurn, SessionError> {
+    reservation::acquire(
+        store,
+        (session_id.to_string(), 0),
+        TurnInput::from(prompt),
+        turn_options(),
+        None,
+        Effects::default(),
+    )
+    .await
 }

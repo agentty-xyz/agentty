@@ -25,9 +25,7 @@ use crate::store::SessionStore;
 use crate::tool::Tool;
 use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
-use crate::{
-    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, store_coordinator,
-};
+use crate::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, reservation};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 
@@ -70,7 +68,7 @@ impl Session {
             .model()
             .validate_schema(&self.schema)
             .map_err(TurnError::from)?;
-        let generation = store_coordinator::switch_model(
+        let generation = reservation::switch_model(
             Arc::clone(&self.database),
             self.id.clone(),
             self.model_generation,
@@ -702,7 +700,7 @@ impl Session {
         effects: &Effects,
     ) -> Result<HostTurnAcquisition, SessionError> {
         if let Some(request) = request {
-            store_coordinator::acquire_request(
+            reservation::acquire_request(
                 Arc::clone(&self.database),
                 (self.id.clone(), self.model_generation),
                 input.clone(),
@@ -713,7 +711,7 @@ impl Session {
             )
             .await
         } else {
-            store_coordinator::acquire(
+            reservation::acquire(
                 Arc::clone(&self.database),
                 (self.id.clone(), self.model_generation),
                 input.clone(),

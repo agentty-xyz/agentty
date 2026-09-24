@@ -14,7 +14,7 @@ use crate::store_conformance_test::{options, schema};
 use crate::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination, MemoryStore,
     NewSession, OutputSchema, SessionStore, SqliteStore, ToolPolicy, TurnInput, TurnLimits,
-    TurnOptions, store_coordinator,
+    TurnOptions, reservation,
 };
 
 struct Control {
@@ -216,7 +216,7 @@ async fn journal_retry_preserves_failure_and_requires_stopped_owner_for_reconcil
         .expect("session");
     let effects = Effects::default();
     let commands = effects.commands().clone();
-    let mut acquired = store_coordinator::acquire(
+    let mut acquired = reservation::acquire(
         Arc::clone(&store),
         ("retry".into(), 0),
         "run".into(),

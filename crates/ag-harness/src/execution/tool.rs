@@ -18,7 +18,7 @@ use crate::command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination,
 };
 use crate::command_settlement::Commands;
-use crate::session::WriteJournal;
+use crate::reservation::WriteJournal;
 
 pub(crate) struct BashTool {
     cleanup_scope: CommandCleanupScope,

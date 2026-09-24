@@ -21,6 +21,9 @@ extern crate self as ag_harness;
 mod store_conformance_test;
 
 #[cfg(test)]
+mod gated_store_test;
+
+#[cfg(test)]
 #[path = "../tests/support/repository.rs"]
 mod repository_fixture;
 
@@ -60,11 +63,11 @@ mod provider;
 mod read;
 mod recovery;
 mod repository;
+mod reservation;
 mod schema_contract;
 mod session;
 mod session_model;
 mod store;
-mod store_coordinator;
 mod telemetry;
 mod tool;
 mod trace;

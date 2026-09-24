@@ -18,10 +18,8 @@ use crate::file_system::FileSystem as _;
 use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, Session, SessionHistory};
 use crate::model::ModelResponse;
 use crate::repository::Repository;
-use crate::session::{
-    Database, NewSession, SessionError, TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS,
-    TimestampSource,
-};
+use crate::reservation::{TURN_LEASE_RENEWAL_INTERVAL_SECONDS, TURN_LEASE_SECONDS};
+use crate::session::{Database, NewSession, SessionError, TimestampSource};
 use crate::store::SessionStore as _;
 use crate::tool::Tool;
 
