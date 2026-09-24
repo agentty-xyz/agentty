@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use ag_tui_text::text_util::{format_duration_compact, inline_text, truncate_spans_with_ellipsis};
 use ratatui::Frame;
@@ -262,10 +263,18 @@ impl Page for SessionListPage<'_> {
         );
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
         let selected_row = selected_render_row(&table_rows, selected_session_id);
+        let row_window = visible_row_window(selected_row, usize::from(areas.main_area.height));
         let is_empty = table_rows.is_empty();
         let rows = table_rows
             .into_iter()
-            .map(|table_row| render_table_row(table_row, title_column_width))
+            .enumerate()
+            .map(|(index, table_row)| {
+                if row_window.contains(&index) {
+                    render_table_row(table_row, title_column_width)
+                } else {
+                    render_offscreen_row(&table_row)
+                }
+            })
             .chain(is_empty.then(render_empty_sessions_hint_row));
         let table = Table::new(rows, column_constraints)
             .column_spacing(TABLE_COLUMN_SPACING)
@@ -361,6 +370,18 @@ fn selected_render_row(
     })
 }
 
+/// Includes every row Ratatui could show after scrolling the selection into
+/// view. Each table row occupies at least one terminal line, so a viewport
+/// cannot contain more rows than its height on either side of the selected row.
+fn visible_row_window(selected_row: Option<usize>, viewport_height: usize) -> Range<usize> {
+    let selected_row = selected_row.unwrap_or(0);
+
+    selected_row.saturating_sub(viewport_height)
+        ..selected_row
+            .saturating_add(viewport_height)
+            .saturating_add(1)
+}
+
 /// Prepares every grouped row once so layout sizing and painting share values.
 fn prepared_session_rows<'a>(
     sessions: &'a [Session],
@@ -416,6 +437,22 @@ fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> R
             has_merge_conflict,
         ),
     }
+}
+
+/// Keeps offscreen row heights for Ratatui's scroll calculations without
+/// formatting their cells or parsing their titles.
+fn render_offscreen_row(row: &PreparedSessionRow<'_>) -> Row<'static> {
+    let adds_group_spacing = matches!(
+        row,
+        PreparedSessionRow::Session {
+            adds_group_spacing: true,
+            ..
+        }
+    );
+
+    Row::new(Vec::<Cell>::new())
+        .height(1)
+        .bottom_margin(u16::from(adds_group_spacing))
 }
 
 /// Renders a non-selectable group label row.
