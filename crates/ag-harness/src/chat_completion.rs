@@ -14,10 +14,17 @@ use crate::{input, model, schema_contract, tool};
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
 const MAX_RATE_LIMIT_RETRIES: usize = 5;
+/// Ceiling for the exponential backoff between rate-limit retries.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
+/// Ceiling for a provider-declared `Retry-After`, so a per-minute quota can
+/// be waited out without honoring an unbounded instruction.
+const MAX_PROVIDER_RETRY_DELAY: Duration = Duration::from_secs(60);
 const MAX_TRANSPORT_RETRIES: usize = 1;
 pub(crate) const RESPONSE_ENVELOPE_LIMIT_BYTES: usize = 64 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_mins(1);
+/// Bound for one provider request. Reasoning models can spend more than a
+/// minute on a single completion, so a timed-out request is reported without
+/// a retry instead of doubling the wait.
+const REQUEST_TIMEOUT: Duration = Duration::from_mins(3);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 pub(crate) const SUCCESS_BODY_LIMIT_BYTES: usize = schema_contract::RESPONSE_CONTENT_LIMIT_BYTES
     * JSON_STRING_MAX_EXPANSION
@@ -645,11 +652,13 @@ pub(crate) fn endpoint(base_url: &str) -> String {
 pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
     Arc::new(ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        request_timeout: REQUEST_TIMEOUT,
     })
 }
 
 struct ReqwestChatCompletionClient {
     client: reqwest::Client,
+    request_timeout: Duration,
 }
 
 #[async_trait]
@@ -665,13 +674,13 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
                 .client
                 .post(request.endpoint())
                 .bearer_auth(request.api_key())
-                .timeout(REQUEST_TIMEOUT)
+                .timeout(self.request_timeout)
                 .json(request.payload())
                 .send()
                 .await;
             let mut response = match response {
                 Ok(response) => response,
-                Err(_) if transport_retries < MAX_TRANSPORT_RETRIES => {
+                Err(error) if !error.is_timeout() && transport_retries < MAX_TRANSPORT_RETRIES => {
                     transport_retries += 1;
                     tokio::time::sleep(RETRY_DELAY).await;
 
@@ -725,9 +734,11 @@ fn rate_limit_retry_delay(headers: &reqwest::header::HeaderMap, retry: usize) ->
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .map_or_default(Duration::from_secs);
-    let backoff = RETRY_DELAY.saturating_mul(1_u32 << retry.min(31));
+    let backoff = RETRY_DELAY
+        .saturating_mul(1_u32 << retry.min(31))
+        .min(MAX_RETRY_DELAY);
 
-    provider_delay.max(backoff).min(MAX_RETRY_DELAY)
+    provider_delay.min(MAX_PROVIDER_RETRY_DELAY).max(backoff)
 }
 
 async fn error_body_summary(response: &mut reqwest::Response) -> String {

@@ -224,7 +224,8 @@ fn parallel_read(provider: Provider) -> CaseFuture {
         {
             return Err(format!(
                 "expected one exact read batch and amber-17, observed paths={read_paths:?} \
-                 responses={response_types:?}"
+                 responses={response_types:?} code={}",
+                outcome.output()["code"]
             )
             .into());
         }

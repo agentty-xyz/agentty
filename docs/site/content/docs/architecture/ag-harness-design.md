@@ -83,6 +83,9 @@ flowchart TD
 - A registration may declare an approximate `ContextBudget`: requests keep the most
   recent whole turns that fit, and mandatory content that cannot fit fails with a typed
   error before any provider call.
+- Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
+  turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
+  observe context projection instead of inferring it from model answers.
 
 ## Cancellation and settlement
 
@@ -111,6 +114,19 @@ All tools are denied by default; per-turn policy enables them explicitly.
 
 Repository tools receive a validated `Repository` with a trusted Git executable outside
 the containing worktree; the library never searches `PATH`.
+
+## Provider transport
+
+Built-in Chat Completions clients bound one provider request to three minutes, because
+reasoning models can spend more than a minute on one completion; a timed-out request is
+reported as a transport failure without a retry, while a connection failure is retried
+once. A `429` response is retried up to five times with exponential backoff capped at
+five seconds, and a provider `Retry-After` is honored up to sixty seconds so a
+per-minute quota can be waited out. Model content is parsed as one JSON object; content
+that wraps the object in Markdown fences or surrounding prose is accepted when the
+embedded object parses, and every accepted value is still validated against the
+requested schema. Invalid content is reported with the parser diagnostic, the leading
+character, and the length, never the content itself.
 
 ## Input and output
 

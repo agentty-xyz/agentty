@@ -268,9 +268,56 @@ fn rejects_malformed_structured_output() {
     let error = schema
         .parse_and_validate("not JSON")
         .expect_err("malformed output should fail");
+    let empty = schema
+        .parse_and_validate("  ")
+        .expect_err("empty output should fail");
+    let unbalanced = schema
+        .parse_and_validate("prose } then {")
+        .expect_err("unbalanced output should fail");
 
     // Assert
-    assert!(matches!(error, OutputValidationError::InvalidJson(_)));
+    assert!(matches!(
+        &error,
+        OutputValidationError::InvalidJson(reason)
+            if reason.contains("content starts with 'n'") && reason.contains("8 bytes")
+    ));
+    assert!(matches!(
+        empty,
+        OutputValidationError::InvalidJson(reason) if reason.contains("content is empty")
+    ));
+    assert!(matches!(unbalanced, OutputValidationError::InvalidJson(_)));
+}
+
+#[test]
+fn parses_fenced_or_prose_wrapped_structured_output() {
+    // Arrange
+    let schema = OutputSchema::new(object_schema()).expect("schema should be valid");
+
+    // Act
+    let fenced = schema
+        .parse_and_validate("```json\n{\"name\":\"Ada\"}\n```")
+        .expect("fenced output should parse");
+    let prose = schema
+        .parse_and_validate("Here is the object: {\"name\":\"Ada\"} Let me know.")
+        .expect("prose-wrapped output should parse");
+    let invalid_embedded = schema
+        .parse_and_validate("```json\n{\"name\": Ada}\n```")
+        .expect_err("malformed embedded output should fail");
+    let violating = schema
+        .parse_and_validate("```json\n{\"name\":1}\n```")
+        .expect_err("embedded output still validates against the schema");
+
+    // Assert
+    assert_eq!(fenced, json!({ "name": "Ada" }));
+    assert_eq!(prose, json!({ "name": "Ada" }));
+    assert!(matches!(
+        invalid_embedded,
+        OutputValidationError::InvalidJson(_)
+    ));
+    assert!(matches!(
+        violating,
+        OutputValidationError::SchemaViolation { .. }
+    ));
 }
 
 #[test]

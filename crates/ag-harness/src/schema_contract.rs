@@ -76,11 +76,20 @@ impl OutputSchema {
                 .is_some_and(|types| types.iter().any(|schema_type| schema_type == "object"))
     }
 
+    /// Parses model content as one JSON object and validates it. Content
+    /// that wraps the object in Markdown fences or surrounding prose is
+    /// accepted when the embedded object parses; the schema still applies.
     pub(crate) fn parse_and_validate(&self, output: &str) -> Result<Value, OutputValidationError> {
         ensure_content_size(output)?;
 
-        let value = serde_json::from_str(output)
-            .map_err(|error| OutputValidationError::InvalidJson(bounded_diagnostic(error)))?;
+        let value = match serde_json::from_str(output) {
+            Ok(value) => value,
+            Err(error) => embedded_object(output)
+                .and_then(|embedded| serde_json::from_str(embedded).ok())
+                .ok_or_else(|| {
+                    OutputValidationError::InvalidJson(invalid_json_diagnostic(output, &error))
+                })?,
+        };
         self.validate(&value)?;
 
         Ok(value)
@@ -167,6 +176,26 @@ pub(crate) enum OutputValidationError {
     InvalidJson(String),
     SchemaViolation { path: String, reason: String },
     TooLarge,
+}
+
+/// Locates the outermost `{...}` span so fenced or prose-wrapped objects can
+/// still be parsed; the caller decides whether that span is valid JSON.
+fn embedded_object(output: &str) -> Option<&str> {
+    let start = output.find('{')?;
+    let end = output.rfind('}')?;
+
+    (end > start).then(|| &output[start..=end])
+}
+
+/// Describes malformed content without reproducing it: the parser
+/// diagnostic, the leading character class, and the content length.
+fn invalid_json_diagnostic(output: &str, error: &serde_json::Error) -> String {
+    let leading = output.trim_start().chars().next().map_or_else(
+        || "content is empty".to_string(),
+        |first| format!("content starts with {first:?}"),
+    );
+
+    bounded_diagnostic(format!("{error}; {leading}; {} bytes", output.len()))
 }
 
 pub(crate) fn ensure_content_size(output: &str) -> Result<(), OutputValidationError> {

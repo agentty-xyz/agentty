@@ -836,6 +836,12 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     assert_eq!(once.output(), durable.output());
     assert_eq!(recalled.output(), &json!({"name":"Ada"}));
     assert_eq!(recalled.report().tool_calls().len(), 0);
+    assert_eq!(recalled.report().history().replayed_turns(), 1);
+    assert_eq!(recalled.report().history().evicted_turns(), 0);
+    assert_eq!(
+        once.report().history(),
+        ag_harness::HistoryActivity::default()
+    );
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
     assert_eq!(options.limits().max_tool_calls().get(), 8);

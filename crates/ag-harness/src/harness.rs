@@ -23,7 +23,7 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
 use crate::store::SessionStore;
 use crate::tool::Tool;
-use crate::turn::{TurnError, TurnLimits, TurnOptions, TurnOutcome};
+use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
 use crate::{
     ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, store_coordinator,
@@ -554,7 +554,7 @@ impl Session {
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(turns);
         self.provider_session_id = provider_session_id;
-        let (request, retained_messages) =
+        let (request, retained_messages, history) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
@@ -569,7 +569,7 @@ impl Session {
             }
             result = engine.run(request, turn_id, Some(journal)) => result,
         };
-        let (outcome, mut messages, provider_session_id) = match result {
+        let (mut outcome, mut messages, provider_session_id) = match result {
             Ok(result) => result,
             Err(error) => {
                 self.provider_session_id = None;
@@ -586,6 +586,7 @@ impl Session {
                 return Err(error.into());
             }
         };
+        outcome.set_history(history);
         let turn = messages.split_off(retained_messages);
         let persistence = if host_request {
             guard
@@ -609,19 +610,21 @@ impl Session {
 
     /// Projects the checkpoint summary and loaded uncovered history into one
     /// request under the effective context budget, keeping the count of
-    /// retained messages that precede new output.
+    /// retained messages that precede new output and the observable
+    /// projection facts.
     fn build_request(
         &self,
         input: TurnInput,
         options: &TurnOptions,
         available_history_weight: Option<u64>,
-    ) -> (ModelRequest, usize) {
+    ) -> (ModelRequest, usize, HistoryActivity) {
         let estimator = self.harness.context_estimator.as_ref();
         let checkpoint_message = self
             .checkpoint
             .as_ref()
             .map(SessionCheckpoint::history_message);
-        let (checkpoint_message, mut messages) = match available_history_weight {
+        let loaded_turns = self.history.turns().len();
+        let (checkpoint_message, mut messages, evicted_turns) = match available_history_weight {
             Some(available_weight) => {
                 // The summary is admitted ahead of recent turns; when even it
                 // cannot fit, projection falls back to recent history alone.
@@ -637,13 +640,18 @@ impl Session {
                     None => (None, available_weight),
                 };
 
-                (
-                    checkpoint_message,
-                    context::select_recent_turns(estimator, self.history.turns(), remaining_weight),
-                )
+                let (messages, evicted_turns) =
+                    context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
+
+                (checkpoint_message, messages, evicted_turns)
             }
-            None => (checkpoint_message, self.history.messages()),
+            None => (checkpoint_message, self.history.messages(), 0),
         };
+        let history = HistoryActivity::new(
+            checkpoint_message.is_some(),
+            evicted_turns,
+            loaded_turns.saturating_sub(evicted_turns),
+        );
         if let Some(checkpoint_message) = checkpoint_message {
             messages.insert(0, checkpoint_message);
         }
@@ -665,7 +673,7 @@ impl Session {
             },
         );
 
-        (request, retained_messages)
+        (request, retained_messages, history)
     }
 
     /// Rejects image input that the replay budget would evict immediately,

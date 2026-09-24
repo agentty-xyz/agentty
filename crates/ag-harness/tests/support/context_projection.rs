@@ -129,11 +129,11 @@ async fn projection_bounds_requests_and_replays_without_continuation() {
             .submit("first", "one", options())
             .await
             .expect("first turn");
-        fresh
+        let second = fresh
             .submit("second", "two", options())
             .await
             .expect("turn on a handle that never saw the first turn");
-        session
+        let third = session
             .submit("third", "three", options())
             .await
             .expect("third turn");
@@ -157,6 +157,14 @@ async fn projection_bounds_requests_and_replays_without_continuation() {
         assert_eq!(user_texts(&requests[0]), ["one"]);
         assert_eq!(user_texts(&requests[1]), ["one", "two"]);
         assert_eq!(user_texts(&requests[2]), ["two", "three"]);
+        // Each report states what projection replayed and evicted.
+        assert_eq!(first.report().history().replayed_turns(), 0);
+        assert_eq!(first.report().history().evicted_turns(), 0);
+        assert_eq!(second.report().history().replayed_turns(), 1);
+        assert_eq!(second.report().history().evicted_turns(), 0);
+        assert_eq!(third.report().history().replayed_turns(), 1);
+        assert_eq!(third.report().history().evicted_turns(), 1);
+        assert!(!third.report().history().checkpoint_replayed());
         // Loading is silently bounded by the byte replay budget, so a budgeted
         // registration never trusts a provider-side continuation.
         assert!(
@@ -377,7 +385,7 @@ async fn image_history_projects_at_its_encoded_weight() {
             .send(image_input("look", &[0_u8; 100], "now"))
             .await
             .expect("image turn");
-        session.send("next").await.expect("text turn");
+        let next = session.send("next").await.expect("text turn");
         session.send("again").await.expect("later turn");
         let oversized = session.send(image_input("look", &[1_u8; 200], "now")).await;
 
@@ -400,6 +408,8 @@ async fn image_history_projects_at_its_encoded_weight() {
         );
         assert_eq!(user_texts(&requests[1]), ["next"]);
         assert_eq!(requests[1].provider_session_id(), None);
+        assert_eq!(next.report().history().evicted_turns(), 1);
+        assert_eq!(next.report().history().replayed_turns(), 0);
         assert_eq!(user_texts(&requests[2]), ["next", "again"]);
         assert!(matches!(
             oversized,

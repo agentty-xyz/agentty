@@ -117,11 +117,21 @@ let harness = Harness::from_registry(&models, "review-model")?;
 Capabilities are host declarations, not detection. A declared `ContextBudget` enables
 model-aware context projection: requests keep the most recent whole turns that fit, and
 mandatory content that cannot fit fails with a typed error before any provider call.
-Registered sessions resume only with the same registration key and revision; revise the
-revision whenever configuration, credentials scope, or injected behavior changes, and
-never embed secrets. `session.switch_model(&models, "other-model")` selects another
-registration for an idle session; `session.compact()` publishes a schema-validated
-summary checkpoint that projection replays ahead of recent turns.
+Every durable turn's `TurnReport::history` reports how many loaded turns were replayed
+or evicted and whether a checkpoint summary was replayed, so hosts can observe context
+loss instead of inferring it from answers; replayed provider reasoning counts toward a
+turn's weight. Registered sessions resume only with the same registration key and
+revision; revise the revision whenever configuration, credentials scope, or injected
+behavior changes, and never embed secrets.
+`session.switch_model(&models, "other-model")` selects another registration for an idle
+session; `session.compact()` publishes a schema-validated summary checkpoint that
+projection replays ahead of recent turns.
+
+Structured output is validated locally against the request schema. Built-in clients
+accept a JSON object wrapped in Markdown fences or surrounding prose when the embedded
+object parses; anything else fails with a content-free `ModelError::InvalidJson`. One
+provider request is bounded to three minutes without a retry on timeout, and a `429`
+`Retry-After` is honored up to sixty seconds.
 
 ## Session stores
 

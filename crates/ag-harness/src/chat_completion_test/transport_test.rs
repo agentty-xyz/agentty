@@ -6,9 +6,10 @@ use std::time::Duration;
 use super::support::max_as_xhigh;
 use crate::chat_completion::{
     ChatCompletionBackend, ChatCompletionClient as _, ChatCompletionError,
-    ChatCompletionProviderPolicy, ChatCompletionRequest, MAX_RATE_LIMIT_RETRIES, MAX_RETRY_DELAY,
-    RETRY_DELAY, ReasoningFormat, ReqwestChatCompletionClient, SUCCESS_BODY_LIMIT_BYTES,
-    StructuredOutputMode, append_success_chunk, default_client, rate_limit_retry_delay,
+    ChatCompletionProviderPolicy, ChatCompletionRequest, MAX_PROVIDER_RETRY_DELAY,
+    MAX_RATE_LIMIT_RETRIES, MAX_RETRY_DELAY, REQUEST_TIMEOUT, RETRY_DELAY, ReasoningFormat,
+    ReqwestChatCompletionClient, SUCCESS_BODY_LIMIT_BYTES, StructuredOutputMode,
+    append_success_chunk, default_client, rate_limit_retry_delay,
 };
 use crate::model;
 
@@ -93,9 +94,19 @@ fn rate_limit_retry_delay_uses_bounded_headers_and_backoff() {
     assert_eq!(rate_limit_retry_delay(&headers, 2), Duration::from_secs(4));
     headers.insert(
         reqwest::header::RETRY_AFTER,
+        "30".parse().expect("valid header"),
+    );
+    assert_eq!(rate_limit_retry_delay(&headers, 0), Duration::from_secs(30));
+    headers.insert(
+        reqwest::header::RETRY_AFTER,
         "99".parse().expect("valid header"),
     );
-    assert_eq!(rate_limit_retry_delay(&headers, 0), MAX_RETRY_DELAY);
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 0),
+        MAX_PROVIDER_RETRY_DELAY
+    );
+    headers.remove(reqwest::header::RETRY_AFTER);
+    assert_eq!(rate_limit_retry_delay(&headers, 9), MAX_RETRY_DELAY);
     headers.insert(
         reqwest::header::RETRY_AFTER,
         reqwest::header::HeaderValue::from_bytes(b"invalid").expect("valid header bytes"),
@@ -144,6 +155,7 @@ async fn retries_rate_limit_response_before_decoding_success() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        request_timeout: REQUEST_TIMEOUT,
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -206,6 +218,7 @@ async fn retries_transport_failure_before_decoding_success() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        request_timeout: REQUEST_TIMEOUT,
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -223,6 +236,67 @@ async fn retries_transport_failure_before_decoding_success() {
 
     // Assert
     assert_eq!(completion.content.as_deref(), Some(r#"{"message":"ok"}"#));
+}
+
+#[tokio::test]
+async fn timed_out_request_is_reported_without_a_retry() {
+    // Arrange
+    let listener = TcpListener::bind("127.0.0.1:0").expect("timeout listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("timeout listener should have an address");
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let server = tokio::task::spawn_blocking(move || {
+        listener
+            .set_nonblocking(true)
+            .expect("listener should poll without blocking");
+        let mut accepted = Vec::new();
+        while released.try_recv().is_err() {
+            match listener.accept() {
+                Ok((stream, _)) => accepted.push(stream),
+                Err(error) => {
+                    assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "listener failed");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+
+        accepted.len()
+    });
+    let client = ReqwestChatCompletionClient {
+        client: reqwest::Client::new(),
+        request_timeout: Duration::from_millis(50),
+    };
+    let request = ChatCompletionRequest::new(
+        "test-key",
+        format!("http://{address}"),
+        serde_json::json!({}),
+    );
+
+    // Act
+    let error = client
+        .complete(request)
+        .await
+        .map(|_| ())
+        .expect_err("a stalled server must time out");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    release
+        .send(())
+        .expect("server should be waiting for release");
+    let connections = server.await.expect("timeout server should finish");
+
+    // Assert
+    assert!(
+        matches!(
+            &error,
+            ChatCompletionError::Transport(source)
+                if source
+                    .downcast_ref::<reqwest::Error>()
+                    .is_some_and(reqwest::Error::is_timeout)
+        ),
+        "expected a timeout, got {error}"
+    );
+    assert_eq!(connections, 1, "a timeout must not be retried");
 }
 
 #[tokio::test]
@@ -259,6 +333,7 @@ async fn retains_http_status_when_error_body_read_fails() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        request_timeout: REQUEST_TIMEOUT,
     };
     let request = ChatCompletionRequest::new(
         "test-key",

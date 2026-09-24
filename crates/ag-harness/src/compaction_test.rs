@@ -168,6 +168,7 @@ fn summary_schema_accepts_only_bounded_structured_output() {
             .is_err()
     );
     assert!(GENERATION_INSTRUCTIONS.contains("Summarize"));
+    assert!(GENERATION_INSTRUCTIONS.contains("preserve every concrete fact verbatim"));
 }
 
 #[test]
