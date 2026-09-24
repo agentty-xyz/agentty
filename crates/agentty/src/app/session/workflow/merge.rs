@@ -576,6 +576,7 @@ impl RealSyncAssistClient {
         // Success payload unused; run for side effects only.
         let _ = run_client
             .submit(ag_contracts::OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,

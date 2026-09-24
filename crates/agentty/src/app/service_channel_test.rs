@@ -176,6 +176,7 @@ async fn offline_session_channel_allows_shutdown_without_polling_a_turn() {
 
 fn unexpected_turn_request() -> TurnRequest {
     TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation: TurnContinuation::fresh(),
         folder: PathBuf::new(),
         main_checkout_root: None,

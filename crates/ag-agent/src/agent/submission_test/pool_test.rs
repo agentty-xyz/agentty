@@ -16,6 +16,7 @@ use crate::app_server::{
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: PathBuf::from("."),
         harness: "codex".into(),

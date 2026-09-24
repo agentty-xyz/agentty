@@ -7,6 +7,12 @@ weight = 5
 <a id="architecture-testability-introduction"></a> Agentty keeps external systems behind
 trait boundaries so orchestration logic can be tested deterministically.
 
+Worker policy tests observe resolved `ExecutionPolicy` values at injected runtime
+boundaries. Adapter tests verify native command settings, unsupported-policy errors,
+repair propagation, and process-reuse compatibility without live model backends. These
+tests establish policy delivery; actual provider enforcement still depends on the
+installed harness and its supported controls.
+
 <!-- more -->
 
 ## Testability and Boundaries

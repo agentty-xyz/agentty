@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 /// workflow effects finish before another command can execute.
 #[derive(Clone)]
 pub struct SessionRunClient {
+    execution_policy: ag_contracts::ExecutionPolicy,
     runtime: ag_runtime::SessionRuntime,
     session_id: String,
 }
@@ -22,7 +23,11 @@ impl SessionRunClient {
         kind: ag_session::AgentKind,
         config: &crate::RuntimeConfig,
     ) -> Self {
-        Self::from_runtime(session_id, config.factory.session(kind))
+        Self::from_runtime(
+            session_id,
+            config.factory.session(kind),
+            config.execution_policy(kind),
+        )
     }
 
     /// Executes a turn under worker cancellation and runtime cleanup.
@@ -33,10 +38,11 @@ impl SessionRunClient {
     /// Returns the runtime failure or a typed user interruption.
     pub async fn submit(
         &self,
-        request: TurnRequest,
+        mut request: TurnRequest,
         events: mpsc::UnboundedSender<TurnEvent>,
         cancellation: CancellationToken,
     ) -> Result<TurnResult, AgentError> {
+        request.execution_policy = self.execution_policy.clone();
         let runtime = &self.runtime;
         let session_id = self.session_id.clone();
         let interrupted =
@@ -66,8 +72,13 @@ impl SessionRunClient {
         self.runtime.shutdown(self.session_id.clone()).await
     }
 
-    pub(crate) fn from_runtime(session_id: String, runtime: ag_runtime::SessionRuntime) -> Self {
+    pub(crate) fn from_runtime(
+        session_id: String,
+        runtime: ag_runtime::SessionRuntime,
+        execution_policy: ag_contracts::ExecutionPolicy,
+    ) -> Self {
         Self {
+            execution_policy,
             runtime,
             session_id,
         }

@@ -25,6 +25,7 @@ async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {
         model: "model-a".into(),
     };
     let mut request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: folder.path().to_owned(),
         live_transcript: None,
@@ -119,6 +120,7 @@ async fn run_turn_with_restart_retry_uses_live_output_on_retry() {
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("streamed before crash")),
@@ -201,6 +203,7 @@ async fn successful_turn_shuts_down_runtime_when_retention_is_disabled() {
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
@@ -273,6 +276,7 @@ async fn run_turn_with_restart_retry_restarts_once_after_first_failure() {
     let history = "previous transcript".repeat(4096);
     let archives = Arc::new(Mutex::new(Vec::new()));
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: folder.path().to_owned(),
         live_transcript: None,
@@ -382,6 +386,7 @@ async fn run_turn_with_restart_retry_shutdown_signal_interrupts_in_flight_runtim
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
@@ -460,6 +465,7 @@ async fn run_turn_with_restart_retry_skips_replay_when_runtime_restores_context(
     // Arrange
     let sessions = AppServerSessionRegistry::new("Test");
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
@@ -542,6 +548,7 @@ async fn size_rejections_shutdown_without_restarting() {
     ] {
         let sessions = AppServerSessionRegistry::new("Test");
         let request = AppServerTurnRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             folder: PathBuf::from("."),
             live_transcript: None,

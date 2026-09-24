@@ -13,10 +13,67 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::test_support::{AppServerTurnResponse, MockAppServerClient};
 use crate::{
-    HeartbeatClock, RunClient, RunInfo, RunRepository, RunScope, RunState, RunWorker, in_scope,
-    scoped_client,
+    HeartbeatClock, RunClient, RunInfo, RunRepository, RunScope, RunState, RunWorker,
+    RuntimeConfig, in_scope, scoped_client,
 };
+
+#[tokio::test]
+async fn configured_utility_policy_survives_pooling_and_protocol_repair() {
+    // Arrange
+    let policy = ag_contracts::ExecutionPolicy {
+        max_concurrent_subagents: NonZeroUsize::new(5),
+        ..ag_contracts::ExecutionPolicy::default()
+    };
+    let mut server = MockAppServerClient::new();
+    let expected = policy.clone();
+    server
+        .expect_run_isolated_turn()
+        .once()
+        .returning(move |request, _| {
+            assert_eq!(request.execution_policy, expected);
+            Box::pin(async { Ok(policy_response("invalid output")) })
+        });
+    let expected = policy.clone();
+    server
+        .expect_run_retained_turn()
+        .once()
+        .returning(move |request, _| {
+            assert_eq!(request.execution_policy, expected);
+            Box::pin(async { Ok(policy_response(r#"{"answer":"done"}"#)) })
+        });
+    server
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async {}));
+    let config = RuntimeConfig::with_app_server(Arc::new(server))
+        .with_execution_policy(ag_session::AgentKind::Codex, policy);
+    let worker = RunWorker::new(
+        &config,
+        Arc::new(Repository::default()),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let mut input = request();
+    input.harness = "CoDeX".into();
+    // Act
+    let result = worker.submit(input).await;
+    worker.shutdown().await;
+    // Assert
+    assert_eq!(result.expect("repaired utility").response.answer, "done");
+}
+
+fn policy_response(text: &str) -> AppServerTurnResponse {
+    AppServerTurnResponse {
+        assistant_message: text.into(),
+        context_reset: false,
+        input_tokens: 1,
+        output_tokens: 1,
+        pid: None,
+        provider_conversation_id: None,
+    }
+}
 
 #[derive(Default)]
 struct Repository {
@@ -133,6 +190,7 @@ fn fixture(
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: "repository".into(),
         harness: "test".into(),

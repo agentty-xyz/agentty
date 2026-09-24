@@ -24,6 +24,7 @@ use crate::app_server_transport;
 
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
     AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder,
         live_transcript: None,

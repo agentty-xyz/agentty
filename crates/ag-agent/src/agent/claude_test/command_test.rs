@@ -23,6 +23,7 @@ fn test_claude_fast_mode_sets_workspace_setting() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -65,6 +66,7 @@ fn test_claude_command_sets_anthropic_model_to_claude_opus_55() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -109,6 +111,7 @@ fn test_claude_command_passes_effort_flag_for_each_reasoning_level() {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                execution_policy: &ag_contracts::ExecutionPolicy::default(),
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
@@ -163,6 +166,7 @@ fn test_claude_command_adds_attachment_access_directories() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &attachments,
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -202,6 +206,7 @@ fn test_claude_prompt_stdin_payload_includes_repo_root_path_instructions() {
     let prompt = String::from_utf8(
         shared_prompt::build_prompt_stdin_payload(
             BuildCommandRequest {
+                execution_policy: &ag_contracts::ExecutionPolicy::default(),
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
@@ -239,6 +244,7 @@ fn test_claude_one_shot_command_enforces_json_schema() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -257,6 +263,7 @@ fn test_claude_one_shot_command_enforces_json_schema() {
     let prompt = String::from_utf8(
         shared_prompt::build_prompt_stdin_payload(
             BuildCommandRequest {
+                execution_policy: &ag_contracts::ExecutionPolicy::default(),
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
@@ -298,6 +305,7 @@ fn test_claude_start_command_includes_json_schema() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -316,6 +324,7 @@ fn test_claude_start_command_includes_json_schema() {
     let prompt = String::from_utf8(
         shared_prompt::build_prompt_stdin_payload(
             BuildCommandRequest {
+                execution_policy: &ag_contracts::ExecutionPolicy::default(),
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,

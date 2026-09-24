@@ -58,19 +58,7 @@ impl WorkQueue for Host {
 impl WorkerHost for Host {
     async fn execute(&self, work: ScheduledWork<Run, Run>) {
         let (ScheduledWork::Command(run) | ScheduledWork::Message(run)) = work;
-        let request = TurnRequest {
-            continuation: TurnContinuation::fresh(),
-            folder: ".".into(),
-            main_checkout_root: None,
-            model: "model-independent-of-harness".into(),
-            permission_mode: PermissionMode::default(),
-            personality: PersonalityPrompt::default(),
-            prompt: TurnPrompt::from("hello"),
-            reasoning_level: ReasoningLevel::default(),
-            request_kind: AgentRequestKind::SessionStart,
-            response_style: ResponseStyle::default(),
-            speed_mode: SpeedMode::default(),
-        };
+        let request = turn_request();
         let result = self
             .runtime
             .submit(request, mpsc::unbounded_channel().0, run.cancellation)
@@ -338,4 +326,57 @@ async fn configured_session_workers_construct_and_release_inert_provider_runtime
         // Assert
         assert!(worker.shutdown().await.is_ok());
     }
+}
+
+fn turn_request() -> TurnRequest {
+    TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
+        continuation: TurnContinuation::fresh(),
+        folder: ".".into(),
+        main_checkout_root: None,
+        model: "model-independent-of-harness".into(),
+        permission_mode: PermissionMode::default(),
+        personality: PersonalityPrompt::default(),
+        prompt: TurnPrompt::from("hello"),
+        reasoning_level: ReasoningLevel::default(),
+        request_kind: AgentRequestKind::SessionStart,
+        response_style: ResponseStyle::default(),
+        speed_mode: SpeedMode::default(),
+    }
+}
+
+#[tokio::test]
+async fn worker_configuration_rejects_unsupported_controls_before_provider_launch() {
+    // Arrange
+    let config = ag_worker::RuntimeConfig::default().with_execution_policy(
+        ag_session::AgentKind::Gemini,
+        ag_contracts::ExecutionPolicy {
+            max_concurrent_subagents: std::num::NonZeroUsize::new(3),
+            ..ag_contracts::ExecutionPolicy::default()
+        },
+    );
+    let worker = SessionRunClient::new(
+        "unsupported-policy".into(),
+        ag_session::AgentKind::Gemini,
+        &config,
+    );
+    // Act
+    let error = worker
+        .submit(
+            turn_request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        )
+        .await
+        .expect_err("unsupported policy must fail before launching the CLI");
+    worker
+        .shutdown()
+        .await
+        .expect("shutdown without a provider");
+    // Assert
+    assert!(
+        error
+            .to_string()
+            .contains("does not support the requested subagent concurrency")
+    );
 }

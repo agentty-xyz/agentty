@@ -97,7 +97,8 @@ pub(crate) struct GeminiSessionRuntime {
 
 impl RuntimeClientRuntime for GeminiSessionRuntime {
     fn matches_request(&self, request: &AppServerTurnRequest) -> bool {
-        self.state.folder == request.folder
+        request.execution_policy == ag_contracts::ExecutionPolicy::default()
+            && self.state.folder == request.folder
             && self.state.model == request.model
             && self.state.permission_mode == request.permission_mode
     }

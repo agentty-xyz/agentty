@@ -618,6 +618,7 @@ impl SessionTaskService {
         );
         let submission = run_client
             .submit(ag_contracts::OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
@@ -1097,6 +1098,7 @@ impl SessionTaskService {
         let (submission, _) = crate::app::diff_prompt::submit(
             run_client,
             ag_contracts::OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
@@ -1170,6 +1172,7 @@ impl SessionTaskService {
             (!ag_worker::uses_persistent_session(session_agent.kind())).then_some(child_pid);
         let assist_submission = run_client
             .submit(ag_contracts::OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
                 child_pid: assist_child_pid,

@@ -26,6 +26,7 @@ async fn oversized_one_shot_responses_do_not_launch_repair() {
     });
     let client = MockAppServerClient::new();
     let request = OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,
@@ -70,6 +71,10 @@ async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
         .expect_build_command()
         .times(2)
         .returning(|request| {
+            assert_eq!(
+                request.execution_policy.max_concurrent_subagents,
+                std::num::NonZeroUsize::new(7)
+            );
             assert!(matches!(
                 request.request_kind,
                 AgentRequestKind::UtilityPrompt
@@ -82,6 +87,10 @@ async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy {
+                max_concurrent_subagents: std::num::NonZeroUsize::new(7),
+                ..ag_contracts::ExecutionPolicy::default()
+            },
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
@@ -131,6 +140,7 @@ async fn test_submit_one_shot_with_backend_rejects_wrapped_plain_text_utility_ou
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -185,6 +195,7 @@ async fn test_submit_one_shot_with_backend_recovers_wrapped_protocol_output() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -234,6 +245,7 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
@@ -300,6 +312,7 @@ async fn focused_review_repairs_trailing_text_with_direct_review_schema() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -342,6 +355,7 @@ async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,

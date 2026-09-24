@@ -7,20 +7,22 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::agent::backend::MAX_CONCURRENT_SUBAGENTS;
-
 /// Builds one `codex app-server` process command for one session folder.
 ///
 /// Applies the subagent limit at process startup, including resumed threads.
-pub(crate) fn build_codex_app_server_command(folder: &Path, model: &str) -> Command {
+pub(crate) fn build_codex_app_server_command(
+    folder: &Path,
+    model: &str,
+    policy: &ag_contracts::ExecutionPolicy,
+) -> Command {
     let mut command = Command::new("codex");
+    command.arg("--model").arg(model);
+    if let Some(limit) = policy.max_concurrent_subagents {
+        command
+            .arg("-c")
+            .arg(format!("agents.max_concurrent_threads_per_session={limit}"));
+    }
     command
-        .arg("--model")
-        .arg(model)
-        .arg("-c")
-        .arg(format!(
-            "agents.max_concurrent_threads_per_session={MAX_CONCURRENT_SUBAGENTS}"
-        ))
         .arg("app-server")
         .arg("--listen")
         .arg("stdio://")

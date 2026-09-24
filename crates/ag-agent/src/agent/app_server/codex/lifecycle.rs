@@ -21,6 +21,8 @@ use crate::model::{reasoning, session};
 
 /// Mutable runtime state required while a Codex app-server process is active.
 pub(super) struct CodexRuntimeState {
+    /// Startup policy used by the retained process.
+    pub(super) execution_policy: ag_contracts::ExecutionPolicy,
     /// Session worktree folder used as the runtime cwd.
     pub(super) folder: PathBuf,
     /// Most recent input token count reported by the app-server.
@@ -39,6 +41,7 @@ impl CodexRuntimeState {
     /// Creates runtime state for one pending session bootstrap.
     pub(super) fn new(folder: PathBuf, model: String, permission_mode: PermissionMode) -> Self {
         Self {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             folder,
             latest_input_tokens: 0,
             model,
@@ -64,6 +67,7 @@ pub(super) async fn start_runtime(
     let request_kind = ag_contracts::AgentRequestKind::SessionStart;
     let command = agent::create_backend(AgentKind::Codex)
         .build_command(agent::BuildCommandRequest {
+            execution_policy: &request.execution_policy,
             attachments: &[],
             folder: request.folder.as_path(),
             main_checkout_root: request.main_checkout_root.as_deref(),
@@ -111,6 +115,8 @@ pub(super) async fn start_runtime_with_built_command(
         request.model.clone(),
         request.permission_mode,
     );
+
+    state.execution_policy = request.execution_policy.clone();
 
     let bootstrap_result = async {
         initialize_runtime(&mut transport).await?;

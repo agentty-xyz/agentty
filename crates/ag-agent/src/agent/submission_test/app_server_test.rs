@@ -50,6 +50,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
     let response = submit_one_shot_with_app_server_client(
         Arc::new(app_server_client),
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
@@ -103,6 +104,7 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
     let error = submit_one_shot_with_app_server_client(
         Arc::new(app_server_client),
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: Some(Arc::clone(&child_pid)),
@@ -157,6 +159,7 @@ async fn one_shot_app_server_repair_preserves_permissions_and_conversation() {
                 })
             });
         let request = OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Gemini).to_string(),
             child_pid: None,
@@ -224,6 +227,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
     let error = submit_one_shot_with_app_server_client(
         Arc::new(app_server_client),
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
@@ -284,6 +288,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
     let error = submit_one_shot_with_app_server_client(
         Arc::new(app_server_client),
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,

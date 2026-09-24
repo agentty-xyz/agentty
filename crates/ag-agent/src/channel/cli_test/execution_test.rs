@@ -64,6 +64,10 @@ fn test_cli_turn_observer_ignores_blank_progress_text() {
 fn test_build_command_request_uses_agent_facing_prompt_text() {
     // Arrange
     let request = TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy {
+            max_concurrent_subagents: std::num::NonZeroUsize::new(7),
+            ..ag_contracts::ExecutionPolicy::default()
+        },
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp/session"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
@@ -82,6 +86,7 @@ fn test_build_command_request_uses_agent_facing_prompt_text() {
     let build_request = build_command_request(&request, &prompt_text);
 
     // Assert
+    assert_eq!(build_request.execution_policy, &request.execution_policy);
     assert_eq!(build_request.prompt, "Review \"src/main.rs\"");
     assert_eq!(
         build_request.main_checkout_root,

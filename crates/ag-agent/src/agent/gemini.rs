@@ -16,6 +16,7 @@ impl AgentBackend for GeminiBackend {
         &'request self,
         request: BuildCommandRequest<'request>,
     ) -> Result<Command, AgentBackendError> {
+        super::execution_policy::validate(ag_session::AgentKind::Gemini, request.execution_policy)?;
         let mut command = build_gemini_acp_command(request.folder, request.model);
         if request.permission_mode.is_read_only()
             && !matches!(

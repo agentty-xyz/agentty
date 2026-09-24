@@ -23,6 +23,10 @@ fn build_command_builds_app_server_runtime_for_start_requests() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy {
+                max_concurrent_subagents: std::num::NonZeroUsize::new(5),
+                ..ag_contracts::ExecutionPolicy::default()
+            },
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -40,6 +44,7 @@ fn build_command_builds_app_server_runtime_for_start_requests() {
     let debug_command = format!("{command:?}");
 
     // Assert
+    assert!(debug_command.contains("agents.max_concurrent_threads_per_session=5"));
     assert!(debug_command.contains("codex"));
     assert!(debug_command.contains("app-server"));
     assert!(debug_command.contains("stdio://"));
@@ -56,6 +61,7 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -78,15 +84,7 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
     // Assert
     assert_eq!(
         arguments,
-        vec![
-            "--model",
-            "gpt-6-sol",
-            "-c",
-            "agents.max_concurrent_threads_per_session=2",
-            "app-server",
-            "--listen",
-            "stdio://"
-        ]
+        vec!["--model", "gpt-6-sol", "app-server", "--listen", "stdio://"]
     );
 }
 
@@ -101,6 +99,7 @@ fn build_command_accepts_gpt_56_luna_model() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -126,8 +125,6 @@ fn build_command_accepts_gpt_56_luna_model() {
         vec![
             "--model",
             "gpt-6-luna",
-            "-c",
-            "agents.max_concurrent_threads_per_session=2",
             "app-server",
             "--listen",
             "stdio://"
@@ -146,6 +143,7 @@ fn build_command_builds_app_server_runtime_for_utility_prompts() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,

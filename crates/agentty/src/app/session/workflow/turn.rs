@@ -207,17 +207,15 @@ pub(super) async fn run_channel_turn(
     } = resolve_turn_personality(context).await;
 
     let agent_prompt = prepare_agent_prompt(context, prompt.clone(), permission_mode).await;
+    let model = turn_metadata.session_agent.model().provider_model_str();
     let req = TurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         continuation,
         folder: context.folder.clone(),
         main_checkout_root: main_checkout_snapshot
             .as_ref()
             .map(|snapshot| snapshot.main_repo_root.clone()),
-        model: turn_metadata
-            .session_agent
-            .model()
-            .provider_model_str()
-            .to_string(),
+        model: model.to_string(),
         permission_mode,
         personality,
         prompt: agent_prompt,

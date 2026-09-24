@@ -50,6 +50,8 @@ pub enum AppServerStreamEvent {
 /// Input payload for one app-server turn execution.
 #[derive(Clone)]
 pub struct AppServerTurnRequest {
+    /// Worker-selected policy, preserved across runtime restarts and repairs.
+    pub execution_policy: ag_contracts::ExecutionPolicy,
     /// Session worktree folder where the provider runtime executes.
     pub folder: PathBuf,
     /// Live in-memory transcript source updated by the streaming consumer.

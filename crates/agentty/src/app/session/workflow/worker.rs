@@ -509,6 +509,7 @@ impl SessionWorkerRebaseAssistClient {
             .ok()
             .flatten();
         let req = TurnRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             continuation: TurnContinuation::provider(
                 Some(turn::live_transcript_source(&self.transcript)),
                 persisted_instruction_conversation_id,

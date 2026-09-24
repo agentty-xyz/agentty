@@ -1,12 +1,63 @@
 use std::env;
+use std::num::NonZeroUsize;
 use std::process::Command;
 
+use ag_contracts::{ExecutionPolicy, McpPolicy, ToolPolicy};
 use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
 
 use crate::{
-    RealAgentAvailabilityProbe, cleanup_session_worktree_artifacts, setup_backend,
+    RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
     uses_persistent_session,
 };
+
+#[test]
+fn worker_defaults_preserve_provider_policy_and_overrides_are_isolated() {
+    // Arrange
+    let original = RuntimeConfig::default();
+    let selected = ExecutionPolicy {
+        max_concurrent_subagents: NonZeroUsize::new(5),
+        mcp: McpPolicy::Inherit,
+        tools: ToolPolicy::AllowOnly(vec!["Read".into()]),
+    };
+    // Act
+    let changed = original
+        .clone()
+        .with_execution_policy(AgentKind::Claude, selected.clone());
+    // Assert
+    assert_eq!(changed.execution_policy(AgentKind::Claude), selected);
+    let claude = original.execution_policy(AgentKind::Claude);
+    assert_eq!(claude.max_concurrent_subagents, NonZeroUsize::new(2));
+    assert_eq!(claude.mcp, McpPolicy::Disabled);
+    assert_eq!(
+        claude.tools,
+        ToolPolicy::AutoApprove(
+            [
+                "Bash",
+                "Edit",
+                "MultiEdit",
+                "Write",
+                "WebSearch",
+                "WebFetch",
+                "EnterPlanMode",
+                "ExitPlanMode"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect()
+        )
+    );
+    let codex = original.execution_policy(AgentKind::Codex);
+    assert_eq!(codex.max_concurrent_subagents, NonZeroUsize::new(2));
+    assert_eq!(changed.execution_policy(AgentKind::Codex), codex);
+    assert_eq!(
+        original.execution_policy(AgentKind::Gemini),
+        ExecutionPolicy::default()
+    );
+    assert_eq!(
+        original.execution_policy(AgentKind::Antigravity),
+        ExecutionPolicy::default()
+    );
+}
 
 #[test]
 fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path() {

@@ -49,6 +49,7 @@ fn test_gemini_build_command_uses_acp_runtime_command() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -85,6 +86,7 @@ fn test_gemini_read_only_command_uses_sandboxed_plan_mode() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -130,6 +132,7 @@ fn test_gemini_read_only_utility_command_uses_standard_acp_mode() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -164,6 +167,7 @@ fn test_gemini_read_only_focused_review_uses_standard_acp_mode() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,

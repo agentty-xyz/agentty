@@ -430,6 +430,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
         app.services.run_client = app.services.run_worker.clone();
         let client = app.services.run_client();
         let request = OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: directory.path().into(),
             harness: "codex".into(),
@@ -760,6 +761,7 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
         crate::test_support::test_app_clients().with_app_server_client_override(Arc::new(provider));
     let (app, directory) = crate::test_support::new_test_app_with_clients(clients).await;
     let request = OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: directory.path().into(),
         harness: "codex".into(),

@@ -75,6 +75,7 @@ fn build_request<'a>(
     request_kind: &'a AgentRequestKind,
 ) -> BuildCommandRequest<'a> {
     BuildCommandRequest {
+        execution_policy: &INHERITED_POLICY,
         attachments,
         folder,
         main_checkout_root: None,
@@ -545,3 +546,9 @@ async fn lost_leader_ownership_disarms_group_cleanup() {
         "never signal a reusable process group ID"
     );
 }
+
+const INHERITED_POLICY: ag_contracts::ExecutionPolicy = ag_contracts::ExecutionPolicy {
+    max_concurrent_subagents: None,
+    mcp: ag_contracts::McpPolicy::Inherit,
+    tools: ag_contracts::ToolPolicy::Inherit,
+};

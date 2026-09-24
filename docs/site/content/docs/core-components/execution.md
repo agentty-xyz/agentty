@@ -37,7 +37,8 @@ admission, and ordered workflow effects. Utility admission is persisted before h
 execution. Records retain the repository, purpose, optional session/project ownership,
 and optional parent operation. Draft title generation can belong to a session before any
 parent operation exists. Provider retries and protocol repairs remain attempts inside
-that supervised run. Permissions and provider-call budgets pass through unchanged.
+that supervised run. Per-turn filesystem permissions and provider-call budgets pass
+through unchanged.
 
 Dropping a utility caller, canceling its parent, or shutting down the application stops
 the owned execution. Nested scopes retain every enclosing cancellation source, including
@@ -55,6 +56,38 @@ to stop, releasing their owned processes. Forced shutdown can leave unfinished r
 for startup recovery. Heartbeats track running work; startup recovery fails abandoned
 runs under exclusive application ownership rather than automatically replaying
 potentially mutating requests.
+
+### Execution Policy
+
+`ag-worker::RuntimeConfig` owns the configured subagent, built-in tool, and MCP policy
+for each harness. Hosts use `with_execution_policy` when composing workers. Each worker
+captures its configuration and replaces the request's `ExecutionPolicy` before runtime
+dispatch; changing configuration affects newly constructed workers. Session turns and
+utility runs use the same policy path, including retries and protocol repairs.
+
+The controls are distinct:
+
+- Worker capacity bounds concurrent utility runs; it does not count provider children.
+- `max_concurrent_subagents` requests a positive limit on provider-native children,
+  excluding the parent. Provider exceptions still apply; this is not a global process
+  limit or the orchestration session cap.
+- `ToolPolicy` selects inherited behavior, unattended approvals, or a built-in tool
+  allowlist. An empty allowlist disables built-ins. Tool names are provider-native;
+  read-only permissions remain an independent restriction.
+- `McpPolicy` selects inherited MCP configuration or disables configured MCP servers.
+  Restricting built-ins alone does not restrict MCP tools.
+
+Defaults preserve existing behavior: Codex and Claude request two concurrent children;
+Claude preapproves the existing edit and web tools and disables inherited MCP servers.
+Other controls inherit the harness configuration. The current adapters support subagent
+limits for Codex and Claude, and tool and MCP overrides for Claude. Explicit unsupported
+controls fail before model execution. Codex declining interactive MCP elicitation is
+separate from disabling MCP access.
+
+Shared policy types live in `ag-contracts`; `ag-runtime` carries the resolved policy,
+and harness adapters translate and enforce it. Provider flags stay in `ag-agent`.
+Retained processes must match the requested policy before reuse. The standalone
+`ag-harness` tool-call budget remains separate until its runtime adapter is integrated.
 
 ## Agent Runtime
 

@@ -81,6 +81,7 @@ fn turn_prompt_for_runtime_uses_shared_protocol_wrapper_for_utility_prompts() {
 fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("live content from stream")),
@@ -109,6 +110,7 @@ fn read_latest_replay_transcript_prefers_live_buffer_over_snapshot() {
 fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empty() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: Some(live_transcript("")),
@@ -137,6 +139,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_live_buffer_is_empt
 fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,
@@ -165,6 +168,7 @@ fn read_latest_replay_transcript_falls_back_to_snapshot_when_no_live_buffer() {
 fn read_latest_replay_transcript_returns_none_when_both_are_absent() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp"),
         live_transcript: None,

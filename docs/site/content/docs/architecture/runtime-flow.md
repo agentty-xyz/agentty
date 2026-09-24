@@ -636,6 +636,14 @@ share the same busy state.
 once per worker. Session workflows execute through the worker client and runtime
 contract; they never construct or invoke the adapter directly.
 
+`ag-worker::RuntimeConfig` captures each harness's subagent, tool, and MCP policy.
+Workers resolve that policy for session turns and utilities before runtime dispatch;
+adapters preserve it across retries and repairs, reject unsupported explicit controls,
+and restart retained processes when their startup policy differs. Per-turn filesystem
+permissions remain independent. See
+[Execution Policy](@/docs/core-components/execution.md#execution-policy) for controls,
+defaults, and adapter support.
+
 ```mermaid
 flowchart TD
   composition[Application composition] --> worker[ag-worker session client]

@@ -42,6 +42,7 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -104,6 +105,7 @@ fn test_antigravity_read_only_mode_uses_sandboxed_plan_mode() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -147,6 +149,7 @@ fn test_antigravity_build_command_passes_supported_effort() {
         let command = AgentBackend::build_command(
             &backend,
             BuildCommandRequest {
+                execution_policy: &ag_contracts::ExecutionPolicy::default(),
                 attachments: &[],
                 folder: temp_directory.path(),
                 main_checkout_root: None,
@@ -197,6 +200,7 @@ fn test_antigravity_build_command_uses_hidden_session_folder_directly() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: &session_folder,
             main_checkout_root: None,
@@ -273,6 +277,7 @@ fn test_antigravity_build_command_rejects_cached_cli_error() {
     let error = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[],
             folder: temp_directory.path(),
             main_checkout_root: None,
@@ -313,6 +318,7 @@ fn test_antigravity_build_command_adds_workspace_directories() {
     let command = AgentBackend::build_command(
         &backend,
         BuildCommandRequest {
+            execution_policy: &ag_contracts::ExecutionPolicy::default(),
             attachments: &[attachment],
             folder: temp_directory.path(),
             main_checkout_root: None,

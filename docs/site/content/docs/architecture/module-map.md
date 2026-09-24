@@ -24,11 +24,12 @@ For file-level detail, read the module docstrings directly.
 - `crates/ag-runtime/`: Worker-consumed runtime composition, harness dispatch, and
   provider lifecycle. It is the sole consumer of `ag-agent`.
 - `crates/ag-worker/`: Session mailboxes and execution clients, bounded utility runs,
-  cancellation, heartbeats, completion, and restart recovery. Hosts supply queue policy
-  and ordered workflow effects; storage implements worker-owned operation contracts.
+  cancellation, heartbeats, completion, restart recovery, and harness execution-policy
+  configuration. Hosts supply queue policy and ordered workflow effects; storage
+  implements worker-owned operation contracts.
 - `crates/ag-agent/`: External-agent adapters, prompt templates, provider discovery, and
   CLI/app-server transport ownership. It implements `ag-contracts` interfaces and owns
-  cancellation of provider resources.
+  cancellation of provider resources and enforcement of worker-selected harness policy.
 - `crates/ag-forge/`: Shared forge review-request library crate with normalized
   review-request and comment-thread types, GitHub/GitLab remote detection, thread
   reply/resolution, and the `gh`/`glab` adapters behind the `ReviewRequestClient` and

@@ -3,6 +3,7 @@
 //! scheduling.
 
 mod contract;
+mod execution_policy;
 mod input_size;
 mod one_shot;
 mod permission;
@@ -18,6 +19,7 @@ pub use contract::{
     TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
     normalize_instruction_conversation_id,
 };
+pub use execution_policy::{ExecutionPolicy, McpPolicy, ToolPolicy};
 pub use input_size::is_input_size_error;
 #[cfg(any(test, feature = "test-utils"))]
 pub use one_shot::MockOneShotClient;

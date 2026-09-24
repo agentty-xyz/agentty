@@ -10,6 +10,7 @@ mod backend;
 mod claude;
 pub(crate) mod cli;
 mod codex;
+mod execution_policy;
 mod gemini;
 mod instruction;
 mod prompt;

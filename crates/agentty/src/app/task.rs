@@ -602,6 +602,7 @@ impl TaskService {
         let review = crate::app::review_prompt::submit(
             &client,
             ag_contracts::OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (review_selection.kind()).to_string(),
                 child_pid: None,

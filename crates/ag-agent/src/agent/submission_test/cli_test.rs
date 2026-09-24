@@ -80,6 +80,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
@@ -120,6 +121,7 @@ async fn test_submit_one_shot_with_backend_returns_protocol_response() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -168,6 +170,7 @@ async fn test_submit_one_shot_with_backend_writes_large_stdin_concurrently() {
         submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (AgentKind::Claude).to_string(),
                 child_pid: None,
@@ -207,6 +210,7 @@ async fn test_submit_one_shot_with_backend_writes_prompt_to_stdin() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -251,6 +255,7 @@ async fn test_submit_one_shot_with_backend_preserves_exit_error_after_broken_pip
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,
@@ -294,6 +299,7 @@ async fn test_submit_one_shot_with_backend_surfaces_claude_auth_guidance() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
             child_pid: None,

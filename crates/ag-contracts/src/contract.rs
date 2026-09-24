@@ -272,6 +272,9 @@ pub struct TurnContinuationParts {
 pub struct TurnRequest {
     /// Prior context needed to continue this turn.
     pub continuation: TurnContinuation,
+    /// Resolved harness policy. The worker replaces this with its configured
+    /// policy before dispatch; application callers supply the default value.
+    pub execution_policy: crate::ExecutionPolicy,
     /// Session worktree folder where the agent runs.
     pub folder: PathBuf,
     /// Main repository checkout that must remain read-only during the turn,

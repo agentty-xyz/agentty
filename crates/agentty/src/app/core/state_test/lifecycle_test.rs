@@ -74,6 +74,7 @@ async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_c
             .expect("persist utility owner");
         let client = app.services.session_run_client("owned-session");
         let request = OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: directory.path().into(),
             harness: "codex".into(),

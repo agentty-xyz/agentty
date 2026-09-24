@@ -47,6 +47,7 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
         let folder = app.sessions.sessions()[0].folder.clone();
         let client = app.services.session_run_client("deletion");
         let request = OneShotRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: folder.clone(),
             harness: "codex".into(),

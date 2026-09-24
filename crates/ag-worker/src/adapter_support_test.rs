@@ -18,6 +18,7 @@ pub fn cli_session(
     SessionRunClient::from_runtime(
         session_id,
         ag_runtime::test_support::cli_runtime(backend, kind),
+        crate::RuntimeConfig::default().execution_policy(kind),
     )
 }
 
@@ -28,6 +29,7 @@ impl SessionRunClient {
         Self::from_runtime(
             session_id,
             ag_runtime::SessionRuntime::from_channel(channel),
+            ag_contracts::ExecutionPolicy::default(),
         )
     }
 }
@@ -39,6 +41,7 @@ impl RuntimeConfig {
     ) -> Self {
         Self {
             factory: ag_runtime::RuntimeFactory::with_app_server(client),
+            ..Self::default()
         }
     }
 }

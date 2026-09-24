@@ -42,6 +42,7 @@ fn persisted_instruction_conversation_id_for_session_turn(
 fn read_latest_replay_transcript_prefers_live_source() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: Some(live_transcript("live content")),
@@ -70,6 +71,7 @@ fn read_latest_replay_transcript_prefers_live_source() {
 fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: Some(live_transcript("  ")),
@@ -98,6 +100,7 @@ fn read_latest_replay_transcript_falls_back_when_live_source_is_empty() {
 fn read_latest_replay_transcript_returns_none_when_no_replay_text() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: None,
@@ -255,6 +258,7 @@ fn turn_prompt_for_runtime_preserves_generated_at_tokens_for_agent_data() {
 fn instruction_delivery_mode_for_runtime_reuses_matching_bootstrap_state() {
     // Arrange
     let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         provider_call_budget: None,
         folder: PathBuf::from("/tmp/test"),
         live_transcript: None,

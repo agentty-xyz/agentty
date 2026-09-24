@@ -15,6 +15,7 @@ use super::ReviewResumeClient;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: ".".into(),
         harness: "codex".into(),

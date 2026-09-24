@@ -24,6 +24,7 @@ use crate::infra::review_deadline::ReviewDeadlineClient;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
