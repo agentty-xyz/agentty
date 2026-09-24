@@ -8,6 +8,10 @@ license.workspace = true
 description.workspace = true
 repository.workspace = true
 
+[package.metadata.dist]
+# Publish this crate only through the crates.io workflow.
+dist = false
+
 [[test]]
 name = "benchmark_summary"
 
