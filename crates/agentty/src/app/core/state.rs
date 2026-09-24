@@ -1200,7 +1200,12 @@ impl App {
         };
 
         if let Some(launched_session_id) = launched_session_id {
-            if self.open_session_if_present(&launched_session_id) {
+            if self.session_index_for_id(&launched_session_id).is_some() {
+                self.sessions
+                    .load_session_detail_into_state(self.services.db(), &launched_session_id)
+                    .await;
+                self.open_session(&launched_session_id);
+
                 return Ok(());
             }
 
@@ -1964,18 +1969,6 @@ impl App {
             position,
             launched_session_id,
         );
-    }
-
-    /// Opens one linked sibling session when it still exists in memory.
-    ///
-    /// Returns `true` when the target session was found and opened.
-    fn open_session_if_present(&mut self, target_session_id: &str) -> bool {
-        let Some(session_index) = self.session_index_for_id(target_session_id) else {
-            return false;
-        };
-        self.open_session_by_index(target_session_id, session_index);
-
-        true
     }
 
     /// Opens one session by id and preserves question mode for clarification

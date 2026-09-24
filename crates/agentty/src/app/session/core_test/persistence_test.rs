@@ -160,7 +160,7 @@ async fn test_load_existing_sessions() {
         .expect("failed to append message");
 
     // Act
-    let app = new_test_app_with_db(
+    let mut app = new_test_app_with_db(
         dir.path().to_path_buf(),
         PathBuf::from("/tmp/test"),
         None,
@@ -175,6 +175,11 @@ async fn test_load_existing_sessions() {
         app.sessions.sessions()[0].agent.model(),
         AgentModel::ClaudeOpus55
     );
+    assert_eq!(app.sessions.sessions()[0].prompt, "");
+    assert_eq!(session_replay_text(&app.sessions.sessions()[0]), "");
+    app.sessions
+        .load_session_detail_into_state(app.services.db(), "12345678")
+        .await;
     assert_eq!(app.sessions.sessions()[0].prompt, "Existing");
     let output = session_replay_text(&app.sessions.sessions()[0]);
     assert_eq!(output, "Output\n\n");

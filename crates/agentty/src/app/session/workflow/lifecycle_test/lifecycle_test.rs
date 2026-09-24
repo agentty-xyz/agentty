@@ -13,7 +13,8 @@ use super::support::{
 use crate::app::SessionManager;
 use crate::app::session::{SessionCreationKind, SessionError};
 use crate::domain::agent::ResponseStyle;
-use crate::domain::session::Status;
+use crate::domain::session::{SessionHandles, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use crate::infra::clock::RealClock;
@@ -49,6 +50,53 @@ async fn record_session_creation_activity_uses_injected_clock() {
 
     // Assert
     assert_eq!(activity_timestamps, vec![timestamp_seconds]);
+}
+
+#[tokio::test]
+async fn reply_keeps_history_pending_when_detail_or_transcript_load_fails() {
+    for failed_read in ["DROP TABLE session", "DROP TABLE session_message"] {
+        // Arrange
+        let session = test_session("", Status::Review, Some("Existing"), "");
+        let (database, pool) = database_with_session_and_pool(&session).await;
+        database
+            .sessions()
+            .append_session_message(
+                "session-id",
+                SessionMessageKind::UserPrompt,
+                "Saved history",
+            )
+            .await
+            .expect("saved history");
+        let services = test_services(
+            &database,
+            Arc::new(git::MockGitClient::new()),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let mut manager = session_manager_with_one_session(session);
+        manager.state.handles_mut().insert(
+            "session-id".into(),
+            SessionHandles::new_unloaded(Status::Review),
+        );
+        manager.mark_history_replay_pending("session-id");
+        sqlx::query(failed_read)
+            .execute(&pool)
+            .await
+            .expect("read should fail");
+
+        // Act
+        let accepted = manager.reply(&services, "session-id", "New reply").await;
+
+        // Assert
+        assert!(!accepted, "reply should stop after {failed_read}");
+        assert!(manager.should_replay_history("session-id"));
+        assert!(
+            manager
+                .state
+                .handle("session-id")
+                .expect("session handle")
+                .needs_transcript_hydration()
+        );
+    }
 }
 
 #[tokio::test]

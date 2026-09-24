@@ -12,6 +12,7 @@ use super::{E2E_DISPLAY_VERSION, current_version_display_text};
 use crate::app::AppError;
 use crate::app::startup::AppStartup;
 use crate::domain::session::Status;
+use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db;
 use crate::infra::db::{AppRepositories, Database};
 use crate::infra::fs::FsClient;
@@ -62,6 +63,61 @@ async fn startup_preserves_unregistered_replay_history() {
         fs::read_to_string(archive.join("history.md")).expect("preserved history"),
         "private history"
     );
+}
+
+#[tokio::test]
+async fn startup_loads_list_selection_without_session_detail() {
+    // Arrange
+    let root = tempdir().expect("worktrees");
+    let project_path = root.path().to_string_lossy();
+    let database = AppRepositories::in_memory().await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project(&project_path, None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_draft_session(
+            "draft-session",
+            "gemini-3.8-flash",
+            "main",
+            "Draft",
+            project_id,
+        )
+        .await
+        .expect("session");
+    database
+        .sessions()
+        .update_session_prompt("draft-session", "large persisted prompt")
+        .await
+        .expect("prompt");
+    database
+        .sessions()
+        .append_session_message(
+            "draft-session",
+            SessionMessageKind::AssistantAnswer,
+            "large persisted output",
+        )
+        .await
+        .expect("message");
+
+    // Act
+    let app = App::new_with_clients(
+        root.path().to_owned(),
+        root.path().to_owned(),
+        None,
+        database,
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("app");
+
+    // Assert
+    let selected = app.selected_session().expect("selected session");
+    assert_eq!(selected.id, "draft-session");
+    assert_eq!(selected.prompt, "");
+    assert!(selected.transcript.is_none());
 }
 
 #[tokio::test]

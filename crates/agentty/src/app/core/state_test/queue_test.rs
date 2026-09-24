@@ -5,6 +5,7 @@ use super::support::{session_creation_resources, test_turn_applied_state, test_v
 use crate::app::AppError;
 use crate::app::core::event::AppEvent;
 use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionStats, Status};
+use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
     TransientMessageLifecycle, TransientMessageSlot,
@@ -79,6 +80,34 @@ async fn launch_or_open_selected_follow_up_task_opens_existing_sibling_session()
     sibling_session.title = Some("Sibling session".to_string());
     app.sessions.push_session(source_session);
     app.sessions.push_session(sibling_session);
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            "session-2",
+            "gemini-3.8-flash",
+            "main",
+            "Review",
+            app.active_project_id(),
+        )
+        .await
+        .expect("sibling row");
+    app.services
+        .db()
+        .sessions()
+        .update_session_prompt("session-2", "sibling prompt")
+        .await
+        .expect("sibling prompt");
+    app.services
+        .db()
+        .sessions()
+        .append_session_message(
+            "session-2",
+            SessionMessageKind::AssistantAnswer,
+            "sibling output",
+        )
+        .await
+        .expect("sibling message");
 
     // Act
     app.launch_or_open_selected_follow_up_task("session-1")
@@ -94,6 +123,9 @@ async fn launch_or_open_selected_follow_up_task_opens_existing_sibling_session()
             ..
         } if session_id == "session-2"
     ));
+    let opened = app.selected_session().expect("opened sibling");
+    assert_eq!(opened.prompt, "sibling prompt");
+    assert!(opened.transcript.is_some());
 }
 
 #[tokio::test]

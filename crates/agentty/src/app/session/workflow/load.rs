@@ -591,20 +591,28 @@ impl SessionManager {
         db: &AppRepositories,
         session_id: &str,
     ) {
-        let Some(detail) = db
+        let _ = self
+            .try_load_session_detail_into_state(db, session_id)
+            .await;
+    }
+
+    /// Hydrates one session and reports persistence errors to callers that
+    /// must not proceed without the saved transcript.
+    pub(super) async fn try_load_session_detail_into_state(
+        &mut self,
+        db: &AppRepositories,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let detail = db
             .sessions()
             .load_session_detail(session_id)
-            .await
-            .ok()
-            .flatten()
-        else {
-            return;
-        };
-        let Ok(transcript) = load_session_transcript(db, session_id).await else {
-            return;
-        };
+            .await?
+            .ok_or(SessionError::NotFound)?;
+        let transcript = load_session_transcript(db, session_id).await?;
 
         self.apply_session_detail(session_id, detail, transcript);
+
+        Ok(())
     }
 
     /// Builds one in-memory session snapshot from a database row plus the

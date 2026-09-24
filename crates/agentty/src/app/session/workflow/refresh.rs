@@ -109,9 +109,7 @@ impl SessionManager {
         let selected_session_id = selected_index
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
-        let detail_session_id = Self::mode_session_id(mode)
-            .cloned()
-            .or_else(|| selected_session_id.clone());
+        let detail_session_id = Self::mode_session_id(mode).cloned();
         let live_orchestration_progress = self
             .state
             .sessions

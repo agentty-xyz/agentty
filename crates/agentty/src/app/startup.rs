@@ -246,14 +246,6 @@ impl AppStartup {
             ),
             stats_activity,
         );
-        if let Some(selected_session_id) = session_manager
-            .selected_session()
-            .map(|session| session.id.clone())
-        {
-            session_manager
-                .load_session_detail_into_state(services.db(), selected_session_id.as_str())
-                .await;
-        }
         session_manager.replace_session_worktree_availability(session_worktree_availability);
         session_manager.refresh_session_branch_names().await;
 

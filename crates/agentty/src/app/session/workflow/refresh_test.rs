@@ -18,6 +18,7 @@ use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
     Session, SessionHandles, SessionId, Status,
 };
+use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::presentation::app_mode::{
@@ -722,6 +723,74 @@ async fn refresh_sessions_if_needed_reloads_sessions_when_metadata_row_count_cha
     assert_eq!(session_manager.state.row_count, 1);
     assert_eq!(session_manager.state.sessions.len(), 1);
     assert_eq!(session_manager.state.sessions[0].id, "session-id");
+}
+
+#[tokio::test]
+async fn refresh_selected_list_session_defers_detail_until_viewed() {
+    // Arrange
+    let session = test_session(PathBuf::from("/tmp/session"), None, Status::Done);
+    let database = database_with_session(&session).await;
+    database
+        .sessions()
+        .update_session_prompt(&session.id, "persisted prompt")
+        .await
+        .expect("prompt");
+    database
+        .sessions()
+        .append_session_message(
+            &session.id,
+            SessionMessageKind::AssistantAnswer,
+            "persisted output",
+        )
+        .await
+        .expect("message");
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut session_manager = session_manager_with_session(clock, session);
+    session_manager.state.table_state.select(Some(0));
+    session_manager.state.handles_mut().insert(
+        "session-id".into(),
+        SessionHandles::new_unloaded(Status::Done),
+    );
+    let mut branch_client = git::MockGitClient::new();
+    branch_client
+        .expect_detect_git_info()
+        .times(2)
+        .returning(|_| Box::pin(async { None }));
+    session_manager.git_client = Arc::new(branch_client);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("temp dir");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+
+    // Act
+    session_manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    let selected = session_manager
+        .selected_session()
+        .expect("selected session");
+    assert_eq!(selected.prompt, "");
+    assert!(selected.transcript.is_none());
+
+    // Act
+    mode = AppMode::View {
+        session_id: selected.id.clone(),
+        scroll_offset: None,
+    };
+    session_manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    let viewed = session_manager.selected_session().expect("viewed session");
+    assert_eq!(viewed.prompt, "persisted prompt");
+    assert!(viewed.transcript.is_some());
 }
 
 /// Test clock implementation with mutable `Instant` and `SystemTime`.
