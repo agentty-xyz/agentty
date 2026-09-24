@@ -7,11 +7,11 @@ use ag_contracts::{
 };
 use ag_protocol::{AgentResponse, diff_fence};
 use ag_session::{AgentKind, AgentModel};
-use ag_worker::MockRunClient;
+use ag_worker::{MockRunClient, RunClient};
 
 use super::{
-    MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, render_result, submit,
-    summarize, summarize_context, summary_with_repair,
+    MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, render_result, summarize,
+    summarize_context, summary_with_repair,
 };
 use crate::app::AppError;
 use crate::app::session::SessionError;
@@ -43,6 +43,16 @@ fn render(diff: &str, context: &str) -> String {
     format!("FINAL\n{context}\n{diff}")
 }
 
+async fn submit(
+    client: &dyn RunClient,
+    request: OneShotRequest,
+    diff: &str,
+    context: &str,
+    render: impl Fn(&str, &str) -> Result<String, OneShotError>,
+) -> Result<(OneShotSubmission, bool), OneShotError> {
+    super::submit(client, request, diff, context, MAX_PROVIDER_CALLS, render).await
+}
+
 #[tokio::test]
 async fn small_diff_preserves_input_and_settings() {
     // Arrange
@@ -70,6 +80,35 @@ async fn small_diff_preserves_input_and_settings() {
     // Assert
     assert_eq!(submission.response.answer, "result");
     assert!(!summarized);
+}
+
+#[tokio::test]
+async fn caller_call_limit_stops_large_diff_reduction() {
+    // Arrange
+    let mut client = MockRunClient::new();
+    client.expect_submit().times(2).returning(|request| {
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("shared budget")
+            .consume()?;
+        Ok(answer("Short summary."))
+    });
+
+    // Act
+    let error = super::submit(
+        &client,
+        request(),
+        &"x".repeat(SUMMARY_CHUNK_BYTES * 3),
+        "",
+        2,
+        |diff, context| Ok(render(diff, context)),
+    )
+    .await
+    .expect_err("reduction should stop at the caller's cap");
+
+    // Assert
+    assert!(error.to_string().contains("provider call limit reached"));
 }
 
 #[tokio::test]
