@@ -19,7 +19,7 @@ label to preserve the repository association on subsequent publications.
 
 Copy the reported digest into the `container.image` value in `.github/workflows/e2e.yml`
 and the `published_e2e_image` assignment in
-`skills/feature-test/references/recording.md`. The pinned digest must remain an image
+`docs/contributing/feature-test/recording.md`. The pinned digest must remain an image
 index with both platforms; do not update the repository when either native test or
 either platform pull fails. Re-record every feature affected by a tool, browser, font,
 or rendering change and refresh its PNG poster before updating the digest and artifacts
@@ -32,7 +32,7 @@ instructions, the combined build requires binfmt/QEMU emulation for the non-nati
 platform; without it, use the manual workflow instead.
 
 When testing a locally built candidate, skip the `podman pull` step in
-`skills/feature-test/references/recording.md` and run the candidate's image ID from
+`docs/contributing/feature-test/recording.md` and run the candidate's image ID from
 `podman image inspect --format '{{.Id}}'` or pass `--pull=never` to `podman run`.
 Pulling a tag, or running `--platform` with one, re-resolves it against the registry and
 silently replaces the local build with a previously published image.

@@ -4,8 +4,8 @@
 # hook with `TESTTY_GIF_MODE=check`, which verifies committed GIF hash sidecars
 # without rewriting them. Developers record or refresh feature artifacts in
 # the same image with a writable mount and `TESTTY_GIF_MODE=generate` (see
-# `skills/feature-test/SKILL.md`), which keeps committed hashes portable between
-# local recording and CI verification.
+# `docs/contributing/feature-test/recording.md`), which keeps committed hashes
+# portable between local recording and CI verification.
 # Every tool is pinned; upgrade pins deliberately and re-verify the committed
 # GIF hash sidecars.
 FROM debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS tool-downloads

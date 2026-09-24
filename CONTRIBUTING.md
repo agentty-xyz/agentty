@@ -10,9 +10,9 @@ review, and validation evidence, regardless of how a change was authored.
   files define development policy and required quality gates.
 - Use [skills/AGENTS.md](skills/AGENTS.md) to select the relevant task workflow. Read
   detailed references only when needed.
-- Follow the [development setup](skills/development/references/setup.md) to prepare a
-  checkout. The [development skill](skills/development/SKILL.md) also routes test
-  selection and SQLx metadata work.
+- Follow the [development setup](docs/contributing/setup.md) to prepare a checkout. Use
+  the [validation recipes](docs/contributing/validation.md) for test selection and the
+  [SQLx metadata guide](docs/contributing/sqlx.md) for checked queries.
 
 ## Preparing a Contribution
 
@@ -23,5 +23,4 @@ definitions live in [.pre-commit-config.yaml](.pre-commit-config.yaml).
 For architecture changes, use the
 [change recipes](docs/site/content/docs/architecture/change-recipes.md) and the
 documentation routing in `AGENTS.md`. Use the
-[feature-test skill](skills/feature-test/SKILL.md) for visible TUI scenarios and the
-[git-commit skill](skills/git-commit/SKILL.md) when preparing commit or PR descriptions.
+[Agentty E2E guide](crates/agentty/tests/e2e/AGENTS.md) for visible TUI scenarios.

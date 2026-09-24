@@ -65,5 +65,5 @@ zola serve --root docs/site
 ```
 
 Use the cataloged `zola-check` hook for validation. Intentional feature recording also
-needs a running Podman environment; follow `skills/feature-test/references/recording.md`
+needs a running Podman environment; follow `docs/contributing/feature-test/recording.md`
 for the canonical container workflow.

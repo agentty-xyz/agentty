@@ -27,7 +27,8 @@ Published Rust-native TUI E2E framework and language-agnostic `testty` CLI.
 
 - Use PTY assertions for terminal semantics and VHS captures for visual artifacts.
   Follow `crates/testty/README.md` and `crates/testty/docs/README.md` for host examples.
-- Follow `skills/feature-test/SKILL.md` when integrating Agentty feature scenarios.
+- Follow `crates/agentty/tests/e2e/AGENTS.md` when integrating Agentty feature
+  scenarios.
 
 ## Documentation
 

@@ -122,7 +122,7 @@ recording should use the canonical container. Do not suppress macOS crash report
 hide the browser failure.
 
 Use the exact platform-explicit, digest-pinned Podman recording command in
-`skills/feature-test/references/recording.md`. It runs the local container as the host
+`docs/contributing/feature-test/recording.md`. It runs the local container as the host
 UID and GID so Linux bind mounts remain writable. CI overrides the image user with root
 for workspace access. Recording in the same container that performs the freshness check
 prevents host-specific output from churning committed artifacts.

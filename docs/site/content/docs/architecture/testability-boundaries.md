@@ -92,7 +92,8 @@ terminal text, style, and position. VHS recordings provide visual review artifac
 time, provider executables, and version labels so recordings do not depend on the host.
 Import public `testty` items through their owning modules.
 
-Use the repository's `feature-test` skill for scenarios, GIFs, and paired PNG posters.
+Follow `crates/agentty/tests/e2e/AGENTS.md` for PTY scenarios and
+`docs/contributing/feature-test/recording.md` for published recordings.
 
 ## Headless worker boundaries
 
@@ -128,5 +129,5 @@ runtime with an injected provider. Opt-in live evaluations use the same path and
 responses, settings, usage, latency, and bounded grades. Grades are regression signals,
 not a proof of correctness; unavailable telemetry remains unknown.
 
-See `skills/development/references/prompts.md` for the evaluation workflow and root
-`AGENTS.md` for required gates.
+See `docs/contributing/prompts.md` for the evaluation workflow and root `AGENTS.md` for
+required gates.

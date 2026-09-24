@@ -61,4 +61,5 @@ state.
 
 Use the `test-agentty-e2e` hook for the final suite. Set `TUI_TEST_UPDATE=1` on the
 `prek run` invocation only when intentionally refreshing snapshot baselines. The focused
-scenario and recording procedures are in `skills/feature-test/SKILL.md`.
+scenario and recording procedures are in `docs/contributing/feature-test/authoring.md`
+and `docs/contributing/feature-test/recording.md`.

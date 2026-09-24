@@ -3,15 +3,14 @@ name: grilling
 description: Grill the user relentlessly about a plan, decision, or idea. Use only when the user explicitly asks to grill or stress-test a plan, decision, or idea.
 ---
 
-Interview me relentlessly about every aspect of this until we reach a shared
-understanding. Walk down each branch of the decision tree, resolving dependencies
-between decisions one-by-one. For each question, provide your recommended answer.
+Stress-test the user's plan, decision, or idea when explicitly requested. Challenge
+material assumptions and trade-offs, following dependencies between decisions. Look up
+facts available in the environment before asking the user.
 
-Ask the questions one at a time, waiting for feedback on each question before
-continuing. Asking multiple questions at once is bewildering.
+Ask one decision question at a time, with a recommended answer and its reason. Wait for
+the user's response, then follow its implications. Reopen an accepted decision only when
+new evidence changes it.
 
-If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it
-up rather than asking me. The *decisions*, though, are mine — put each one to me and
-wait for my answer.
-
-Do not act on it until I confirm we have reached a shared understanding.
+Stop when remaining uncertainty would not change the plan, or when the user asks to
+stop. Summarize the accepted decisions and unresolved risks. Continue work the user has
+already authorized; ask for another decision only if it blocks that work.

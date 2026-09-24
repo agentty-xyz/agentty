@@ -164,4 +164,4 @@ intentional recording; do not suppress macOS crash reporting to hide a bare-host
 failure.
 
 When changing the image itself, follow
-`skills/feature-test/references/image-maintenance.md`.
+`docs/contributing/feature-test/image-maintenance.md`.
