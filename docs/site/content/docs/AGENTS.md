@@ -5,8 +5,14 @@ it as a changelog, implementation inventory, or agent-environment setup guide.
 
 ## Writing
 
-- Keep overview pages concise and task-oriented; link to the detailed workflow,
-  keybinding, backend, or architecture page instead of repeating it.
+- Keep every user-facing page concise, task-oriented, and written in plain language.
+  Include only what readers need to understand, use, or troubleshoot the feature;
+  preserve necessary prerequisites, limitations, and recovery steps.
+- Give each topic one canonical explanation and link to it instead of repeating it. Keep
+  overviews to concepts and first steps, and keybinding tables to keys and actions.
+- Keep contributor and architecture pages focused on durable concepts, boundaries, and
+  guarantees. Leave implementation inventories and exhaustive test cases in source and
+  tests; clearly distinguish proposed designs from shipped behavior.
 - Preserve useful headings and anchors. Use short titled sections for prose and tables
   only for compact comparison data.
 - Use checked Zola `@/...` links for internal Markdown targets; do not use relative
@@ -37,5 +43,6 @@ it as a changelog, implementation inventory, or agent-environment setup guide.
 - When a product surface is removed, remove its page and navigation entry rather than
   leaving a historical stub.
 
-Before handoff, scan edited pages for duplicated behavior, stale setup, long table
-cells, invalid internal links, and implementation detail at the wrong layer.
+Before handoff, scan edited pages for unnecessary detail, jargon, duplicated behavior,
+stale setup, long table cells, invalid internal links, and implementation detail at the
+wrong layer.

@@ -9,6 +9,8 @@ weight = 6
 `ag-harness` is the base layer between an application and an LLM. It is Rust-native,
 app-facing, and lightweight: an agent loop, three policy-checked tools, durable
 sessions, and content-free lifecycle events. Product decisions stay in the application.
+It is not yet an Agentty backend; product integration must follow the
+[Execution](@/docs/core-components/execution.md) boundary.
 
 ```mermaid
 flowchart LR

@@ -1,11 +1,12 @@
 +++
 title = "Testability Boundaries"
-description = "Trait boundaries around external systems and testing guidance for deterministic orchestration."
+description = "External-system boundaries and deterministic testing guidance."
 weight = 5
 +++
 
-<a id="architecture-testability-introduction"></a> Agentty keeps external systems behind
-trait boundaries so orchestration logic can be tested deterministically.
+<a id="architecture-testability-introduction"></a> Inject external systems so workflow
+tests can control failures, ordering, and time without live providers or host-dependent
+results. Use real adapter tests to verify the boundaries themselves.
 
 Worker policy tests observe resolved `ExecutionPolicy` values at injected runtime
 boundaries. Adapter tests verify native command settings, unsupported-policy errors,
@@ -17,272 +18,115 @@ installed harness and its supported controls.
 
 ## Testability and Boundaries
 
-Unit suites live in sibling `*_test.rs` files loaded as child modules, keeping private
-implementation details accessible without expanding production APIs. Large suites use
-test-module routers grouped by behavior, with shared fixtures in test-only support
-modules. Coverage excludes these test files while retaining production sources.
+Unit tests live in sibling `*_test.rs` modules. Shared fixtures remain test-only; public
+integration tests exercise supported APIs without exposing private implementation.
 
-Agentty keeps crate-wide fixtures behind `cfg(test)` and integration database fixtures
-in `tests/support/`. Startup receives an explicit version-task runner, and test fixtures
-select offline clients without changing production defaults or control flow. PTY setup
-and database assertions run asynchronously on the test runtime.
+<a id="architecture-testability-boundaries"></a> Major injectable contracts:
 
-<a id="architecture-testability-boundaries"></a> External-boundary traits are mocked
-with `mockall`, usually via `#[cfg_attr(test, mockall::automock)]`; shared workspace
-crates such as `ag-agent`, `ag-forge`, and `ag-git` expose test mocks through crate-root
-exports gated by test features or test-only exports. The major boundaries and
-application ports:
+| Boundary                         | Contract                        |
+| -------------------------------- | ------------------------------- |
+| Git and worktrees                | `GitClient`                     |
+| Filesystem and path probes       | `FsClient`                      |
+| Session turns                    | `AgentChannel`                  |
+| Isolated model calls             | `OneShotClient`                 |
+| Provider setup                   | `AgentBackend`                  |
+| Provider runtime lifecycle       | `AppServerClient`               |
+| Forge requests and comments      | `ReviewRequestClient`           |
+| Programmatic session lifecycle   | `SessionBackend`                |
+| Terminal events                  | `EventSource`                   |
+| Wall and monotonic time          | `Clock`                         |
+| Worktree launch commands         | `TmuxClient`                    |
+| Clipboard capture                | `ClipboardImageClient`          |
+| Workspace personalities          | `PersonalityCatalogClient`      |
+| Process and temperature sampling | `ResourceClient`                |
+| Persistence                      | Repository traits in `ag-store` |
+| Storage timestamps               | `TimestampSource`               |
 
-| Trait                      | Module                                       | Boundary                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| -------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GitClient`                | `crates/ag-git/src/client.rs`                | Git and worktree operations (hook readiness and execution, merge, merge-conflict probes, rebase, diff, bounded preview-file reads, push, status, ahead/behind).                                                                                                                                                                                                                                                                    |
-| `FsClient`                 | `infra/fs.rs`                                | Async filesystem operations and path probes.                                                                                                                                                                                                                                                                                                                                                                                       |
-| `AgentChannel`             | `crates/ag-contracts/src/contract.rs`        | Provider-agnostic turn execution.                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `OneShotClient`            | `crates/ag-contracts/src/one_shot.rs`        | Isolated structured prompts, including transport routing, protocol repair, scoped runtime reuse and cleanup, and usage aggregation.                                                                                                                                                                                                                                                                                                |
-| `AgentBackend`             | `crates/ag-agent/src/agent/backend.rs`       | Per-provider setup and transport command construction.                                                                                                                                                                                                                                                                                                                                                                             |
-| `AppServerClient`          | `crates/ag-agent/src/app_server/contract.rs` | Provider-managed runtime execution and session lifecycle, including app-server RPC and persistent NDJSON processes.                                                                                                                                                                                                                                                                                                                |
-| `ReviewRequestClient`      | `crates/ag-forge/src/client.rs`              | Review-request orchestration, comment loading, and thread reply/resolution through `gh`/`glab`.                                                                                                                                                                                                                                                                                                                                    |
-| `SessionBackend`           | `crates/ag-session/src/service.rs`           | Clone-safe frontend-neutral session creation, complete by-id lookup, messaging, structured question answers, cancellation, merge, and review-request operations implemented by host applications.                                                                                                                                                                                                                                  |
-| `EventSource`              | `runtime/event.rs`                           | Terminal event polling for deterministic event-loop tests.                                                                                                                                                                                                                                                                                                                                                                         |
-| `Clock`                    | `infra/clock.rs`                             | Wall-clock, UTC-offset, and monotonic time for session orchestration, activity timestamps/day grouping, and render throttling; fixed clocks pin the timestamp and offset so application state and `FrameTime` remain deterministic.                                                                                                                                                                                                |
-| `TmuxClient`               | `infra/tmux.rs`                              | Tmux subprocess operations for opening worktrees.                                                                                                                                                                                                                                                                                                                                                                                  |
-| `ClipboardImageClient`     | `infra/clipboard_image.rs`                   | Clipboard image capture and temp-file persistence; host clipboard reads are isolated in `ag-clipboard`.                                                                                                                                                                                                                                                                                                                            |
-| `PersonalityCatalogClient` | `infra/personality.rs`                       | Discovers and resolves enabled personality definitions from the current session worktree's `.agents/agents` directory.                                                                                                                                                                                                                                                                                                             |
-| Repository traits          | `crates/ag-store/src/*.rs`                   | Narrow persistence boundaries (`SessionRepository`, `ProjectRepository`, `ReviewRepository`, `UsageRepository`, `ActivityRepository`, `OperationRepository`, `OrchestrationRepository`, `SettingRepository`); activity persistence returns raw timestamps for clock-aware app aggregation. `OrchestrationRepository` owns its own pool so orchestration reconciliation never contends with the foreground session-runtime mailbox. |
-| `TimestampSource`          | `crates/ag-store/src/timestamp.rs`           | Unix timestamps for persistence writes; Agentty adapts its environment-selected `Clock` at the composition root while standalone store constructors use the system clock.                                                                                                                                                                                                                                                          |
+Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
+isolate subprocess sequencing when a public client is too broad. Runtime rendering can
+use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)
+identifies the owning crates and layers.
 
-`ag-orchestration` injects `OrchestrationEventSink` for campaign refresh/progress
-notifications and `OrchestrationSchedule` for reconciliation wakeups. Tests can combine
-an in-memory event channel, deterministic schedule, repository mocks, and a
-`SessionBackend` without constructing the TUI. Agentty tests its event translation at
-the application boundary.
+Campaign tests inject repositories, `SessionBackend`, `OrchestrationEventSink`, and
+`OrchestrationSchedule`. They do not construct the TUI. Storage tests exercise real
+SQLite adapters with injected timestamps; test fixtures do not alter production
+contracts.
 
-`ag-store` keeps repository contracts identical in ordinary and test builds. Its
-`test-utils` feature exposes shared in-memory repository fixtures and orchestration
-mocks; fixture construction stays in separate test-support files. Persistence suites
-exercise the real SQLite adapters and inject timestamp sources for clock assertions.
+Resource tests inject process identities and readings to cover PID reuse, stale data,
+and sensor stalls. Host tests separately verify native access. A stalled sensor must not
+block process accounting or shutdown.
 
-`OrchestrationRepository` also bulk-loads session-list progress and controller-child
-adjacency per project, and atomically claims roll-up submission before the session API
-uses its stable operation identifier.
-
-`ResourceClient` supplies process-table snapshots to the session manager. Its production
-adapter runs a locale-stable, time-limited `ps` command between native creation-identity
-queries for the tracked roots. Native queries run off the async executor. Deterministic
-snapshots test process-tree attribution, same-second PID reuse, refresh throttling, and
-invalidation without host-dependent resource assertions. Isolated host tests check both
-accounting and native identity access. The same adapter reads CPU temperature sensors
-through `sysinfo` on a dedicated thread, scheduling reads at most every ten seconds. It
-polls one retained worker without awaiting sensor I/O, so stalled reads cannot block
-accounting, accumulate replacement workers, or hold up Tokio shutdown. Cached readings
-remain visible during refresh but expire after twenty seconds. Channel-controlled tests
-cover stalls, recovery, and continued process accounting; worker failures retry after
-the cooldown. Pure sensor-selection tests exclude unrelated and invalid readings;
-snapshot tests verify host temperature is carried without summing it across descendants.
-The public `SessionResources` type retains only process totals. An internal temperature
-sidecar follows the same root identity and invalidation rules, and temperature-only
-changes request a redraw without changing the public accounting snapshot. Debug-build
-feature recordings pin `AGENTTY_CPU_TEMPERATURE_CELSIUS` to keep temperature text
-independent of host hardware and load; `--` pins an unavailable reading. Release builds
-do not read this override.
-
-Beyond these, narrower internal command-runner boundaries (for example
-`ForgeCommandRunner`, `GitCommandRunner`, `CompatibilityMergeRunner`,
-`TmuxCommandRunner`, `UpdateRunner`, the `ag-harness` repository-inspection runner, and
-the provider transport traits) keep subprocess sequencing and retry behavior
-deterministic in unit tests. The runtime also accepts `Terminal<B: Backend>` via
-`run_with_backend`, enabling in-process TUI tests with `TestBackend`.
-
-`ag-harness` supervision consumes the public `BashExecutor` boundary: an inert executor
-binding, a resource-owning process interface, and a private monotonic clock.
-Deterministic tests cover stalled preparation and partial startup, independent
-descendant lifetime and pipe EOFs, output floods, cancellation, dropped callers, bounded
-cleanup retries, and combined failures. Contract tests also exercise grants, shared
-output budgets, and independent result fields. Bash uses this supervisor with the
-selected executor: the default native launcher with descriptor clearing, or the
-explicitly selected unsandboxed executor. The shared execution-conformance suite runs
-lifecycle and persistence behavior against both shipped executors. Native public-surface
-tests exercise allowed access, confinement, capture, cancellation, and retained
-controls, including Linux Landlock write-grant confinement on real isolated processes.
-Linux namespace completion and macOS best-effort process-group cleanup are distinct
-contracts; mock tests cannot establish native enforcement. Missing native infrastructure
-is a failed qualification, not a skipped success.
-
-Persistent `ag-harness` execution uses a public object-safe transactional store. An
-independent external test implementation exercises public construction, reservation,
-options compatibility, and actual turns. Shared conformance cases run against it and
-SQLite and `MemoryStore`, covering admission, bounded history, terminal states, and
-journal ownership. Host-request conformance also covers atomic duplicates, effective
-configuration conflicts, stopped outcomes, pending effects, and SQLite reopen.
-Controlled request tests retain cancellation/commit races and lost acknowledgments.
-Model-switch conformance covers stale handles, A-to-B-to-A reopen, canonical history
-compatibility, continuation isolation, and recovery provenance. Admission barriers
-exercise switching against unacknowledged acquisition and dropped switch waiters. Memory
-clones share state; tests verify independent instances, expiry recovery, comparison
-compatibility, and canonical records outside replay budgets. Barrier-controlled store
-fixtures exercise stalled renewal and terminal persistence, acknowledgement loss, and
-finalization races. SQLite tests verify owner fencing, expired leases, journal
-settlement, and reopen behavior. The backend also injects a timestamp source and a
-reservation observer. The observer marks the boundary after SQLite commits a turn
-reservation, allowing tests to exercise cancellation at that point without conditional
-production control flow. Unit suites and their fixtures live in separate test files.
-Shared-engine tests compare provider requests across durable and ephemeral execution.
-Persistence tests cover options snapshots, legacy reads without live repository
-validation, and continuation invalidation against canonical configuration. Host
-comparison validation shares the bounded repository command runner; real-Git fixtures
-cover pinned OIDs and nested scopes; terminal lifecycle tests retain the
-persistence-before-completion boundary. Gated filesystem replacements and journal
-recording verify independent persistence and effect settlement, retained execution after
-caller drop, successor admission, and stale controls across all stores. The filesystem
-boundary must acknowledge completion of delegated work before returning; worker failure
-without acknowledgment remains explicitly unresolved.
-
-The `ag-agent` crate keeps provider routers, parsers, and concrete transport adapters
-private. Application workflows that submit isolated utility prompts inject
-`ag-worker::RunClient`; worker tests inject `OneShotClient`. Provider and transport
-tests use the feature-gated crate-root mocks and helper factories rather than deep
-module paths. CLI-backed session turns, one-shot prompts, and protocol-repair retries
-share one crate-private raw subprocess executor for command construction, stdin
-delivery, PID lifetime, stream collection, and exit classification. Adapter-specific
-observers translate those raw events into session updates, while one-shot callers
-consume the collected raw output; response parsing and repair policy stay in the owning
-adapter.
+Harness conformance tests exercise every supported store and executor through public
+APIs. Store tests cover ownership, recovery, admission, and persistence; executor tests
+cover capture, cancellation, cleanup, and confinement. Native enforcement requires real
+platform qualification: mocks cannot prove it. Missing native infrastructure is a failed
+qualification, not a passed or silently skipped check. See
+[`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for platform
+limitations.
 
 ## Typed Errors Across Layers
 
-<a id="architecture-typed-error-enums"></a> Each infra boundary exposes a typed error
-enum (`DbError`, `GitError`, `AppServerError`, `AgentError`, `OneShotError`,
-`ClipboardError`, and so on). Within `ag-agent`, `AppServerError::Transport` retains
-transport-specific causes. The channel adapter maps app-server diagnostics into
-`ag-contracts`' `AgentError::Runtime` category, keeping worker and host contracts
-independent of concrete transport error types.
+<a id="architecture-typed-error-enums"></a> External clients expose typed errors.
+Adapters translate transport details into shared execution error categories so workers
+and hosts remain independent of provider implementations.
 
-<a id="architecture-app-layer-typed-errors"></a> The app layer propagates infra errors
-through `SessionError` (`app/session/error.rs`) and `AppError` (`app/error.rs`), both of
-which wrap infra and `OneShotError` values via `#[from]` plus a `Workflow(String)`
-variant for contextual app-level failures. At event and display boundaries, errors are
-converted to `String` via `Display` because those types require `Clone` and `Eq`.
+<a id="architecture-app-layer-typed-errors"></a> Application workflows propagate
+`SessionError` and `AppError`. Convert them to display strings only at event and UI
+boundaries; preserve causes until then.
 
 ## Testing Guidance
 
-<a id="architecture-boundary-testing-guidance"></a> When adding higher-level flows
-involving multiple external commands, prefer injectable trait boundaries and
-`mockall`-based tests over flaky end-to-end shell-heavy tests. Add a narrower internal
-command-runner boundary when a public orchestration trait still needs deterministic
-coverage of subprocess sequencing or retry behavior. Repository command boundaries must
-also select executables outside repository scope, neutralize inherited process
-configuration and configured filesystem monitors, verify canonical scope, and drain
-subprocess streams into complete bounded records.
+<a id="architecture-boundary-testing-guidance"></a>
 
-Apply the same rule to filesystem discovery and path probes in `app/` and `runtime/`:
-route directory walking, `exists` checks, `canonicalize`, and file copy or persistence
-helpers through an infra boundary instead of calling `std::fs` or `Path` helpers
-directly from orchestration code. Likewise, route `Instant::now()` and
-`SystemTime::now()` through the shared `Clock` boundary. Cleanup tasks also derive their
-shared shutdown deadline from that injected clock.
-
-Workspace migration validation injects directory listing and metadata operations.
-Deterministic tests cover discovery order, duplicate prefixes, and I/O failures;
-isolated filesystem and CLI tests cover the host adapter. Unreadable migration
-directories fail validation instead of being treated as empty.
+- Inject process, filesystem, and clock access in application and runtime workflows.
+- Test ordering, failure, cancellation, and retries through controllable boundaries.
+- Use isolated real-system tests for behavior mocks cannot establish.
+- Keep executable selection, canonical path validation, bounded output, and inherited
+  process configuration handling inside command adapters.
+- Keep production defaults intact; tests select offline clients through composition.
 
 ## TUI E2E Testing Framework (`testty`)
 
-<a id="architecture-tui-e2e-framework"></a> The `testty` workspace crate provides a
-dual-oracle model for TUI end-to-end testing. The PTY path (`portable-pty` + `vt100`) is
-the semantic oracle for text, style, and location assertions; the VHS path is the visual
-oracle and review artifact generator.
+<a id="architecture-tui-e2e-framework"></a> PTY tests provide semantic assertions over
+terminal text, style, and position. VHS recordings provide visual review artifacts. Pin
+time, provider executables, and version labels so recordings do not depend on the host.
+Import public `testty` items through their owning modules.
 
-| Module                          | Purpose                                                            |
-| ------------------------------- | ------------------------------------------------------------------ |
-| `session`                       | PTY executor: spawns binaries, writes input, captures ANSI output. |
-| `frame`                         | Terminal frame parser: ANSI bytes to a cell grid.                  |
-| `region` / `locator`            | Rectangular regions and style-aware text locators.                 |
-| `assertion` / `recipe`          | Structured matchers and agent-friendly expectation helpers.        |
-| `scenario` / `step` / `journey` | Scenario DSL compiled to PTY or VHS.                               |
-| `vhs` / `snapshot` / `proof`    | VHS tape compilation, paired baselines, proof backends.            |
-| `feature`                       | `FeatureDemo` builder with hash-cached VHS GIF generation.         |
-
-testty has no crate-root re-export module: every public item is addressable only through
-its owning module path (for example, `use testty::scenario::Scenario;`). The
-`tests/public_api.rs` tripwire pins those per-module items as the documented stable
-surface.
-
-Agentty feature runs pin the wall clock, UTC offset, agent executables, and rendered
-version label before the PTY frame is captured. Hash redactions then normalize generated
-worktree names and the pinned version label without relying on their runtime width.
+Use the repository's `feature-test` skill for scenarios, GIFs, and paired PNG posters.
 
 ## Headless worker boundaries
 
-`ag-worker` tests scheduling with injected `WorkQueue` and `WorkerHost` implementations.
-`OperationRepository` is generic over the storage error type and has no SQLite
-requirement. An injected `Clock` drives heartbeat tests. Runtime tests use
-`ag-contracts` mocks to cover cancellation before the first turn poll. CLI adapter tests
-use a real parent and long-lived child to verify process-group cleanup, including parent
-exit with inherited output pipes still open. Closed-mailbox tests cover paused work,
-operation settlement, and caller notifications. Session models and storage depend on
-contracts without pulling in provider transports.
+Inject `WorkQueue`, `WorkerHost`, persistence, runtime contracts, and the worker clock.
+Cover shared ordering, heartbeats, cancellation, shutdown, and terminal settlement
+without a frontend. Real process tests verify descendant cleanup and inherited pipes.
 
 ## Session composition boundary
 
-Application tests inject `SessionRunFactory`, which returns worker clients, before
-submitting ordinary session commands. Runtime configuration and raw adapter injection
-are separated: production constructs runtimes inside the worker, while test-only worker
-facilities wrap scripted channels and CLI backends. The default test factory stays
-offline: non-model worker operations can create and shut down a channel, but an
-unscripted model turn fails the test process, even from a detached worker. Tests
-requiring turns supply scripted worker clients through `ag-worker` test facilities.
-Worker reuse, model-switch replacement, and shutdown follow the production path. A
-reversible scheduling hold protects pending work while
-`SessionRepository::apply_session_agent_model` atomically saves the selection,
-conversation reset, and optional project defaults. SQLite failure fixtures verify
-rollback, and worker tests verify resumption after releasing the hold.
+Application tests receive scripted worker clients through `SessionRunFactory`. The
+default test factory is offline and fails unexpected model calls, including detached
+ones. Exercise model-switch scheduling and persistence failure through the production
+composition path, preserving pending work when a save fails.
 
 ## Worker submission boundary
 
-Utility workflow tests inject `ag-worker::MockRunClient`; session workflow tests receive
-`SessionRunClient` wrapping a scripted runtime through composition. Worker tests inject
-runtime and persistence boundaries. Mailbox tests verify shared ordering, wakeups,
-post-processing serialization, abandonment, and shutdown; public integration tests
-exercise the same submission handles without a frontend. Deterministic tests cover
-concurrency, inherited ownership, cancellation, heartbeat failures, and terminal
-persistence. Cancellation tests retain independent parent and child tokens, assert
-app-server shutdown during initial and repair turns, and verify session deletion and
-background cancellation cleanup wait for utilities. `RunRepository` atomically rejects
-admission for durably closed session IDs; SQLite tests verify closures survive session
-deletion, while worker tests cover tracker eviction, runtime panics, and
-closure-persistence failure. Adapter tests also cover provider panics during initial and
-repair turns through shutdown expectations. Deadline tests inject stuck turns and
-shutdown futures, verify runtime resources are dropped, and confirm unfinished run
-records remain recoverable. The source-boundary test rejects raw runtime execution from
-Agentty workflows.
+Utility workflows inject `MockRunClient`; session workflows use scripted
+`SessionRunClient` instances. Worker tests own raw runtime and storage injection.
+Preserve public submission-contract coverage alongside workflow tests.
 
-See [Execution](@/docs/core-components/execution.md) for the execution contract.
+Cancellation tests must observe adapter cleanup before terminal persistence, including
+nested calls, caller drop, and provider panics. Review tests control deadlines and
+request generations to verify partial retry, invalidation, and stale-result rejection. A
+cached successful call is reusable only for the same evidence and profile.
 
-Focused-review tests inject a short total deadline around `RunClient` to verify
-cancellation and retained partial findings. App-server fixtures verify fresh
-conversation context on reused processes, restart fallbacks, and explicit scope cleanup.
-
-Focused-review retry tests exercise durable call checkpoints through `SessionRepository`
-and SQLite, including atomic completion cleanup, failed persistence, generation pruning,
-and rejection of late writes. Tests with reversed submission order verify that
-generation activation follows review creation order. Reducer tests cover same-diff
-request replacement, reordered completions, and stale persistence retries. Repository
-and worker tests verify that rebase invalidation discards prior evidence even when the
-next review has identical inputs, while preserving reuse on ordinary retries. Rejected
-rebase admission retains completed and partial reviews; invalidation failure stops Git
-mutation. PTY coverage verifies that a rejected sync leaves the review visible.
-Production-composition tests verify that the worker uses isolated pooled runtime
-submissions and closes retained runtimes after draining calls. Provider-size regressions
-exercise adaptive cross-file prompts and whole-finding consolidation through
-`RunClient`; PTY coverage verifies that retrying a partial review skips completed work.
+See [Execution](@/docs/core-components/execution.md) for the mandatory worker path.
 
 ## Prompt Behavior
 
-Protocol tests cover task-specific schemas, native policy delivery, instruction-key
-invalidation, evidence encoding, and preservation of remote descriptions. Behavioral
-fixtures additionally run through `RunWorker` and the real runtime with an injected
-provider boundary. Opt-in repeated live evaluations use the same execution path and
-record raw responses, settings, tokens, latency, and bounded rule-based grades. These
-grades are regression signals, not a general correctness proof; unavailable telemetry is
-recorded as unknown. See `skills/development/references/prompts.md` for the recipe.
+Contract tests cover schemas, native policy delivery, evidence encoding, and
+continuation invalidation. Behavioral fixtures run through the production worker and
+runtime with an injected provider. Opt-in live evaluations use the same path and record
+responses, settings, usage, latency, and bounded grades. Grades are regression signals,
+not a proof of correctness; unavailable telemetry remains unknown.
+
+See `skills/development/references/prompts.md` for the evaluation workflow and root
+`AGENTS.md` for required gates.

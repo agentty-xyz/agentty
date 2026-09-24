@@ -4,1075 +4,447 @@ description = "Interface layout, session lifecycle, slash commands, and data loc
 weight = 1
 +++
 
-<a id="usage-workflow-introduction"></a> This page covers the Agentty interface layout,
-session lifecycle, session sizes, slash commands, and data location.
-
-For keyboard shortcuts by view, see [Keybindings](@/docs/usage/keybindings.md).
+<a id="usage-workflow-introduction"></a> Create a session, review its changes, then
+merge locally or publish a review request. See
+[Keybindings](@/docs/usage/keybindings.md) for shortcuts by view.
 
 <!-- more -->
 
-New sessions open their composer before workspace setup finishes. You can type
-immediately and submit a prompt; it waits safely for the workspace. Setup stays quiet
-until a submitted prompt is waiting or setup fails. These notices appear inline. Press
-`s` from the session view to retry failed setup. A restart also preserves prompts and
-images whose turns never began, so `s` can submit them again. Saved prompts survive a
-restart; review the previous turn if dispatch was interrupted. If you switch projects, a
-saved prompt resumes when you return to its project.
-
-Startup marks interrupted rebases as failed and restores their sessions to **Review**. A
-removed session worktree does not block this recovery. Storage errors or Git inspection
-and cleanup failures in existing worktrees must be resolved before startup can complete.
-
-Drafts keep their staging controls: `Enter` saves a draft, and `s` starts background
-workspace setup for the staged prompt. Stacked drafts still require a review-ready
-parent and an idle stack. Forks capture the source history and commit before setup.
-
 ## Interface Layout
 
-<a id="usage-interface-layout"></a> Agentty organizes its interface into six primary
-tabs. Press `Tab` to move forward or `Shift+Tab` to move backward:
+<a id="usage-interface-layout"></a> Use `Tab` and `Shift+Tab` to move between tabs:
 
-- **Projects**: Select between projects (git repositories) in a dashboard view with an
-  activity heatmap, work-pace metrics, token usage, and a project table showing names,
-  branches, session counts, last-opened dates, and paths. Detected agent CLIs and their
-  versions are listed here too.
-- **Sessions**: List, create, and manage agent sessions for the active project. Rows
-  show a size marker prefix (for example `[XL]`), the current `agent/model` with its
-  reasoning level, and a live active-work `Timer` column whose time units are separated
-  for readability (for example, `11m 23s`). The list shows only populated merge queue,
-  active, and archive groups, with a session count in each group heading. Archive rows
-  use subdued text so completed work is visually distinct from current sessions. When
-  there are no sessions, it prompts you to press `a` to start one. Press `p` to open a
-  project switcher popup that lists registered projects in most-recently-opened order
-  and switches the active project without leaving the Sessions view.
-- **Settings**: Configure the color theme, orchestrator parallelism, automatic approval
-  for read-only research waves, per-role smart/fast/review model and reasoning defaults,
-  the optional `Last used model as default` mode, the session commit coauthor trailer,
-  and `Launch Configurations` for the active project.
+- **Projects**: Choose a repository; view activity, usage, and installed agent CLIs.
+- **Sessions**: Create and manage work in merge-queue, active, and archive groups. Press
+  `p` to switch projects without leaving this tab.
+- **Settings**: Configure appearance, orchestration, model defaults, and launch
+  commands.
 
-On startup, Agentty restores the last active list tab. If no tab has been saved yet but
-an active project is already persisted, Agentty opens on **Sessions** so you can resume
-project work without first selecting the project again.
+Agentty restores your last list tab on startup. Session chat shows the current model,
+reasoning, changed-line totals, active-work timer, token usage, and linked review
+request. The footer shows the active directory, branch, and ahead/behind counts.
 
-In session chat view, the status-colored session title renders in a header row above the
-output panel, with a metadata row showing the size bucket, `+added` / `-deleted` line
-totals, the cumulative active-work timer, the current model, the effective reasoning
-level, and token usage. A linked pull-request or merge-request URL appears in the header
-when present. Press `c` on a linked review request to open its comments in a split page:
-unresolved threads, resolved threads, and standalone review-request comments are grouped
-on the left, while the selected entry's metadata, attached current-diff context, and
-conversation appear on the right. In **Review**, **AgentReview**, or **Question**, press
-`Space` to select actionable inline threads, then press `Enter` to send the selection to
-the active session agent. Standalone comments are read-only because they do not have
-forge thread IDs. After submission, the session returns to **InProgress** and shows a
-count-aware `Resolving … review comments...` loader without exposing the generated agent
-instructions as a user message. Conversation bodies render Markdown and common embedded
-HTML through the same shared text-rendering path used by review-request details.
-Forge-authored description and comment input is capped at `1 MiB` before normalization;
-truncated bodies end with `[Forge content truncated at 1 MiB.]`. The timer ticks only
-while the session is actively working. `Done` sessions use `c` to start a continuation
-draft and no longer expose review comments. File-level comments show an explicit
-no-line-context message instead of a synthetic code anchor. Each session stores the
-project's Smart reasoning default when it is created, so later default changes affect
-new sessions without relabeling existing ones.
+### Resource Usage
 
-Session chat also shows `Processes`, `CPU`, and `Memory` for the tracked agent process
-and its descendants, refreshed about every two seconds. `CPU` sums the host's `ps`
-percentages and can exceed `100%`; it is host-reported accounting rather than an
-instantaneous utilization measurement. `Memory` is summed resident memory in `MiB`, so
-shared pages may be counted for each process. `--` means no agent PID is tracked, the
-tracked process has exited (including while idle), its PID now belongs to a different
-process, a retry replacement is starting, or accounting is unavailable. Detached
-processes, other Agentty instances, and Agentty's own resource use are outside these
-totals.
+`Processes`, `CPU`, and `Memory` cover the tracked agent and its descendants, refreshed
+about every two seconds. CPU can exceed `100%`; resident memory may count shared pages
+more than once. Detached processes and Agentty itself are excluded. `--` means no
+current measurement is available.
 
-`Host CPU temp` shows the hottest recognized CPU sensor in `°C` alongside a valid
-process sample, with sensors polled at most every ten seconds. It measures the whole
-host, including other workloads. Supported sensors include the numbered CPU die probes
-on Apple M5 Macs. Sensor support varies by hardware and operating system; unavailable
-readings display `--`. If a sensor read stalls, the previous temperature expires after
-twenty seconds; process CPU and memory updates continue independently.
+`Host CPU temp` measures the whole host, including other workloads. Sensor support
+varies by hardware and OS. Readings refresh at most every ten seconds and expire after
+twenty seconds if a sensor stalls.
 
-The top status bar shows the current version, update status, and the latest explicit
-project-sync phase. Project-sync progress temporarily takes the place of the rotating
-page-scoped `FYI:` message without changing the current page or popup.
+### Project Sync
 
-The footer shows the active directory and branch. When the current branch tracks an
-upstream, the branch badge renders `local -> remote`. Inside a session, the footer
-switches to the session directory and shows the session branch's ahead/behind counts
-relative to its base branch, plus a second segment for the published remote branch when
-one exists.
+New worktrees start from the local active base branch. Press `s` from a list tab first
+if you need remote changes. Sync runs in the background; you can navigate and continue
+existing isolated work. Creating or starting sessions, merging, and rebasing against
+that project's base checkout require a retry after sync finishes. Existing merge work
+has priority. Repeated sync requests for one project are combined; other projects wait
+in order.
 
-The background status refresh also checks divergent session branches for merge conflicts
-against their stored base branch. A conflict adds a red `[merge conflict]` label beside
-the session title in the **Sessions** list and a red `Merge conflict with <base>` alert
-in the open session. The check compares committed branch tips without changing the index
-or worktree; a failed check remains unknown and does not show a warning.
-
-New session worktrees start from the local active base branch. If local `main` is behind
-`origin/main`, the session branch still starts from local `main`; run list-mode sync
-(`s`) first when you want a new session to include remote-only commits.
-
-List-mode sync stays non-modal: you can navigate, switch projects, inspect sessions, and
-continue work already running in isolated session worktrees while it proceeds. Agentty
-coalesces repeated `s` presses for the same project and queues one request per other
-project in FIFO order. Operations that change the syncing project's base
-checkout—creating or starting a draft session, merging, and rebasing—return a retryable
-workflow error until sync finishes; the TUI keeps running and shows that guidance
-in-app. Other projects remain available. Existing merge work has priority: requesting
-sync while a merge is active or queued reports retryable guidance in the status bar, and
-a queued merge rechecks the sync guard before it starts. If the sync stops on rebase
-conflicts, the status bar reports the number of files handed to the assist agent.
-Completion, blocked preflight, and failure summaries remain in that bar for ten seconds
-instead of opening a popup, then the page's normal `FYI:` message returns.
+Progress and completion appear in the top status bar. A red `[merge conflict]` label on
+a session means its committed branch conflicts with its base. A failed conflict check
+leaves the result unknown.
 
 ## Session Lifecycle
 
-<a id="usage-session-lifecycle"></a> Session statuses:
+<a id="usage-session-lifecycle"></a>
 
-| Status          | Meaning                                                          |
-| --------------- | ---------------------------------------------------------------- |
-| **Draft**       | Created but not started; draft sessions can stage prompts first. |
-| **InProgress**  | Agent is working; `r` and `p` queue branch actions.              |
-| **Review**      | Agent finished; changes are ready for review.                    |
-| **AgentReview** | Focused review is generating; `r` cancels it before syncing.     |
-| **Question**    | Agent requested clarification before continuing.                 |
-| **Queued**      | Waiting in the merge queue.                                      |
-| **Rebasing**    | Session is syncing; follow-up messages queue behind the sync.    |
-| **Merging**     | Changes are being merged into the base branch.                   |
-| **Merged**      | Review merged remotely; waiting for manual local target sync.    |
-| **Done**        | Completed and merged; the worktree was removed.                  |
-| **Canceled**    | Canceled by the user; the worktree was removed.                  |
+| Status          | Meaning                                                  |
+| --------------- | -------------------------------------------------------- |
+| **Draft**       | Prompt staging or workspace setup; work has not started. |
+| **InProgress**  | Agent is working.                                        |
+| **Review**      | Changes are ready to inspect.                            |
+| **AgentReview** | Focused review is running.                               |
+| **Question**    | Agent is waiting for clarification.                      |
+| **Queued**      | Waiting to merge.                                        |
+| **Rebasing**    | Session branch is syncing.                               |
+| **Merging**     | Changes are merging into the base branch.                |
+| **Merged**      | Merged remotely; waiting for manual local target sync.   |
+| **Done**        | Completed; worktree removed.                             |
+| **Canceled**    | Canceled; worktree removed.                              |
 
-The shortcuts available in each state are listed in
-[Keybindings](@/docs/usage/keybindings.md).
+New sessions open the composer while their workspace is prepared. Submit immediately;
+the prompt waits for setup. If setup fails, press `s` from session view to retry.
+Prompts and images whose turns never began survive restart. Review the transcript before
+retrying a turn interrupted during dispatch.
 
-When an eligible session enters **Review**, Agentty starts focused review in the
-background when its diff has changed since the previous turn. Follow-up turns that leave
-the diff unchanged skip automatic review, including after an application restart; manual
-focused review remains available. Orchestrator controller sessions skip this automatic
-review because they coordinate child branches without owning changes themselves. While
-focused review is running, **AgentReview** keeps the review-oriented shortcuts
-available; pressing `r` starts session sync immediately and cancels pending
-focused-review output so stale review text cannot reappear after the rebase begins.
-Provider progress and commentary remain transient; only the terminal focused-review
-answer is stored and rendered.
+Startup restores interrupted rebases to **Review**. Storage or Git cleanup failures must
+be resolved before startup can finish; a missing worktree alone does not block recovery.
 
 ### Typical Transitions
 
 ```mermaid
-%%{init: { "flowchart": { "curve": "linear" } } }%%
-flowchart TB
-  classDef auxiliary stroke-dasharray: 4 2,stroke-width: 1.5px;
-  classDef terminal stroke-width: 1.5px;
-
-  subgraph start["Session Setup"]
-    direction LR
-    new_regular["Draft"]
-    new_draft["Draft<br/>staging"]
-    stacked_draft["Stacked<br/>draft"]
-  end
-
-  subgraph active["Active Turn"]
-    direction LR
-    in_progress["InProgress"]
-    question["Question"]
-  end
-
-  subgraph finish["Review & Finish"]
-    direction LR
-    review["Review"]
-    agent_review["AgentReview"]
-    rebasing["Rebasing"]
-    queued["Queued"]
-    merging["Merging"]
-    merged["Merged"]
-    done["Done"]
-    canceled["Canceled"]
-  end
-
-  new_regular -->|submit first prompt| in_progress
-  new_draft -->|stage more drafts| new_draft
-  new_draft -->|start staged bundle| in_progress
-  new_draft -->|cancel from session list| canceled
-  stacked_draft -->|stage more drafts| stacked_draft
-  stacked_draft -->|start staged bundle<br/>when parent review-ready| in_progress
-  stacked_draft -->|parent merged| new_draft
-  stacked_draft -->|parent canceled| canceled
-  stacked_draft -->|cancel from session list| canceled
-
-  in_progress -->|turn completes| review
-  in_progress -->|needs clarification| question
-  in_progress -->|stop current turn| review
-  in_progress -->|queue sync| rebasing
-  in_progress -->|cancel from session list| canceled
-  question -->|submit clarifications| in_progress
-  question -->|Ctrl+C end turn| review
-
-  review -->|generate focused review| agent_review
-  review -->|create stacked draft| stacked_draft
-  review -->|fork session| review
-  agent_review -->|review ready| review
-  agent_review -->|sync cancels review| rebasing
-  review -->|sync| rebasing
-  rebasing -->|sync complete| review
-  review -->|queue merge| queued
-  queued --> merging
-  merging --> done
-  review -->|cancel| canceled
-  review -->|forge reports merge| merged
-  merged -->|manual target sync| done
-
-  class agent_review,rebasing auxiliary
-  class done,canceled terminal
+flowchart TD
+  Draft --> InProgress
+  InProgress --> Question
+  Question --> InProgress
+  InProgress --> Review
+  Review --> AgentReview
+  AgentReview --> Review
+  Review --> Rebasing
+  Rebasing --> Review
+  Review --> Queued
+  Queued --> Merging
+  Merging --> Done
+  Review --> Merged
+  Merged -->|Manual target sync| Done
+  Review --> Canceled
 ```
 
 ### Active Turns and the Message Queue
 
-While a session is **InProgress**, an animated loader row shows transient provider
-thought and tool-status text; the transcript itself updates only after the final turn
-result is parsed and persisted.
+Press `Enter` during **InProgress** or **Rebasing** to queue a message. Messages,
+session sync (`r`), and publishing (`p`) run in submission order after the active work.
+Repeated `r` presses queue only one sync. Publishing is also available during rebase.
 
-Pressing `Enter` during a running turn or session sync opens the composer and queues the
-message inline with a `≡ queued ›` prefix below the active turn. All waiting work uses
-the same subdued, slowly pulsing `≡` indicator; warning-colored animation is reserved
-for work that is actively running. Queued worker actions such as sync or review-request
-publishing and queued chat messages share one first-in, first-out list. Rows appear from
-top to bottom in submission order, and the worker executes them in that same order after
-the active turn or sync finishes. During **InProgress**, each `Ctrl+c` press retracts
-the most recently queued message (LIFO) without interrupting the running turn; once the
-queue is empty, the next `Ctrl+c` stops the current turn and returns the session to
-**Review**. If session sync is waiting behind that turn, the same stop cancels the sync
-and removes its queued row without entering **Rebasing**. A queued review-request action
-is canceled the same way: its waiting row disappears and `p` becomes available again
-without starting publish work. **Rebasing** keeps cancellation unavailable while still
-accepting queued messages. The chat queue is in-memory only and is discarded if
-`agentty` restarts. Switching projects within the same Agentty process preserves running
-workers, queued messages, and workflow-action rows. Returning to the project can queue
-more work on the same worker, and workflow results completed in the background remain
-available in the session transcript.
+During **InProgress**, `Ctrl+C` removes the newest queued message. With no messages
+left, it stops the active turn and cancels queued branch actions. Rebase cannot be
+interrupted this way. Queued chat survives project switching, but not an Agentty
+restart.
 
-Changing a session's provider or model waits for its current workflow to finish and
-saves the new selection before discarding pending chat messages and queued actions. If
-saving fails, the old selection and pending work remain intact. Resubmit any discarded
-work after a successful switch.
+Changing provider or model waits for current work, saves the selection, then discards
+pending messages and actions. Resubmit them after switching. A failed save keeps the old
+selection and queue.
 
-While the composer is open, `Tab` moves focus to the chat transcript above it so the
-conversation can be scrolled with `j` / `k`, `g` / `G`, and `Ctrl+D` / `Ctrl+U` without
-losing the typed draft. `Shift+Tab` cycles the session through `Auto Edit`,
-`Auto Edit + Auto Address Comments`, and `Read Only` without changing the draft. The
-combined mode also verifies and applies focused-review suggestions after each completed
-turn for up to three iterations. While that chat transcript is focused, the `d`
-diff-preview hint appears unless the latest successful refresh found an empty diff
-against the session's base branch; `d` opens text, binary, metadata-only, or diagnostic
-diff output. Leaving the preview returns to the composer with the draft intact. Before
-opening the writable session worktree, Agentty clears a known-empty result in memory and
-durable storage because external edits may follow. If durable invalidation fails, the
-worktree stays closed; otherwise `d` becomes available and reloads the diff. Full diffs
-load in the background, with **Loading...** in Files until changed paths are available.
-Press `q` or `Esc` on **Loading diff...** to return immediately while a large repository
-is still being inspected. A failed load returns to the session and shows its diagnostic
-there instead of opening an empty Diff workspace.
+While composing, press `Tab` to focus and scroll chat; press it again to return. From
+chat focus, `d` previews changes and `q` returns to the list, preserving the draft.
+These controls also work while answering questions. `Shift+Tab` cycles permission modes
+without changing your draft.
 
-Inside diff view, `Shift+j` / `Shift+k` and `Up` / `Down` scroll the selected file while
-Files remains focused. Press `Enter` or `l` on a file to move focus from the file tree
-to its patch, or press `Shift+C` to open a whole-file editor above that patch. Within
-the patch, `Shift+C` also opens the whole-file editor, including while a visual row
-selection is active; opening it clears that row selection. Press `Enter` to open an
-inline editor beneath the selected added or removed line. The bordered editor is titled
-`File comment` for whole-file feedback. Inline feedback identifies added ranges as
-`New line N` or `New lines N-M`, deleted ranges as `Old line N` or `Old lines N-M`, and
-shows both ranges when a selection spans old and new rows. Insert additional lines with
-`Alt+Enter` or `Shift+Enter`, then press `Enter` or `Esc` to finish without leaving Diff
-mode. Use `j` / `k` or the arrow keys to move through changed lines and completed file
-or inline comments while Agentty keeps the cursor visible. Press `Enter` on a changed
-line to add feedback or on a completed comment to edit its text again. To comment on a
-range, press `Shift+V` on the first changed row, extend the visual selection with `j` /
-`k` or the arrow keys, then press `Enter`; `Esc` cancels the selection without leaving
-the patch. The full range stays highlighted while its inline editor is open and after
-the comment is finished, so every inline comment retains its visible source context.
-Type `@` in a diff comment to look up repository files. The lookup aligns with the
-comment input, opening above it when space allows and below it near the top edge. `Up` /
-`Down` navigate matches, and `Tab` / `Enter` insert the selected path without finishing
-the comment. `Esc` dismisses the lookup while preserving the draft; press it again to
-finish editing. With no matches, `Tab` / `Enter` dismiss the lookup. Modified `Enter`
-still inserts a newline.
-
-Finishing empty text removes the comment and its source highlight. Completed comments
-keep a distinct inset background, and the active editor uses the stronger selection
-highlight. Leaving Diff mode keeps every completed comment with that session, so
-switching to session chat and reopening the diff restores the batch. Submitting the
-batch, or starting another turn in the session, clears those comments. The linked
-review-request Comments section retains its separate `Enter` action for submitting
-marked review threads. Press `s` to submit every finished file, line, or range comment
-together as the next session turn from any Diff pane. The submitted prompt uses one
-compact row per comment: file feedback carries its repository-relative path, while
-inline feedback also carries its old or new side and line or range. The batch keeps
-draft instructions or image attachments that were present before opening the diff.
-Selected deleted rows also include their captured pre-change source text because that
-context is absent from the current worktree. Diff comment editing and submission are
-available only when the session can accept a reply. Read-only diffs such as `Merged`
-sessions keep line navigation but omit the comment actions from the footer and help
-overlay. With no visual selection active, press `Esc`, `Left`, `h`, or `f` to return to
-the file tree. Select a changed markdown file and press `p` to render its complete
-post-change worktree content, including supported Mermaid diagrams. Preview remains
-active across file navigation; non-markdown selections keep showing raw diff lines, and
-files that are deleted, binary, too large, or unreadable show a concise notice. Press
-`p` again to restore the patch view. Pressing `q` returns to the sessions list and saves
-the complete composer; reopening the session restores the typed draft with input focus.
-Pressing `Tab` again returns focus to the composer. The same focus toggle, `d` diff
-preview, and `q` preservation flow are available while answering clarification
-questions. Long transcripts show a slim scrollbar on the right side of the output panel
-to indicate the current position.
-
-Pressing `r` during a running turn queues session sync on the same session worker. The
-session stays **InProgress** while the active turn runs, then moves to **Rebasing** when
-the queued sync command starts. The existing worker must accept the request; Agentty
-never creates a second worker from an **InProgress** status just to start sync. If sync
-arrives while Agentty is draining queued chat, the active chat turn finishes before sync
-runs; earlier queued messages stay ahead of sync, while later messages wait behind it.
-Transient session-list refresh failures preserve the current session snapshot and
-worker, so retrying `r` does not lose the active queue. Agentty shows a `[Sync]` notice
-only when sync resolves; while it waits, the consolidated queue shows
-`≡ sync — rebase onto the base branch after this turn`. The waiting row disappears when
-the active `Rebasing...` loader starts. Agentty validates the session worktree before
-that promotion; a validation failure replaces the waiting row with a durable
-`[Sync Error]` notice without showing sync as active. Repeated `r` presses keep the
-single queued rebase instead of adding duplicates. Session sync tries to reserve idle
-branch-publish ownership while queueing but never waits for an active owner on the UI
-event loop. If an auto-push is already running, the session worker waits behind it while
-the terminal remains interactive. Once rebase execution acquires ownership, it retains
-that ownership through its post-rebase push. A completed turn or subsequent sync
-therefore cannot start a competing published-branch auto-push.
-
-Pressing `p` during a running turn opens the usual branch-name popup and queues
-review-request creation on that same worker. The session remains **InProgress** and
-shows a queued review-request row until the active turn finishes. Publishing then runs
-when it reaches the top of the shared queue, and the row changes to
-`Publishing review request...`; chat submitted before it runs first, while later chat
-waits behind it. The waiting label itself is not added to durable transcript history.
-Like queued sync, the queued publish reserves branch ownership before the current turn
-reaches auto-push, so the completed turn cannot race the requested review creation. If
-another branch operation already owns that lock, the handler queues immediately without
-waiting and the worker serializes review-request creation behind the operation in
-progress.
-
-Pressing `p` while the session is **Rebasing** queues review-request creation on the
-same worker instead of starting another branch executor. The active sync finishes first,
-then publishing runs when the request reaches the front of the shared queue.
-
-Session output keeps workflow feedback in execution order. Commit feedback appears
-before its sync result, post-sync auto-push progress appears after that result, and
-focused-review progress remains at the tail while those branch operations finish. If a
-focused review completes before a review request is published, the completed review
-stays above the later `[Review Request]` notice; a review that completes afterward stays
-below that notice.
+In Diff mode, add file, line, or range comments and press `s` to submit them together
+with the existing draft and images. Finished comments survive leaving Diff mode and
+clear when the next turn starts. Read-only sessions cannot submit comments. See
+[Diff Mode](@/docs/usage/keybindings.md#diff-mode) for editing and preview controls.
 
 ### Focused Review
 
-When an eligible session enters **Review**, Agentty starts generating a focused review
-in the background and temporarily shows **AgentReview**. Orchestrator controllers do not
-trigger this automatic review. Press `f` to append the cached review into the session
-output, or to see a loading message with the review agent, model, reasoning level, and
-speed while generation is still running. The loading state puts `Reviewing changes` on
-the primary row and the review profile on a subdued metadata row beneath it. A third row
-shows history preparation, completed batches, the cross-file check, or final review
-consolidation. The appended review stays visible across diff mode, question mode,
-session switching, project switching, and background session metadata refreshes, and is
-cleared when you submit the next prompt. If a turn finishes while another project is
-active, its automatic focused review continues in the background without requiring you
-to switch back. Pending generation remains recoverable after Agentty restarts. Deleted
-sessions do not start or resume reviews from late completion events. Focused review
-includes the saved user and agent chat history for context. It uses inspection-only
-context: it may read files, search, inspect git history, and browse when needed, but it
-recommends verification commands instead of running checks itself. The review treats
-explicit decisions, accepted tradeoffs, and explanations in the chat as constraints, and
-only reopens a resolved suggestion when the current diff contradicts the resolution or
-inspection finds a new significant risk. `Project Impact` renders concise bullets
-directly beneath its heading. `Suggestions` uses the same compact spacing and formats
-its bullets as `[Severity]: Issue details`, using `[High]` or `[Medium]` when follow-up
-work is needed. Empty `Suggestions` output does not offer the `/apply` action. A turn
-stopped with `Ctrl+c` does not start a focused review automatically; press `f` for a
-manual one.
+Agentty automatically reviews a changed diff when an eligible session enters **Review**.
+Unchanged diffs, stopped turns, and orchestrator controllers skip automatic review.
+Press `f` to show the review or request one manually. Pressing `r` cancels a pending
+review before syncing.
+
+Reviews use the diff and saved conversation, respecting accepted decisions. They inspect
+files and history and may browse, but recommend checks rather than run them. Progress
+shows the review profile and completed stages. Results remain visible across navigation
+until the next prompt.
+
+Large reviews run in batches. Each attempt has a 64-call budget and a 15-minute
+deadline. A `Partial` result preserves findings and identifies unfinished checks; an
+empty suggestions list does not mean the review completed. Press `f` and confirm
+regeneration to resume completed calls for unchanged inputs, including after restart.
+Completed reviews regenerate from scratch; changed inputs or an accepted sync require
+fresh evidence. Summarized history is disclosed.
+
+Use `/apply` to have the agent verify suggestions and apply those that remain valid.
+[Permission modes](@/docs/usage/workflow.md#slash-commands) can automate this for up to
+three iterations.
 
 ### Session Output Markdown
 
-Session output renders common Markdown blocks in agent answers and persisted user
-messages, including headings, lists, block quotes, code fences, and pipe tables. Tables
-are aligned to the output panel width so compact comparison data stays readable in the
-terminal transcript. Inline `$\rightarrow$` math renders as the Unicode `→` symbol;
-unsupported dollar-delimited expressions remain literal. Leading horizontal whitespace
-in pasted prompts is preserved after submission, including nested indentation in
-multiline text. Tabs render at four-column tab stops. Transcript messages and workflow
-notices use one empty line between messages, regardless of padding stored with the
-message content.
+Chat supports headings, lists, quotes, code blocks, and tables. Pasted indentation is
+preserved; tabs use four-column stops.
 
-<a id="usage-session-mermaid"></a> Complete ```` ```mermaid ```` fenced blocks in
-session output render as Unicode diagrams. Simple `graph`/`flowchart` diagrams with
-`TD`, `TB`, or `LR` direction are supported, including edges that span multiple layers
-and cyclic feedback paths. An `LR` graph that is wider than the session panel
-automatically uses a top-down layout when that compact form fits. Each feedback edge
-renders as an independent return row beneath the layered graph so unrelated cycles
-remain visually separate; larger `LR` cycles also use the compact top-down layout.
-Common node shapes (stadium, subroutine, cylinder, hexagon, and more) draw as rectangle
-or rounded boxes, `&` groups fan out into one edge per pair, subgraphs are flattened
-into the surrounding graph, and styling statements such as `style`, `classDef`,
-`linkStyle`, `click`, and `:::class` tags are skipped. Solid, dotted, thick, long, and
-bidirectional edges render with optional labels in the `-->|label|`, `-- label -->`,
-`-.label.->`, and `==label==>` forms. A reverse arrow such as `A <-- B` counts as an
-edge from `B` to `A`, so it places `B` on the earlier layer and joins any cycle in that
-direction. Invisible `~~~` links affect node layout without drawing a connector. Node
-and edge labels longer than the 32-character label limit are truncated with a trailing
-ellipsis, and HTML line-break labels degrade to the first renderable label line instead
-of preventing the graph preview. `erDiagram` entity-relationship diagrams render
-entities as boxes, relationships as lines labeled with the relationship name, and
-crow's-foot cardinalities as compact end markers — `1` (exactly one), `?` (zero or one),
-`*` (zero or more), and `+` (one or more). Entity attribute blocks are omitted from the
-diagram. Simple `sequenceDiagram` participant and message lines render as lifelines with
-arrowed message rows; `actor` lines join as participants, notes, activations,
-autonumbering, and `alt`/`opt`/`loop`-style blocks are skipped, lifeline spacing adapts
-to the widest message label, self-messages render as a compact loop on their lifeline,
-and participant or message labels longer than the 32-character label limit are truncated
-with a trailing ellipsis instead of preventing the diagram preview. Unsupported diagram
-types, self-links, double-width label glyphs, incomplete blocks, and diagrams wider than
-the panel keep the plain fenced-code presentation. Session turn prompts tell agents
-about this supported diagram subset, so agents include a diagram when it explains a
-flow, process, or relationship better than prose. The prompts also instruct agents to
-place Mermaid only in the assistant `answer` as an unindented ```` ```mermaid ````
-fenced block, because plain code fences or indented blocks stay in the fenced-code
-presentation.
+<a id="usage-session-mermaid"></a> Mermaid code blocks render simple flowcharts, entity
+relationships, and sequence diagrams. Flowcharts support `TD`, `TB`, and `LR`; labels
+over 32 characters are truncated. Complex styling and grouping are simplified;
+unsupported, too large, or too wide diagrams remain readable as code. Markdown file
+previews use the same renderer.
 
 ### Forking a Review Session
 
-Pressing `F` in a root **Review** or **AgentReview** session opens a confirmation, then
-creates a new independent **Review** session from the source session branch. The fork
-receives a fresh worktree branch and a copy of the durable transcript history as it
-existed at fork time. Stacked child sessions hide `F` because their branch remains tied
-to the parent stack workflow. Provider-native conversation IDs, focused-review cache,
-published branch state, linked review-request metadata, stack parent links, active-work
-timing, and token usage are reset on the fork so future replies and publishing are
-tracked separately from the source session. Diff availability is recomputed from the
-fork's new worktree, so uncommitted source-worktree changes are not advertised on the
-fork.
+Press `F` in a root **Review** or **AgentReview** session to confirm a fork. It receives
+a new worktree from the source commit and a copy of the saved conversation. Uncommitted
+changes are not copied. Publishing, review state, usage, and timing start independently.
+Stacked children cannot be forked.
 
 ### Commit and Merge Behavior
 
-After each successful turn with file changes, Agentty keeps the session branch at one
-evolving commit: it regenerates the commit message from the cumulative session diff
-using the project's `Default Fast Model`, applies the `Coauthored by Agentty` setting,
-amends `HEAD`, and refreshes the session title from the commit text. If a later turn
-reverts every change, the empty session commit is dropped. Commit and merge notices
-appear as transient status rows rather than persisted transcript messages.
+After a successful file-changing turn, Agentty creates or updates one evolving commit
+with a message generated from the cumulative changes. The project's Fast model and
+coauthor setting apply. Reverting all changes removes the empty session commit.
 
-Large changes are summarized in bounded chunks before generating the commit message. If
-diff preparation exceeds the agent’s input or reduction limit, Agentty retries using
-only the changed file list, your chat history, and the existing session commit message,
-without the diff. The existing message keeps earlier work represented; oversized
-messages are reduced as commit continuity, preserving their subject, changes, and
-rationale. This preserves the complete worktree and the single evolving commit. If that
-fallback also exceeds its limit, auto-commit stops without invoking code-repair
-assistance. Empty or oversized summaries get a bounded repair attempt before their
-source fragments are split again. Small fragments are kept verbatim.
+Large diffs are summarized. If they exceed input limits, commit generation falls back to
+changed filenames, chat history, and the existing commit message. If that also fails,
+auto-commit stops and leaves the worktree intact.
 
-Focused review checks original diff batches, cross-file interactions, and then
-consolidates supported findings. Large candidate sets are reconciled in groups without
-truncating individual findings. Final passes adapt to smaller provider input limits; if
-distinct findings still cannot fit, the review remains explicitly partial.
+An index lock is retried for up to five seconds. A persistent lock produces
+`[Commit Error]`; Agentty does not remove it. Wait for active Git operations to finish.
+Only the repository owner should remove a confirmed stale lock.
 
-Each attempt shares a 64-provider-call budget and a 15-minute deadline. A partial review
-retains completed findings and identifies unfinished checks. Press `f` and confirm
-regeneration to resume: successful calls for the same diff, conversation, and review
-profile are reused, including after restart. Completed reviews regenerate from scratch.
-Changed input requires fresh evidence. Accepted session sync (`r`) clears saved review
-evidence before rebasing, so a later review starts fresh even if the diff and
-conversation are unchanged. Rejected sync requests preserve the existing review.
-Summarized session history is disclosed.
+If pre-commit configuration exists but its hook is missing, session creation warns you.
+Continue with `Enter` or cancel with `Esc` / `q`; install the hook with `prek install`
+or `pre-commit install`. Commits without the configured hook show `[Commit Warning]`.
+Installed hook failures stop commits.
 
-Partial reviews remain marked `Partial` in orchestration and require controller
-verification; an empty suggestions list does not mean coverage completed. `/apply` still
-verifies retained suggestions before changing code.
+For an unlinked session, `m` queues a local squash merge using the session commit
+message. The target checkout must be clean. A failed rebase or merge returns the session
+to **Review**. Linked pull requests and merge requests must merge through their forge;
+see [Review Request Sync](@/docs/usage/workflow.md#review-request-sync).
 
-Auto-commit waits up to five seconds in total for a busy Git index to become available.
-If an index lock still blocks auto-commit, Agentty stops and records a `[Commit Error]`
-with recovery guidance instead of invoking commit assistance. Your changes and the lock
-remain intact. Wait for active Git operations to finish before retrying. If the lock
-persists, the repository owner must confirm it is stale before removing it;
-linked-worktree locks may live outside the session workspace.
+Session sync (`r`) rebases onto the stored local base for unpublished sessions or the
+remote base after fetching for published sessions. Conflict assistance uses the existing
+agent conversation. Agentty stages repairs, runs the installed pre-commit hook, and
+continues the rebase. Hook failures allow up to three repair attempts before aborting
+with `[Sync Error]` and suppressing the push.
 
-When a project contains `.pre-commit-config.yaml` or `.pre-commit-config.yml`, Agentty
-checks for an executable Git pre-commit hook when you press `a`. A missing hook opens a
-warning before the session-type selector. Press `Enter` to continue to the selector or
-`Esc` / `q` to cancel, and install the hook with `prek install` or `pre-commit install`
-when practical. This advisory will become an error in a future Agentty release.
-
-For now, Agentty still creates the session and runs the normal Git commit command. If a
-commit succeeds without the configured hook, the session output records a
-`[Commit Warning]` with the installation commands. Later commits do not repeat an
-unchanged warning in the same session. Installed hooks remain enabled and their failures
-still stop the commit.
-
-When a session without a linked review request merges, Agentty reuses the session branch
-`HEAD` commit message for the final squash commit on the base branch. Merging requires a
-clean main checkout and returns the session to **Review** if the preparatory rebase or
-squash-merge fails. After a pull request or merge request is linked, Agentty hides `m`
-and rejects local merge queueing; merge through the forge, and background review-request
-sync moves the session to read-only **Merged** when that remote merge completes. The
-session remains in Active until a successful manual main sync moves it to **Done**.
-
-When a session syncs (`r`), Agentty rebases the session branch: published sessions fetch
-first and rebase onto the remote base ref, unpublished sessions rebase onto the stored
-local base branch. In **InProgress**, the sync request is queued behind the running turn
-before the session enters **Rebasing**. If the rebase stops on conflicts, Agentty asks
-the existing agent session to resolve only the conflicted files, then stages the edits
-and runs the repository's effective `pre-commit` hook before continuing the rebase
-itself. If the hook fails, Agentty keeps the rebase paused and asks the agent to repair
-the reported issues, then stages the repairs and reruns the hook. It allows up to three
-repair attempts before aborting, recording a `[Sync Error]`, and preventing the
-post-rebase auto-push. Failed assistance or staging also stops the operation.
-Repositories without an installed hook retain Git's normal no-hook behavior. The
-completed conversation remains in place while the rebase or merge status animates below
-it.
-
-During normal turns, the agent prompt names the session worktree as the only writable
-root. After a turn, if Agentty detects that the main checkout's tracked-file status
-changed and remains dirty, it appends a `[Main Checkout Warning]` notice to the
-transcript. Clean `HEAD` movement, such as another session landing on the base branch,
-and unchanged pre-existing tracked changes do not emit this warning. Projects backed by
-a bare repository have no main working checkout, so this main-checkout dirty-state guard
-is skipped there.
+`[Main Checkout Warning]` means tracked changes in the main checkout changed during a
+turn and remain dirty. Inspect them before continuing. Unchanged pre-existing changes
+and clean branch movement do not trigger it. Bare-repository projects have no main
+checkout to inspect.
 
 ### Continuing a Terminal Session
 
-Pressing `c` on a **Done** or **Canceled** session opens a confirmation, then creates a
-brand-new draft session. **Done** sessions stage a continuation message from the merged
-commit hash, or from saved context when the hash is unavailable. **Canceled** sessions
-stage the saved transcript or original prompt. The source session remains terminal and
+Press `c` on **Done** or **Canceled** to confirm a new continuation draft. It uses the
+merged commit or saved conversation as context and leaves the original session
 unchanged.
 
 ## Session Types
 
-<a id="usage-draft-stacked"></a> From the **Sessions** tab, press `a` to choose between
-`Regular`, `Draft`, `Orchestrator`, and `Stacked` session creation, or choose
-`Append to stack` to move an existing session. `Orchestrator` and `Append to stack` are
-marked `[Preview]`:
+<a id="usage-draft-stacked"></a> Press `a` on **Sessions**:
 
-- `Regular` starts the agent immediately on the first `Enter`.
-- `Draft` stages each `Enter` as one ordered draft message and starts only after you
-  press `s`. The worktree is created at that start step, so the branch is based on the
-  base branch at launch time. From a draft session view, `Ctrl+V`, `Ctrl+Shift+V`, or
-  `Alt+V` opens the draft composer and pastes one clipboard image into the next staged
-  draft.
-- `Orchestrator` can first run temporary read-only researchers, then turns a broad goal
-  into an independent implementation plan, waits for approval, runs multiple managed
-  worker sessions, verifies their results, and integrates the approved work. The
-  controller reads the repository but never owns branch changes.
-- `Stacked` creates a draft below the selected parent session, with its future branch
-  based on the parent session branch. A stack can contain up to five stacked levels
-  below its root session.
-- `Append to stack` moves the selected independent **Review** or **AgentReview** session
-  below a parent chosen in the next popup. Agentty immediately syncs the moved branch
-  onto that parent branch. Sessions with children or linked review requests stay
-  independent, and a busy or depth-limited destination is omitted from the parent list.
+- **Regular**: The first `Enter` submits work.
+- **Draft**: Each `Enter` stages a message; `s` starts the bundle and creates its
+  worktree from the base branch at that time.
+- **Orchestrator** `[Preview]`: A controller plans, coordinates, and verifies managed
+  research or implementation sessions.
+- **Stacked**: Create a draft based on a parent session, up to five levels below a root.
+- **Append to stack** `[Preview]`: Move an independent review-ready session below an
+  eligible parent and sync it onto that branch. Sessions with children or linked review
+  requests cannot be moved.
 
-Stacked drafts show `s` start only when the parent is in **Review** or **AgentReview**
-and no stack member is running, queued, syncing, merging, or waiting on a question. An
-unstarted stacked draft can already parent another stacked draft, so you can stage the
-full stack before any child worktree exists. Start the drafts from parent to child; each
-child's `s` action appears only after its immediate parent reaches review. While a
-materialized child is linked, the parent keeps `Enter` replies, `m` merge queueing, `r`
-sync, and direct `/` access to slash commands. Syncing the parent (or completing a
-parent turn) rebases review-ready direct children onto the refreshed parent branch
-automatically, cascading through deeper descendants. When a parent merges, its children
-are retargeted onto the parent's base branch as root sessions and review-ready children
-are synced with `git rebase --onto` so they keep only their own commits. If an automatic
-child sync cannot start or complete, the affected child session shows a `[Sync Error]`
-notice with the failure. When a parent is canceled, Agentty stops queued, running,
-question, sync, and merge work throughout the stack before canceling every nonterminal
-descendant. Descendants already in a terminal state keep that state.
+Start stacked drafts from parent to child. Each needs a review-ready parent and an idle
+stack. Parents can receive replies and sync while materialized children are idle.
+Completing a parent turn or syncing it automatically rebases review-ready descendants. A
+parent merge retargets children to its base and keeps their own changes; failed child
+syncs show `[Sync Error]`. Canceling a parent also cancels all nonterminal descendants.
 
 ### Parallel Orchestration
 
-Use an orchestrator when a goal needs deep repository discovery or contains at least two
-independent pieces of implementation work:
+Use orchestration for discovery or at least two independent implementation tasks:
 
-1. On the **Sessions** tab, press `a`, choose `Orchestrator` (marked `[Preview]`), and
-   press `Enter`.
-1. Discuss the goal with the controller. It resolves repository facts itself and asks a
-   focused, recommendation-first clarification only when an unresolved choice changes
-   the decomposition or acceptance criteria. Controller clarifications and Agentty's
-   plan or follow-up routing questions provide two or three selectable options with the
-   recommended choice first; free-text answers remain available. A valid plan contains
-   between two and eight implementation tasks. When deeper discovery would materially
-   improve the plan, the controller instead proposes a separate wave of one to eight
-   `research` tasks before any implementation tasks. Research and implementation tasks
-   cannot share one wave. Every task has a stable key, standalone prompt, and concrete
-   acceptance criteria. Optional literal repository-relative touched areas apply only to
-   implementation tasks and are best-effort planning references: they may overlap and do
-   not prevent a worker from changing other files needed to complete its task. Wildcards
-   remain invalid for implementation tasks.
-1. Review the persisted plan on the campaign monitor above the controller chat. Before
-   pressing `a` to approve, confirm the tasks and acceptance criteria. The number of
-   simultaneous children comes from the global **Orchestrator Parallelism** setting.
-   Research-only waves start immediately when **Auto-approve Research** is enabled; turn
-   that setting off to review those waves on the same approval board. Continue chatting
-   to revise decomposition. If an implementation goal does not meaningfully split, the
-   controller recommends a regular session instead of creating a ceremonial worker.
-1. Follow real-time task status on the campaign monitor. Status changes do not add
-   transcript messages. Worker rows remain grouped with their controller in the
-   **Sessions** list. Workers restrict direct Agentty actions: open one to inspect its
-   transcript, press `d` for its diff, or press `D` and confirm **Detach** to
-   permanently transfer it into an ordinary user-owned session. When Agentty runs inside
-   `tmux`, a worker in **Review** also exposes `o` to open its materialized worktree.
-   The confirmation warns that the shell has normal write access and edits can
-   invalidate orchestration verification. Temporary research children expose transcript
-   and discarded-diff evidence but hide `D` and `o`, because their worktree must be
-   reclaimed after report capture. Direct reply, question-answer, cancel, merge,
-   publish, fork, review-comment addressing, `Ctrl+c` turn interruption, and
-   slash-command actions are unavailable while it is managed. The controller
-   conversation below the monitor uses the same line-by-line transcript scrolling as a
-   regular session.
-1. When a worker asks a blocking question, Agentty mirrors it into the controller's
-   question panel only when the controller has no question of its own. The relay durably
-   records the exact task that owns the mirrored question, so concurrent worker
-   questions are relayed one at a time and every answer returns to the correct worker
-   without adding a controller model turn. Infrastructure failures retry twice without
-   interrupting chat. Worker failures remain visible on the campaign monitor for
-   follow-up.
-1. Research children run in their own temporary worktrees under a read-only role. They
-   cannot auto-commit. Agentty maps that role to provider-native read-only enforcement:
-   Codex uses a read-only sandbox and rejects pre-action approvals, Claude and
-   Antigravity use plan mode, and Gemini combines sandboxed plan mode with cancellation
-   of ACP mutation requests. After capturing the final report, Agentty archives the
-   observed diff, then discards the worktree and local branch. If a researcher
-   nevertheless edits files, the campaign board records that the temporary edits were
-   discarded and `d` opens the archived evidence after cleanup. Research skips focused
-   review and never enters merge or review-request integration. Its terminal status is
-   **Reported**.
-1. When a worker reaches review with a diff, Agentty waits for its focused auto-review.
-   Actionable suggestions are sent back to that worker using the same verification-gated
-   prompt as `/apply`: the worker checks each comment against the current code, applies
-   only suggestions that make sense, runs the required checks, and explains any rejected
-   comment. Agentty repeats this review and remediation cycle at most three times. A
-   worker continued after controller verification re-enters the same focused-review
-   cycle before the controller can verify its updated work again. Pending reviews and
-   the current pass remain visible on the campaign monitor; failed reviews, including
-   review-preparation failures, and suggestions that remain after pass three move on as
-   explicit evidence for controller verification instead of stalling the campaign. On
-   restart, Agentty regenerates only an interrupted review; a queued remediation or
-   controller-requested continuation resumes before the updated diff is reviewed.
-1. After every task settles, Agentty sends one hidden, durable verification envelope to
-   the controller. It contains each task's acceptance criteria, branch, bounded result,
-   campaign goal, focused-review outcome, diffstat, token totals, merge order, and a
-   mechanical comparison between expected and changed paths. Additional paths appear on
-   the campaign monitor and in the envelope as review context, not an automatic
-   verification failure. The comparison remains **not checked** when no expected areas
-   were provided, even if the child changed files. The controller can run targeted
-   read-only Git inspection, reports only cross-task synthesis and risks, and records an
-   explicit pass or flag for every ready task. Research entries carry their bounded full
-   reports instead of branch and diff evidence; the envelope marks those model-authored
-   reports as inert data so instructions inside a report are never followed. This
-   verification response is the campaign's single controller report. Only explicit
-   passes enter integration; flagged or missing verdicts remain parked for correction.
-   The controller reuses a task key to continue the same live implementation child when
-   a correction is required. Reusing a reported research key starts a fresh temporary
-   researcher. A passing research wave can propose the implementation wave in the same
-   verification turn; that new scope parks on the normal plan approval board.
-1. At **AwaitingIntegration**, press `a`, then choose **Local merges** or **Review
-   requests**. Agentty applies local merges or creates forge review requests in plan
-   order and records failures on the campaign monitor. A published review-request task
-   remains **Review requested**, and the controller stays active, until review sync
-   observes that worker's request as merged. When every integration has settled, the
-   campaign and controller become **Done** without another model turn. Local merge
-   integration archives an immutable copy of each worker diff before removing its
-   worktree and local branch. Review-request workers retain their published branch and
-   remain browsable under the controller. A review request closed without merging is
-   recorded as an **Integration failed** task, leaving the controller active for
-   follow-up. Detached workers remain ordinary sessions. A verified research-only wave
-   with no follow-up implementation scope completes automatically and never opens this
-   integration chooser.
+1. Create an **Orchestrator** session and describe the goal.
+1. Review its tasks and acceptance criteria on the campaign monitor. Implementation
+   plans contain two to eight tasks; research waves contain one to eight and run
+   separately. Touched areas guide planning but do not restrict worker edits.
+1. Press `a` to approve. Research waves start automatically when **Auto-approve
+   Research** is enabled. **Orchestrator Parallelism** controls simultaneous children.
+1. Follow progress and answer relayed worker questions in the controller. Blocking
+   questions arrive one at a time. Infrastructure failures retry twice.
+1. Implementation workers receive up to three review-and-repair passes. The controller
+   verifies results against the criteria; only explicit passes can integrate. Partial or
+   failed reviews remain visible evidence.
+1. At **AwaitingIntegration**, press `a` and choose **Local merges** or **Review
+   requests**. Integration follows plan order. Published tasks wait for remote merge;
+   closed requests become integration failures. Research-only work completes without
+   integration.
 
-Multi-turn feedback is routed by task identity. Reusing a settled implementation task's
-exact key continues its existing worker, branch, and conversation and returns it to
-verification, even when the follow-up expects different files. Any touched-area
-references emitted for the continuation replace the previous references and are included
-in the resumed worker prompt and next comparison. Previously passed but not yet
-integrated siblings return to **Ready** so the next settlement verifies one coherent
-campaign snapshot instead of stalling behind old integration state. This supports
-review-first workflows: after review workers settle and the controller summarizes their
-findings, describe the implementation follow-up in the orchestrator chat. The controller
-routes those instructions to the same completed workers, which keep their branches and
-conversation context. Research corrections reuse a key but start with a clean temporary
-child because research worktrees are never retained. A task cannot change between
-`research` and `implementation`; use a new key when moving from findings to
-implementation. A new task key is treated as new scope and parks the campaign on the
-approval board before that worker starts. Once the controller is `Done`, a new goal or
-further feedback starts a new orchestrator campaign.
+Managed workers allow transcript and diff inspection. `D` permanently detaches an
+implementation worker into an ordinary session. In `tmux`, `o` can open a review-ready
+worker's worktree; edits there can invalidate verification. Other direct mutations are
+unavailable while managed.
 
-Press `c` on a draft or running controller to cancel it. Draft controllers can be
-canceled before their first goal is submitted. For running controllers, the confirmation
-names the number of running children. Approval first blocks new worker fan-out, then
-cancels the controller and its active children idempotently. If any child cannot be
-canceled, Agentty reports the error and leaves the orchestration in **Canceling** so `c`
-can retry without reporting a false terminal cancellation.
+Researchers run read-only in temporary worktrees. Their reports and any unexpected diff
+are archived, then the worktree is discarded. They cannot be detached or integrated. The
+controller is instructed not to edit, but its read-only role is currently enforced only
+by its prompt; see [Orchestrator Design](@/docs/architecture/orchestrator.md).
+
+Continue feedback in controller chat. Reusing an implementation task continues its
+worker and branch; research corrections start a fresh temporary researcher. New scope
+requires approval. After the controller is **Done**, start a new campaign.
+
+To cancel, press `c` on the controller in the session list. Cancellation includes its
+active children. If a child cannot stop, the campaign remains **Canceling** so you can
+retry. The preview's flat task list and verification limits are documented in
+[Current Limits](@/docs/architecture/orchestrator.md#current-limits).
 
 ## Branch Publish Flow
 
-<a id="usage-review-request-flow"></a> In **Review**, **AgentReview**, and
-**InProgress**, `p` opens a publish popup for the linked forge review request:
+<a id="usage-review-request-flow"></a> Press `p` to publish a GitHub pull request or
+GitLab merge request. During a turn or rebase, publishing waits in the session queue.
 
-- Leave the field empty to keep the default branch target, or type a custom remote
-  branch name. Agentty rejects a custom name that currently exists remotely. A name
-  whose remote branch was deleted can be reused even if a stale local remote-tracking
-  ref remains. After the first publish, the popup is locked to that same remote branch.
-- Agentty publishes with `git push --force-with-lease`, then creates or refreshes the
-  linked review request. After confirmation, the popup closes and publishing continues
-  on the session worker while session chat remains interactive. During **InProgress**,
-  the action waits behind the active turn at its submission position in the shared FIFO
-  queue. Inline progress is replaced only after the forge URL is ready, including across
-  intermediate session refreshes. It becomes a one-line
-  `[Review Request] Created PR URL` or `[Review Request] Created MR URL` transcript
-  notice recorded at that point in session history, or failure details when the task
-  finishes; `p` stays hidden while that publish is active. Later turns do not move or
-  reconstruct the creation notice. GitHub projects publish pull requests; GitLab
-  projects publish merge requests. Manual publishing and completed-turn auto-push share
-  one per-session branch-operation lock, so whichever starts later waits instead of
-  force-pushing the same branch concurrently.
-- Stacked child review requests target the parent review branch while the parent link is
-  active.
-- When no review request is linked yet, only an open request for the same branch is
-  reused; merged or closed requests are left alone.
-- After the first publish, later completed turns push the same remote branch
-  automatically in the background when no chat message or sync is already queued. After
-  each successful push, Agentty reads the current remote title and description and
-  reconciles them with the generated commit metadata. The title stays exactly as it is
-  unless the primary objective changed materially; implementation refinements, tests,
-  documentation, and review fixes keep it stable.
-- Description updates retain the intent of user-added content, including issue links,
-  other URLs, checklists, instructions, and context, while incorporating session details
-  that changed. The entire existing remote description is preserved, including marked
-  sections and older generated text. Agentty cannot establish authorship from remote
-  markers, so it does not automatically remove obsolete description text. Updates that
-  omit substantive existing content are rejected. Agentty checks the remote fields again
-  immediately before editing and skips a field if somebody changed it during
-  reconciliation. This check is best-effort because forge metadata updates have no
-  atomic version precondition; an edit made after the final check can still race with
-  Agentty's update. Failed background pushes or metadata evaluation keep the manual `p`
-  flow available for retry and surface the existing review-request sync warning.
-- In Diff mode's Comments section, press `Space` to select actionable inline threads,
-  then press `Enter` to submit them in one agent turn. The agent evaluates each comment,
-  makes a worktree change when needed, and posts a very short explanation of what was
-  done and why whether or not a change was needed. Press `f` to return to the Files
-  section without leaving Diff mode.
-- Agent-driven review-comment turns report one structured outcome for each submitted
-  inline thread. Agentty rejects the whole outcome batch when an allowlisted thread is
-  missing, duplicated, or has a blank reply, so a malformed agent response cannot apply
-  only part of the selected work. After Agentty commits the work and successfully pushes
-  an already published branch, it refreshes the live threads, posts the agent's concise
-  reply for every valid allowlisted outcome, and resolves only threads reported as
-  `fixed`. Threads reported as `no_change_needed` receive their explanatory reply but
-  remain open. While an authenticated Agentty reply is the thread's latest comment, the
-  thread is shown as `addressed` and cannot be submitted again. The forge-reported
-  authorship and Agentty's reply marker must both match, so a reviewer-authored marker
-  cannot suppress feedback. A later reviewer follow-up makes the thread actionable
-  again, preventing repeated replies to unchanged feedback without hiding new feedback.
-  Unknown thread IDs are ignored. Unresolved outdated threads remain actionable through
-  their forge thread ID while their stale line anchor is omitted from current diff
-  context. Agentty saves each operation's original reply and random marker token in the
-  same database transaction that completes the agent turn, so restart recovery cannot
-  observe one without the other. It flags the operation immediately before posting and
-  deletes it after completion, so a later successful branch push resumes saved work and
-  reuses a reply that reached the forge before an interruption instead of posting it
-  twice. A new agent response cannot replace a bound unfinished operation's saved reply,
-  and an unrelated comment that copies Agentty's old static marker is not accepted as
-  its audit reply. Commit, reply, resolution, and missing-open-review failures produce a
-  `[Review Comments Warning]` transcript notice. A commit failure discards that review
-  batch, so a later unrelated push cannot apply its stale outcomes; reopen the comments
-  to retry. A push failure keeps a successfully committed batch for the next push
-  attempt. Before applying that batch, Agentty verifies the pushed tip still exactly
-  matches its saved fix commit. Any later commit, including a revert, causes Agentty to
-  discard the saved outcomes and require a fresh review batch. If shutdown or
-  persistence failure interrupts commit binding, Agentty keeps the unbound batch
-  pending, reports that a fresh agent turn is required, and lets that turn replace only
-  the unbound operation.
+1. Keep the default branch name or enter a custom one. A custom name must not already
+   exist remotely. After publishing, the remote branch name is fixed.
+1. Agentty pushes with a force-with-lease check, then creates or refreshes an open
+   review request. Stacked children target their parent's review branch.
+1. The forge URL appears in chat. Later completed turns automatically push to the same
+   branch when no chat or sync is queued. Failed pushes remain retryable with `p`.
 
-<a id="usage-review-request-prerequisites"></a> Publishing needs regular Git
-authentication (credential helper or PAT for HTTPS remotes, SSH key for SSH remotes)
-plus the forge CLI for the repository remote: authenticated `gh` for GitHub and
-authenticated `glab` for GitLab. See
-[Forge Authentication](@/docs/usage/forge-authentication.md) for setup steps.
+Review-request titles stay stable unless the primary objective changes. Description
+updates preserve existing content and append new details. Agentty checks for concurrent
+remote edits before updating, but an edit after that check can still race.
+
+### Addressing Review Comments
+
+Open linked comments with `c`. Select actionable threads with `Space`, then press
+`Enter` to have the agent evaluate them in one turn. Resolved threads and standalone
+comments are read-only; outdated unresolved threads remain actionable without current
+line context.
+
+After a successful commit and push, Agentty replies to each selected thread and resolves
+only those reported as fixed. Threads needing no change receive an explanation and stay
+open. An `addressed` thread becomes actionable again when a reviewer follows up.
+
+`[Review Comments Warning]` reports failures. After a commit failure, reopen comments
+and retry. A push failure retains the batch for retry only while its fix commit remains
+the branch tip; later changes require a fresh review batch. Interrupted replies can
+resume without duplicating a reply already posted.
+
+<a id="usage-review-request-prerequisites"></a> Publishing requires both Git credentials
+and an authenticated forge CLI: `gh` for GitHub or `glab` for GitLab. See
+[Forge Authentication](@/docs/usage/forge-authentication.md).
 
 ## Review Request Sync
 
-<a id="usage-review-request-sync"></a> After a branch has been published, Agentty
-refreshes review-request status in the background for **Review** and **AgentReview**
-sessions. The session list shows forge indicators next to the status label:
+<a id="usage-review-request-sync"></a> Published review-ready sessions refresh forge
+status in the background:
 
-| Indicator | Meaning                                 |
-| --------- | --------------------------------------- |
-| `↑`       | Branch published; no request found yet. |
-| `⊙ <id>`  | Review request `<id>` is open.          |
-| `✓ <id>`  | Review request `<id>` was merged.       |
-| `✗ <id>`  | Review request `<id>` was closed.       |
+| Indicator | Meaning                             |
+| --------- | ----------------------------------- |
+| `↑`       | Branch published; no request found. |
+| `⊙ <id>`  | Request is open.                    |
+| `✓ <id>`  | Request was merged.                 |
+| `✗ <id>`  | Request was closed.                 |
 
-When background refresh detects that the review request was merged, the session moves to
-read-only **Merged** and remains in the Active group. Transcript and diff inspection
-stay available, while replies, session sync, merge, publishing, commands, and new
-follow-up tasks are disabled. Agentty does not archive or clean up the session during
-background refresh or startup.
+A remote merge moves the session to read-only **Merged**, keeping its transcript and
+diff in Active. Manually sync its local target branch with list-mode `s` to move it to
+**Done**, clean up the worktree, and retarget stacked children. Failed syncs or syncing
+another branch leave it unchanged. Follow workflow warnings and retry if archival or
+child restacking fails.
 
-After the user manually syncs the review request's local target branch, Agentty moves
-the session to **Done**, archives it, cleans up its worktree in the background, and
-persists restack work for any stacked children. A failed sync or a sync of another
-branch leaves the session and its stack unchanged. Interrupted child restacks can resume
-after restart. If restack intent or archival cannot be persisted, the sync status counts
-the sessions that remain in **Merged** so the user can inspect their workflow warnings
-and retry safely. A closed request still moves an editable session to **Canceled**.
-
-When both a stacked parent and child review request have already merged, syncing the
-parent's local target branch moves both sessions to **Done**. This also applies while
-the child's stored review target still names the parent review branch, because the
-merged parent has carried the child's changes into the synchronized target. Retrying
-that sync also recovers a child left in **Merged** by an earlier Agentty run that
-already archived its parent.
+If parent and child requests have both merged, syncing the parent's local target also
+completes the child. Closing an unmerged request cancels its editable session.
 
 ## Clarification Interaction Loop
 
-<a id="usage-clarification-loop"></a> If an agent emits structured clarification
-questions, the session moves to **Question** status. You answer each question in
-sequence, and Agentty sends one consolidated follow-up message back to the session.
+<a id="usage-clarification-loop"></a> In **Question**, answer each question; Agentty
+sends the answers together as a follow-up turn.
 
-<a id="usage-question-options"></a> Questions may include predefined answer options
-shown as a numbered list; use `j`/`k` or `Up`/`Down` to navigate and `Enter` to send the
-highlighted choice. Moving past the list edges switches to the free-text input. Sending
-a blank free-text answer stores `no answer`. `Ctrl+C` while the answer input is focused
-ends the clarification turn and returns the session to **Review** without sending a
-reply; it is ignored while chat output is focused. `q` (outside free-text input) returns
-to the sessions list with the **Question** state kept for later; answers already
-submitted are saved, and reopening the session resumes at the next unanswered question.
+<a id="usage-question-options"></a> Use `j` / `k` or arrow keys to choose an option,
+then `Enter`. Move beyond the options to type a free-text answer; a blank answer means
+`no answer`. Type `@` to insert a repository path.
 
-In a free-text answer, type `@` to look up repository files. Use `Up` / `Down` to choose
-a match and `Tab` / `Enter` to insert it without submitting the answer. `Esc` closes the
-lookup while keeping your draft, even if file loading finishes afterward. Editing the
-query can open the lookup again.
+`Ctrl+C` from the answer input ends the turn without replying. `q` outside free-text
+input returns to the list and preserves progress. Reopening resumes the unanswered
+questions. See [Question Input](@/docs/usage/keybindings.md#question-input-free-text)
+for editing controls.
 
 ## Prompt Input Extras
 
-<a id="usage-prompt-extras"></a> In prompt input, `Ctrl+V`, `Ctrl+Shift+V`, and `Alt+V`
-paste one clipboard image into the current draft or reply as an inline `[Image #n]`
-token; from a draft session view, the same shortcuts first open the composer and then
-paste the image. The referenced local images are sent to the agent with the prompt. The
-clipboard source can be a copied PNG file, raw image data, or PNG path text from the
-host clipboard backend. Wayland reads use `wl-paste` when it is available; missing or
-unsupported clipboard backends report an inline paste error. Draft image files are
-removed when the composer is canceled, after a submitted turn finishes, and when a
-session is deleted or canceled.
+<a id="usage-prompt-extras"></a> Paste a clipboard image with `Ctrl+V`, `Ctrl+Shift+V`,
+or `Alt+V`. From a draft session, these also open the composer. Each attached image
+appears as `[Image #n]`; typing that text manually does not attach a file. Unsupported
+clipboard backends show an inline error; Wayland image reads use `wl-paste` when
+available.
 
-All editable inputs use the same character movement, word movement and deletion,
-line-editing, paste, `Ctrl+Z` undo, and `Ctrl+Y` / `Ctrl+Shift+Z` redo behavior. Prompt
-and clarification inputs extend that shared editor with multiline movement and their own
-completion or option actions. Undoing prompt text also recomputes slash-command and `@`
-lookup state; deleted image metadata remains available while undo history can restore
-its `[Image #n]` placeholder. Typing the same placeholder text manually does not attach
-the deleted image, and Agentty removes archived image files after their restoring edit
-falls out of bounded undo history. Attachment identity follows the exact placeholder
-occurrence, so duplicate lookalike text cannot substitute for the pasted token. Moving
-through prompt history with `Up` and `Down` preserves the attachment membership of the
-captured draft.
+Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo. On macOS, use `Ctrl+Z`;
+your terminal may consume `Cmd+Z`. Prompt-history navigation preserves attached images.
 
-On macOS, use `Ctrl+Z` rather than `Cmd+Z` for input undo. Terminal applications such as
-Ghostty may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
+Type `@` to look up repository files. Unstarted stacked drafts use the nearest available
+ancestor worktree. See [Prompt Input](@/docs/usage/keybindings.md#prompt-input) for
+completion and multiline editing.
 
-`@` file lookups keep the raw `@path/to/file` text visible and highlighted in the
-composer and transcript; the agent-facing prompt rewrites them to quoted `path/to/file`
-tokens. Before a stacked draft materializes its own worktree, lookup suggestions come
-from the nearest materialized ancestor worktree so newly created ancestor files remain
-available through unstarted intermediate drafts.
-
-If an agent command exits with an error, Agentty prints a short failure header followed
-by captured `stdout` and `stderr` sections, with JSONL provider events summarized into
-readable lines.
+Provider failures show a short error and captured output where available.
 
 ## Session Sizes
 
-<a id="usage-session-size"></a> Agentty classifies sessions by the number of changed
-lines in their diff:
+<a id="usage-session-size"></a> Sizes reflect changed lines and refresh after each turn:
 
-| Size    | Changed Lines |
+| Size    | Changed lines |
 | ------- | ------------- |
-| **XS**  | 0-10          |
-| **S**   | 11-30         |
-| **M**   | 31-80         |
-| **L**   | 81-200        |
-| **XL**  | 201-500       |
+| **XS**  | 0–10          |
+| **S**   | 11–30         |
+| **M**   | 31–80         |
+| **L**   | 81–200        |
+| **XL**  | 201–500       |
 | **XXL** | 501+          |
-
-Session size is recalculated after each completed agent turn, persisted to the session
-record, and rendered as a title prefix in the **Sessions** list.
 
 ## Slash Commands
 
-<a id="usage-slash-commands"></a> Type these in the prompt input to access special
-actions. From an editable session view, press `/` to open a new composer with the
-leading slash already inserted. This replaces any prompt draft previously saved by
-returning to the sessions list:
+<a id="usage-slash-commands"></a> Type `/` in the composer. From session view, `/` opens
+a fresh composer, replacing any saved draft. The picker supports fuzzy matching.
 
-The command picker filters as you type, accepts contains or fuzzy abbreviations such as
-`/son` for `/reasoning`, and wraps between its first and last options when you navigate
-with `j` / `k` or `Up` / `Down`.
+| Command        | Action                                               |
+| -------------- | ---------------------------------------------------- |
+| `/apply`       | Verify and apply valid focused-review suggestions.   |
+| `/mode`        | Choose permissions and review automation.            |
+| `/model`       | Choose a locally available backend and model.        |
+| `/personality` | Choose a workspace agent personality.                |
+| `/reasoning`   | Set reasoning effort for this session.               |
+| `/style`       | Choose concise, balanced, or detailed answers.       |
+| `/speed`       | Choose normal or fast responses for Claude or Codex. |
 
-| Command        | Description                                                   |
-| -------------- | ------------------------------------------------------------- |
-| `/apply`       | Verify focused-review suggestions, then apply the valid ones. |
-| `/mode`        | Choose editing permissions and review automation.             |
-| `/model`       | Switch the model for the current session.                     |
-| `/personality` | Choose an agent personality for the current session.          |
-| `/reasoning`   | Override the reasoning level for the current session.         |
-| `/style`       | Choose concise, balanced, or detailed responses.              |
-| `/speed`       | Choose normal or fast responses for this session.             |
+`/apply` requires a completed focused review. `/mode` selects:
 
-`/apply` requires a completed focused review (`f` key). `/mode` stores a session-scoped
-mode for following chat turns. `Auto Edit` uses the agent's standard editing
-permissions. `Auto Edit + Auto Address Comments` uses the same permissions and
-automatically runs the verification-gated `/apply` flow when focused review returns
-actionable suggestions. The resulting turn is reviewed again; automation stops when no
-actionable suggestions remain or after three automatic application turns. A new user
-prompt or mode selection starts a fresh iteration budget. Codex auto-edit modes have
-full command access, including for browser tests and local services that cannot run
-inside its sandbox. Claude auto-edit modes can likewise retry incompatible commands
-outside its sandbox. During those chat turns, `Read Only` prevents repository and
-filesystem writes. The composer title always shows the current mode after the response
-speed when that provider supports speed control. `Shift+Tab` cycles `Auto Edit`,
-`Auto Edit + Auto Address Comments`, and `Read Only` in that order without changing the
-draft. In `Read Only`, agents do not ask for write access; when a requested change
-requires edits, they suggest switching to `Auto Edit` with `Shift+Tab`. `/model` offers
-only locally available backends; see [Agents & Models](@/docs/agents/backends.md).
-`/speed` is available for Claude and Codex sessions. The selected speed is stored with
-the session, shown after the reasoning level in the session header and beside the
-composer title, and applied to following turns. Gemini and Antigravity sessions have no
-speed control, so their header and composer omit the speed display entirely. Fast
-responses use the provider's higher-cost low-latency mode. Enabling Fast moves Claude
-sessions to `claude-opus-5-5` and Codex Spark sessions to `gpt-6-sol` without changing
-the project default model. Returning to Normal does not change the selected model.
-Selecting a model that does not support Fast resets the session to Normal before the
-model changes. Claude Opus 5.5 retains Fast when selected.
+- **Auto Edit**: Standard editing permissions. Codex has full command access; Claude can
+  retry commands outside its sandbox. Commands are not necessarily confined to the
+  worktree.
+- **Auto Edit + Auto Address Comments**: The same permissions, plus automatic
+  verification and application of focused-review suggestions. Stops when none remain or
+  after three application turns. A new prompt or mode selection resets that limit.
+- **Read Only**: Prevents filesystem writes during chat turns. Switch modes when edits
+  are needed.
 
-`/style` is available for every backend. `Concise` keeps the answer compact while
-retaining essential results, caveats, and verification; `Balanced` provides enough
-context to understand and verify the result without exhaustive detail; and `Detailed`
-explains decisions, trade-offs, effects, and verification thoroughly. The selection is
-stored with the session and applied to following user turns. Non-default `Concise` and
-`Detailed` selections are also shown in the session header and composer title. An
-explicit length or format request in the prompt takes precedence. Style guidance changes
-presentation only: it does not alter tool access, protocol output, safety requirements,
-or utility prompts such as title generation.
+`Shift+Tab` cycles these modes while composing. See
+[Agents & Models](@/docs/agents/backends.md#switching-models) for speed costs and
+automatic model compatibility changes.
 
-`/personality` scans `.agents/agents/*/agent.md` in the session worktree when the picker
-opens. Agentty does not scan the global `~/.agents` directory. Each enabled definition
-provides a name, description, and prompt body; workspace directory names supply missing
-IDs. Choose `None (default)` to clear the selection. Agentty stores the selected ID and
-resolves the file again immediately before each turn, so edits apply on the next turn.
-If the selected definition is removed, disabled, or invalid, the turn continues without
-it and the transcript reports the fallback.
+`/style` affects following user turns: **Concise** retains essential results, caveats,
+and verification; **Balanced** adds useful context; **Detailed** explains decisions and
+trade-offs thoroughly. Explicit prompt instructions take precedence. Style never changes
+permissions, safety requirements, or required output fields.
 
-<a id="usage-title-refinement"></a> When the first prompt is submitted, Agentty stores
-it as a provisional title and generates a refined title in the background using the
-project's `Default Fast Model`. Title refinement runs for every session role, including
-managed read-only research sessions, and the isolated title prompt is itself read-only.
-Title generation uses the persisted original request, current title, and latest request
-as one stable context snapshot. The original request anchors the overall goal; later
-requests can establish a goal after context-only text or clarify the existing goal, but
-a narrow follow-up or clarification answer does not replace broader session intent. An
-explicit cancellation or replacement does change the goal. Each context field is
-shortened at a valid text boundary when necessary, so unusually large sessions retain
-every context category without exceeding a model's prompt transport limit. Draft
-sessions regenerate the title as more drafts are staged.
+`/personality` reads `.agents/agents/*/agent.md` from the session worktree, excluding
+global definitions. Choose `None (default)` to clear it. File edits apply on the next
+turn; missing or invalid definitions fall back without stopping work and show a notice.
 
-Provider failures are logged and retried once. If both attempts fail, or the model finds
-no actionable goal, Agentty keeps the provisional title so a later substantive request
-can refine it. Candidates equivalent to the current title, original request, latest
-request, or one line of those requests after case and punctuation normalization are
-rejected as copies. Generated title candidates are ordered, so an empty response does
-not discard an earlier usable candidate, while a slow response cannot replace a newer
-accepted candidate, draft, or commit-derived title.
+<a id="usage-title-refinement"></a> Agentty refines session titles from the overall goal
+using the Fast model. Draft titles update as messages are staged; committed work uses
+the commit title. Failed refinement leaves the provisional title in place.
 
 ## Settings Scope
 
-<a id="usage-settings-scope"></a> Settings for models, reasoning, response speed,
-response style, commit trailers, and launch configurations are stored per active
-project. `Theme` and `Orchestrator Parallelism` are global. Parallelism defaults to
-three workers and accepts values from one through eight. The Settings tab renders these
-scopes as `Global settings` and `'<project>' settings`. Rows with fixed choices open
-dropdowns; use `j` / `k` to move through options. Smart, Fast, and Review first ask for
-a model and reasoning level. Claude and Codex then offer a response-speed dropdown with
-`Normal` and `Fast`; Gemini and Antigravity save after reasoning because they do not
-support speed control. Each role persists its independent model, reasoning, and speed
-defaults. Smart supplies defaults for new sessions, Fast supplies title and
-commit-message utility prompts, and Review supplies focused review assists. Selecting
-`Fast` also applies the same compatible-model adjustment used by `/speed`: Claude uses
-`claude-opus-5-5`, and Codex Spark uses `gpt-6-sol`.
+<a id="usage-settings-scope"></a> **Global settings** include theme, orchestrator
+parallelism (one to eight workers, default three), and research auto-approval. Project
+settings include model, reasoning, speed and style defaults, commit trailers, and launch
+configurations. Defaults affect new sessions; use slash commands to change an existing
+one. See [Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for Smart,
+Fast, and Review roles.
 
-`Default Response Style` supplies the initial style for new sessions. Changing the
-project default does not rewrite existing sessions; use `/style` to update an active
-session.
-
-The `Launch Configurations` row opens a command-list editor instead of a multiline text
-field. Use `a` to add an entry, `e` or `Enter` to edit the selected entry, `d` to delete
-it, and `J` / `K` to reorder entries. Add/edit mode uses a single-line input; `Enter`
-saves the command, `Esc` cancels the input, and the shared word-editing, paste,
-undo/redo, and cursor shortcuts remain available. Agentty trims commands and drops empty
-entries when saving. When Agentty runs inside `tmux` and multiple
-`Launch Configurations` entries are configured, pressing `o` in a session opens a
-selector popup.
+`Launch Configurations` is a command list: add with `a`, edit with `e` or `Enter`,
+delete with `d`, and reorder with `J` / `K`. `Enter` saves an edit; `Esc` cancels it.
+When Agentty runs in `tmux`, session-view `o` runs a configured command in the worktree
+or opens a selector if several commands exist.
 
 ## Auto-Update
 
-<a id="usage-auto-update"></a> Agentty checks npmjs for a newer version in the
-background when it launches and once every hour while it remains open. If a newer
-version is detected, it automatically runs `npm i -g agentty@latest` without blocking
-the UI:
-
-- **Updating to vX.Y.Z...**: The background npm install is running.
-- **Updated to vX.Y.Z — restart to use new version**: Installation succeeded; relaunch
-  Agentty to use it.
-- **vX.Y.Z version available update with npm i -g agentty@latest**: Automatic
-  installation failed; run the displayed command manually.
-
-To disable automatic updates, launch with `--no-update`:
+<a id="usage-auto-update"></a> Agentty checks npm at startup and hourly, then installs
+new versions in the background. The status bar reports installation progress, a request
+to restart after success, or a manual update command after failure.
 
 ```bash
 agentty --no-update
 ```
 
-When `--no-update` is set, Agentty still performs the startup and hourly checks and
-shows the manual update hint, but does not install automatically.
-
-Run `agentty --help` to list supported launch options or `agentty --version` to print
-the installed Agentty version. Unsupported arguments produce an error instead of
-launching the TUI.
+This disables automatic Agentty installation while retaining update checks and hints.
+See [Backend Selection](@/docs/agents/backends.md#selecting-a-backend) for agent CLI
+refresh. Use `agentty --help` for launch options and `agentty --version` for the
+installed version.
 
 ## Data Location
 
-<a id="usage-data-location"></a> Agentty stores its data in `~/.agentty/` by default.
-This includes the SQLite database, session logs, and worktree checkouts (under
-`~/.agentty/wt/`).
-
-Per-session worktree folders are removed automatically after a session reaches `Done` or
-`Canceled`, and when a session record is deleted.
-
-You can override this location by setting the `AGENTTY_ROOT` environment variable:
-
-```bash
-# Run agentty with a custom root directory
-AGENTTY_ROOT=/tmp/agentty-test agentty
-```
+<a id="usage-data-location"></a> Agentty keeps its database, logs, and worktrees in its
+data root, normally `~/.agentty/`. Worktrees are removed when sessions finish, are
+canceled, or are deleted. Set `AGENTTY_ROOT` to use another root; each root allows one
+running Agentty instance.
 
 ### Continuing long sessions
 
-Follow-up messages preserve the active goal and accepted decisions unless you cancel or
-replace them. A status question does not cancel unfinished work. For long histories,
-agents receive opening and recent context with access to the full history during the
-turn; the saved conversation remains intact.
+Follow-ups preserve the active goal and accepted decisions unless you cancel or replace
+them. A status question does not cancel work. Long sessions use opening and recent
+context with access to full history; the saved conversation remains intact.
 
-Agents reuse successful check results while the relevant inputs remain unchanged and
-still run repository-required checks. Orchestration workers report evidence for each
-acceptance criterion, exact check commands and results, and unresolved gaps.
+Agents reuse successful checks while their inputs remain unchanged and still run
+repository-required checks.

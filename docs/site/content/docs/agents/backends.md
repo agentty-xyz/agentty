@@ -5,9 +5,7 @@ weight = 1
 +++
 
 <a id="backends-introduction"></a> Agentty delegates coding work to external AI agent
-CLIs. Each backend is a standalone CLI tool that Agentty launches in an isolated
-worktree. This page covers the supported backends, available models, and configuration
-options.
+CLIs running in session worktrees. Install and authenticate at least one backend.
 
 <!-- more -->
 
@@ -93,10 +91,6 @@ describes subscription OAuth as intended for Claude Code and native Anthropic
 applications, while developer integrations should use API keys or supported cloud
 providers.
 
-Claude turns use the CLI's schema-validated structured result for the final chat
-response. Tool-use events remain transient progress updates and are replaced by the
-validated answer when the turn completes.
-
 If Claude session turns or utility prompts fail with `authentication_error`,
 `Failed to authenticate`, or `OAuth token has expired`, refresh the CLI session and
 retry:
@@ -114,12 +108,7 @@ than Google Account subscription sign-in. The
 [Antigravity terms](https://antigravity.google/terms) do not currently explain how
 subscription access applies when third-party tools invoke headless sessions.
 
-Agentty starts `agy` with `--input-format stream-json` and sends each prompt as an
-NDJSON user event over standard input. The process remains active between turns, so
-Antigravity retains native conversation context and performs its own context compaction
-instead of receiving a replayed transcript on every follow-up. Agentty persists the
-native conversation ID and resumes it after a process or application restart. Prompts
-are no longer constrained by an operating-system command-argument limit.
+Antigravity retains conversation context between turns and resumes it after a restart.
 
 ### Gemini
 
@@ -144,55 +133,32 @@ backends the same repository guidance.
 
 ## Selecting a Backend
 
-<a id="backends-selecting-a-backend"></a> Choose the backend from the `/model` picker:
+<a id="backends-selecting-a-backend"></a> Use `/model` to choose a locally available
+backend, then one of its models.
 
-```bash
-# Open model selection (backend first, then model)
-/model
-```
+The **Projects** tab shows installed CLI versions and `updating...` during startup
+refresh. Antigravity, Claude, and Codex use their native updaters; Gemini updates only
+when Agentty recognizes an npm-global installation. If an Antigravity executable changes
+while Agentty is running, wait for discovery or restart before retrying a turn.
 
-The picker is filtered to the backend CLIs currently available on the machine. If only
-`agy` is installed, `/model` shows only Antigravity and its selectable Gemini model
-choices.
+<a id="backends-persistent-defaults"></a> In **Settings**, choose a model and reasoning
+level for each project role. Claude and Codex also offer `Normal` or `Fast` response
+speed. Unavailable backend defaults fall back to an installed backend.
 
-At startup, Agentty refreshes each available agent CLI in the background, then probes
-`--version` and updates the Projects tab's **Agent CLIs** rows with the current version.
-Antigravity, Claude, and Codex use their native `update` commands. Because current
-Gemini CLI releases do not expose that command, npm-global Gemini installations are
-refreshed with `npm install -g @google/gemini-cli@latest`. Rows show `updating...` until
-the refresh completes. Gemini installations that Agentty cannot identify as npm-global
-are version-probed without an automatic update. Antigravity setup and turns reuse the
-validated discovery result instead of running `agy --version` on the async session path.
-Replacing or modifying the `agy` executable invalidates that result and asks you to wait
-for discovery or restart Agentty before retrying.
+<a id="backends-reasoning-level"></a>
 
-<a id="backends-persistent-defaults"></a> For persistent defaults, configure each Smart,
-Fast, and Review role in the **Settings** tab (`Tab` to navigate, `Enter` to open the
-selector). Choose the `agent/model` first and press `Enter`, then choose its reasoning
-level. Claude and Codex selections continue to a response-speed picker with `Normal` and
-`Fast`; Gemini and Antigravity save after reasoning. Each role's model, reasoning, and
-speed defaults are stored per project. Keeping the backend in the selection ensures
-shared Gemini model ids remain tied to the selected Gemini or Antigravity provider.
-Stored defaults that point at an unavailable backend fall back to the first available
-backend default.
+| Role   | Used for                   |
+| ------ | -------------------------- |
+| Smart  | New sessions               |
+| Fast   | Titles and commit messages |
+| Review | Focused reviews            |
 
-The separate `Default Response Style` setting applies to every backend and initializes
-new sessions as `Concise`, `Balanced`, or `Detailed`. Existing sessions retain their
-stored style.
+Session overrides take precedence. Changing defaults does not alter existing sessions.
+`Default Response Style` initializes new sessions as `Concise`, `Balanced`, or
+`Detailed`.
 
-<a id="backends-reasoning-level"></a> Smart reasoning becomes the default for new
-sessions, Fast reasoning is used for title and commit-message utility prompts, and
-Review reasoning is used for focused review assists. A session-specific `/reasoning`
-override still takes precedence for that session's turns. Antigravity receives
-`--effort low`, `--effort medium`, or `--effort high`; `xhigh` and `max` map to its
-highest supported value, `--effort high`. Codex receives `max` as a distinct reasoning
-effort. For Claude, both `xhigh` and `max` map to `--effort max`, which is currently
-supported by `claude-opus-5-5`.
-
-Smart speed becomes the default for new sessions, Fast speed is used for title and
-commit-message utility prompts, and Review speed is used for focused review assists.
-Fast is available only for Claude and Codex. It applies the same compatible-model
-adjustment as `/speed`: Claude uses `claude-opus-5-5`, and Codex Spark uses `gpt-6-sol`.
+Antigravity maps `xhigh` and `max` reasoning to `high`. Claude maps both to `max`, which
+is supported by `claude-opus-5-5`. Codex supports a distinct `max` effort.
 
 ## Available Models
 
@@ -230,34 +196,24 @@ replacement automatically. Finished sessions preserve their historical model dat
 
 ## Switching Models
 
-<a id="backends-switching-models"></a> You can switch the model for the current session
-using the `/model` slash command in the prompt input. This opens a two-step picker:
-first choose the backend, then choose one of its models. Both steps are filtered to
-locally available backends.
+<a id="backends-switching-models"></a> Use `/model` to change the current session's
+backend and model, `/reasoning` to change reasoning effort, and `/style` to choose
+answer length. See [Slash Commands](@/docs/usage/workflow.md#slash-commands) for
+response styles and permission modes.
 
-You can also switch the reasoning level for the current session with the `/reasoning`
-slash command. The picker preselects the current effective reasoning level.
+Claude and Codex also support `/speed`. `Fast` reduces latency at higher provider cost
+and may switch to a compatible model:
 
-Use `/style` with any backend to choose concise, balanced, or detailed answers for the
-current session. Agentty persists the preference and adds provider-neutral guidance to
-each interactive turn. Explicit user instructions about length or format take
-precedence, and the guidance never replaces required protocol fields, safety details, or
-verification. One-shot utility prompts are unchanged.
+| Selection   | Model used with Fast |
+| ----------- | -------------------- |
+| Claude      | `claude-opus-5-5`    |
+| Codex Spark | `gpt-6-sol`          |
 
-Claude and Codex sessions also expose `/speed`. Choose Normal for standard provider
-routing or Fast for lower latency at higher provider cost. Agentty persists the choice
-per session and displays it after reasoning in the session header and beside the prompt
-title. Gemini and Antigravity sessions have no speed control, so they show neither the
-command nor the speed display. Claude Fast uses the noninteractive `fastMode` setting
-and supports `claude-opus-5-5`; Agentty switches other Claude models to Opus 5.5 when
-Fast is enabled. Codex Fast uses the app-server `fast` service tier; Agentty switches
-`gpt-5.3-codex-spark` to `gpt-6-sol` first. Selecting Normal restores the provider's
-standard tier without reverting that model change. These automatic compatibility
-switches do not change the project's default model. Selecting a model that cannot use
-Fast resets the session to Normal before switching. See the provider guides for
+Returning to `Normal` keeps the resulting model. Choosing an incompatible model resets
+speed to `Normal`. These changes do not alter project defaults. Gemini and Antigravity
+have no speed control. See the provider guides for
 [Codex fast mode](https://learn.chatgpt.com/docs/agent-configuration/speed) and
 [Claude Code fast mode](https://code.claude.com/docs/en/fast-mode).
 
-<a id="backends-switching-default-model"></a> To change the **default model**
-persistently, use the **Settings** tab (`Tab` to navigate to it, `Enter` to open the
-selector).
+<a id="backends-switching-default-model"></a> To change defaults for future sessions,
+use **Settings**. See [Settings Scope](@/docs/usage/workflow.md#settings-scope).

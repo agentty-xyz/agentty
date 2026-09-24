@@ -13,9 +13,8 @@ through the correct modules without crossing layer boundaries.
 
 1. Keep frontend-neutral request/result models and programmatic operations in
    `crates/ag-session/`.
-1. Update Agentty orchestration in `crates/agentty/src/app/session/` (`lifecycle.rs`,
-   `worker.rs`, `task.rs`, etc.) and adapt it through
-   `crates/agentty/src/app/session_api.rs`.
+1. Update Agentty orchestration in `crates/agentty/src/app/session/` and adapt it
+   through `crates/agentty/src/app/session_api.rs`.
 1. Route background-callable operations through the bounded actor in
    `crates/agentty/src/app/session_runtime.rs`; do not share `App` behind an async
    mutex.
@@ -44,13 +43,8 @@ through the correct modules without crossing layer boundaries.
 1. Update provider model declarations in `crates/ag-session/src/agent.rs`.
 1. Add backend behavior in `crates/ag-agent/src/agent/` and register it in
    `crates/ag-agent/src/agent/provider.rs`.
-1. If app-server-based, wire the provider client through
-   `crates/ag-agent/src/agent/provider.rs` so the provider owns its runtime wiring.
-1. Register any shared parsing, prompt-transport, streaming, or thought-policy changes
-   in `crates/ag-agent/src/agent/provider.rs`.
-1. The channel factory re-exported by the `ag-agent` crate root routes automatically
-   based on the backend-owned transport mode - no change needed there unless the runtime
-   contract itself changes.
+1. Keep transport selection, parsing, streaming, and provider setup in the provider
+   registry; application workflows continue through worker clients.
 1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
 
 ## Add or Change a Utility Agent Prompt
@@ -98,34 +92,15 @@ through the correct modules without crossing layer boundaries.
 
 ## Contributor Checklist for Architecture-Safe Changes
 
-1. Keep workflow/state transitions in `app/`, not in UI rendering modules.
-1. Keep external integrations in `infra/` behind traits.
-1. Keep frontend-neutral session entities, enums, and policies in `ag-session`; keep
-   Agentty-specific entities and interaction state in `domain/`.
-1. In `app/` and `runtime/` orchestration, avoid direct `Command::new`, `Instant::now`,
-   `SystemTime::now`, and direct filesystem/process calls unless they run behind trait
-   boundaries.
-1. For helpers that need timestamps in `app/` or `runtime/`, reuse the shared
-   `app/session/core.rs` `Clock` boundary instead of adding direct `Instant::now()` or
-   `SystemTime::now()` calls.
-1. New external boundaries should get a trait with
-   `#[cfg_attr(test, mockall::automock)]`.
-1. Update docs in `docs/site/content/docs/` whenever user-facing behavior changes.
-1. Update `docs/site/content/docs/architecture/module-map.md`,
-   `docs/site/content/docs/architecture/runtime-flow.md`, and
-   `docs/site/content/docs/architecture/testability-boundaries.md` when architecture
-   responsibilities change.
-1. Keep the nearest semantic `AGENTS.md` guides aligned when a major module's purpose,
-   invariants, or change-routing guidance changes.
-1. Treat render-time helpers as hot paths: avoid per-frame cloning of large render
-   inputs, and make line-count/layout helpers reuse the same cached derived data as the
-   final paint path.
-1. When changing `TurnRequest`/`TurnContinuation`/`TurnEvent`/`TurnResult` shapes in
-   `crates/ag-contracts/src/contract.rs`, update the key-types table in
-   `docs/site/content/docs/architecture/runtime-flow.md`.
-1. When adding/removing `#[cfg_attr(test, mockall::automock)]` external-boundary traits,
-   update `docs/site/content/docs/architecture/testability-boundaries.md`.
-1. Run quality gates from `AGENTS.md` before opening a PR.
+1. Follow [Module Map](@/docs/architecture/module-map.md#layer-rules) for layer
+   ownership and [Testability Boundaries](@/docs/architecture/testability-boundaries.md)
+   for external-system injection.
+1. Update the relevant user guide for visible changes and the canonical architecture
+   page when its contracts change. Keep durable scope instructions aligned.
+1. Reuse cached derived data on render hot paths; measurement and painting must agree.
+1. Keep the runtime key-types table current when execution contracts change, and the
+   boundary reference current when external traits change.
+1. Run the required gates in root `AGENTS.md`.
 
 ## Change run execution
 
@@ -143,11 +118,10 @@ through the correct modules without crossing layer boundaries.
 
 ## Adding model-assisted work
 
-Inject `ag-worker::RunClient` and submit with the existing request permissions and
-provider-call budget. Capture session/project ownership and a purpose with
-`ag-worker::scoped_client` when spawning background work. Nested operations must retain
-parent scope and await worker-owned utilities directly, rather than enqueueing behind
-the waiting session command. Construct runtime adapters only inside `ag-runtime`;
-configure their workers in the application.
+Use the
+[utility prompt recipe](@/docs/architecture/change-recipes.md#add-or-change-a-utility-agent-prompt).
+Background work must capture purpose and session/project ownership with
+`ag-worker::scoped_client`. Nested utilities retain parent cancellation and run directly
+under worker supervision, without enqueueing behind the session command awaiting them.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.
