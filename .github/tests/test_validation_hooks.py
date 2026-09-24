@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -39,6 +41,7 @@ with Path("calls.jsonl").open("a", encoding="utf-8") as calls:
         "gif_mode": os.environ.get("TESTTY_GIF_MODE"),
         "coverage_base": os.environ.get("AGENTTY_COVERAGE_BASE"),
         "rustflags": os.environ.get("RUSTFLAGS"),
+        "coverage_target": os.environ.get("CARGO_LLVM_COV_TARGET_DIR"),
     }) + "\\n")
 if tool == "cargo":
     status = int(os.environ.get("STUB_CARGO_EXIT", "0"))
@@ -80,7 +83,7 @@ class ValidationHookTests(unittest.TestCase):
             key: value
             for key, value in os.environ.items()
             if not key.startswith(
-                ("AGENTTY_TEST_", "AGENTTY_COVERAGE_", "AGENTTY_MERGE_GROUP_", "STUB_")
+                ("AGENTTY_TEST_", "AGENTTY_COVERAGE_", "AGENTTY_MERGE_GROUP_", "CARGO_LLVM_COV_", "STUB_")
             )
         }
         environment.update(overrides)
@@ -131,6 +134,55 @@ class ValidationHookTests(unittest.TestCase):
             "live_prompt_evaluation", "--", "--ignored", "--exact", "--nocapture",
         ])
         self.assertEqual(HOOKS["prompt-evaluation"]["stages"], ["manual"])
+
+    def test_coverage_target_is_isolated_and_overridable(self):
+        for hook in ("coverage", "coverage-ag-harness-sandbox"):
+            for target in ("", "custom coverage/target"):
+                with self.subTest(hook=hook, target=target):
+                    (self.directory / "calls.jsonl").write_text("")
+                    result = self.run_hook(
+                        hook, CARGO_TARGET_DIR="ordinary-target",
+                        CARGO_LLVM_COV_TARGET_DIR=target,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        self.calls()[0]["coverage_target"],
+                        target or "target/llvm-cov-target",
+                    )
+
+    def test_compiler_wrapper_preserves_environment_arguments_and_exit_status(self):
+        wrapper = ROOT / ".cargo/rustc-wrapper.sh"
+        (self.bin / "bash").symlink_to(shutil.which("bash"))
+        compiler = self.bin / "compiler with spaces"
+        compiler.write_text(
+            f"#!{sys.executable}\nimport os, sys\n"
+            'print(os.environ["CARGO_BIN_EXE_ag-xtask"])\n'
+            'print("\\n".join(sys.argv[1:]))\nsys.exit(17)\n'
+        )
+        compiler.chmod(0o755)
+        for cache_state in ("missing", "ready", "unreachable"):
+            with self.subTest(cache_state=cache_state):
+                if cache_state != "missing":
+                    cache = self.bin / "sccache"
+                    probe_status = 2 if cache_state == "unreachable" else 0
+                    cache.write_text(
+                        f"#!{sys.executable}\nimport os, sys\n"
+                        f'if sys.argv[1] == "--dist-status":\n    sys.exit({probe_status})\n'
+                        'print("cached", flush=True)\nos.execv(sys.argv[1], sys.argv[1:])\n'
+                    )
+                    cache.chmod(0o755)
+                result = subprocess.run(
+                    [str(wrapper), str(compiler), "argument with spaces", "$(literal)"],
+                    env={"PATH": str(self.bin), "CARGO_BIN_EXE_ag-xtask": "test binary"},
+                    capture_output=True, text=True,
+                    timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 17)
+                self.assertEqual(
+                    result.stdout,
+                    ("cached\n" if cache_state == "ready" else "")
+                    + "test binary\nargument with spaces\n$(literal)\n",
+                )
 
     def test_coverage_generates_once_before_checking_all_thresholds(self):
         (self.directory / "coverage.lcov").write_text("stale report")

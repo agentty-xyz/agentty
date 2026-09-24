@@ -1,3 +1,4 @@
 [build]
-# Limit each build's parallelism when multiple sessions compile at once.
-jobs = 2
+# Use the optional compiler cache when sccache is installed.
+rustc-wrapper = ".cargo/rustc-wrapper.sh"
+# Use Cargo's CPU-based default; set CARGO_BUILD_JOBS for concurrent sessions.
