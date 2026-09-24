@@ -55,16 +55,17 @@ pub(super) fn render_result(result: Result<String, impl Display>) -> Result<Stri
 /// original worktree content is changed. Returns whether context was summarized
 /// so reviews can disclose that they do not constitute full diff coverage.
 /// Size rejections get at most two smaller final retries; other failures
-/// propagate. All summary, reduction, and final attempts share a fixed
+/// propagate. All summary, reduction, and final attempts share the caller's
 /// provider-call budget.
 pub(super) async fn submit(
     client: &dyn RunClient,
     mut request: OneShotRequest,
     diff: &str,
     context: &str,
+    max_provider_calls: usize,
     render: impl Fn(&str, &str) -> Result<String, OneShotError>,
 ) -> Result<(OneShotSubmission, bool), OneShotError> {
-    let call_budget = ag_contracts::ProviderCallBudget::new(MAX_PROVIDER_CALLS);
+    let call_budget = ag_contracts::ProviderCallBudget::new(max_provider_calls);
     request.provider_call_budget = Some(call_budget.clone());
     let mut diff = diff.to_string();
     let mut context = context.to_string();

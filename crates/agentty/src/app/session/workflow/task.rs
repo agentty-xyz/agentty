@@ -34,6 +34,8 @@ const AUTO_COMMIT_ASSIST_POLICY: AssistPolicy = AssistPolicy {
     max_identical_failure_streak: 3,
 };
 
+const COMMIT_MESSAGE_MAX_PROVIDER_CALLS: usize = 8;
+
 const SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER: &str =
     "Co-Authored-By: [Agentty](https://github.com/agentty-xyz/agentty)";
 
@@ -1112,6 +1114,7 @@ impl SessionTaskService {
             },
             diff,
             current_commit_message.unwrap_or_default(),
+            COMMIT_MESSAGE_MAX_PROVIDER_CALLS,
             |diff, context| {
                 crate::app::diff_prompt::render_result(Self::session_commit_message_prompt(
                     diff,

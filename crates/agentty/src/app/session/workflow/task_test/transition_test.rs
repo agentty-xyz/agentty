@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 
 use super::super::{
     AUTO_COMMIT_ERROR_TRUNCATED_SECTION_MARKER, AutoCommitOutcome,
-    SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER, SessionTaskService,
-    append_agentty_coauthor_trailer, compact_commit_error_for_assist,
+    COMMIT_MESSAGE_MAX_PROVIDER_CALLS, SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER,
+    SessionTaskService, append_agentty_coauthor_trailer, compact_commit_error_for_assist,
 };
 use super::support::{commit_fallback_transcript, insert_review_session, one_shot_submission};
 use crate::app::AppEvent;
@@ -567,7 +567,7 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
         let mut client = MockRunClient::new();
         client
             .expect_submit()
-            .times(if oversized_diff { 2..=64 } else { 1..=1 })
+            .times(1..=COMMIT_MESSAGE_MAX_PROVIDER_CALLS)
             .withf(|request| request.prompt.contains("DIFF_ONLY_SECRET"))
             .returning(move |request| {
                 if oversized_diff {
