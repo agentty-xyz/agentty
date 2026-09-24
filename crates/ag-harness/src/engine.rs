@@ -11,7 +11,7 @@ use crate::model::{
 };
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
-use crate::session::WriteJournal;
+use crate::reservation::WriteJournal;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
 use crate::turn::{
     ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOptions, TurnOutcome,

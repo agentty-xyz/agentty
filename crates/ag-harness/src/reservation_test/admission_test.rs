@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use crate::reservation::{AdmittedStore, admit};
 use crate::store_conformance_test::{lifecycle, options, schema, stores};
-use crate::store_coordinator::{AdmittedStore, admission};
 use crate::{
     CommandIntent, HostRequest, HostTurnAcquisition, HostTurnStatus, NewSession, SessionStore,
     TurnInput,
@@ -11,7 +11,7 @@ use crate::{
 async fn admission_decorator_forwards_the_complete_store_contract() {
     // Arrange
     for store in stores().await {
-        let admission = admission(store.identity(), "session").expect("admission");
+        let admission = admit(store.identity(), "session").expect("admission");
         let decorated: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
             admission: Mutex::new(Some(Arc::new(admission))),
             lease: Mutex::new(None),
@@ -57,7 +57,7 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
 async fn admission_decorator_forwards_host_recovery() {
     // Arrange
     for store in stores().await {
-        let admission = admission(store.identity(), "session").expect("admission");
+        let admission = admit(store.identity(), "session").expect("admission");
         let decorated: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
             admission: Mutex::new(Some(Arc::new(admission))),
             lease: Mutex::new(None),
@@ -100,7 +100,7 @@ async fn admission_decorator_forwards_host_recovery() {
 async fn admission_decorator_preserves_command_owner_and_unknown_outcome() {
     // Arrange
     for store in stores().await.into_iter().skip(1) {
-        let guard = admission(store.identity(), "commands").expect("admission");
+        let guard = admit(store.identity(), "commands").expect("admission");
         let decorated: Arc<dyn SessionStore> = Arc::new(AdmittedStore {
             admission: Mutex::new(Some(Arc::new(guard))),
             lease: Mutex::new(None),

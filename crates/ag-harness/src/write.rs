@@ -9,8 +9,8 @@ use tokio::io::AsyncReadExt as _;
 
 use crate::effect::Effects;
 use crate::file_system::FileSystem;
+use crate::reservation::WriteJournal;
 use crate::schema_contract;
-use crate::session::WriteJournal;
 use crate::tool::WriteArguments;
 
 const BYTE_ORDER_MARK: &[u8] = b"\xef\xbb\xbf";

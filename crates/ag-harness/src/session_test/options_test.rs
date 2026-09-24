@@ -40,7 +40,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
     database
         .fail_turn(
             "session",
-            first.guard.owner.turn_position,
+            first.guard.owner().turn_position,
             &TurnError::ToolCallLimit { limit: 8 },
         )
         .await
@@ -143,7 +143,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     database
         .complete_turn(
             "session",
-            first.guard.owner.turn_position,
+            first.guard.owner().turn_position,
             &[],
             Some("native"),
         )
@@ -246,7 +246,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
     database
         .complete_turn(
             "session",
-            first.guard.owner.turn_position,
+            first.guard.owner().turn_position,
             &[],
             Some("native"),
         )

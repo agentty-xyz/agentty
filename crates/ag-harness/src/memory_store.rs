@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tokio::time::Instant;
 
 use crate::input::TurnInput;
-use crate::session::TURN_LEASE_SECONDS;
+use crate::reservation::TURN_LEASE_SECONDS;
 use crate::write_journal::content_hash;
 use crate::{
     AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,

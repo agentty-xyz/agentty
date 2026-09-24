@@ -5,8 +5,9 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
-use super::support::{AcquisitionGate, CommitGate, GatedStore, PauseAt};
+use super::support::{AcquisitionGate, CommitGate};
 use crate::WriteStatus;
+use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, ReservationObserver, SessionError};

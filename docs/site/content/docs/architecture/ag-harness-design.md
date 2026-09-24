@@ -73,6 +73,9 @@ flowchart TD
   never the only copy of conversation state.
 - One active turn per session. Renewable leases fence concurrent processes; expired
   leases mark turns `interrupted`, and only completed turns re-enter model context.
+- Within one process, a single reservation lifecycle owns admission, lease renewal,
+  finalization, and cleanup of abandoned owners. It recovers those owners before every
+  turn acquisition or model switch, the same way for every store.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
 - `submit`/`recover` bind host-assigned request IDs to a fingerprint of the effective
@@ -149,3 +152,21 @@ OpenTelemetry without storing prompts or tool output in telemetry.
    permission mapping.
 1. **Feature-gated product surface** — off-by-default Harness selection, capability
    checks, and deterministic Agentty end-to-end coverage.
+1. **Narrow the `SessionStore` seam** — stores expose atomic record operations over
+   plain data, and the harness applies the admission rules (generation, busy state,
+   command fence, continuation compatibility, history budget) once, inside each store's
+   transaction. It also builds `AcquiredTurn` and its lease on its own side of the seam.
+   Today every adapter repeats those rules and constructs the lease guard itself. That
+   is also why the reservation lifecycle still binds admission through a forwarding
+   store handle.
+1. **One settlement tracker behind `TurnControl`** — replace the separate persistence,
+   effect, and command trackers with one phased tracker. It would expose a single
+   settlement report and retry that enforce phase order in code rather than in rustdoc.
+   This is a breaking public change.
+1. **The acquired turn owns request projection and commit** — the acquired turn builds
+   its model request and commits its outcome itself, so the rule that the store records
+   the user input as message `0` never leaves one module. Host-request and plain turns
+   become commit variants instead of flags.
+1. **Shared lifecycle correlation for observers** — one correlator pairs turn and tool
+   start/finish events for both `LifecycleTraceObserver` and `LifecycleMetrics`, instead
+   of each observer rebuilding pending maps from the raw event stream.

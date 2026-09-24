@@ -4,11 +4,14 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tempfile::tempdir;
 
-use super::support::{GatedStore, PauseAt};
+use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
-use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, NewSession, SessionError, StoreIdentity, TURN_LEASE_SECONDS};
+use crate::reservation::TURN_LEASE_SECONDS;
+use crate::session::tests::support::{
+    acquire, allow_interrupts, reject_interrupts, schema, turn_options,
+};
+use crate::session::{Database, NewSession, SessionError, StoreIdentity};
 use crate::store::SessionStore;
 use crate::{TurnError, WriteStatus};
 
@@ -38,7 +41,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
         .await
         .expect("turn");
     acquired.guard.disarm();
-    let owner = acquired.guard.owner.clone();
+    let owner = acquired.guard.owner().clone();
     let journal = acquired.guard.write_journal();
     let intent = journal
         .intent("write", Path::new("repo"), "file", None, b"result")
@@ -108,88 +111,30 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
 async fn failed_drop_cleanup_remains_registered_for_owner_scoped_recovery() {
     // Arrange
     let (store, acquired) = GatedStore::fixture(PauseAt::Completion).await;
-    sqlx::raw_sql(
-        "CREATE TRIGGER reject_interrupt BEFORE UPDATE OF status ON session_turn WHEN NEW.status \
-         = 'interrupted' BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END;",
-    )
-    .execute(&store.database.pool)
-    .await
-    .expect("cleanup fault");
-    let owner = acquired.guard.owner.clone();
-
-    // Act
+    reject_interrupts(&store.database).await;
+    let owner = acquired.guard.owner().clone();
     drop(acquired);
     store.interrupted.notified().await;
-    let abandoned = store
-        .database
-        .abandoned_turns
-        .for_session(store.identity(), "session");
-    sqlx::query("DROP TRIGGER reject_interrupt")
-        .execute(&store.database.pool)
-        .await
-        .expect("remove fault");
-    let replacement = store
+    allow_interrupts(&store.database).await;
+    let direct = store
         .begin_turn(
             store.clone(),
             "session",
-            &TurnInput::from("replacement"),
+            &TurnInput::from("direct"),
             &turn_options(),
             0,
         )
+        .await;
+
+    // Act
+    let replacement = acquire(store.clone(), "session", "replacement")
         .await
         .expect("recover owner");
 
     // Assert
-    assert!(abandoned.contains(&owner));
+    assert!(matches!(direct, Err(SessionError::Busy { .. })));
     assert_eq!(
-        replacement.guard.owner.turn_position,
+        replacement.guard.owner().turn_position,
         owner.turn_position + 1
     );
-}
-
-#[tokio::test]
-async fn recovery_without_a_retained_handle_uses_the_current_store() {
-    // Arrange
-    let (store, mut acquired) = GatedStore::fixture(PauseAt::Completion).await;
-    acquired.guard.disarm();
-    let owner = acquired.guard.owner.clone();
-    store.database.abandoned_turns.register(owner.clone());
-    let current: Arc<dyn SessionStore> = store.clone();
-
-    // Act
-    crate::session::recover_abandoned(&current, "session")
-        .await
-        .expect("recover through current store");
-
-    // Assert
-    assert!(matches!(
-        store.renew(&owner).await,
-        Err(SessionError::OwnershipLost { .. })
-    ));
-    assert_eq!(
-        store
-            .database
-            .abandoned_turns
-            .for_session(store.identity(), "session"),
-        Vec::<crate::TurnOwner>::new()
-    );
-    let successor = store
-        .begin_turn(
-            store.clone(),
-            "session",
-            &TurnInput::from("successor"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("successor is admitted");
-
-    // Act: another caller already recovered this owner before a retained
-    // control retries its cleanup.
-    crate::session::recover_abandoned_owner(&owner)
-        .await
-        .expect("already recovered owner is inert");
-
-    // Assert
-    assert!(store.renew(successor.owner()).await.is_ok());
 }

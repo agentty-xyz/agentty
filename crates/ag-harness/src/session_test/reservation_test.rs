@@ -6,13 +6,16 @@ use sqlx::sqlite::SqlitePoolOptions;
 use tempfile::tempdir;
 
 use super::support::{
-    ReservationCommitControl, active_turn_owner, complete_native_turn, schema, turn, turn_options,
+    ReservationCommitControl, acquire, active_turn_owner, allow_interrupts, complete_native_turn,
+    reject_interrupts, schema, turn, turn_options,
 };
+use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
+use crate::reservation::TURN_LEASE_SECONDS;
 use crate::session::{
-    Database, EncodedMessage, NewSession, Reservation, SessionError, TURN_LEASE_SECONDS,
-    TimestampSource, connect_options, interrupt_owned_turn,
+    Database, EncodedMessage, NewSession, Reservation, SessionError, TimestampSource,
+    connect_options, interrupt_owned_turn,
 };
 use crate::store::SessionStore as _;
 use crate::turn::TurnError;
@@ -218,7 +221,7 @@ WHERE session_id = ? AND turn_position = ?
 ",
     )
     .bind("session-a")
-    .bind(acquired.guard.owner.turn_position)
+    .bind(acquired.guard.owner().turn_position)
     .fetch_one(&database.pool)
     .await
     .expect("turn lifecycle should load");
@@ -359,7 +362,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
 
     // Assert
     assert!(cancellation.is_err());
-    assert_eq!(acquired.guard.owner.turn_position, 0);
+    assert_eq!(acquired.guard.owner().turn_position, 0);
 }
 
 #[tokio::test]
@@ -419,7 +422,7 @@ ORDER BY turn_position
     // Assert
     assert!(cancellation.is_err());
     assert!(commit_seen);
-    assert_eq!(acquired.guard.owner.turn_position, 1);
+    assert_eq!(acquired.guard.owner().turn_position, 1);
     assert_eq!(
         turns,
         vec![(0, "interrupted".to_string()), (1, "running".to_string())]
@@ -437,9 +440,10 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .await
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
-    let abandoned = database
+    let store = Arc::new(GatedStore::new(database.clone(), PauseAt::Completion));
+    let abandoned = store
         .begin_turn(
-            Arc::new(database.clone()),
+            store.clone(),
             "session-a",
             &TurnInput::from("abandoned"),
             &turn_options(),
@@ -447,20 +451,13 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         )
         .await
         .expect("turn should begin");
-    let mut owner =
-        active_turn_owner(&database, "session-a", abandoned.guard.owner.turn_position).await;
-    owner.interruption_error_type = "cancelled";
-    database.abandoned_turns.register(owner);
+    reject_interrupts(&database).await;
+    drop(abandoned);
+    store.interrupted.notified().await;
+    allow_interrupts(&database).await;
 
     // Act
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
+    let replacement = acquire(store, "session-a", "replacement")
         .await
         .expect("replacement turn should begin");
     let turns = sqlx::query_as::<_, (i64, String, Option<String>)>(
@@ -476,7 +473,7 @@ ORDER BY turn_position
     .expect("turn states should load");
 
     // Assert
-    assert_eq!(replacement.guard.owner.turn_position, 2);
+    assert_eq!(replacement.guard.owner().turn_position, 2);
     assert!(replacement.provider_session_id.is_none());
     assert_eq!(
         turns,
@@ -486,136 +483,6 @@ ORDER BY turn_position
             (2, "running".to_string(), None),
         ]
     );
-}
-
-#[tokio::test]
-async fn stopped_ownership_monitor_reports_ownership_loss() {
-    // Arrange
-    let database = Database::open_in_memory()
-        .await
-        .expect("database should open");
-    database
-        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
-        .await
-        .expect("session should be created");
-    let mut acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
-    acquired
-        .guard
-        .renewal_task
-        .take()
-        .expect("ownership monitor should be running")
-        .abort();
-
-    // Act
-    let error = acquired.guard.ownership_failure().await;
-    let repeated_error = acquired.guard.ownership_failure().await;
-
-    // Assert
-    assert!(matches!(
-        error,
-        SessionError::OwnershipLost {
-            ref id,
-            turn_position: 0,
-        } if id == "session-a"
-    ));
-    assert!(matches!(
-        repeated_error,
-        SessionError::OwnershipLost {
-            ref id,
-            turn_position: 0,
-        } if id == "session-a"
-    ));
-}
-
-#[tokio::test]
-async fn abandoned_owners_are_scoped_to_their_database() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory should be created");
-    let first_database = Database::open(&directory.path().join("first.db"))
-        .await
-        .expect("first database should open");
-    let second_database = Database::open(&directory.path().join("second.db"))
-        .await
-        .expect("second database should open");
-    for database in [&first_database, &second_database] {
-        database
-            .create_session(&NewSession::new("session-a", schema()), None, 100_000)
-            .await
-            .expect("session should be created");
-    }
-    let first_turn = first_database
-        .begin_turn(
-            Arc::new(first_database.clone()),
-            "session-a",
-            &TurnInput::from("first abandoned"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("first turn should begin");
-    let second_turn = second_database
-        .begin_turn(
-            Arc::new(second_database.clone()),
-            "session-a",
-            &TurnInput::from("second abandoned"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("second turn should begin");
-    let first_owner = active_turn_owner(
-        &first_database,
-        "session-a",
-        first_turn.guard.owner.turn_position,
-    )
-    .await;
-    let second_owner = active_turn_owner(
-        &second_database,
-        "session-a",
-        second_turn.guard.owner.turn_position,
-    )
-    .await;
-    first_database.abandoned_turns.register(first_owner);
-    second_database.abandoned_turns.register(second_owner);
-
-    // Act
-    let second_replacement = second_database
-        .begin_turn(
-            Arc::new(second_database.clone()),
-            "session-a",
-            &TurnInput::from("second replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("second replacement should begin");
-    let first_owners = first_database
-        .abandoned_turns
-        .for_session(&first_database.identity, "session-a");
-    let first_replacement = first_database
-        .begin_turn(
-            Arc::new(first_database.clone()),
-            "session-a",
-            &TurnInput::from("first replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("first replacement should begin");
-
-    // Assert
-    assert_eq!(second_replacement.guard.owner.turn_position, 1);
-    assert_eq!(first_owners.len(), 1);
-    assert_eq!(first_replacement.guard.owner.turn_position, 1);
 }
 
 #[tokio::test]
@@ -638,7 +505,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_ownership_loss
         )
         .await
         .expect("turn should begin");
-    let turn_position = acquired.guard.owner.turn_position;
+    let turn_position = acquired.guard.owner().turn_position;
     database
         .fail_turn(
             "session-a",
@@ -727,7 +594,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         "SELECT status FROM session_turn WHERE session_id = ? AND turn_position = ?",
     )
     .bind("session-a")
-    .bind(abandoned.guard.owner.turn_position)
+    .bind(abandoned.guard.owner().turn_position)
     .fetch_one(&database.pool)
     .await
     .expect("turn status should load");
@@ -738,8 +605,8 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     assert!(replacement.provider_session_id.is_none());
     assert_eq!(status, "interrupted");
     assert_eq!(
-        replacement.guard.owner.turn_position,
-        abandoned.guard.owner.turn_position + 1
+        replacement.guard.owner().turn_position,
+        abandoned.guard.owner().turn_position + 1
     );
 }
 
@@ -767,7 +634,7 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .expect("turn should begin");
         acquired.guard.disarm();
         let owner =
-            active_turn_owner(&database, "session-a", acquired.guard.owner.turn_position).await;
+            active_turn_owner(&database, "session-a", acquired.guard.owner().turn_position).await;
         sqlx::query("UPDATE session_turn SET lease_expires_at = 0 WHERE status = 'running'")
             .execute(&database.pool)
             .await
@@ -841,7 +708,8 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .await
         .expect("turn should begin");
     acquired.guard.disarm();
-    let owner = active_turn_owner(&database, "session-a", acquired.guard.owner.turn_position).await;
+    let owner =
+        active_turn_owner(&database, "session-a", acquired.guard.owner().turn_position).await;
     let mut wrong_owner = owner.clone();
     wrong_owner.token = vec![0];
     let mut transaction = database
@@ -865,7 +733,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
     database
         .complete_turn(
             "session-a",
-            acquired.guard.owner.turn_position,
+            acquired.guard.owner().turn_position,
             &[],
             Some("replacement-session"),
         )

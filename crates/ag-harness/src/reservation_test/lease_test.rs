@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
-use super::support::{GatedStore, PauseAt};
 use crate::TurnError;
+use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
-use crate::session::SessionError;
-use crate::session::tests::support::turn_options;
+use crate::session::{Database, NewSession, SessionError};
 use crate::store::SessionStore;
+use crate::store_conformance_test::{options, schema};
 
 #[tokio::test]
 async fn stalled_renewal_cannot_extend_the_last_confirmed_deadline() {
@@ -103,7 +103,7 @@ async fn completion_acknowledgement_excludes_renewal_and_preserves_success() {
 async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     // Arrange
     let (store, mut acquired) = GatedStore::fixture(PauseAt::CompletionAcknowledgement).await;
-    let owner = acquired.guard.owner.clone();
+    let owner = acquired.guard.owner().clone();
     let task =
         tokio::spawn(async move { acquired.guard.complete(&[], Some("first-native")).await });
     store.entered.notified().await;
@@ -113,7 +113,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
             Arc::new(store.database.clone()),
             "session",
             &TurnInput::from("next"),
-            &turn_options(),
+            &options(),
             0,
         )
         .await
@@ -277,4 +277,52 @@ async fn ownership_check_rejects_expiry_before_waiting_for_the_monitor() {
 
     // Assert
     assert!(matches!(result, SessionError::OwnershipLost { .. }));
+}
+
+#[tokio::test]
+async fn stopped_ownership_monitor_reports_ownership_loss() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session should be created");
+    let mut acquired = database
+        .begin_turn(
+            Arc::new(database.clone()),
+            "session-a",
+            &TurnInput::from("prompt"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn should begin");
+    acquired
+        .guard
+        .renewal_task
+        .take()
+        .expect("ownership monitor should be running")
+        .abort();
+
+    // Act
+    let error = acquired.guard.ownership_failure().await;
+    let repeated_error = acquired.guard.ownership_failure().await;
+
+    // Assert
+    assert!(matches!(
+        error,
+        SessionError::OwnershipLost {
+            ref id,
+            turn_position: 0,
+        } if id == "session-a"
+    ));
+    assert!(matches!(
+        repeated_error,
+        SessionError::OwnershipLost {
+            ref id,
+            turn_position: 0,
+        } if id == "session-a"
+    ));
 }
