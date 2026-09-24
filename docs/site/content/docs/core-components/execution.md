@@ -17,6 +17,18 @@ flowchart TD
   H --> L[LLM]
 ```
 
+## Crates
+
+| Component          | Crates                         | Responsibility                                    |
+| ------------------ | ------------------------------ | ------------------------------------------------- |
+| Run Worker         | `ag-worker`                    | Admission, scheduling, cancellation, recovery     |
+| Agent Runtime      | `ag-runtime`                   | Adapter composition, dispatch, provider lifecycle |
+| Shared contracts   | `ag-contracts`, `ag-protocol`  | Requests, events, policy types, response schemas  |
+| Harness (external) | `ag-agent`                     | CLI and app-server adapters, policy enforcement   |
+| Harness (native)   | `ag-harness`, `ag-harness-cli` | Standalone model loop, tools, and companion CLI   |
+| LLM                | None                           | Reached through the harness                       |
+| Supporting         | `ag-session`, `ag-store`       | Session models, model selection, and persistence  |
+
 ## Run Worker
 
 `ag-worker` schedules runs and coordinates heartbeats, cancellation, completion, and
@@ -96,8 +108,11 @@ integrations.
 
 `ag-session` owns session models and model selection; `ag-store` supplies persistence.
 Only `ag-worker` depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`.
-Applications configure worker handles and import shared types from `ag-contracts`.
-Automated dependency and source checks enforce this boundary, including test code.
+Only `ag-harness-cli` depends on `ag-harness` until its runtime adapter is integrated.
+Applications configure worker handles and import shared types from `ag-contracts`. The
+`check-execution-boundary` hook enforces this boundary on every commit: dependency rules
+cover all workspace dependencies, including test code, and source checks keep raw
+adapter use and agent CLI launches out of production code outside the execution crates.
 
 See [Module Map](@/docs/architecture/module-map.md) for ownership and
 [Runtime Flow](@/docs/architecture/runtime-flow.md) for orchestration and recovery.
