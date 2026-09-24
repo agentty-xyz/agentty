@@ -378,6 +378,48 @@ fn test_prepare_grouped_table_state_resets_offset_and_sets_selected_group_row() 
 }
 
 #[test]
+fn test_render_deep_selection_keeps_titles_and_group_boundary_visible() {
+    // Arrange
+    let sessions = (0..80)
+        .map(|index| {
+            let status = if index < 60 {
+                Status::Review
+            } else {
+                Status::Done
+            };
+            let mut session =
+                crate::test_support::titled_session_fixture(&format!("session-{index}"), status);
+            session.title = Some(format!("Session title {index}"));
+
+            session
+        })
+        .collect::<Vec<_>>();
+
+    // Act & Assert
+    for selected_index in [0, 30, 59, 60, 79] {
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let mut table_state = TableState::default();
+        table_state.select(Some(selected_index));
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .render(frame, frame.area());
+            })
+            .expect("failed to draw");
+
+        let buffer = terminal.backend().buffer();
+        let selected_title = format!("Session title {selected_index}");
+        let selected_cell = find_text_start_cell(buffer, &selected_title)
+            .expect("selected session title should be visible");
+        assert_eq!(selected_cell.bg, style::palette::surface_selection());
+        if selected_index == 60 {
+            assert!(buffer_text(buffer).contains(" ARCHIVE —— 20"));
+        }
+    }
+}
+
+#[test]
 fn test_text_column_width_uses_longest_project_value() {
     // Arrange
     let expected_width =
