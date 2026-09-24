@@ -43,9 +43,9 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
 
 - Preserve unrelated user changes.
 - Agentty UI features demonstrable in a PTY scenario require `FeatureTest` E2E coverage
-  under `crates/agentty/tests/e2e/`; follow `skills/feature-test/SKILL.md`. For behavior
-  requiring live backends or unavailable infrastructure, report the exact coverage gap
-  and test the supported boundaries deterministically.
+  under `crates/agentty/tests/e2e/`; follow `crates/agentty/tests/e2e/AGENTS.md`. For
+  behavior requiring live backends or unavailable infrastructure, report the exact
+  coverage gap and test the supported boundaries deterministically.
 - Use integration tests appropriate to the public surface for other CLI, library, or
   backend features.
 - Every code change requires automated tests covering 100% of its coverable changed
@@ -62,15 +62,15 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
 
 `.pre-commit-config.yaml` is the executable source of truth for hook IDs and commands.
 Invoke cataloged checks through `prek`. The focused E2E validation and container
-recording commands in the `skills/feature-test/` workflow are explicit exceptions
-because the E2E hook runs the complete suite. Keep those commands in that skill and its
-references; do not duplicate hook implementations elsewhere.
+recording commands in `docs/contributing/feature-test/` are explicit exceptions because
+the E2E hook runs the complete suite. Keep those commands there; do not duplicate hook
+implementations elsewhere.
 
 - While iterating, run the relevant formatter or fixer on touched paths and focused
   tests for the changed behavior. Use `test-focused` with an explicit
-  `AGENTTY_TEST_FILTER`; use `skills/development/SKILL.md` for selection recipes and
-  environment setup. Keep gate policy here and executable definitions in the hook
-  catalog.
+  `AGENTTY_TEST_FILTER`; use `docs/contributing/validation.md` for selection recipes and
+  `docs/contributing/setup.md` for environment setup. Keep gate policy here and
+  executable definitions in the hook catalog.
 - Before handoff, run one impact-based validation rung covering every touched file and
   all affected dependencies and dependents:
   - Markdown: `mdformat` and the default hooks for the touched paths.
@@ -118,8 +118,6 @@ Follow the nearest documentation guide for exact routing and integrity rules.
 
 ## Git and Releases
 
-- Use `skills/git-commit/SKILL.md` for commit preparation, commit messages, and
-  pull-request descriptions.
 - Use `skills/bump-version/SKILL.md` for release preparation. Local work stops at the
   ordinary version-bump change; create and publish no release tags locally.
 - After that change lands, create its `v`-prefixed tag for the exact commit in the
@@ -150,5 +148,5 @@ source routers and doc comments:
 - `docs/site/content/docs/architecture/testability-boundaries.md`: external boundaries.
 - `docs/site/content/docs/architecture/change-recipes.md`: contributor change paths.
 
-Prompt changes follow `skills/development/references/prompts.md` for ownership routing,
-contract checks, and behavioral evaluation.
+Prompt changes follow `docs/contributing/prompts.md` for ownership routing, contract
+checks, and behavioral evaluation.

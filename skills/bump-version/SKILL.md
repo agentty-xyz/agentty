@@ -16,8 +16,9 @@ steps here.
 1. **Version Selection**
 
    - Use the version or bump already specified by the user, including an accepted
-     decision from earlier in the session. Ask for `major`, `minor`, or `patch` only
-     when no version or bump has been selected; wait for that decision before editing.
+     decision from earlier in the session. Otherwise select a bump using the release
+     pattern below. Ask only when the release intent cannot be inferred from the change
+     and session context.
    - Use the current repository release pattern when advising:
      - Prefer `patch` by default for fixes, small UX improvements, refactors, docs
        updates, model/config changes, and other incremental work within the current
@@ -27,14 +28,15 @@ steps here.
      - Treat this as a pragmatic pre-`1.0` policy. The changelog history shows patch
        releases may still include additive features or removals while the project
        remains below `1.0.0`.
-   - If the user wants a conservative release recommendation and the change is not
-     clearly milestone-sized, recommend `patch`.
+   - When the change is not clearly milestone-sized, select `patch`.
 
 1. **Version Bump**
 
-   - Update the `version` field in the root `Cargo.toml`.
-   - Update any package lockfile or generated metadata that changes as a direct result
-     of the package version update.
+   - Update `[workspace.package].version` and every versioned internal path dependency
+     under `[workspace.dependencies]` in the root `Cargo.toml` to the selected version.
+     Leave unrelated external dependency versions alone.
+   - Update `Cargo.lock` and any generated metadata affected by the bump. Check that no
+     internal workspace dependency still pins the previous version.
 
 1. **Changelog**
 

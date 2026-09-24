@@ -14,5 +14,5 @@ Applies to site configuration, templates, content, and static assets.
 - Each E2E test's `FeatureTest::zola()` metadata owns its generated feature title,
   description, and weight.
 - Keep feature GIFs and same-named PNG posters paired under
-  `docs/site/static/features/`; use `skills/feature-test/SKILL.md` for generation and
-  verification.
+  `docs/site/static/features/`; use `docs/contributing/feature-test/recording.md` for
+  generation and verification.

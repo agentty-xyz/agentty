@@ -2,7 +2,7 @@
 
 ## Naming Convention
 
-A single name flows through the entire pipeline:
+For a published feature demo, a single name flows through the entire pipeline:
 
 | Artifact      | Path                                                    |
 | ------------- | ------------------------------------------------------- |
@@ -32,8 +32,11 @@ new session topic.
 
 Use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs`. This is the
 preferred pattern — it handles `TempDir` and `BuilderEnv` creation, scenario execution,
-GIF generation with content-hash caching, and optional Zola page creation in a single
-declarative chain.
+optional GIF generation with content-hash caching, and optional Zola page creation in a
+single declarative chain.
+
+The example below publishes a feature demo. Omit `.zola(...)` when only PTY coverage is
+needed.
 
 ```rust
 use testty::assertion;
@@ -88,7 +91,7 @@ async fn test_{name}() -> Result<(), Box<dyn std::error::Error>> {
 - **`.setup(setup)`** — supply an async fixture closure returning
   `Box::pin(async move { ... })`.
 - **`.run(build_scenario, assert).await`** — execute the scenario, await the boxed async
-  assertion closure, and generate the GIF.
+  assertion closure, and generate the GIF when recording mode is enabled.
 
 #### Common `Journey` helpers
 
@@ -122,6 +125,19 @@ gif = "{name}.gif"
 
 The `features.html` template auto-discovers all pages in `content/features/` sorted by
 `weight`. No manual template edits are needed.
+
+## Focused Validation
+
+Run the affected scenario without launching VHS or Chrome:
+
+```sh
+TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty --test e2e test_{name}
+```
+
+An unset `TESTTY_GIF_MODE` still runs the PTY assertions without GIF work. Check mode
+does not publish a new demo or refresh its PNG poster. When adding or changing a
+published page or asset, run `prek run zola-check --all-files --hook-stage manual`. The
+root `AGENTS.md` defines the final quality gates.
 
 ## Freshness Modes
 
