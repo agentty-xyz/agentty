@@ -282,6 +282,45 @@ fn test_render_conflicted_session_appends_red_title_alert() {
 }
 
 #[test]
+fn test_render_ready_pr_appends_green_title_label() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
+    let backend = ratatui::backend::TestBackend::new(120, 12);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let mut table_state = TableState::default();
+    table_state.select(Some(0));
+    let mut session = crate::test_support::titled_session_fixture("ready-pr", Status::Review);
+    session.title = Some("Ready PR session".to_string());
+    session.review_request = Some(ReviewRequest {
+        last_refreshed_at: 0,
+        summary: ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: ForgeKind::GitHub,
+            source_branch: "feature".to_string(),
+            state: ReviewRequestState::Open,
+            status_summary: Some("Mergeable, PR ready".to_string()),
+            target_branch: "main".to_string(),
+            title: "Ready PR session".to_string(),
+            web_url: "https://github.com/example/repo/pull/42".to_string(),
+        },
+    });
+    let sessions = vec![session];
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .render(frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    // Assert
+    let label_cell = find_text_start_cell(terminal.backend().buffer(), "[ready]")
+        .expect("ready PR label should be visible");
+    assert_eq!(label_cell.fg, style::palette::success());
+}
+
+#[test]
 fn test_render_archive_rows_use_muted_text_across_columns() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);

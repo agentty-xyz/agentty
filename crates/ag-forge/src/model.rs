@@ -171,6 +171,23 @@ pub struct ReviewRequestSummary {
     pub web_url: String,
 }
 
+impl ReviewRequestSummary {
+    /// Status-summary component persisted for a GitHub PR with a clean merge
+    /// state at the latest forge refresh.
+    pub const GITHUB_READY_STATUS_COMPONENT: &'static str = "PR ready";
+
+    /// Returns whether the latest GitHub refresh marked this open PR ready.
+    pub fn is_github_pr_ready(&self) -> bool {
+        self.forge_kind == ForgeKind::GitHub
+            && self.state == ReviewRequestState::Open
+            && self.status_summary.as_deref().is_some_and(|summary| {
+                summary
+                    .split(", ")
+                    .any(|part| part == Self::GITHUB_READY_STATUS_COMPONENT)
+            })
+    }
+}
+
 /// Boxed async result used by review-request trait methods.
 pub type ForgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 

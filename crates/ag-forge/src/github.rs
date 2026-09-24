@@ -13,6 +13,12 @@ use super::{
     normalize_provider_label, operation_failed, parse_remote_url, status_summary_parts, strip_port,
 };
 
+/// One compact status query replaces `gh pr view` during each review refresh.
+const PULL_REQUEST_STATUS_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: \
+     $repo) { pullRequest(number: $number) { number title state url baseRefName headRefName \
+     isDraft mergeStateStatus reviewDecision mergedAt } } }";
+
 /// Paginated GraphQL query used to fetch review threads for one pull request.
 const REVIEW_THREADS_QUERY: &str =
     "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) { \
@@ -164,28 +170,38 @@ impl GitHubReviewRequestAdapter {
         Ok(trimmed.to_string())
     }
 
-    /// Builds the `gh pr view` command for one pull-request number.
+    /// Builds one small GraphQL status request for a pull request.
     fn view_command(remote: &ForgeRemote, pull_request_number: &str) -> ForgeCommand {
         Self::github_command(
             remote,
             vec![
-                "pr".to_string(),
-                "view".to_string(),
-                pull_request_number.to_string(),
-                "--repo".to_string(),
-                remote.project_path(),
-                "--json".to_string(),
-                "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
-                 reviewDecision,mergedAt"
-                    .to_string(),
+                "api".to_string(),
+                "--hostname".to_string(),
+                remote.host.clone(),
+                "graphql".to_string(),
+                "-f".to_string(),
+                format!("query={PULL_REQUEST_STATUS_QUERY}"),
+                "-F".to_string(),
+                format!("owner={}", remote.namespace),
+                "-F".to_string(),
+                format!("repo={}", remote.project),
+                "-F".to_string(),
+                format!("number={pull_request_number}"),
             ],
         )
     }
 
-    /// Parses one pull-request summary from a `gh pr view` JSON response.
+    /// Parses one pull-request summary from the compact GraphQL response.
     fn parse_view_response(stdout: &str) -> Result<ReviewRequestSummary, String> {
-        let pull_request: GitHubViewResponse = serde_json::from_str(stdout)
+        let response: GitHubViewEnvelope = serde_json::from_str(stdout)
             .map_err(|error| format!("invalid GitHub pull-request view response: {error}"))?;
+        let pull_request = response
+            .data
+            .and_then(|data| data.repository)
+            .and_then(|repository| repository.pull_request)
+            .ok_or_else(|| {
+                "GitHub pull-request view response is missing a pull request".to_string()
+            })?;
         let state = pull_request.review_request_state();
         let status_summary = pull_request.status_summary();
 
@@ -841,7 +857,24 @@ struct GitHubReviewCommentAuthor {
     login: String,
 }
 
-/// GitHub pull-request JSON payload returned by `gh pr view --json`.
+/// Outer GraphQL status response returned by `gh api graphql`.
+#[derive(Deserialize)]
+struct GitHubViewEnvelope {
+    data: Option<GitHubViewData>,
+}
+
+#[derive(Deserialize)]
+struct GitHubViewData {
+    repository: Option<GitHubViewRepository>,
+}
+
+#[derive(Deserialize)]
+struct GitHubViewRepository {
+    #[serde(rename = "pullRequest")]
+    pull_request: Option<GitHubViewResponse>,
+}
+
+/// GitHub pull-request status payload returned by the compact GraphQL query.
 #[derive(Deserialize)]
 struct GitHubViewResponse {
     #[serde(rename = "baseRefName")]
@@ -892,7 +925,18 @@ impl GitHubViewResponse {
             parts.push(merge_summary);
         }
 
+        if self.is_ready() {
+            parts.push(ReviewRequestSummary::GITHUB_READY_STATUS_COMPONENT.to_string());
+        }
+
         status_summary_parts(&parts)
+    }
+
+    /// Rely on GitHub's merge state to apply the repository's merge rules.
+    fn is_ready(&self) -> bool {
+        self.state == "OPEN"
+            && !self.is_draft
+            && self.merge_state_status.as_deref() == Some("CLEAN")
     }
 
     /// Formats one GitHub review-decision label for the UI.

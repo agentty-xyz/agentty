@@ -59,7 +59,7 @@ async fn find_authenticated_by_source_branch_builds_lookup_and_refresh_commands(
             forge_kind: ForgeKind::GitHub,
             source_branch: "feature/forge".to_string(),
             state: ReviewRequestState::Open,
-            status_summary: Some("Approved, Mergeable".to_string()),
+            status_summary: Some("Approved, Mergeable, PR ready".to_string()),
             target_branch: "main".to_string(),
             title: "Add forge review support".to_string(),
             web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
@@ -78,6 +78,115 @@ fn lookup_command_limits_lookup_to_open_pull_requests() {
     // Assert
     assert!(command.arguments.contains(&"state=open".to_string()));
     assert!(!command.arguments.contains(&"state=all".to_string()));
+}
+
+#[test]
+fn status_command_requests_only_merge_state_for_readiness() {
+    // Arrange
+    let remote = github_remote();
+
+    // Act
+    let command = GitHubReviewRequestAdapter::view_command(&remote, "42");
+    let query = command
+        .arguments
+        .iter()
+        .find_map(|argument| argument.strip_prefix("query="))
+        .expect("status command should include a GraphQL query");
+
+    // Assert
+    assert_eq!(
+        &command.arguments[..4],
+        ["api", "--hostname", "github.com", "graphql"]
+    );
+    assert!(query.contains("mergeStateStatus"));
+    assert!(!query.contains("comments"));
+    assert!(!query.contains("reviewThreads"));
+    assert!(!query.contains("reviews("));
+    assert!(!query.contains("statusCheckRollup"));
+    assert!(command.arguments.contains(&"number=42".to_string()));
+    assert!(!command.arguments.contains(&"--paginate".to_string()));
+}
+
+#[test]
+fn github_status_marks_only_open_clean_pr_ready() {
+    // Arrange
+    let ready: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    let unready_cases = [
+        (
+            "/data/repository/pullRequest/isDraft",
+            serde_json::json!(true),
+        ),
+        (
+            "/data/repository/pullRequest/state",
+            serde_json::json!("MERGED"),
+        ),
+        (
+            "/data/repository/pullRequest/mergeStateStatus",
+            serde_json::json!("BLOCKED"),
+        ),
+        (
+            "/data/repository/pullRequest/mergeStateStatus",
+            serde_json::json!("UNSTABLE"),
+        ),
+        (
+            "/data/repository/pullRequest/mergeStateStatus",
+            serde_json::Value::Null,
+        ),
+    ];
+
+    // Act
+    let ready_summary = GitHubReviewRequestAdapter::parse_view_response(&ready.to_string())
+        .expect("ready response should parse");
+    let unready_summaries = unready_cases.map(|(path, value)| {
+        let mut response = ready.clone();
+        *response
+            .pointer_mut(path)
+            .expect("fixture path should exist") = value;
+
+        GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
+            .expect("unready response should parse")
+    });
+
+    // Assert
+    assert!(ready_summary.is_github_pr_ready());
+    assert!(
+        unready_summaries
+            .iter()
+            .all(|summary| !summary.is_github_pr_ready())
+    );
+}
+
+#[test]
+fn github_clean_status_without_required_review_is_ready() {
+    // Arrange
+    let mut response: serde_json::Value =
+        serde_json::from_str(&github_view_json()).expect("fixture should be valid JSON");
+    response["data"]["repository"]["pullRequest"]["reviewDecision"] = serde_json::Value::Null;
+
+    // Act
+    let summary = GitHubReviewRequestAdapter::parse_view_response(&response.to_string())
+        .expect("clean response should parse");
+
+    // Assert
+    assert!(summary.is_github_pr_ready());
+    assert_eq!(
+        summary.status_summary.as_deref(),
+        Some("Mergeable, PR ready")
+    );
+}
+
+#[test]
+fn github_status_rejects_missing_pull_request() {
+    // Arrange
+    let response = r#"{"data":{"repository":{"pullRequest":null}}}"#;
+
+    // Act
+    let error = GitHubReviewRequestAdapter::parse_view_response(response)
+        .expect_err("missing pull request should fail");
+
+    // Assert
+    assert!(error.contains("missing a pull request"));
 }
 
 #[tokio::test]
@@ -143,7 +252,7 @@ async fn create_authenticated_review_request_builds_create_command_and_returns_s
     assert_eq!(review_request.display_id, "#42");
     assert_eq!(
         review_request.status_summary.as_deref(),
-        Some("Approved, Mergeable")
+        Some("Approved, Mergeable, PR ready")
     );
 }
 
