@@ -699,6 +699,17 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         text: Option<String>,
     ) -> Result<(), DbError>;
 
+    /// Persists a generated review only while its invocation still owns the
+    /// active generation. Returns `false` after invalidation or replacement.
+    async fn update_session_focused_review_for_generation(
+        &self,
+        id: &str,
+        request_id: &str,
+        status: FocusedReviewStatus,
+        diff_hash: Option<String>,
+        text: Option<String>,
+    ) -> Result<bool, DbError>;
+
     /// Activates one generation, preserving its checkpoints and atomically
     /// pruning superseded generations. Late writes from older callers are
     /// ignored. Hosts must serialize activation with review creation, before
@@ -2547,6 +2558,50 @@ WHERE id = ?
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn update_session_focused_review_for_generation(
+        &self,
+        id: &str,
+        request_id: &str,
+        status: FocusedReviewStatus,
+        diff_hash: Option<String>,
+        text: Option<String>,
+    ) -> Result<bool, DbError> {
+        let mut transaction = self.0.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE session SET focused_review_status = ?, focused_review_diff_hash = ?, \
+             focused_review_text = ?, updated_at = ? WHERE id = ? AND EXISTS (SELECT 1 FROM \
+             session_review_generation WHERE session_id = ? AND request_id = ?)",
+        )
+        .bind(status.to_string())
+        .bind(diff_hash)
+        .bind(text)
+        .bind(self.now())
+        .bind(id)
+        .bind(id)
+        .bind(request_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+            > 0;
+        if !updated {
+            return Ok(false);
+        }
+
+        if status == FocusedReviewStatus::Ready {
+            sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("DELETE FROM session_review_generation WHERE session_id = ?")
+                .bind(id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(true)
     }
 
     async fn begin_review_generation(

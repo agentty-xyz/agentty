@@ -129,6 +129,8 @@ pub(crate) struct FocusedReviewPersistence {
     /// Hash of the diff that the persisted text applies to, or `None` when
     /// clearing a stale persisted review.
     pub(crate) diff_hash: Option<u64>,
+    /// Generated review invocation that must still own durable evidence.
+    pub(crate) generation_request_id: Option<Uuid>,
     /// Invocation token required for accepting and persisting this result.
     pub(crate) request_id: Uuid,
     /// Stable session identifier for the focused-review cache row.
@@ -346,7 +348,7 @@ fn hydrate_session_review_transient(
 ) {
     if !matches!(
         session.status,
-        Status::Review | Status::Question | Status::AgentReview
+        Status::Review | Status::Question | Status::AgentReview | Status::Rebasing
     ) {
         session
             .transient_messages
@@ -523,6 +525,7 @@ pub(crate) fn fail_review_preparation(
     hydrate_review_transient(review_cache, session_state, session_id);
 
     FocusedReviewPersistence {
+        generation_request_id: None,
         request_id,
         diff_hash: Some(diff_hash),
         session_id: session_id.clone(),
@@ -553,6 +556,7 @@ fn apply_review_update(
     }
 
     let persistence_update = FocusedReviewPersistence {
+        generation_request_id: Some(request_id),
         request_id,
         diff_hash: Some(diff_hash),
         session_id: SessionId::from(session_id),

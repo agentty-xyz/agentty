@@ -19,9 +19,9 @@ use super::support::{
     wait_for_output_contains_after_events, wait_for_second_merge_to_start, wait_for_status,
     wait_for_status_with_retries,
 };
+use crate::app::App;
 use crate::app::session::SessionError;
 use crate::app::test_support::{SyncSessionStartError, TestSessionRunFactory};
-use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -565,7 +565,7 @@ async fn test_rebase_session_queues_while_branch_operation_is_busy() {
 }
 
 #[tokio::test]
-async fn test_rebase_session_cancels_pending_focused_review() {
+async fn test_rebase_session_keeps_focused_review_without_conflicts() {
     // Arrange
     let dir = tempdir().expect("failed to create temp dir");
     let mut app = new_test_app_with_git(dir.path()).await;
@@ -577,62 +577,37 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     db.sessions()
         .update_session_focused_review(
             &session_id,
-            Some(crate::domain::review::FocusedReviewStatus::Ready),
+            Some(crate::domain::review::FocusedReviewStatus::Partial),
             Some("111".to_string()),
-            Some("old persisted focused review".to_string()),
+            Some("Pre-rebase finding.\n\nPartial review: interrupted".to_string()),
         )
         .await
         .expect("failed to seed persisted focused review");
-    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::AgentReview);
+    crate::test_support::set_session_status_for_test(&mut app, &session_id, Status::Review);
     app.mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: None,
     };
-    app.review_cache
-        .insert(session_id.clone().into(), test_loading_review(777));
-
-    db.sessions()
-        .begin_review_generation(&session_id, "777:history", "before-rebase")
-        .await
-        .expect("review generation");
-    db.sessions()
-        .save_review_fragment(
-            &session_id,
-            "777:history",
-            "before-rebase",
-            "batch",
-            "pre-rebase answer",
-        )
-        .await
-        .expect("checkpoint");
+    app.set_review_ready_output(
+        &session_id,
+        111,
+        "Pre-rebase finding.\n\nPartial review: interrupted".to_string(),
+    );
 
     // Act
     let result = app.rebase_session(&session_id).await;
 
     // Assert
     assert!(result.is_ok(), "rebase should succeed: {:?}", result.err());
-    assert!(!app.review_cache.contains_key(session_id.as_str()));
-    wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
-    assert!(
-        db.sessions()
-            .load_review_fragment(&session_id, "777:history", "batch")
-            .await
-            .expect("invalidated checkpoint")
-            .is_none()
+    assert_eq!(
+        app.review_view_state(&session_id).1,
+        Some("Pre-rebase finding.\n\nPartial review: interrupted")
     );
-    assert!(matches!(app.mode, AppMode::View { .. }));
-
-    // Act
-    app.apply_app_events(AppEvent::ReviewPrepared {
-        diff_hash: 777,
-        review_text: "stale focused review".to_string(),
-        session_id: session_id.clone().into(),
-        request_id: uuid::Uuid::nil(),
-    })
-    .await;
-
-    // Assert
-    assert!(!app.review_cache.contains_key(session_id.as_str()));
+    wait_for_output_contains(&mut app, &session_id, "[Sync] Successfully synced", 200).await;
+    assert_eq!(
+        app.review_view_state(&session_id).1,
+        Some("Pre-rebase finding.\n\nPartial review: interrupted")
+    );
     assert!(matches!(app.mode, AppMode::View { .. }));
     let clients = crate::test_support::test_app_clients()
         .with_app_server_client_override(crate::test_support::mock_app_server())
@@ -649,7 +624,10 @@ async fn test_rebase_session_cancels_pending_focused_review() {
     .await
     .expect("failed to build app after recovery");
 
-    assert!(!restarted_app.review_cache.contains_key(session_id.as_str()));
+    assert_eq!(
+        restarted_app.review_view_state(&session_id).1,
+        Some("Pre-rebase finding.\n\nPartial review: interrupted")
+    );
 }
 
 /// Verifies unavailable persistence rejects admission without clearing the

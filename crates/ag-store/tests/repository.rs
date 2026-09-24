@@ -403,6 +403,138 @@ async fn pending_review_database() -> Result<(Database, i64), ag_store::DbError>
 }
 
 #[tokio::test]
+async fn generated_review_write_is_fenced_by_its_active_invocation() {
+    // Arrange
+    let (database, project) = pending_review_database().await.expect("pending review");
+    let sessions = database.sessions();
+    sessions
+        .begin_review_generation("checkpoint", "same-inputs", "first")
+        .await
+        .expect("first generation");
+
+    // Act: a partial result is accepted, then invalidation closes its
+    // invocation.
+    let partial = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "first",
+            ag_session::FocusedReviewStatus::Partial,
+            Some("42".into()),
+            Some("Partial review".into()),
+        )
+        .await
+        .expect("partial result");
+    sessions
+        .update_session_focused_review("checkpoint", None, None, None)
+        .await
+        .expect("invalidation");
+    let late = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "first",
+            ag_session::FocusedReviewStatus::Ready,
+            Some("42".into()),
+            Some("Stale review".into()),
+        )
+        .await
+        .expect("late result is ignored");
+    sessions
+        .update_session_focused_review(
+            "checkpoint",
+            Some(ag_session::FocusedReviewStatus::Pending),
+            Some("42".into()),
+            None,
+        )
+        .await
+        .expect("next pending review");
+    sessions
+        .begin_review_generation("checkpoint", "same-inputs", "second")
+        .await
+        .expect("replacement generation");
+    let replaced = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "first",
+            ag_session::FocusedReviewStatus::Ready,
+            Some("42".into()),
+            Some("Stale review".into()),
+        )
+        .await
+        .expect("replaced result is ignored");
+    let current = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "second",
+            ag_session::FocusedReviewStatus::Ready,
+            Some("42".into()),
+            Some("Current review".into()),
+        )
+        .await
+        .expect("current result");
+
+    // Assert
+    assert!(partial);
+    assert!(!late);
+    assert!(!replaced);
+    assert!(current);
+    let reviews = sessions
+        .load_session_focused_reviews_for_project(project)
+        .await
+        .expect("saved review");
+    assert_eq!(reviews[0].text, "Current review");
+}
+
+#[tokio::test]
+async fn generated_review_completion_rolls_back_when_checkpoint_cleanup_fails() {
+    // Arrange
+    let (database, project) = pending_review_database().await.expect("pending review");
+    let sessions = database.sessions();
+    sessions
+        .begin_review_generation("checkpoint", "same-inputs", "active")
+        .await
+        .expect("active generation");
+    sqlx::query(
+        "CREATE TRIGGER reject_generation_cleanup BEFORE DELETE ON session_review_generation \
+         BEGIN SELECT RAISE(ABORT, 'cleanup failed'); END",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failure fixture");
+
+    // Act
+    let result = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "active",
+            ag_session::FocusedReviewStatus::Ready,
+            Some("42".into()),
+            Some("Uncommitted review".into()),
+        )
+        .await;
+
+    // Assert
+    assert!(result.is_err());
+    assert_eq!(
+        sessions
+            .load_session_focused_reviews_for_project(project)
+            .await
+            .expect("no committed review"),
+        [] as [ag_store::SessionFocusedReviewRow; 0]
+    );
+    sessions
+        .save_review_fragment("checkpoint", "same-inputs", "active", "batch", "evidence")
+        .await
+        .expect("generation remains active");
+    assert_eq!(
+        sessions
+            .load_review_fragment("checkpoint", "same-inputs", "batch")
+            .await
+            .expect("checkpoint"),
+        Some("evidence".into())
+    );
+}
+
+#[tokio::test]
 async fn explicit_review_invalidation_fences_reactivated_identical_generations() {
     // Arrange
     let database = Database::open_in_memory().await.expect("database");

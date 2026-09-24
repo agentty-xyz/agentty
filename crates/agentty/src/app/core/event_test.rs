@@ -827,6 +827,16 @@ async fn completed_focused_review_persists_for_inactive_project() {
         )
         .await
         .expect("failed to insert inactive review session");
+    app.services
+        .db()
+        .sessions()
+        .begin_review_generation(
+            session_id.as_str(),
+            "inactive-inputs",
+            &uuid::Uuid::nil().to_string(),
+        )
+        .await
+        .expect("failed to begin inactive review generation");
     let review_agent = app.review_agent();
     app.review_cache.insert(
         session_id.clone(),
@@ -883,6 +893,7 @@ async fn failed_focused_review_persistence_retries_without_replaying_stale_state
         },
     );
     let persistence_update = FocusedReviewPersistence {
+        generation_request_id: None,
         request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-1".into(),
@@ -1291,6 +1302,123 @@ async fn superseded_review_events_cannot_replace_same_diff_results_or_checkpoint
 }
 
 #[tokio::test]
+async fn rebase_invalidation_precedes_same_batch_review_completion_and_retry() {
+    for retry_first in [false, true] {
+        // Arrange: the worker has cleared durable evidence, but its event is
+        // queued behind an older review result in the foreground mailbox.
+        let (mut app, _directory) = crate::test_support::new_test_app().await;
+        let id = SessionId::from("conflicted-review");
+        let request_id = uuid::Uuid::new_v4();
+        let repositories = app.services.db().clone();
+        let project = app.projects.active_project_id();
+        seed_current_review_checkpoint(&mut app, &id, request_id).await;
+        let first_event = if retry_first {
+            app.review_cache.insert(
+                id.clone(),
+                app::review::ReviewCacheEntry::Ready {
+                    diff_hash: 42,
+                    request_id,
+                    text: "stale review".into(),
+                },
+            );
+            let update = FocusedReviewPersistence {
+                diff_hash: Some(42),
+                generation_request_id: Some(request_id),
+                request_id,
+                session_id: id.clone(),
+                status: crate::domain::review::FocusedReviewStatus::Ready,
+                text: Some("stale review".into()),
+            };
+            app.pending_focused_review_persistence
+                .insert(id.clone(), update.clone());
+
+            AppEvent::FocusedReviewPersistenceRetry {
+                retry: FocusedReviewPersistenceRetry::initial(update),
+            }
+        } else {
+            AppEvent::ReviewPrepared {
+                diff_hash: 42,
+                request_id,
+                review_text: "stale review".into(),
+                session_id: id.clone(),
+            }
+        };
+        repositories
+            .sessions()
+            .update_session_focused_review(&id, None, None, None)
+            .await
+            .expect("worker invalidation");
+        app.services
+            .event_sender()
+            .send(AppEvent::SessionRebaseReviewInvalidated {
+                session_id: id.clone(),
+            })
+            .expect("invalidation event");
+
+        // Act
+        app.apply_app_events(first_event).await;
+
+        // Assert
+        assert!(!app.review_cache.contains_key(&id));
+        assert!(!app.pending_focused_review_persistence.contains_key(&id));
+        assert_eq!(
+            repositories
+                .sessions()
+                .load_session_focused_reviews_for_project(project)
+                .await
+                .expect("saved reviews"),
+            [] as [ag_store::SessionFocusedReviewRow; 0]
+        );
+        assert_eq!(
+            repositories
+                .sessions()
+                .load_review_fragment(&id, "generation", "batch")
+                .await
+                .expect("checkpoint"),
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn late_review_completion_cannot_restore_durable_output_before_invalidation_event() {
+    // Arrange: SQLite invalidation commits before the foreground receives its
+    // event, while the completed review is still cached as Loading.
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let id = SessionId::from("late-conflicted-review");
+    let request_id = uuid::Uuid::new_v4();
+    let repositories = app.services.db().clone();
+    let project = app.projects.active_project_id();
+    seed_current_review_checkpoint(&mut app, &id, request_id).await;
+    repositories
+        .sessions()
+        .update_session_focused_review(&id, None, None, None)
+        .await
+        .expect("worker invalidation");
+
+    // Act
+    app.apply_app_events(AppEvent::ReviewPrepared {
+        diff_hash: 42,
+        request_id,
+        review_text: "stale review".into(),
+        session_id: id.clone(),
+    })
+    .await;
+
+    // Assert
+    assert!(!app.review_cache.contains_key(&id));
+    assert!(!app.pending_focused_review_persistence.contains_key(&id));
+    assert_eq!(
+        repositories
+            .sessions()
+            .load_session_focused_reviews_for_project(project)
+            .await
+            .expect("saved reviews"),
+        [] as [ag_store::SessionFocusedReviewRow; 0]
+    );
+}
+
+#[tokio::test]
 async fn same_diff_persistence_retry_requires_the_current_invocation() {
     // Arrange: an older Ready write failed, then a newer review completed.
     let (mut app, _directory) = crate::test_support::new_test_app().await;
@@ -1309,6 +1437,7 @@ async fn same_diff_persistence_retry_requires_the_current_invocation() {
         },
     );
     let old_write = FocusedReviewPersistence {
+        generation_request_id: Some(stale),
         diff_hash: Some(42),
         request_id: stale,
         session_id: id.clone(),

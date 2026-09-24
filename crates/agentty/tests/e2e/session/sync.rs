@@ -358,8 +358,8 @@ async fn test_session_rebase_repairs_pre_commit_hook_failure() -> E2eResult {
     Ok(())
 }
 
-/// Verify a manual rebase keeps the completed answer stable while only the
-/// workflow status tail animates.
+/// Verify a conflict-free manual rebase keeps the completed answer and focused
+/// review visible while the workflow status tail animates.
 #[tokio::test]
 async fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
     // Arrange, Act, Assert
@@ -390,8 +390,42 @@ async fn session_rebase_keeps_completed_transcript_stable() -> E2eResult {
                         &full,
                     );
                     assertion::assert_not_visible(frame, "Change Summary");
-                    assertion::assert_not_visible(frame, "Pre-rebase finding.");
+                    assertion::assert_text_in_region(frame, "Pre-rebase finding.", &full);
                     assertion::assert_text_in_region(frame, "Rebasing...", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify a conflict-free rebase keeps the focused review after completion
+/// and reopening the session view.
+#[tokio::test]
+async fn session_rebase_keeps_focused_review_after_completion() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_rebase_keeps_focused_review")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_rebase_transcript_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Pre-rebase finding.", 5000)
+                    .press_key("r")
+                    .wait_for_text("[Sync] Successfully synced", 20000)
+                    .press_key("Esc")
+                    .press_key("Enter")
+                    .wait_for_text("Pre-rebase finding.", 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Pre-rebase finding.", &full);
+                    assertion::assert_text_in_region(frame, "[Sync] Successfully synced", &full);
                 })
             },
         )

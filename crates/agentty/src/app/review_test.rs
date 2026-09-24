@@ -291,6 +291,7 @@ fn review_view_text_hides_suppressed_auto_review() {
 fn review_cache_matches_only_current_persistence_state() {
     // Arrange
     let update = |status| FocusedReviewPersistence {
+        generation_request_id: None,
         request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-id".into(),
@@ -336,6 +337,7 @@ fn review_cache_matches_only_current_persistence_state() {
 fn focused_review_persistence_retry_stops_after_limit() {
     // Arrange
     let persistence_update = FocusedReviewPersistence {
+        generation_request_id: None,
         request_id: uuid::Uuid::nil(),
         diff_hash: Some(42),
         session_id: "session-id".into(),
@@ -418,6 +420,46 @@ fn hydrate_review_transients_retracts_terminal_session_review() {
             .get(TransientMessageSlot::Review)
             .is_none()
     );
+}
+
+#[test]
+fn hydrate_review_transients_keeps_review_during_rebase() {
+    // Arrange
+    let session_id = SessionId::from("session-id");
+    let session = SessionFixtureBuilder::new()
+        .id(session_id.as_str())
+        .status(Status::Rebasing)
+        .build();
+    let review_cache = HashMap::from([(
+        session_id,
+        ReviewCacheEntry::Ready {
+            request_id: uuid::Uuid::nil(),
+            diff_hash: 42,
+            text: "persisted review".to_string(),
+        },
+    )]);
+    let mut session_state = SessionState::new(
+        HashMap::new(),
+        vec![session],
+        SelectionState::default(),
+        Arc::new(RealClock),
+        0,
+        0,
+    );
+
+    // Act
+    hydrate_review_transients(&review_cache, &mut session_state);
+
+    // Assert
+    assert!(matches!(
+        session_state.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Review),
+        Some(TransientMessage {
+            body: TransientMessageBody::Markdown(text),
+            ..
+        }) if text == "persisted review"
+    ));
 }
 
 #[test]
@@ -543,6 +585,7 @@ fn prune_review_cache_retains_active_loading_and_pending_entries() {
     let pending_persistence = HashMap::from([(
         pending_session_id.clone(),
         FocusedReviewPersistence {
+            generation_request_id: None,
             request_id: uuid::Uuid::nil(),
             diff_hash: Some(2),
             session_id: pending_session_id.clone(),
@@ -583,6 +626,7 @@ fn apply_review_updates_retains_inactive_success_until_persistence() {
     assert_eq!(
         persistence_updates,
         vec![FocusedReviewPersistence {
+            generation_request_id: Some(uuid::Uuid::nil()),
             request_id: uuid::Uuid::nil(),
             diff_hash: Some(diff_hash),
             session_id: session_id.clone(),
@@ -620,6 +664,7 @@ fn apply_review_updates_returns_clear_for_failed_regeneration() {
     assert_eq!(
         persistence_updates,
         vec![FocusedReviewPersistence {
+            generation_request_id: Some(uuid::Uuid::nil()),
             request_id: uuid::Uuid::nil(),
             diff_hash: Some(diff_hash),
             session_id,

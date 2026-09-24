@@ -195,7 +195,9 @@ Session sync (`r`) rebases onto the stored local base for unpublished sessions o
 remote base after fetching for published sessions. Conflict assistance uses the existing
 agent conversation. Agentty stages repairs, runs the installed pre-commit hook, and
 continues the rebase. Hook failures allow up to three repair attempts before aborting
-with `[Sync Error]` and suppressing the push.
+with `[Sync Error]` and suppressing the push. The focused review stays visible after a
+rebase without conflicts. A conflict clears it before assistance changes the session
+files.
 
 `[Main Checkout Warning]` means tracked changes in the main checkout changed during a
 turn and remain dirty. Inspect them before continuing. Unchanged pre-existing changes

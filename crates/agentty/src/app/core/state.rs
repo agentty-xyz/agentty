@@ -1530,9 +1530,8 @@ impl App {
 
     /// Starts or queues a session branch rebase onto its base branch.
     ///
-    /// Successful admission clears displayed review output. The worker clears
-    /// durable review evidence before changing the worktree; rejected requests
-    /// preserve both the displayed review and resumable checkpoints.
+    /// A conflict-free rebase retains the displayed review and its durable
+    /// evidence. Conflict assistance invalidates both before editing files.
     ///
     /// # Errors
     /// Returns an error if session sync cannot be admitted.
@@ -1541,8 +1540,6 @@ impl App {
         self.sessions
             .rebase_session(&self.services, session_id)
             .await?;
-        self.clear_review_output(session_id);
-
         Ok(())
     }
 

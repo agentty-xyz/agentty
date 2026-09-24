@@ -1929,11 +1929,6 @@ impl SessionManager {
         });
 
         let rebase_result: Result<String, SessionError> = async {
-            // Admission has succeeded and this worker owns the branch. Fail
-            // closed before any Git mutation if evidence cannot be invalidated.
-            db.sessions()
-                .update_session_focused_review(&id, None, None, None)
-                .await?;
             let rebase_plan = Self::resolve_session_rebase_plan(
                 &db,
                 git_client.as_ref(),
@@ -2429,6 +2424,20 @@ impl SessionManager {
                 }
             }
         }
+
+        // A completed Git step leaves the reviewed change intact. Once Git
+        // reports a conflict, assistance may edit it, so invalidate the old
+        // review before any model work begins.
+        input
+            .db
+            .sessions()
+            .update_session_focused_review(&input.id, None, None, None)
+            .await?;
+        let _ = input
+            .app_event_tx
+            .send(AppEvent::SessionRebaseReviewInvalidated {
+                session_id: input.id.clone(),
+            });
 
         Self::run_rebase_assist_loop_core(
             RebaseAssistLoopInput::Session(Box::new(input)),
