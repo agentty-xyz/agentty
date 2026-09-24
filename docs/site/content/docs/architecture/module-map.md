@@ -76,8 +76,8 @@ paths.
 
 Application workflows submit session turns through `SessionRunClient` and isolated
 utilities through `RunClient`. Only `ag-worker` depends on `ag-runtime`; only
-`ag-runtime` depends on `ag-agent`. Shared execution contracts live in `ag-contracts`.
-The worker owns runtime lifecycle and cancellation; applications configure workers
-rather than construct adapters.
+`ag-runtime` depends on `ag-agent`; only `ag-agent` launches agent CLIs. Shared
+execution contracts live in `ag-contracts`. The worker owns runtime lifecycle and
+cancellation; applications configure workers rather than construct adapters.
 
 See [Execution](@/docs/core-components/execution.md) for the execution contract.

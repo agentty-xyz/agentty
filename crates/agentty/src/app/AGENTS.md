@@ -30,8 +30,8 @@ presentation-state refreshes.
 - Capture `RunScope` with `scoped_client` before spawning background work. Preserve
   parent operation, session/project ownership, and cancellation across nested calls;
   pass request permissions and provider-call budgets through unchanged.
-- Keep `crates/agentty/src/execution_boundary_test.rs` enforcing the boundary when
-  adding model actions. Test new workflows through the worker submission contract.
+- Keep the `check-execution-boundary` hook enforcing the boundary when adding model
+  actions. Test new workflows through the worker submission contract.
 
 ## Documentation
 

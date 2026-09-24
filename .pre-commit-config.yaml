@@ -270,7 +270,8 @@ repos:
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --workspace
-          --lib --bins --examples --test check_instruction --test check_migration --test sandbox
+          --lib --bins --examples --test check_execution_boundary --test check_instruction
+          --test check_migration --test sandbox
           --test public_api --test lifecycle --test telemetry --test benchmark_summary
           --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
@@ -329,6 +330,13 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: check-execution-boundary
+        name: execution boundary
+        description: Verify model execution flows only through worker-owned crates and agent CLIs launch only from `ag-agent`.
+        entry: cargo run -q --locked -p ag-xtask -- check-execution-boundary
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
+        pass_filenames: false
       - id: check-migrations
         name: check migrations
         description: Verify SQL migration files have unique prefix numbers.

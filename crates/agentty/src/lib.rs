@@ -18,9 +18,5 @@ pub mod runtime;
 #[path = "test_support_test.rs"]
 pub(crate) mod test_support;
 
-#[cfg(test)]
-#[path = "execution_boundary_test.rs"]
-mod execution_boundary;
-
 // Public convenience re-exports.
 pub use infra::db;
