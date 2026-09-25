@@ -211,16 +211,18 @@ fn current_user_review_comment_node(body: &str) -> serde_json::Value {
 
 pub(super) fn github_view_json() -> String {
     r#"{
-        "number": 42,
-        "title": "Add forge review support",
-        "state": "OPEN",
-        "url": "https://github.com/agentty-xyz/agentty/pull/42",
-        "baseRefName": "main",
-        "headRefName": "feature/forge",
-        "isDraft": false,
-        "mergeStateStatus": "CLEAN",
-        "reviewDecision": "APPROVED",
-        "mergedAt": null
+        "data": {"repository": {"pullRequest": {
+            "number": 42,
+            "title": "Add forge review support",
+            "state": "OPEN",
+            "url": "https://github.com/agentty-xyz/agentty/pull/42",
+            "baseRefName": "main",
+            "headRefName": "feature/forge",
+            "isDraft": false,
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "mergedAt": null
+        }}}
     }"#
     .to_string()
 }

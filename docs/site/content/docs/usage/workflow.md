@@ -48,6 +48,12 @@ Progress and completion appear in the top status bar. A red `[merge conflict]` l
 a session means its committed branch conflicts with its base. A failed conflict check
 leaves the result unknown.
 
+For a linked GitHub pull request, the **Sessions** list adds a green `[ready]` label
+when GitHub reports the open, non-draft request has a clean merge state. Repository
+rules determine which checks and conversations block merging; resolved comments do not
+hide the label. The background forge refresh updates it every minute. A failed refresh
+keeps the last known label until the next successful update.
+
 ## Session Lifecycle
 
 <a id="usage-session-lifecycle"></a>

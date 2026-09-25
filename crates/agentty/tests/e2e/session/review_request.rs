@@ -132,8 +132,8 @@ case "$*" in
     sleep __CREATE_DELAY_SECONDS__
     touch "$marker_path"
     ;;
-  *"pr view"*)
-    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"__REVIEW_BRANCH_NAME__","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+  *"mergeStateStatus"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"__REVIEW_BRANCH_NAME__","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -219,8 +219,8 @@ case "$*" in
   *"auth status"*)
     exit 0
     ;;
-  *"pr view"*)
-    printf '%s\n' '{"number":42,"title":"Review-ready session shortcuts","state":"MERGED","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","mergedAt":"2026-01-01T00:00:00Z"}'
+  *"mergeStateStatus"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Review-ready session shortcuts","state":"MERGED","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/review-s","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","mergedAt":"2026-01-01T00:00:00Z"}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2
@@ -233,6 +233,19 @@ esac
     std::fs::set_permissions(&gh_path, std::fs::Permissions::from_mode(0o750))?;
 
     install_delayed_worktree_remove_stub(env, 4)
+}
+
+/// Seeds one linked PR whose merge state reports readiness.
+async fn seed_ready_pr_status(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session_with_review_request(env).await?;
+    let gh_path = env.stub_bin.join("gh");
+    let gh_script = std::fs::read_to_string(&gh_path)?.replace(
+        "\"mergeStateStatus\":\"BLOCKED\"",
+        "\"mergeStateStatus\":\"CLEAN\"",
+    );
+    std::fs::write(&gh_path, gh_script)?;
+
+    Ok(())
 }
 
 /// Seeds a merged parent and merged stacked child whose review target still
@@ -378,6 +391,40 @@ async fn published_branch_push_notice_renders_as_transcript_message() -> E2eResu
                             .count(),
                         1
                     );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify the linked PR status refresh paints a ready label in the session
+/// list.
+#[tokio::test]
+async fn test_pr_ready_label() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("pr_ready_label")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_ready_pr_status(env).await }))
+        .zola(
+            "Pull request ready label",
+            "See when repository rules allow a linked pull request to merge.",
+            54,
+        )
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("[ready]", 10_000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled("pr_ready_label", "Linked pull request ready in Sessions")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "[ready]", &full);
                 })
             },
         )

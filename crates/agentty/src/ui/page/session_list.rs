@@ -28,6 +28,7 @@ const EMPTY_SESSIONS_HINT: &str = "No sessions. Press 'a' to start one.";
 
 /// Warning suffix appended to titles whose branches conflict with their base.
 const MERGE_CONFLICT_LABEL: &str = " [merge conflict]";
+const PR_READY_LABEL: &str = " [ready]";
 
 /// Tree branch prefix for child rows that have siblings after them.
 const TREE_BRANCH_MIDDLE: &str = "├ ";
@@ -627,17 +628,37 @@ fn render_session_title(
         ),
     );
 
-    if !has_merge_conflict {
+    let is_pr_ready = session
+        .review_request
+        .as_ref()
+        .is_some_and(|request| request.summary.is_github_pr_ready());
+    if !has_merge_conflict && !is_pr_ready {
         return truncate_spans_with_ellipsis(title_spans, title_column_width);
     }
 
-    let label_width = MERGE_CONFLICT_LABEL.chars().count();
+    let label_width = if has_merge_conflict {
+        MERGE_CONFLICT_LABEL.chars().count()
+    } else {
+        0
+    } + if is_pr_ready {
+        PR_READY_LABEL.chars().count()
+    } else {
+        0
+    };
     let mut title_spans =
         truncate_spans_with_ellipsis(title_spans, title_column_width.saturating_sub(label_width));
-    title_spans.push(Span::styled(
-        MERGE_CONFLICT_LABEL,
-        Style::default().fg(style::palette::danger()),
-    ));
+    if has_merge_conflict {
+        title_spans.push(Span::styled(
+            MERGE_CONFLICT_LABEL,
+            Style::default().fg(style::palette::danger()),
+        ));
+    }
+    if is_pr_ready {
+        title_spans.push(Span::styled(
+            PR_READY_LABEL,
+            Style::default().fg(style::palette::success()),
+        ));
+    }
 
     truncate_spans_with_ellipsis(title_spans, title_column_width)
 }

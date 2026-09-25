@@ -312,8 +312,8 @@ case "$*" in
   *"pr create"*)
     touch "$marker_path"
     ;;
-  *"pr view"*)
-    printf '%s\n' '{"number":42,"title":"Queued review request","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/queued-review","isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}'
+  *"mergeStateStatus"*)
+    printf '%s\n' '{"data":{"repository":{"pullRequest":{"number":42,"title":"Queued review request","state":"OPEN","url":"https://github.com/agentty-xyz/agentty/pull/42","baseRefName":"main","headRefName":"wt/queued-review","isDraft":false,"mergeStateStatus":"BLOCKED","reviewDecision":"REVIEW_REQUIRED","mergedAt":null}}}}'
     ;;
   *)
     echo "unexpected gh invocation: $*" >&2

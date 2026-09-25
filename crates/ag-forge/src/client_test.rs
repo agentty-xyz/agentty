@@ -118,20 +118,15 @@ async fn find_by_source_branch_authenticates_once_before_github_lookup() {
         .once()
         .in_sequence(&mut sequence)
         .withf(|command| {
-            command_arguments_are(
-                command,
-                "gh",
-                &[
-                    "pr",
-                    "view",
-                    "42",
-                    "--repo",
-                    "agentty-xyz/agentty",
-                    "--json",
-                    "number,title,state,url,baseRefName,headRefName,isDraft,mergeStateStatus,\
-                     reviewDecision,mergedAt",
-                ],
-            )
+            command.executable == "gh"
+                && command.arguments[..4] == ["api", "--hostname", "github.com", "graphql"]
+                && command.arguments.contains(&"owner=agentty-xyz".to_string())
+                && command.arguments.contains(&"repo=agentty".to_string())
+                && command.arguments.contains(&"number=42".to_string())
+                && command
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains("mergeStateStatus"))
         })
         .returning(|_| Box::pin(async { Ok(success_output(github_view_json())) }));
     let client = RealReviewRequestClient::new(Arc::new(command_runner));
@@ -150,7 +145,7 @@ async fn find_by_source_branch_authenticates_once_before_github_lookup() {
             forge_kind: ForgeKind::GitHub,
             source_branch: "feature/forge".to_string(),
             state: ReviewRequestState::Open,
-            status_summary: Some("Approved, Mergeable".to_string()),
+            status_summary: Some("Approved, Mergeable, PR ready".to_string()),
             target_branch: "main".to_string(),
             title: "Add forge review support".to_string(),
             web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
@@ -427,16 +422,18 @@ fn failure_output(stderr: String) -> ForgeCommandOutput {
 /// Returns one representative GitHub pull-request JSON response.
 fn github_view_json() -> String {
     r#"{
-        "number": 42,
-        "title": "Add forge review support",
-        "state": "OPEN",
-        "url": "https://github.com/agentty-xyz/agentty/pull/42",
-        "baseRefName": "main",
-        "headRefName": "feature/forge",
-        "isDraft": false,
-        "mergeStateStatus": "CLEAN",
-        "reviewDecision": "APPROVED",
-        "mergedAt": null
+        "data": {"repository": {"pullRequest": {
+            "number": 42,
+            "title": "Add forge review support",
+            "state": "OPEN",
+            "url": "https://github.com/agentty-xyz/agentty/pull/42",
+            "baseRefName": "main",
+            "headRefName": "feature/forge",
+            "isDraft": false,
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "mergedAt": null
+        }}}
     }"#
     .to_string()
 }
