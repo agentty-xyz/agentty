@@ -124,6 +124,7 @@ fn app_event_label_names_focused_review_persistence_retries() {
         retry: crate::app::review::FocusedReviewPersistenceRetry {
             attempt: 1,
             persistence_update: crate::app::review::FocusedReviewPersistence {
+                generation_request_id: None,
                 request_id: uuid::Uuid::nil(),
                 diff_hash: Some(42),
                 session_id: "session-id".into(),
@@ -227,6 +228,20 @@ fn app_event_label_names_queued_sync_resolutions() {
 
     // Assert
     assert_eq!(label, "SessionQueuedSyncResolved");
+}
+
+#[test]
+fn app_event_label_names_rebase_review_invalidation() {
+    // Arrange
+    let event = AppEvent::SessionRebaseReviewInvalidated {
+        session_id: "session-id".into(),
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "SessionRebaseReviewInvalidated");
 }
 
 #[test]

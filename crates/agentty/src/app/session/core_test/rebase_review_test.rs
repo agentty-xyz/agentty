@@ -1,15 +1,16 @@
 //! Review retention at the rebase admission and execution boundaries.
 
-use ag_git::MockGitClient;
+use ag_git::{self as git, MockGitClient};
 use sqlx::SqlitePool;
 use tempfile::tempdir;
 use uuid::Uuid;
 
 use super::support::{
-    allow_detect_git_info, install_mock_git_client, new_test_app_with_git_and_db,
-    session_status_or_done, wait_for_output_contains, wait_for_status,
+    install_mock_git_client, new_test_app_with_git_and_db, session_status_or_done,
+    setup_mock_commit_and_branch_expectations, setup_mock_worktree_expectations,
+    wait_for_output_contains, wait_for_status,
 };
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
@@ -66,7 +67,28 @@ async fn rejected_rebase_admission_preserves_completed_and_partial_reviews() {
 }
 
 #[tokio::test]
-async fn rebase_invalidation_failure_stops_before_git_mutation() {
+async fn conflict_free_rebase_preserves_completed_and_partial_reviews() {
+    for review_status in [FocusedReviewStatus::Ready, FocusedReviewStatus::Partial] {
+        // Arrange
+        let directory = tempdir().expect("directory");
+        let db = AppRepositories::in_memory().await.expect("database");
+        let mut app = new_test_app_with_git_and_db(directory.path(), db).await;
+        let id = app.create_session().await.expect("session");
+        crate::test_support::set_session_status_for_test(&mut app, &id, Status::Review);
+        let (request_id, text) = seed_review(&mut app, &id, review_status).await;
+
+        // Act
+        app.rebase_session(&id).await.expect("accepted sync");
+        wait_for_output_contains(&mut app, &id, "[Sync] Successfully synced", 200).await;
+
+        // Assert
+        assert_eq!(app.review_view_state(&id).1, Some(text.as_str()));
+        assert_durable_review_retained(&app, &id, &text, request_id).await;
+    }
+}
+
+#[tokio::test]
+async fn rebase_conflict_invalidation_failure_stops_before_assistance() {
     // Arrange
     let directory = tempdir().expect("directory");
     let (db, pool) = AppRepositories::in_memory_with_pool()
@@ -84,9 +106,22 @@ async fn rebase_invalidation_failure_stops_before_git_mutation() {
     .await
     .expect("invalidation failure fixture");
     let mut git = MockGitClient::new();
-    allow_detect_git_info(&mut git);
-    git.expect_is_worktree_clean().never();
-    git.expect_rebase_start().never();
+    setup_mock_worktree_expectations(&mut git, directory.path().to_path_buf());
+    setup_mock_commit_and_branch_expectations(&mut git);
+    git.expect_is_rebase_in_progress()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git.expect_rebase_start().times(1).returning(|_, _| {
+        Box::pin(async {
+            Ok(git::RebaseStepResult::Conflict {
+                detail: "content conflict".to_string(),
+            })
+        })
+    });
+    git.expect_list_conflicted_files().never();
+    git.expect_abort_rebase()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(()) }));
     install_mock_git_client(&mut app, git);
 
     // Act: admission succeeds, but the worker cannot invalidate evidence.
@@ -94,9 +129,74 @@ async fn rebase_invalidation_failure_stops_before_git_mutation() {
     wait_for_output_contains(&mut app, &id, "review invalidation failed", 200).await;
     wait_for_status(&mut app, &id, Status::Review).await;
 
-    // Assert: transaction rollback preserves evidence and Git never runs.
+    // Assert: transaction rollback preserves evidence and assistance never
+    // runs.
     assert_durable_review_retained(&app, &id, &text, request_id).await;
+    assert_eq!(app.review_view_state(&id).1, Some(text.as_str()));
     assert_eq!(session_status_or_done(&app, &id), Status::Review);
+}
+
+#[tokio::test]
+async fn rebase_conflict_invalidates_display_and_durable_review() {
+    // Arrange
+    let directory = tempdir().expect("directory");
+    let db = AppRepositories::in_memory().await.expect("database");
+    let mut app = new_test_app_with_git_and_db(directory.path(), db).await;
+    let id = app.create_session().await.expect("session");
+    crate::test_support::set_session_status_for_test(&mut app, &id, Status::Review);
+    let (request_id, _) = seed_review(&mut app, &id, FocusedReviewStatus::Partial).await;
+    let mut git = MockGitClient::new();
+    setup_mock_worktree_expectations(&mut git, directory.path().to_path_buf());
+    setup_mock_commit_and_branch_expectations(&mut git);
+    git.expect_is_rebase_in_progress()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git.expect_rebase_start().times(1).returning(|_, _| {
+        Box::pin(async {
+            Ok(git::RebaseStepResult::Conflict {
+                detail: "content conflict".to_string(),
+            })
+        })
+    });
+    git.expect_list_conflicted_files().times(1).returning(|_| {
+        Box::pin(async { Err(git::GitError::OutputParse("assist unavailable".to_string())) })
+    });
+    git.expect_abort_rebase()
+        .times(2)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    install_mock_git_client(&mut app, git);
+
+    // Act
+    app.rebase_session(&id).await.expect("accepted sync");
+    wait_for_output_contains(&mut app, &id, "assist unavailable", 200).await;
+    app.apply_app_events(AppEvent::ReviewPrepared {
+        diff_hash: 42,
+        review_text: "stale focused review".to_string(),
+        session_id: id.clone().into(),
+        request_id,
+    })
+    .await;
+
+    // Assert
+    assert!(!app.review_cache.contains_key(id.as_str()));
+    assert_eq!(app.review_view_state(&id).1, None);
+    let persisted_reviews = app
+        .services
+        .db()
+        .sessions()
+        .load_session_focused_reviews_for_project(app.active_project_id())
+        .await
+        .expect("persisted reviews");
+    assert_eq!(persisted_reviews.first().map(|review| &review.text), None);
+    assert!(
+        app.services
+            .db()
+            .sessions()
+            .load_review_fragment(&id, "same-inputs", "batch")
+            .await
+            .expect("checkpoint")
+            .is_none()
+    );
 }
 
 /// Seeds a displayed review with durable output and resumable evidence.

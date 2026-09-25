@@ -64,6 +64,9 @@ qualification, not a passed or silently skipped check. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for platform
 limitations.
 
+Focused review persistence is checked against its active invocation in SQLite. Store
+tests exercise the write and invalidation boundary with the real adapter.
+
 ## Typed Errors Across Layers
 
 <a id="architecture-typed-error-enums"></a> External clients expose typed errors.

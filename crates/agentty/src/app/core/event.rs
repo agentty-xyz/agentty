@@ -192,6 +192,8 @@ pub(crate) enum AppEvent {
     BranchPublishActionStarted { session_id: SessionId },
     /// Indicates a queued session sync has either started or failed visibly.
     SessionQueuedSyncResolved { session_id: SessionId },
+    /// A rebase conflict invalidated the focused review before assistance.
+    SessionRebaseReviewInvalidated { session_id: SessionId },
     /// Indicates a session start or resume command began its turn.
     SessionTurnStarted { session_id: SessionId },
     /// Indicates review assist output became available for a session.
@@ -375,6 +377,7 @@ pub(super) struct AppEventBatch {
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
+    pub(super) session_rebase_review_invalidated_ids: HashSet<SessionId>,
     pub(super) session_reasoning_level_updates:
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_response_style_updates:
@@ -439,6 +442,7 @@ impl AppEventBatch {
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
+            || !self.session_rebase_review_invalidated_ids.is_empty()
             || !self.session_turn_started_ids.is_empty()
             || !self.session_review_comment_snapshots.is_empty()
             || !self.session_reasoning_level_updates.is_empty()
@@ -550,6 +554,10 @@ impl AppEventBatch {
                 self.session_speed_mode_updates
                     .insert(session_id, speed_mode);
             }
+            AppEvent::SessionRebaseReviewInvalidated { session_id } => {
+                self.session_rebase_review_invalidated_ids
+                    .insert(session_id);
+            }
             AppEvent::RefreshSessions => self.should_reload_sessions = true,
             AppEvent::RefreshProjects => self.should_reload_projects = true,
             AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
@@ -651,6 +659,7 @@ impl AppEventBatch {
             | AppEvent::SessionReasoningLevelUpdated { .. }
             | AppEvent::SessionResponseStyleUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
+            | AppEvent::SessionRebaseReviewInvalidated { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus => {
@@ -770,6 +779,7 @@ impl AppEventBatch {
             | AppEvent::SyncMainCompleted { .. }
             | AppEvent::SyncMainConflictResolutionStarted { .. }
             | AppEvent::SessionDiffStatsUpdated { .. }
+            | AppEvent::SessionRebaseReviewInvalidated { .. }
             | AppEvent::SessionTitleGenerationFinished { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
             }
@@ -1033,6 +1043,9 @@ impl App {
             self.update_session_redraw_versions(&event_batch.session_update_versions);
 
         self.apply_app_event_effects(before_snapshot_effects).await;
+        for session_id in std::mem::take(&mut event_batch.session_rebase_review_invalidated_ids) {
+            self.clear_review_output(&session_id);
+        }
         self.apply_batch_runtime_updates(&mut event_batch);
 
         self.apply_batch_session_snapshot_updates(&mut event_batch);
@@ -1623,7 +1636,14 @@ impl App {
             .filter(|session_id| {
                 previous_session_states
                     .get(*session_id)
-                    .is_some_and(|status| !status.allows_review_actions())
+                    .is_some_and(|status| {
+                        !status.allows_review_actions()
+                            && (*status != Status::Rebasing
+                                || !matches!(
+                                    self.review_cache.get(*session_id),
+                                    Some(app::review::ReviewCacheEntry::Ready { .. })
+                                ))
+                    })
                     && self
                         .sessions
                         .session_for_id(session_id)
@@ -2035,21 +2055,42 @@ impl App {
                 .diff_hash
                 .map(|diff_hash| diff_hash.to_string());
 
-            let result = self
-                .services
-                .db()
-                .sessions()
-                .update_session_focused_review(
-                    persistence_update.session_id.as_str(),
-                    Some(persistence_update.status),
-                    diff_hash,
-                    persistence_update.text.clone(),
-                )
-                .await;
+            let result =
+                if let Some(generation_request_id) = persistence_update.generation_request_id {
+                    self.services
+                        .db()
+                        .sessions()
+                        .update_session_focused_review_for_generation(
+                            persistence_update.session_id.as_str(),
+                            &generation_request_id.to_string(),
+                            persistence_update.status,
+                            diff_hash,
+                            persistence_update.text.clone(),
+                        )
+                        .await
+                } else {
+                    self.services
+                        .db()
+                        .sessions()
+                        .update_session_focused_review(
+                            persistence_update.session_id.as_str(),
+                            Some(persistence_update.status),
+                            diff_hash,
+                            persistence_update.text.clone(),
+                        )
+                        .await
+                        .map(|()| true)
+                };
+            if matches!(result, Ok(false)) {
+                self.clear_review_output(&persistence_update.session_id);
+                self.remove_current_focused_review_persistence(&persistence_update);
+
+                continue;
+            }
             let retry_scheduled = Self::handle_focused_review_persistence_result(
                 self.services.event_sender(),
                 retry,
-                result,
+                result.map(|_| ()),
             );
             if !retry_scheduled {
                 self.remove_current_focused_review_persistence(&persistence_update);

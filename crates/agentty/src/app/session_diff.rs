@@ -613,6 +613,7 @@ impl App {
                     current_review_text.clone(),
                 );
                 self.persist_focused_review_updates(vec![FocusedReviewPersistence {
+                    generation_request_id: None,
                     request_id,
                     diff_hash: Some(cached_diff_hash),
                     session_id: session_id.clone(),

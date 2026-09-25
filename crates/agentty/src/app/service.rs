@@ -336,6 +336,7 @@ impl AppServices {
             AppEvent::BranchPublishActionResolved { .. } => "BranchPublishActionResolved",
             AppEvent::BranchPublishActionStarted { .. } => "BranchPublishActionStarted",
             AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
+            AppEvent::SessionRebaseReviewInvalidated { .. } => "SessionRebaseReviewInvalidated",
             AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
             AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
             AppEvent::ReviewProgressUpdated { .. } => "ReviewProgressUpdated",
