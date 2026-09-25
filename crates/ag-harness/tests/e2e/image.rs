@@ -2,11 +2,14 @@
 
 use std::sync::Arc;
 
-use ag_harness::{
-    ExecutionIdentity, Harness, KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR,
-    MemoryStore, ModelCapabilities, ModelClient, ModelRegistry, MuseConfig, QWEN_PLUS, QwenConfig,
-    SessionError,
+use ag_harness::model::{ModelCapabilities, ModelClient, ModelRegistry};
+use ag_harness::provider::{
+    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, MuseConfig, QWEN_PLUS,
+    QwenConfig,
 };
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::MemoryStore;
+use ag_harness::{Harness, SessionError};
 
 use crate::{DynError, vision};
 

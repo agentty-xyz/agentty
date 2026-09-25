@@ -2,7 +2,9 @@
 
 use serde::Deserialize;
 
-use crate::{ExecutionIdentity, ModelCapabilities, ModelMessage, SessionError};
+use crate::SessionError;
+use crate::model::{ModelCapabilities, ModelMessage};
+use crate::recovery::ExecutionIdentity;
 
 /// Model selected when a turn was reserved. Legacy turns have no snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]

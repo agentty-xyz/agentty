@@ -5,7 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_harness::{HostRequest, HostTurnAcquisition, HostTurnRecord, TurnOutcome};
+use ag_harness::TurnOutcome;
+use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -15,9 +16,9 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{
     AcquiredTurn, Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
 };
-use crate::store::SessionStore;
+use crate::store::{SessionStore, WriteRecord};
 use crate::store_conformance_test::{options, schema};
-use crate::{TurnError, TurnOptions, WriteRecord};
+use crate::{TurnError, TurnOptions};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PauseAt {
@@ -109,7 +110,7 @@ impl SessionStore for GatedStore {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &crate::SessionCheckpoint,
+        checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         self.database
             .publish_checkpoint(session_id, checkpoint)
@@ -120,9 +121,9 @@ impl SessionStore for GatedStore {
         &self,
         id: &str,
         generation: i64,
-        identity: &crate::ExecutionIdentity,
+        identity: &crate::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         self.database
             .switch_model(id, generation, identity, metadata, capabilities)

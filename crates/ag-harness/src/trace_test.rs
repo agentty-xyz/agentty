@@ -806,7 +806,7 @@ impl SessionStore for TracedWriteStore {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &crate::SessionCheckpoint,
+        checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
@@ -815,9 +815,9 @@ impl SessionStore for TracedWriteStore {
         &self,
         id: &str,
         generation: i64,
-        identity: &crate::ExecutionIdentity,
+        identity: &crate::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         self.store
             .switch_model(id, generation, identity, metadata, capabilities)

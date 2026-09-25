@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 
-use ag_harness::{ModelClient, ModelRequest, OutputSchema};
+use ag_harness::OutputSchema;
+use ag_harness::model::{ModelClient, ModelRequest};
 use serde_json::{Value, json};
 
 use crate::DynError;

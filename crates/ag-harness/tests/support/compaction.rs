@@ -4,12 +4,14 @@ use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ag_harness::{
-    CheckpointError, ContextBudget, ExecutionIdentity, Harness, LifecycleEvent, LifecycleEventKind,
-    LifecycleObserver, Model, ModelCapabilities, ModelCompletion, ModelError, ModelMessage,
-    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse, SessionCheckpoint, SessionError,
-    SessionStore, TurnError,
+use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
+use ag_harness::model::{
+    ContextBudget, ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry,
+    ModelRequest, ModelResponse,
 };
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::{CheckpointError, SessionCheckpoint, SessionStore};
+use ag_harness::{Harness, Model, ModelError, SessionError, TurnError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::Notify;

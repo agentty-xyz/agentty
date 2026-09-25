@@ -12,13 +12,14 @@ use super::support::{
     model, object_schema, read_call, read_harness, readable_file_system, response_without_metadata,
     write_call, write_harness,
 };
+use crate::bash::{BashConfig, BashError};
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ToolErrorType, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::tool::ToolDefinition;
 use crate::turn::TurnError;
-use crate::{BashConfig, BashError, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
 
 #[tokio::test]
 async fn rejects_schema_invalid_output_from_injected_model() {
@@ -516,10 +517,8 @@ async fn bash_permission_requires_host_configuration_and_host_information_grant(
     .expect("config");
 
     // Act
-    let missing = harness.run_once_with_options("run", options.clone()).await;
-    let denied = harness
-        .run_once_with_options("run", options.with_bash(configuration))
-        .await;
+    let missing = harness.turn("run", options.clone()).await;
+    let denied = harness.turn("run", options.with_bash(configuration)).await;
 
     // Assert
     assert!(matches!(

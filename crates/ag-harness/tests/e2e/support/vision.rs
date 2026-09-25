@@ -1,9 +1,11 @@
 use std::io::{self, Write};
 use std::sync::Arc;
 
+use ag_harness::model::ModelClient;
+use ag_harness::store::MemoryStore;
 use ag_harness::{
-    Harness, ImageContent, ImageMediaType, InputBlock, MemoryStore, ModelClient, ModelError,
-    OutputSchema, TurnError, TurnInput,
+    Harness, ImageContent, ImageMediaType, InputBlock, ModelError, OutputSchema, TurnError,
+    TurnInput,
 };
 use serde_json::{Value, json};
 

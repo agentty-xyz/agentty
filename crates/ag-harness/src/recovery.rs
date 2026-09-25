@@ -1,10 +1,16 @@
-//! Host request identity and recorded outcomes, independent of store ownership.
+//! Idempotent retries keyed by host request IDs.
+//!
+//! Give the harness an [`ExecutionIdentity`], then attach a host ID to a turn
+//! with `SessionTurn::host_id`. A retry with the same ID and effective request
+//! returns the recorded outcome without running the model or tools again;
+//! `Session::recover` reads a [`HostTurnRecord`] without executing anything.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{AcquiredTurn, SessionError, TurnOutcome, WriteRecord};
+use crate::store::{AcquiredTurn, WriteRecord};
+use crate::{SessionError, TurnOutcome};
 
 /// Host assertion identifying all model and injected execution configuration.
 /// Change the revision whenever behavior, endpoints, credentials' scope, or
@@ -89,9 +95,9 @@ pub enum HostTurnAcquisition {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HostTurnRecord {
     /// Command intents and observed results belonging only to this turn.
-    pub commands: Vec<crate::CommandRecord>,
+    pub commands: Vec<crate::bash::CommandRecord>,
     /// Immutable model provenance; absent for turns predating model switching.
-    pub model: Option<crate::RecordedModel>,
+    pub model: Option<crate::store::RecordedModel>,
     /// Immutable request identity.
     pub request: HostRequest,
     /// Recorded lifecycle state and terminal result, when available.

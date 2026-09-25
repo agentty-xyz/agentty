@@ -4,12 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 
+use crate::SessionError;
 use crate::input::TurnInput;
+use crate::model::{ModelCapabilities, ModelMessage};
+use crate::recovery::ExecutionIdentity;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, ReservationObserver};
-use crate::{
-    ExecutionIdentity, ModelCapabilities, ModelMessage, NewSession, SessionError, SessionStore,
-};
+use crate::store::{NewSession, SessionStore};
 
 struct Validated {
     entered: Notify,

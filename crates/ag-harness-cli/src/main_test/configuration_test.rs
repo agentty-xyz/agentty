@@ -1,7 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-use ag_harness::{ModelConfigurationError, ModelProvider};
+use ag_harness::provider::{ModelConfigurationError, ModelProvider};
 use serde_json::json;
 
 use super::support::{parse_cli, resume_arguments, run_arguments};

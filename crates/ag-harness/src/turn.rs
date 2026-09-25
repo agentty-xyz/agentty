@@ -1,4 +1,10 @@
-//! Immutable turn options, outcomes, observable activity, and terminal errors.
+//! Turn configuration, results, and control.
+//!
+//! [`TurnOptions`] replace harness defaults for one turn. A finished turn
+//! returns a [`TurnOutcome`] whose [`TurnReport`] lists model requests and tool
+//! activity. [`SessionTurn`] and [`OneShotTurn`] configure a turn before it
+//! runs; `start` returns a [`ControlledTurn`] whose [`TurnControl`] cancels it
+//! and observes settlement.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -9,7 +15,10 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::bash::{BashConfig, BashError};
+pub use crate::cancellation::{ControlledTurn, SettlementError, TurnControl};
 use crate::comparison::ComparisonBase;
+pub use crate::effect::EffectSettlementError;
+pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
@@ -466,14 +475,14 @@ pub enum TurnError {
     #[error("sandbox command failed")]
     CommandFailed {
         /// Normalized observed outcome; command content is never telemetry.
-        outcome: Box<crate::CommandOutcome>,
+        outcome: Box<crate::bash::CommandOutcome>,
     },
     /// Command persistence failed; the observed execution result is retained
     /// separately when available, including cleanup and main-exit diagnostics.
     #[error("command journal failed: {source}")]
     CommandJournal {
         /// Observed result; absent when intent persistence prevented execution.
-        outcome: Option<Box<crate::CommandOutcome>>,
+        outcome: Option<Box<crate::bash::CommandOutcome>>,
         /// Underlying transactional store error.
         #[source]
         source: Box<crate::SessionError>,

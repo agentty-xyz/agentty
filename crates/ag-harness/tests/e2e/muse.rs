@@ -1,6 +1,7 @@
 //! Live Muse provider check.
 
-use ag_harness::{MUSE_SPARK_1_3, ModelClient, MuseConfig};
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{MUSE_SPARK_1_3, MuseConfig};
 
 use crate::{DynError, greeting};
 

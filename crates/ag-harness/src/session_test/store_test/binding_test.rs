@@ -6,12 +6,11 @@ use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use super::support::{AcquisitionGate, CommitGate};
-use crate::WriteStatus;
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, NewSession, ReservationObserver, SessionError};
-use crate::store::SessionStore;
+use crate::store::{SessionStore, WriteStatus};
 
 #[tokio::test]
 async fn acquisition_rejects_a_different_backing_store_before_reserving() {

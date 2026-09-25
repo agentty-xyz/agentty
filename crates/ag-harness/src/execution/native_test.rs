@@ -15,7 +15,7 @@ use super::{
     Directory, Inspection, LocalInspection, Native, NativeProcess, bounded_text, inspect_tree,
     validate_executable,
 };
-use crate::BashConfig;
+use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,

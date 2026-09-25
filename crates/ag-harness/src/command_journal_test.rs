@@ -3,11 +3,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::{
-    CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination, MemoryStore,
-    NewSession, OutputSchema, SessionError, SessionStore, SqliteStore, ToolPolicy, TurnInput,
-    TurnLimits, TurnOptions, TurnOwner,
-};
+use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use crate::store::{MemoryStore, NewSession, SessionStore, SqliteStore, TurnOwner};
+use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnLimits, TurnOptions};
 
 fn outcome() -> CommandOutcome {
     CommandOutcome {
@@ -214,10 +212,12 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
             .expect("session");
-        let request =
-            crate::HostRequest::from_configuration("host-id".into(), json!({"prompt":"run"}))
-                .expect("request");
-        let crate::HostTurnAcquisition::Acquired(acquired) = store
+        let request = crate::recovery::HostRequest::from_configuration(
+            "host-id".into(),
+            json!({"prompt":"run"}),
+        )
+        .expect("request");
+        let crate::recovery::HostTurnAcquisition::Acquired(acquired) = store
             .begin_request(
                 Arc::clone(&store),
                 "commands",
@@ -258,12 +258,12 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
             .expect("duplicate");
 
         // Assert
-        let crate::HostTurnAcquisition::Recorded(record) = duplicate else {
+        let crate::recovery::HostTurnAcquisition::Recorded(record) = duplicate else {
             std::panic::resume_unwind(Box::new("duplicate must not execute"));
         };
         assert_eq!(record.commands.len(), 1);
         assert!(record.commands[0].blocks_admission());
-        assert_eq!(record.status, crate::HostTurnStatus::InProgress);
+        assert_eq!(record.status, crate::recovery::HostTurnStatus::InProgress);
         store
             .interrupt(acquired.owner())
             .await

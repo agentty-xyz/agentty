@@ -1,5 +1,11 @@
-//! Explicit host policy and bounded results for Bash commands run through the
-//! host-selected executor.
+//! Sandboxed shell commands.
+//!
+//! Bash is the only tool that needs per-turn configuration: enable
+//! `Tool::Bash` in the policy and attach a [`BashConfig`] with
+//! `TurnOptions::with_bash`. [`BashConfig::new`] selects the native sandbox;
+//! [`BashConfig::for_executor`] selects a host [`BashExecutor`] such as
+//! [`UnsandboxedExecutor`]. Command intents are journaled before spawning and
+//! surface as [`CommandRecord`]s.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -11,7 +17,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::execution::BashExecutor;
+pub use crate::command_journal::{
+    CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
+};
+pub use crate::command_settlement::CommandSettlementError;
+pub use crate::execution::{
+    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
+    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
+};
 
 /// Identity recorded for the default native sandbox executor.
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
@@ -20,7 +33,7 @@ pub(crate) const NATIVE_EXECUTOR: &str = "native";
 /// values are inherited. Runtime libraries and executables require read grants.
 /// Grants and denials state policy; their enforcement is the selected
 /// executor's documented scope, and an unenforcing executor such as
-/// [`crate::UnsandboxedExecutor`] applies none of them.
+/// [`crate::bash::UnsandboxedExecutor`] applies none of them.
 /// The default native executor requires the matching `ag-harness-sandbox`
 /// launcher at a trusted location outside the command workspace;
 /// [`BashConfig::for_executor`] selects an explicit host executor instead.
@@ -238,7 +251,7 @@ impl BashConfig {
 
     /// Networking cannot be granted: the policy always denies it. Enforcing
     /// the denial is the selected executor's documented scope; an unenforcing
-    /// executor such as [`crate::UnsandboxedExecutor`] applies no network
+    /// executor such as [`crate::bash::UnsandboxedExecutor`] applies no network
     /// boundary of its own.
     ///
     /// # Errors

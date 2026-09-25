@@ -7,13 +7,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use ag_harness::lifecycle::TurnErrorType;
+use ag_harness::model::{
+    ModelCompletion, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
+};
+use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use ag_harness::store::{
+    AcquiredTurn, LoadedSession, MemoryStore, NewSession, SessionStore, SqliteStore, StoreIdentity,
+    TurnOwner, WriteRecord, WriteStatus,
+};
+use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
-    AcquiredTurn, FileSystem, Harness, HostRequest, HostTurnAcquisition, HostTurnRecord,
-    LoadedSession, LocalFileSystem, MemoryStore, Model, ModelCompletion, ModelError, ModelMessage,
-    ModelMetadata, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionError,
-    SessionStore, SqliteStore, StoreIdentity, Tool, ToolCall, ToolPolicy, TurnControl, TurnError,
-    TurnErrorType, TurnInput, TurnLimits, TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
-    WriteStatus,
+    Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
+    TurnError, TurnInput, TurnLimits, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -169,7 +175,7 @@ impl SessionStore for Gate {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &ag_harness::SessionCheckpoint,
+        checkpoint: &ag_harness::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
@@ -178,9 +184,9 @@ impl SessionStore for Gate {
         &self,
         id: &str,
         generation: i64,
-        identity: &ag_harness::ExecutionIdentity,
+        identity: &ag_harness::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::ModelCapabilities,
+        capabilities: ag_harness::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         self.store
             .switch_model(id, generation, identity, metadata, capabilities)
@@ -343,7 +349,7 @@ async fn cancellation_before_poll_and_unstarted_drop_do_not_execute() {
     // Arrange
     let probe = Arc::new(Probe::default());
     let harness = Harness::new(TestModel(Arc::clone(&probe)));
-    let turn = harness.run_once_controlled("wait", options());
+    let turn = harness.turn("wait", options()).start();
     let control = turn.control();
 
     // Act
@@ -355,7 +361,7 @@ async fn cancellation_before_poll_and_unstarted_drop_do_not_execute() {
         .await
         .expect("effects settled");
     control.retry_settlement().await.expect("no cleanup needed");
-    let unstarted = harness.run_once_controlled("wait", options());
+    let unstarted = harness.turn("wait", options()).start();
     let unstarted_control = unstarted.control();
     drop(unstarted);
     bounded(unstarted_control.effects_settled())
@@ -377,7 +383,7 @@ async fn one_shot_cancellation_drop_success_and_panic_settle_without_storage() {
     for prompt in ["wait", "ok", "panic"] {
         let probe = Arc::new(Probe::default());
         let harness = Harness::new(TestModel(Arc::clone(&probe)));
-        let mut turn = Box::pin(harness.run_once_controlled(prompt, options()));
+        let mut turn = Box::pin(harness.turn(prompt, options()).start());
         let control = turn.control();
 
         // Act
@@ -419,7 +425,7 @@ async fn abandoned_acquisition_keeps_admission_and_never_executes() {
                 .await
                 .expect("session");
             let mut successor = harness.resume(id).await.expect("successor");
-            let mut turn = Box::pin(session.send_controlled("ok", options()));
+            let mut turn = Box::pin(session.turn("ok").options(options()).start());
             let control = turn.control();
             tokio::select! {
                 result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -471,7 +477,7 @@ async fn terminal_acknowledgment_survives_cancellation_and_caller_drop() {
                 .expect("session");
             let mut successor = harness.resume(&id).await.expect("successor");
             let prompt = if phase == Phase::Fail { "fail" } else { "ok" };
-            let mut turn = Box::pin(session.send_controlled(prompt, options()));
+            let mut turn = Box::pin(session.turn(prompt).options(options()).start());
             let control = turn.control();
             tokio::select! {
                 result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -527,7 +533,7 @@ async fn cleanup_failure_is_observable_and_retry_is_owner_scoped() {
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_controlled("wait", options()));
+        let mut turn = Box::pin(session.turn("wait").options(options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -550,7 +556,7 @@ async fn cleanup_failure_is_observable_and_retry_is_owner_scoped() {
             .await
             .expect("cleanup recovered");
         bounded(control.settled()).await.expect("settled");
-        let next = session.send_controlled("ok", options());
+        let next = session.turn("ok").options(options()).start();
         let next_control = next.control();
         control.cancel();
         control.retry_settlement().await.expect("old retry inert");
@@ -575,7 +581,7 @@ async fn provider_drop_is_prompt_while_cleanup_stalls() {
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_controlled("wait", options()));
+        let mut turn = Box::pin(session.turn("wait").options(options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -680,7 +686,7 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let mut turn = Box::pin(session.turn("write").options(write_options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -728,7 +734,7 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
             session.writes().await.expect("journal")[0].status,
             WriteStatus::Applied
         );
-        let mut successor = Box::pin(session.send_controlled("wait", options()));
+        let mut successor = Box::pin(session.turn("wait").options(options()).start());
         let successor_control = successor.control();
         tokio::select! {
             result = &mut successor => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -758,7 +764,9 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
         let probe = Arc::new(Probe::default());
         let harness = Harness::new(TestModel(Arc::clone(&probe)))
             .store(gate.clone())
-            .execution_identity(ag_harness::ExecutionIdentity::new("model", "1").expect("identity"))
+            .execution_identity(
+                ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
+            )
             .repository(repository_with_host_git(root.path()))
             .file_system(DeferredReplacement {
                 entered: entered.clone(),
@@ -772,8 +780,10 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
             .expect("session");
         let mut turn = Box::pin(
             session
-                .submit_controlled("write-id", "write", write_options())
-                .expect("turn"),
+                .turn("write")
+                .options(write_options())
+                .host_id("write-id")
+                .start(),
         );
         let control = turn.control();
         tokio::select! {
@@ -794,18 +804,30 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
 
         // Assert
         assert!(matches!(
-            session.submit("write-id", "write", write_options()).await,
+            session
+                .turn("write")
+                .options(write_options())
+                .host_id("write-id")
+                .await,
             Err(SessionError::HostTurnStopped(_))
         ));
         assert!(matches!(
-            session.submit("successor", "ok", options()).await,
+            session
+                .turn("ok")
+                .options(options())
+                .host_id("successor")
+                .await,
             Err(SessionError::Busy { .. })
         ));
         release.notify_one();
         bounded(gate.entered.notified()).await;
         effects_pending(&control).await;
         assert!(matches!(
-            session.submit("successor", "ok", options()).await,
+            session
+                .turn("ok")
+                .options(options())
+                .host_id("successor")
+                .await,
             Err(SessionError::Busy { .. })
         ));
         gate.release.notify_one();
@@ -820,7 +842,9 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
         assert_eq!(record.writes[0].status, WriteStatus::Applied);
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         session
-            .submit("successor", "ok", options())
+            .turn("ok")
+            .options(options())
+            .host_id("successor")
             .await
             .expect("successor after effect settlement");
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
@@ -841,7 +865,7 @@ async fn cancelled_intent_does_not_start_replacement() {
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let mut turn = Box::pin(session.turn("write").options(write_options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -887,7 +911,7 @@ async fn dropped_ordinary_turn_retains_replacement_and_admission() {
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_with_options("write", write_options()));
+        let mut turn = session.turn("write").options(write_options()).into_future();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
             () = entered.notified() => {},
@@ -941,7 +965,7 @@ async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() 
             .create()
             .await
             .expect("session");
-        let mut turn = Box::pin(session.send_controlled("write", write_options()));
+        let mut turn = Box::pin(session.turn("write").options(write_options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -989,7 +1013,7 @@ async fn one_shot_drop_retains_effect_completion() {
             finished: Arc::new(Notify::new()),
             release: release.clone(),
         });
-    let mut turn = Box::pin(harness.run_once_controlled("write", write_options()));
+    let mut turn = Box::pin(harness.turn("write", write_options()).start());
     let control = turn.control();
     tokio::select! {
         result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -1030,7 +1054,7 @@ async fn stalled_renewal_and_terminal_persistence_keep_hard_deadlines() {
             .await
             .expect("session");
         let prompt = if phase == Phase::Renew { "wait" } else { "ok" };
-        let mut turn = Box::pin(session.send_controlled(prompt, options()));
+        let mut turn = Box::pin(session.turn(prompt).options(options()).start());
         let control = turn.control();
         tokio::select! {
             result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -1060,7 +1084,7 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
         .expect("session");
 
     // Act
-    let cancelled = session.send_controlled("wait", options());
+    let cancelled = session.turn("wait").options(options()).start();
     let control = cancelled.control();
     control.cancel();
     assert!(matches!(
@@ -1068,13 +1092,13 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
         Err(SessionError::Turn(TurnError::Cancelled))
     ));
     bounded(control.settled()).await.expect("settled");
-    let success = session.send_controlled("ok", options());
+    let success = session.turn("ok").options(options()).start();
     let success_control = success.control();
     bounded(success).await.expect("success");
     bounded(success_control.settled())
         .await
         .expect("success settled");
-    let failure = session.send_controlled("fail", options());
+    let failure = session.turn("fail").options(options()).start();
     let failure_control = failure.control();
     assert!(matches!(
         bounded(failure).await,
@@ -1150,7 +1174,7 @@ async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission()
                 .create()
                 .await
                 .expect("session");
-            let turn = session.send_controlled("write", write_options());
+            let turn = session.turn("write").options(write_options()).start();
             let control = turn.control();
 
             // Act
@@ -1216,7 +1240,7 @@ async fn lease_loss_settles_persistence_before_retained_replacement() {
         .create()
         .await
         .expect("session");
-    let mut turn = Box::pin(session.send_controlled("write", write_options()));
+    let mut turn = Box::pin(session.turn("write").options(write_options()).start());
     let control = turn.control();
     tokio::select! {
         result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
@@ -1263,7 +1287,7 @@ async fn successful_controlled_writes_acknowledge_both_boundaries() {
             .create()
             .await
             .expect("session");
-        let turn = session.send_controlled("write", write_options());
+        let turn = session.turn("write").options(write_options()).start();
         let control = turn.control();
 
         // Act
@@ -1298,7 +1322,7 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
             let harness = Harness::new(TestModel(Arc::clone(&probe)))
                 .store(gate.clone())
                 .execution_identity(
-                    ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+                    ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
                 );
             let mut session = harness
                 .session(format!("host-ack-{index}"), schema())
@@ -1308,8 +1332,10 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
             let mut retry = harness.resume(session.id()).await.expect("retry");
             let mut turn = Box::pin(
                 session
-                    .submit_controlled("host-id", "ok", options())
-                    .expect("controlled"),
+                    .turn("ok")
+                    .options(options())
+                    .host_id("host-id")
+                    .start(),
             );
             let control = turn.control();
 
@@ -1319,7 +1345,7 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
                 () = bounded(gate.entered.notified()) => {},
             }
             if phase != Phase::Acquire {
-                let duplicate = retry.submit("host-id", "ok", options()).await;
+                let duplicate = retry.turn("ok").options(options()).host_id("host-id").await;
                 if phase == Phase::CompleteAck {
                     assert!(duplicate.is_ok());
                 } else {
@@ -1342,20 +1368,20 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
                 .await
                 .expect("recover")
                 .expect("record");
-            let repeated = retry.submit("host-id", "ok", options()).await;
+            let repeated = retry.turn("ok").options(options()).host_id("host-id").await;
 
             // Assert
             if matches!(phase, Phase::Complete | Phase::CompleteAck) {
                 assert!(matches!(
                     record.status,
-                    ag_harness::HostTurnStatus::Completed(_)
+                    ag_harness::recovery::HostTurnStatus::Completed(_)
                 ));
                 assert!(repeated.is_ok());
                 assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
             } else {
                 assert!(matches!(
                     record.status,
-                    ag_harness::HostTurnStatus::Interrupted { .. }
+                    ag_harness::recovery::HostTurnStatus::Interrupted { .. }
                 ));
                 assert!(matches!(repeated, Err(SessionError::HostTurnStopped(_))));
                 assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
@@ -1373,7 +1399,7 @@ async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
         let harness = Harness::new(TestModel(Arc::clone(&probe)))
             .store(gate.clone())
             .execution_identity(
-                ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+                ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
             );
         let mut first = harness
             .session("queued-host", schema())
@@ -1381,11 +1407,7 @@ async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
             .await
             .expect("session");
         let mut retry = harness.resume(first.id()).await.expect("retry");
-        let mut turn = Box::pin(
-            first
-                .submit_controlled("id", "wait", options())
-                .expect("turn"),
-        );
+        let mut turn = Box::pin(first.turn("wait").options(options()).host_id("id").start());
         let control = turn.control();
 
         // Act
@@ -1394,11 +1416,7 @@ async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
             () = bounded(gate.entered.notified()) => {},
         }
         bounded(gate.lookup.notified()).await;
-        let mut duplicate = Box::pin(
-            retry
-                .submit_controlled("id", "wait", options())
-                .expect("retry"),
-        );
+        let mut duplicate = Box::pin(retry.turn("wait").options(options()).host_id("id").start());
         tokio::select! {
             result = &mut duplicate => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
             () = bounded(gate.lookup.notified()) => {},
@@ -1429,16 +1447,14 @@ async fn host_acquisition_panic_releases_admission_without_execution() {
         let harness = Harness::new(TestModel(Arc::clone(&probe)))
             .store(gate)
             .execution_identity(
-                ag_harness::ExecutionIdentity::new("model", "1").expect("identity"),
+                ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
             );
         let mut session = harness
             .session("panic-host", schema())
             .create()
             .await
             .expect("session");
-        let turn = session
-            .submit_controlled("id", "ok", options())
-            .expect("turn");
+        let turn = session.turn("ok").options(options()).host_id("id").start();
         let control = turn.control();
 
         // Act

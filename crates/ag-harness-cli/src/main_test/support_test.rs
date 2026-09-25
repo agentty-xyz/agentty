@@ -16,10 +16,10 @@ pub(super) struct FixedModel(pub(super) Value);
 impl ag_harness::Model for FixedModel {
     async fn complete(
         &self,
-        _request: ag_harness::ModelRequest,
-    ) -> Result<ag_harness::ModelCompletion, ag_harness::ModelError> {
-        Ok(ag_harness::ModelCompletion::from_response(
-            ag_harness::ModelResponse::Output(self.0.clone()),
+        _request: ag_harness::model::ModelRequest,
+    ) -> Result<ag_harness::model::ModelCompletion, ag_harness::ModelError> {
+        Ok(ag_harness::model::ModelCompletion::from_response(
+            ag_harness::model::ModelResponse::Output(self.0.clone()),
         ))
     }
 }
@@ -32,14 +32,14 @@ pub(super) struct FailOnceModel {
 impl ag_harness::Model for FailOnceModel {
     async fn complete(
         &self,
-        _request: ag_harness::ModelRequest,
-    ) -> Result<ag_harness::ModelCompletion, ag_harness::ModelError> {
+        _request: ag_harness::model::ModelRequest,
+    ) -> Result<ag_harness::model::ModelCompletion, ag_harness::ModelError> {
         if self.requests.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(ag_harness::ModelError::InvalidResponse);
         }
 
-        Ok(ag_harness::ModelCompletion::from_response(
-            ag_harness::ModelResponse::Output(json!({"message": "recovered"})),
+        Ok(ag_harness::model::ModelCompletion::from_response(
+            ag_harness::model::ModelResponse::Output(json!({"message": "recovered"})),
         ))
     }
 }

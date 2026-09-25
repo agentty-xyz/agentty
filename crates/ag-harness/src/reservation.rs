@@ -21,11 +21,11 @@ use tokio::time::Instant;
 use crate::cancellation::{Settlement, SettlementLease};
 use crate::effect::Effects;
 use crate::input::TurnInput;
+use crate::model::{ModelMessage, ModelMetadata};
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::session::{AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner};
-use crate::{
-    HostRequest, HostTurnAcquisition, HostTurnRecord, ModelMessage, ModelMetadata, SessionError,
-    SessionStore, TurnError, TurnOptions, TurnOutcome, WriteRecord,
-};
+use crate::store::{SessionStore, WriteRecord};
+use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
 pub(crate) const TURN_LEASE_RENEWAL_INTERVAL_SECONDS: u64 = 100;
@@ -38,7 +38,7 @@ pub(crate) async fn switch_model(
     store: Arc<dyn SessionStore>,
     id: String,
     generation: i64,
-    registration: crate::ModelRegistration,
+    registration: crate::model::ModelRegistration,
 ) -> Result<i64, SessionError> {
     recover_session(store.identity(), &id).await?;
     let admission = admit(store.identity(), &id)?;
@@ -178,7 +178,7 @@ impl WriteJournal {
 
     pub(crate) async fn command_intent(
         &self,
-        intent: &crate::CommandIntent,
+        intent: &crate::bash::CommandIntent,
     ) -> Result<i64, SessionError> {
         self.database.command_intent(&self.owner, intent).await
     }
@@ -186,7 +186,7 @@ impl WriteJournal {
     pub(crate) async fn finish_command(
         &self,
         id: i64,
-        outcome: &crate::CommandOutcome,
+        outcome: &crate::bash::CommandOutcome,
     ) -> Result<(), SessionError> {
         self.database.finish_command(&self.owner, id, outcome).await
     }
@@ -569,14 +569,14 @@ impl SessionStore for AdmittedStore {
     async fn load_commands(
         &self,
         session: &str,
-    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    ) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
         self.store.load_commands(session).await
     }
 
     async fn command_intent(
         &self,
         owner: &TurnOwner,
-        intent: &crate::CommandIntent,
+        intent: &crate::bash::CommandIntent,
     ) -> Result<i64, SessionError> {
         self.store.command_intent(owner, intent).await
     }
@@ -585,7 +585,7 @@ impl SessionStore for AdmittedStore {
         &self,
         owner: &TurnOwner,
         id: i64,
-        outcome: &crate::CommandOutcome,
+        outcome: &crate::bash::CommandOutcome,
     ) -> Result<(), SessionError> {
         self.store.finish_command(owner, id, outcome).await
     }
@@ -615,9 +615,9 @@ impl SessionStore for AdmittedStore {
         &self,
         id: &str,
         generation: i64,
-        identity: &crate::ExecutionIdentity,
+        identity: &crate::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         self.store
             .switch_model(id, generation, identity, metadata, capabilities)
@@ -654,7 +654,7 @@ impl SessionStore for AdmittedStore {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &crate::SessionCheckpoint,
+        checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }

@@ -98,7 +98,7 @@ impl TurnControl {
     /// Snapshots observed command outcomes in invocation order. `None` means no
     /// outcome has been observed, including a still-running invocation. Content
     /// may contain secrets; this is host inspection data, never telemetry.
-    pub fn command_outcomes(&self) -> Vec<Option<crate::CommandOutcome>> {
+    pub fn command_outcomes(&self) -> Vec<Option<crate::bash::CommandOutcome>> {
         self.effects.commands().outcomes()
     }
 
@@ -108,7 +108,7 @@ impl TurnControl {
     ///
     /// # Errors
     /// Returns an error for unresolved cleanup or command outcome recording.
-    pub async fn commands_settled(&self) -> Result<(), crate::CommandSettlementError> {
+    pub async fn commands_settled(&self) -> Result<(), crate::bash::CommandSettlementError> {
         self.effects.commands().settled().await
     }
 
@@ -118,7 +118,7 @@ impl TurnControl {
     /// # Errors
     /// Returns an error when execution is still active or cleanup/recording
     /// fails.
-    pub async fn retry_commands(&self) -> Result<(), crate::CommandSettlementError> {
+    pub async fn retry_commands(&self) -> Result<(), crate::bash::CommandSettlementError> {
         self.effects.commands().retry().await
     }
 

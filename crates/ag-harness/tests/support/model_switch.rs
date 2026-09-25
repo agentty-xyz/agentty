@@ -2,11 +2,14 @@
 
 use std::sync::{Arc, Mutex};
 
-use ag_harness::{
-    ExecutionIdentity, Harness, Model, ModelCapabilities, ModelCompletion, ModelError,
-    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse, NewSession,
-    SessionError, SqliteStore, ToolCall, TurnInput,
+use ag_harness::model::{
+    ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest,
+    ModelResponse,
 };
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::{NewSession, SqliteStore};
+use ag_harness::tool::ToolCall;
+use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -97,7 +100,9 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
             .expect("session");
         let mut stale = harness.resume("switch").await.expect("stale handle");
         let original = session
-            .submit("first", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("first")
             .await
             .expect("first turn");
 
@@ -107,7 +112,9 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
             .await
             .expect("switch to b");
         let recorded = stale
-            .submit("first", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("first")
             .await
             .expect("retry on stale handle");
         assert_eq!(recorded.output(), original.output());
@@ -120,11 +127,17 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
             Err(SessionError::StaleModel { .. })
         ));
         assert!(matches!(
-            session.submit("first", "hello", options()).await,
+            session
+                .turn("hello")
+                .options(options())
+                .host_id("first")
+                .await,
             Err(SessionError::HostTurnConflict)
         ));
         session
-            .submit("second", "continue", options())
+            .turn("continue")
+            .options(options())
+            .host_id("second")
             .await
             .expect("b turn");
         session
@@ -136,12 +149,16 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
             Err(SessionError::StaleModel { .. })
         ));
         session
-            .submit("first", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("first")
             .await
             .expect("retry after ABA");
         let mut resumed = harness.resume("switch").await.expect("resume a");
         resumed
-            .send_controlled("third", options())
+            .turn("third")
+            .options(options())
+            .start()
             .await
             .expect("controlled a turn");
 
@@ -428,7 +445,9 @@ async fn switching_survives_sqlite_reopen() {
         .await
         .expect("session");
     session
-        .submit("first", "hello", options())
+        .turn("hello")
+        .options(options())
+        .host_id("first")
         .await
         .expect("turn");
 
@@ -453,7 +472,9 @@ async fn switching_survives_sqlite_reopen() {
         .database(&path);
     let mut session = harness.resume("switch").await.expect("resume a");
     session
-        .submit("first", "hello", options())
+        .turn("hello")
+        .options(options())
+        .host_id("first")
         .await
         .expect("recorded retry");
     session.send("a again").await.expect("a turn");
@@ -641,7 +662,7 @@ async fn switching_checks_adapter_schema_without_network_access() {
     registry
         .register(
             ExecutionIdentity::new("builtin", "1").expect("identity"),
-            ag_harness::ModelClient::muse(ag_harness::MuseConfig {
+            ag_harness::model::ModelClient::muse(ag_harness::provider::MuseConfig {
                 api_key: "test".into(),
                 base_url: server.uri(),
                 model: "muse-spark-1.3".into(),
@@ -747,7 +768,9 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
             .expect("complete");
         drop(acquired);
         session
-            .submit("before", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("before")
             .await
             .expect("original request");
 
@@ -762,7 +785,9 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
             .await
             .expect("switch back");
         session
-            .submit("before", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("before")
             .await
             .expect("original fingerprint retains host override");
 

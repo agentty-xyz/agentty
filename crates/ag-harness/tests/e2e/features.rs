@@ -10,12 +10,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ag_harness::bash::{BashConfig, CommandTermination, UnsandboxedExecutor};
+use ag_harness::model::{
+    ContextBudget, ContextEstimator, HeuristicContextEstimator, ModelCapabilities, ModelClient,
+    ModelMessage, ModelRegistry,
+};
+use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
+use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::{
-    BashConfig, CommandTermination, ContextBudget, ContextEstimator, ExecutionIdentity, Harness,
-    HeuristicContextEstimator, HostTurnStatus, KimiConfig, MUSE_SPARK_1_3, ModelCapabilities,
-    ModelClient, ModelMessage, ModelRegistry, MuseConfig, OutputSchema, QWEN_PLUS, QwenConfig,
-    Repository, Session, SessionError, Tool, ToolPolicy, TurnError, TurnLimits, TurnOptions,
-    UnsandboxedExecutor,
+    Harness, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy, TurnError,
+    TurnLimits, TurnOptions,
 };
 use serde_json::{Value, json};
 
@@ -800,7 +804,8 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
     for (index, step) in steps.iter().enumerate() {
         provider.pace().await;
         let outcome = session
-            .send_with_options(bash_prompt(step.command), bash_options(executor, step)?)
+            .turn(bash_prompt(step.command))
+            .options(bash_options(executor, step)?)
             .await
             .map_err(|error| format!("{} turn failed: {error}", step.label))?;
         let commands = session.commands().await?;
@@ -948,7 +953,7 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
     let harness = Harness::new(provider.client()?)
         .execution_identity(ExecutionIdentity::new("live-image", "1")?)
         .max_history_bytes(NonZeroUsize::new(4 * 1024 * 1024).ok_or("history")?)
-        .store(Arc::new(ag_harness::MemoryStore::new()));
+        .store(Arc::new(ag_harness::store::MemoryStore::new()));
     let options = TurnOptions::new(
         vision::color_schema()?,
         ToolPolicy::default(),
@@ -960,21 +965,17 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
         .await?;
     provider.pace().await;
     let first = session
-        .submit(
-            "req-1",
-            vision::colored_images(vision::REPORT)?,
-            options.clone(),
-        )
+        .turn(vision::colored_images(vision::REPORT)?)
+        .options(options.clone())
+        .host_id("req-1")
         .await?;
     vision::assert_colors(first.output(), &format!("{} host request", provider.name()))?;
 
     let started = Instant::now();
     let retry = session
-        .submit(
-            "req-1",
-            vision::colored_images(vision::REPORT)?,
-            options.clone(),
-        )
+        .turn(vision::colored_images(vision::REPORT)?)
+        .options(options.clone())
+        .host_id("req-1")
         .await?;
     let retry_elapsed = started.elapsed();
     if retry != first || retry_elapsed > Duration::from_millis(500) {
@@ -991,7 +992,11 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
     // Different image content under the same host ID must conflict.
     let mut swapped = vision::colored_images(vision::REPORT)?;
     swapped = ag_harness::TurnInput::from_blocks(swapped.blocks().iter().rev().cloned().collect())?;
-    let conflict = session.submit("req-1", swapped, options.clone()).await;
+    let conflict = session
+        .turn(swapped)
+        .options(options.clone())
+        .host_id("req-1")
+        .await;
     if !matches!(conflict, Err(SessionError::HostTurnConflict)) {
         return Err(format!(
             "changed images did not conflict: {:?}",
@@ -1002,7 +1007,11 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
 
     // Text-only follow-up replays the image history.
     provider.pace().await;
-    let follow_up = session.submit("req-2", vision::RECALL, options).await?;
+    let follow_up = session
+        .turn(vision::RECALL)
+        .options(options)
+        .host_id("req-2")
+        .await?;
     vision::assert_colors(
         follow_up.output(),
         &format!("{} replayed after recovery", provider.name()),

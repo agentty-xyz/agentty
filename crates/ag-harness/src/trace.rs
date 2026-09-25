@@ -16,9 +16,9 @@ const TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES: usize = 128;
 /// spans.
 ///
 /// Install an OpenTelemetry tracer provider before operations start, then
-/// attach one observer to a [`crate::Harness`] or [`crate::ModelClient`].
-/// Applications retain ownership of exporter configuration, flushing, and
-/// shutdown.
+/// attach one observer to a [`crate::Harness`] or
+/// [`crate::model::ModelClient`]. Applications retain ownership of exporter
+/// configuration, flushing, and shutdown.
 pub struct LifecycleTraceObserver {
     state: Mutex<TraceState>,
 }

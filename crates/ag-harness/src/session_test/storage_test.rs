@@ -8,9 +8,9 @@ use super::support::{
 };
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
-use crate::store::SessionStore as _;
+use crate::store::{SessionCheckpoint, SessionStore as _};
 use crate::store_conformance_test::image_input;
-use crate::{SessionCheckpoint, ToolCall};
+use crate::tool::ToolCall;
 
 #[test]
 fn session_config_exposes_values_and_system_prompt() {

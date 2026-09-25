@@ -1,11 +1,11 @@
 use std::sync::{Arc, Mutex};
 
+use crate::TurnInput;
+use crate::bash::CommandIntent;
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::reservation::{AdmittedStore, admit};
+use crate::store::{NewSession, SessionStore};
 use crate::store_conformance_test::{lifecycle, options, schema, stores};
-use crate::{
-    CommandIntent, HostRequest, HostTurnAcquisition, HostTurnStatus, NewSession, SessionStore,
-    TurnInput,
-};
 
 #[tokio::test]
 async fn admission_decorator_forwards_the_complete_store_contract() {
@@ -25,9 +25,9 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
             .switch_model(
                 "session",
                 0,
-                &crate::ExecutionIdentity::new("next", "1").expect("identity"),
+                &crate::recovery::ExecutionIdentity::new("next", "1").expect("identity"),
                 None,
-                crate::ModelCapabilities {
+                crate::model::ModelCapabilities {
                     context_budget: None,
                     image_input: false,
                     native_continuation: true,
@@ -36,7 +36,7 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
             )
             .await
             .expect("switch through decorator");
-        let checkpoint = crate::SessionCheckpoint::new(
+        let checkpoint = crate::store::SessionCheckpoint::new(
             0,
             1,
             None,

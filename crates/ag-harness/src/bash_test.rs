@@ -3,12 +3,14 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::command_journal::CommandCleanupScope;
-use crate::{
-    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, ExecutionError, OutputSchema,
-    StoredTurnOptions, Tool, ToolCall, ToolCallArguments, ToolDefinition, ToolPolicy, TurnLimits,
-    TurnOptions, UnsandboxedExecutor,
+use crate::bash::{
+    BashArguments, BashConfig, BashError, BashExecutor, BashProcess, ExecutionError,
+    UnsandboxedExecutor,
 };
+use crate::command_journal::CommandCleanupScope;
+use crate::store::StoredTurnOptions;
+use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
+use crate::{OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions};
 
 fn configuration() -> BashConfig {
     BashConfig::new(

@@ -108,7 +108,7 @@ fn single_line_terminal_text_replaces_all_control_characters() {
 #[test]
 fn usage_format_marks_missing_counts() {
     // Arrange
-    let usage = ag_harness::CompletionUsage::new(None, None, None, Some(4), None, None);
+    let usage = ag_harness::model::CompletionUsage::new(None, None, None, Some(4), None, None);
 
     // Act
     let formatted = format_usage(&usage);

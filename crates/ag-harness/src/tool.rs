@@ -1,10 +1,20 @@
+//! Built-in repository tools and their typed arguments.
+//!
+//! Tools are denied by default; enable them with `Harness::allow` or a
+//! `ToolPolicy` in `TurnOptions`. Repository access goes through a validated
+//! `Repository` and an injectable [`FileSystem`].
+
 use std::fmt;
 use std::num::NonZeroU64;
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Number, Value, json};
 
-use crate::{BashArguments, ComparisonBase, model, schema_contract};
+use crate::bash::BashArguments;
+pub use crate::file_system::{FileSystem, LocalFileSystem};
+pub use crate::read::{ReadError, ReadOutput};
+pub use crate::write::{WriteError, WriteOutput};
+use crate::{ComparisonBase, model, schema_contract};
 
 const READ_DESCRIPTION: &str = concat!(
     "Inspect the repository with one bounded read-only action. Use `file` with `path` and ",

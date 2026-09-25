@@ -1,3 +1,10 @@
+//! The model boundary and model selection.
+//!
+//! Implement [`Model`] to plug in any provider, or use the built-in clients in
+//! [`crate::provider`]. [`ModelRegistry`] selects models by stable host keys
+//! with declared [`ModelCapabilities`], and [`ContextBudget`] enables
+//! model-aware history projection.
+
 use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
@@ -7,8 +14,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+pub use crate::context::{
+    ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator,
+};
 use crate::input::TurnInput;
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
+pub use crate::model_registry::{
+    ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
+};
 use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
 use crate::{chat_completion, telemetry, tool};

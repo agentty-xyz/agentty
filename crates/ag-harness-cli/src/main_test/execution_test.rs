@@ -1,6 +1,6 @@
 use std::env;
 
-use ag_harness::ModelConfigurationError;
+use ag_harness::provider::ModelConfigurationError;
 use serde_json::json;
 use tokio::io::BufReader;
 use wiremock::matchers::{body_string_contains, method, path};

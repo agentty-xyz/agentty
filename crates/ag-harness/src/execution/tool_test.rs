@@ -4,14 +4,13 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 
 use super::{BashTool, command_outcome};
+use crate::TurnError;
+use crate::bash::{BashArguments, BashConfig, BashError, CommandCleanupScope, CommandTermination};
 use crate::command_settlement::Commands;
 use crate::execution::contract::{
     Execution, ExecutionCommand, ExecutionControl, ExecutionError, ExecutionPolicy,
     ExecutionResult, Executor, Limits, MainExit, Output, OutputStream, PreparedExecution,
     Termination,
-};
-use crate::{
-    BashArguments, BashConfig, BashError, CommandCleanupScope, CommandTermination, TurnError,
 };
 
 struct FailingExecutor {

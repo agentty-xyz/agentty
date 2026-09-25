@@ -14,12 +14,10 @@ use crate::file_system::{FileSystem, LocalFileSystem, MockFileSystem};
 use crate::reservation::TurnGuard;
 use crate::session::{Database, NewSession, SessionError, WriteRecordRow};
 use crate::store::SessionStore as _;
-use crate::tool::WriteArguments;
+use crate::tool::{WriteArguments, WriteError};
 use crate::write::WriteTool;
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
-use crate::{
-    ModelError, OutputSchema, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions, WriteError,
-};
+use crate::{ModelError, OutputSchema, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions};
 
 async fn fixture() -> (Database, TurnGuard) {
     let database = Database::open_in_memory().await.expect("database");

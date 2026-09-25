@@ -13,12 +13,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
+use ag_harness::store::{
+    AcquiredTurn, MemoryStore, NewSession, SessionCheckpoint, SessionStore, SqliteStore,
+    StoreIdentity, StoredTurnOptions, TurnOwner, WriteStatus,
+};
 use ag_harness::{
-    AcquiredTurn, CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination, Harness,
-    ImageContent, ImageMediaType, InputBlock, MemoryStore, Model, ModelCompletion, ModelError,
-    ModelMessage, ModelRequest, ModelResponse, NewSession, OutputSchema, SessionCheckpoint,
-    SessionError, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, ToolPolicy,
-    TurnError, TurnInput, TurnLimits, TurnOptions, TurnOwner, WriteStatus,
+    Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
+    SessionError, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -856,7 +859,8 @@ async fn bounded_history_and_continuation_policy_are_shared() {
             TurnLimits::default(),
         );
         session
-            .send_with_options("three", changed)
+            .turn("three")
+            .options(changed)
             .await
             .expect("changed");
 
@@ -1198,8 +1202,8 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
             .await
             .expect("intent");
         store.interrupt(turn.owner()).await.expect("stop owner");
-        let identity = ag_harness::ExecutionIdentity::new("next", "1").expect("identity");
-        let capabilities = ag_harness::ModelCapabilities {
+        let identity = ag_harness::recovery::ExecutionIdentity::new("next", "1").expect("identity");
+        let capabilities = ag_harness::model::ModelCapabilities {
             context_budget: None,
             image_input: false,
             native_continuation: false,

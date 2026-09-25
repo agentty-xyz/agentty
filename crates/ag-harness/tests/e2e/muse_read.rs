@@ -3,7 +3,8 @@
 use std::io::{self, Write as _};
 use std::path::PathBuf;
 
-use ag_harness::{Harness, MUSE_SPARK_1_3, Muse, OutputSchema, Repository, Tool};
+use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+use ag_harness::{Harness, OutputSchema, Repository, Tool};
 use serde_json::json;
 
 use crate::DynError;

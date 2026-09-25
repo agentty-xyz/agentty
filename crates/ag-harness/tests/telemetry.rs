@@ -9,10 +9,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ag_harness::{
-    Harness, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, Model, ModelClient,
-    ModelCompletion, ModelError, ModelMetadata, ModelRequest, OutputSchema, Tool, ToolDefinition,
-};
+use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver};
+use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest};
+use ag_harness::tool::ToolDefinition;
+use ag_harness::{Harness, Model, ModelError, OutputSchema, Tool};
 use async_trait::async_trait;
 use opentelemetry::{KeyValue, global};
 use opentelemetry_otlp::{MetricExporter, Protocol, SpanExporter, WithExportConfig};
@@ -110,8 +110,8 @@ impl Model for PolicyDenialModel {
     }
 }
 
-fn client(server: &MockServer, model: &str) -> ag_harness::ModelClient {
-    ag_harness::ModelClient::qwen(ag_harness::QwenConfig {
+fn client(server: &MockServer, model: &str) -> ag_harness::model::ModelClient {
+    ag_harness::model::ModelClient::qwen(ag_harness::provider::QwenConfig {
         api_key: "test-key".to_string(),
         base_url: server.uri(),
         model: model.to_string(),
@@ -119,8 +119,8 @@ fn client(server: &MockServer, model: &str) -> ag_harness::ModelClient {
     .expect("fixture configuration should be valid")
 }
 
-fn request(prompt: &str) -> ag_harness::ModelRequest {
-    ag_harness::ModelRequest::new(
+fn request(prompt: &str) -> ag_harness::model::ModelRequest {
+    ag_harness::model::ModelRequest::new(
         prompt,
         ag_harness::OutputSchema::new(json!({
             "type": "object",
@@ -1654,7 +1654,7 @@ async fn mount_lifecycle_responses(server: &MockServer, pending_started: Arc<Not
 }
 
 fn lifecycle_harness(server: &MockServer, repository: &std::path::Path) -> Harness {
-    let client = ModelClient::qwen(ag_harness::QwenConfig {
+    let client = ModelClient::qwen(ag_harness::provider::QwenConfig {
         api_key: "lifecycle-test-key".to_string(),
         base_url: server.uri(),
         model: OTLP_MODEL.to_string(),
