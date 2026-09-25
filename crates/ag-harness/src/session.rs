@@ -19,15 +19,15 @@ use tokio::time::Instant;
 use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
+use crate::recovery::{
+    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
+};
 use crate::reservation::{TURN_LEASE_SECONDS, TurnGuard, lease_deadline};
 use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
-use crate::{
-    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
-    OutputSchema, OutputSchemaError, TurnError, TurnOptions, TurnOutcome,
-};
+use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOptions, TurnOutcome};
 
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -757,7 +757,7 @@ impl SessionStore for Database {
     async fn load_commands(
         &self,
         session_id: &str,
-    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    ) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
         let mut connection = self.pool.acquire().await.session_context("load commands")?;
         load_turn_configuration(&mut connection, session_id).await?;
         load_commands_from(&mut connection, &self.identity, session_id, None).await
@@ -766,7 +766,7 @@ impl SessionStore for Database {
     async fn command_intent(
         &self,
         owner: &TurnOwner,
-        intent: &crate::CommandIntent,
+        intent: &crate::bash::CommandIntent,
     ) -> Result<i64, SessionError> {
         self.validate_owner(owner)?;
         let intent = serialize_payload(intent)?;
@@ -802,7 +802,7 @@ impl SessionStore for Database {
         &self,
         owner: &TurnOwner,
         id: i64,
-        outcome: &crate::CommandOutcome,
+        outcome: &crate::bash::CommandOutcome,
     ) -> Result<(), SessionError> {
         self.validate_owner(owner)?;
         let unresolved = outcome.cleanup_failed;
@@ -1060,7 +1060,7 @@ ON CONFLICT(session_id) DO UPDATE SET
         generation: i64,
         identity: &ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         let next = crate::session_model::next_generation(generation)?;
         let operation = "switch session model";
@@ -1445,7 +1445,7 @@ pub enum SessionError {
     },
     /// The host selected a key absent from its registry.
     #[error(transparent)]
-    Registry(#[from] crate::ModelRegistryError),
+    Registry(#[from] crate::model::ModelRegistryError),
     /// The harness's registration differs from the session's current
     /// selection.
     #[error("persistent session `{id}` has a different model registration")]
@@ -1462,10 +1462,10 @@ pub enum SessionError {
     HostTurnConflict,
     /// The matching request remains active; no duplicate execution was started.
     #[error("host turn is in progress")]
-    HostTurnInProgress(Box<crate::HostTurnRecord>),
+    HostTurnInProgress(Box<crate::recovery::HostTurnRecord>),
     /// Failed/interrupted requests are inspectable, never automatically rerun.
     #[error("host turn has stopped; an explicit new attempt requires a new ID")]
-    HostTurnStopped(Box<crate::HostTurnRecord>),
+    HostTurnStopped(Box<crate::recovery::HostTurnRecord>),
     /// A host-provided store failed without requiring a SQLite error type.
     #[error("session store operation `{operation}` failed: {source}")]
     Store {
@@ -1666,8 +1666,8 @@ pub struct LoadedSession {
 
 impl LoadedSession {
     /// Returns the current selection for immutable turn provenance.
-    pub fn recorded_model(&self) -> crate::RecordedModel {
-        crate::RecordedModel {
+    pub fn recorded_model(&self) -> crate::store::RecordedModel {
+        crate::store::RecordedModel {
             generation: self.model_generation,
             model: self.model.clone(),
             provider: self.provider.clone(),
@@ -2081,7 +2081,7 @@ async fn load_request_from(
         model: row
             .model_snapshot
             .as_deref()
-            .map(crate::RecordedModel::decode)
+            .map(crate::store::RecordedModel::decode)
             .transpose()?,
         request,
         status,
@@ -2099,7 +2099,7 @@ struct SwitchMessageRow {
 async fn check_switch_history(
     connection: &mut SqliteConnection,
     id: &str,
-    capabilities: crate::ModelCapabilities,
+    capabilities: crate::model::ModelCapabilities,
 ) -> Result<(), SessionError> {
     let mut after = 0;
     loop {
@@ -2553,7 +2553,7 @@ async fn load_commands_from(
     identity: &StoreIdentity,
     session_id: &str,
     position: Option<i64>,
-) -> Result<Vec<crate::CommandRecord>, SessionError> {
+) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
     let rows = sqlx::query_as::<_, CommandRow>(
         "SELECT id, intent, outcome, owner_token, reconciled, turn_position FROM session_command \
          WHERE session_id = ? AND (? IS NULL OR turn_position = ?) ORDER BY id",
@@ -2566,7 +2566,7 @@ async fn load_commands_from(
     .session_context("load command records")?;
     rows.into_iter()
         .map(|row| {
-            Ok(crate::CommandRecord {
+            Ok(crate::bash::CommandRecord {
                 id: row.id,
                 intent: deserialize_payload(&row.intent)?,
                 outcome: row

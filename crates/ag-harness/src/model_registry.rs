@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::{ContextBudget, ExecutionIdentity, Model, ModelMetadata, TurnInput};
+use crate::model::{ContextBudget, ModelMetadata};
+use crate::recovery::ExecutionIdentity;
+use crate::{Model, TurnInput};
 
 /// Host-declared capabilities of a registered adapter, not tool permissions.
 ///

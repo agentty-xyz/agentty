@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
+use std::future::{Future, IntoFuture};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -18,14 +20,15 @@ use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnL
 use crate::model::{Model, ModelError, ModelMessage, ModelRequest, ReasoningEffort};
 use crate::model_registry::{ModelRegistration, ModelRegistry, ModelRegistryError};
 use crate::policy::ToolPolicy;
+use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::repository::Repository;
+use crate::reservation;
 use crate::schema_contract::OutputSchema;
 use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
 use crate::store::SessionStore;
 use crate::tool::Tool;
 use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
-use crate::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, reservation};
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
 
@@ -98,7 +101,7 @@ impl Session {
     ///
     /// # Errors
     /// Returns a store failure if command records cannot be loaded.
-    pub async fn commands(&self) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    pub async fn commands(&self) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
         self.database.load_commands(&self.id).await
     }
 
@@ -112,7 +115,7 @@ impl Session {
     /// Rejects another session/store/owner or a still-live turn.
     pub async fn reconcile_command(
         &self,
-        record: &crate::CommandRecord,
+        record: &crate::bash::CommandRecord,
     ) -> Result<(), SessionError> {
         if record.owner().session_id() != self.id
             || record.owner().store_identity() != self.database.identity()
@@ -246,129 +249,33 @@ impl Session {
         self.database.load_writes(&self.id).await
     }
 
-    /// Sends one input and durably records its lifecycle and messages.
+    /// Runs one turn with the session defaults and records it durably.
     ///
-    /// Plain strings remain the text-only path; ordered text/image content
-    /// uses [`TurnInput`]. Resolves the stored session schema and captured
-    /// permission and tool-limit defaults afresh; earlier explicit overrides
-    /// are not inherited.
+    /// Plain strings are text input; use [`TurnInput`] for ordered text and
+    /// images. Shorthand for `self.turn(input).await`; use [`Self::turn`] for
+    /// per-turn options, host IDs, or cancellation.
     ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when the model turn or persistence operation
     /// fails.
     pub async fn send(&mut self, input: impl Into<TurnInput>) -> Result<TurnOutcome, SessionError> {
-        self.send_with_options(input, self.harness.default_options(self.schema.clone()))
-            .await
+        self.turn(input).await
     }
 
-    /// Sends a durable turn using exactly these options, without changing
-    /// defaults.
+    /// Configures one durable turn. Await the result to run it, or call
+    /// [`SessionTurn::start`] to keep a cancellation control.
     ///
-    /// Schema, permission, or comparison changes discard native continuation
-    /// and replay completed history. Permission downgrades retain earlier
-    /// tool results. Options are persisted before execution; completion is
-    /// reported only after the resulting messages are committed.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionError`] if execution or persistence fails.
-    pub async fn send_with_options(
-        &mut self,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> Result<TurnOutcome, SessionError> {
-        self.send_observed(input.into(), options, None, None).await
-    }
-
-    /// Prepares a turn with explicit options and a retained cancellation
-    /// control.
-    ///
-    /// The returned future starts execution when polled. Its control observes
-    /// persistence and managed-effect settlement even if the future is dropped.
-    /// Cancellation may race a successful terminal commit; inspect stored
-    /// history after settlement.
-    ///
-    /// # Errors
-    /// The future returns [`SessionError`] for execution or persistence
-    /// failure, including [`TurnError::Cancelled`] when cancellation stops
-    /// its waiter.
-    pub fn send_controlled(
-        &mut self,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> ControlledTurn<'_, SessionError> {
-        let input = input.into();
-        let mut session = Self {
-            checkpoint: self.checkpoint.clone(),
-            database: Arc::clone(&self.database),
-            harness: self.harness.snapshot(),
-            history: SessionHistory::new(self.history.max_bytes),
-            id: self.id.clone(),
-            model_generation: self.model_generation,
-            provider_session_id: None,
-            schema: self.schema.clone(),
-            system_prompt: self.system_prompt.clone(),
-        };
-
-        ControlledTurn::new(move |control| async move {
-            session
-                .send_observed(input, options, Some(control), None)
-                .await
-        })
-    }
-
-    /// Submits a host request once. Matching completed retries return the
-    /// original output and activity; active or stopped retries return typed
-    /// errors containing recovery records. New attempts require new IDs.
-    ///
-    /// # Errors
-    /// Returns a conflict for changed effective configuration, an identity
-    /// error if the harness is unidentified, or an execution/store error.
-    pub async fn submit(
-        &mut self,
-        host_id: impl Into<String>,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> Result<TurnOutcome, SessionError> {
-        let input = input.into();
-        let request = self.host_request(host_id.into(), &input, &options)?;
-
-        self.send_observed(input, options, None, Some(request))
-            .await
-    }
-
-    /// Prepares a host request with the existing retained cancellation control.
-    /// Cancellation can race a terminal commit; use `recover` after settlement.
-    ///
-    /// # Errors
-    /// Returns identity validation errors before execution. The future returns
-    /// the same execution, duplicate, and persistence errors as `submit`.
-    pub fn submit_controlled(
-        &mut self,
-        host_id: impl Into<String>,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> Result<ControlledTurn<'_, SessionError>, SessionError> {
-        let input = input.into();
-        let request = self.host_request(host_id.into(), &input, &options)?;
-        let mut session = Self {
-            checkpoint: self.checkpoint.clone(),
-            database: Arc::clone(&self.database),
-            harness: self.harness.snapshot(),
-            history: SessionHistory::new(self.history.max_bytes),
-            id: self.id.clone(),
-            model_generation: self.model_generation,
-            provider_session_id: None,
-            schema: self.schema.clone(),
-            system_prompt: self.system_prompt.clone(),
-        };
-
-        Ok(ControlledTurn::new(move |control| async move {
-            session
-                .send_observed(input, options, Some(control), Some(request))
-                .await
-        }))
+    /// Without [`SessionTurn::options`] the turn resolves the stored session
+    /// schema and the captured permission and tool-limit defaults afresh;
+    /// earlier explicit overrides are not inherited.
+    pub fn turn(&mut self, input: impl Into<TurnInput>) -> SessionTurn<'_> {
+        SessionTurn {
+            host_id: None,
+            input: input.into(),
+            options: None,
+            session: self,
+        }
     }
 
     /// Loads recorded status, complete output, and known writes without model
@@ -379,6 +286,21 @@ impl Session {
     pub async fn recover(&self, host_id: &str) -> Result<Option<HostTurnRecord>, SessionError> {
         crate::recovery::validate_identifier(host_id)?;
         self.database.load_request(&self.id, host_id).await
+    }
+
+    /// Copies this handle for a controlled turn that runs on its own task.
+    fn detached(&self) -> Self {
+        Self {
+            checkpoint: self.checkpoint.clone(),
+            database: Arc::clone(&self.database),
+            harness: self.harness.snapshot(),
+            history: SessionHistory::new(self.history.max_bytes),
+            id: self.id.clone(),
+            model_generation: self.model_generation,
+            provider_session_id: None,
+            schema: self.schema.clone(),
+            system_prompt: self.system_prompt.clone(),
+        }
     }
 
     fn host_request(
@@ -838,6 +760,149 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
     })
 }
 
+/// One durable turn being configured, created by [`Session::turn`].
+///
+/// Await it to run the turn, or call [`Self::start`] to run it with a
+/// [`TurnControl`](crate::TurnControl).
+#[must_use = "turns do not run until awaited or started"]
+pub struct SessionTurn<'a> {
+    host_id: Option<String>,
+    input: TurnInput,
+    options: Option<TurnOptions>,
+    session: &'a mut Session,
+}
+
+impl<'a> SessionTurn<'a> {
+    /// Runs the turn with exactly these options instead of the session
+    /// defaults, without changing the defaults.
+    ///
+    /// Schema, permission, or comparison changes discard native continuation
+    /// and replay completed history. Permission downgrades retain earlier tool
+    /// results. Options are persisted before execution; completion is reported
+    /// only after the resulting messages are committed.
+    pub fn options(mut self, options: TurnOptions) -> Self {
+        self.options = Some(options);
+
+        self
+    }
+
+    /// Makes the turn idempotent under a host-assigned request ID.
+    ///
+    /// A retry with the same ID and effective request returns the recorded
+    /// output and activity without running the model or tools; active or
+    /// stopped retries fail with errors containing their recovery records, and
+    /// a changed request under a used ID fails with a conflict. New attempts
+    /// need new IDs. Requires [`Harness::execution_identity`] or a registered
+    /// model; read results later with [`Session::recover`].
+    pub fn host_id(mut self, host_id: impl Into<String>) -> Self {
+        self.host_id = Some(host_id.into());
+
+        self
+    }
+
+    /// Prepares the turn with a retained cancellation control.
+    ///
+    /// The returned future starts execution when polled, and dropping it
+    /// requests cancellation. Its control observes persistence and managed
+    /// effect settlement even after the future is dropped. Cancellation may
+    /// race a successful terminal commit; inspect stored history, or
+    /// [`Session::recover`] a host ID, after settlement.
+    ///
+    /// # Errors
+    ///
+    /// The future returns the same errors as awaiting the turn, including
+    /// [`TurnError::Cancelled`] when cancellation stops its waiter.
+    pub fn start(self) -> ControlledTurn<'a, SessionError> {
+        let (options, request) = self.prepare();
+        let input = self.input;
+        let mut session = self.session.detached();
+
+        ControlledTurn::new(move |control| async move {
+            session
+                .send_observed(input, options, Some(control), request?)
+                .await
+        })
+    }
+
+    fn prepare(&self) -> (TurnOptions, Result<Option<HostRequest>, SessionError>) {
+        let options = self.options.clone().unwrap_or_else(|| {
+            self.session
+                .harness
+                .default_options(self.session.schema.clone())
+        });
+        let request = self
+            .host_id
+            .clone()
+            .map(|host_id| self.session.host_request(host_id, &self.input, &options))
+            .transpose();
+
+        (options, request)
+    }
+}
+
+impl<'a> IntoFuture for SessionTurn<'a> {
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    type Output = Result<TurnOutcome, SessionError>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let (options, request) = self.prepare();
+        let Self { input, session, .. } = self;
+
+        Box::pin(async move { session.send_observed(input, options, None, request?).await })
+    }
+}
+
+/// One storage-free turn being configured, created by [`Harness::turn`].
+///
+/// Await it to run the turn, or call [`Self::start`] to run it with a
+/// [`TurnControl`](crate::TurnControl).
+#[must_use = "turns do not run until awaited or started"]
+pub struct OneShotTurn<'a> {
+    harness: &'a Harness,
+    input: TurnInput,
+    options: TurnOptions,
+}
+
+impl<'a> OneShotTurn<'a> {
+    /// Prepares the turn with a retained cancellation control.
+    ///
+    /// Dropping the returned future requests cancellation. Observe
+    /// persistence settlement and managed filesystem-effect settlement
+    /// separately through the retained control. Neither waits for remote
+    /// provider work.
+    ///
+    /// # Errors
+    ///
+    /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
+    pub fn start(self) -> ControlledTurn<'a, TurnError> {
+        let harness = self.harness.snapshot();
+        let Self { input, options, .. } = self;
+
+        ControlledTurn::new(move |control| async move {
+            tokio::select! {
+                biased;
+                () = control.cancelled() => Err(TurnError::Cancelled),
+                result = harness.run_once_observed(input, options, control.effects.clone()) => result,
+            }
+        })
+    }
+}
+
+impl<'a> IntoFuture for OneShotTurn<'a> {
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    type Output = Result<TurnOutcome, TurnError>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let Self {
+            harness,
+            input,
+            options,
+        } = self;
+
+        Box::pin(harness.run_once_observed(input, options, Effects::default()))
+    }
+}
+
 /// Application-facing harness for one complete model turn.
 ///
 /// A turn advertises policy-approved tools, executes validated native calls,
@@ -1010,10 +1075,11 @@ impl Harness {
         self
     }
 
-    /// Runs one input without creating durable session history.
+    /// Runs one turn with the harness defaults and no stored history.
     ///
-    /// Plain strings remain the text-only path; ordered text/image content
-    /// uses [`TurnInput`].
+    /// Plain strings are text input; use [`TurnInput`] for ordered text and
+    /// images. Shorthand for `self.turn(input, defaults).await`, where the
+    /// defaults come from [`Self::allow`] and [`Self::max_tool_calls`].
     ///
     /// # Errors
     ///
@@ -1024,50 +1090,21 @@ impl Harness {
         input: impl Into<TurnInput>,
         schema: OutputSchema,
     ) -> Result<TurnOutcome, TurnError> {
-        self.run_once_with_options(input, self.default_options(schema))
-            .await
+        self.turn(input, self.default_options(schema)).await
     }
 
-    /// Runs an ephemeral turn with a complete options snapshot.
+    /// Configures one turn with exactly `options` and no stored history.
     ///
-    /// Options replace harness schema, permission, and tool-limit defaults;
-    /// an empty policy denies all tools. This never opens a database.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`TurnError`] when model execution, validation, or tools fail.
-    pub async fn run_once_with_options(
-        &self,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> Result<TurnOutcome, TurnError> {
-        self.run_once_observed(input.into(), options, Effects::default())
-            .await
-    }
-
-    /// Prepares a storage-free turn with separately retained cancellation.
-    ///
-    /// Dropping the returned future requests cancellation. Observe persistence
-    /// settlement and managed filesystem-effect settlement separately through
-    /// the retained control. Neither waits for remote provider work.
-    ///
-    /// # Errors
-    /// The future returns [`TurnError`], including [`TurnError::Cancelled`].
-    pub fn run_once_controlled(
-        &self,
-        input: impl Into<TurnInput>,
-        options: TurnOptions,
-    ) -> ControlledTurn<'_, TurnError> {
-        let harness = self.snapshot();
-        let input = input.into();
-
-        ControlledTurn::new(move |control| async move {
-            tokio::select! {
-                biased;
-                () = control.cancelled() => Err(TurnError::Cancelled),
-                result = harness.run_once_observed(input, options, control.effects.clone()) => result,
-            }
-        })
+    /// Options replace the harness schema, permission, and tool-limit
+    /// defaults; an empty policy denies all tools. This never opens a store.
+    /// Await the result to run it, or call [`OneShotTurn::start`] to keep a
+    /// cancellation control.
+    pub fn turn(&self, input: impl Into<TurnInput>, options: TurnOptions) -> OneShotTurn<'_> {
+        OneShotTurn {
+            harness: self,
+            input: input.into(),
+            options,
+        }
     }
 
     /// Builds a durable session with `schema` as its default output contract.

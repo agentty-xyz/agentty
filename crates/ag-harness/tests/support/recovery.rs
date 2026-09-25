@@ -6,11 +6,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
+use ag_harness::model::{ModelCompletion, ModelRequest, ModelResponse};
+use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnStatus};
+use ag_harness::store::{NewSession, SessionStore, SqliteStore, WriteStatus};
 use ag_harness::{
-    ExecutionIdentity, Harness, HostRequest, HostTurnAcquisition, HostTurnStatus, LifecycleEvent,
-    LifecycleEventKind, LifecycleObserver, Model, ModelCompletion, ModelError, ModelRequest,
-    ModelResponse, NewSession, SessionError, SessionStore, SqliteStore, Tool, ToolPolicy,
-    TurnError, TurnInput, TurnLimits, TurnOptions, WriteStatus,
+    Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
+    TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -48,8 +50,8 @@ impl Model for TestModel {
         self.0.calls.fetch_add(1, Ordering::SeqCst);
         self.0.entered.notify_one();
         match request.prompt() {
-            "write" if !matches!(request.messages().last(), Some(ag_harness::ModelMessage::ToolResult { .. })) => {
-                Ok(ModelCompletion::from_response(ModelResponse::ToolCall(ag_harness::ToolCall::from_json(
+            "write" if !matches!(request.messages().last(), Some(ag_harness::model::ModelMessage::ToolResult { .. })) => {
+                Ok(ModelCompletion::from_response(ModelResponse::ToolCall(ag_harness::tool::ToolCall::from_json(
                     "write-call".into(), "write", &json!({"path":"file.txt","patch":"--- /dev/null\n+++ b/file.txt\n@@ -0,0 +1 @@\n+new\n"}).to_string(), None,
                 )?)))
             }
@@ -85,24 +87,42 @@ async fn completed_and_failed_retries_never_execute_again() {
 
         // Act
         let original = session
-            .submit("first", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("first")
             .await
             .expect("first");
         let completed_events = events.events();
         let duplicate = session
-            .submit("first", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("first")
             .await
             .expect("duplicate");
         let controlled_duplicate = session
-            .submit_controlled("first", "hello", options())
-            .expect("controlled retry")
+            .turn("hello")
+            .options(options())
+            .host_id("first")
+            .start()
             .await
             .expect("recorded completion");
-        let conflict = session.submit("first", "different", options()).await;
+        let conflict = session
+            .turn("different")
+            .options(options())
+            .host_id("first")
+            .await;
         assert_eq!(events.events(), completed_events);
-        let failed = session.submit("failed", "fail", options()).await;
+        let failed = session
+            .turn("fail")
+            .options(options())
+            .host_id("failed")
+            .await;
         let failed_events = events.events();
-        let failed_retry = session.submit("failed", "fail", options()).await;
+        let failed_retry = session
+            .turn("fail")
+            .options(options())
+            .host_id("failed")
+            .await;
 
         // Assert
         assert_eq!(original, duplicate);
@@ -127,10 +147,19 @@ async fn completed_and_failed_retries_never_execute_again() {
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
         assert!(session.recover("missing").await.expect("lookup").is_none());
         assert!(session.recover("").await.is_err());
-        assert!(session.submit("", "hello", options()).await.is_err());
+        assert!(
+            session
+                .turn("hello")
+                .options(options())
+                .host_id("")
+                .await
+                .is_err()
+        );
         assert_eq!(events.events(), failed_events);
         session
-            .submit("new-attempt", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("new-attempt")
             .await
             .expect("new ID");
         assert_eq!(probe.calls.load(Ordering::SeqCst), 3);
@@ -151,9 +180,7 @@ async fn active_retries_classify_before_local_busy_and_cancelled_retries_stay_st
             .await
             .expect("session");
         let mut retry = harness.resume("session").await.expect("resume");
-        let controlled = first
-            .submit_controlled("id", "wait", options())
-            .expect("controlled");
+        let controlled = first.turn("wait").options(options()).host_id("id").start();
         let control = controlled.control();
 
         // Act
@@ -162,15 +189,19 @@ async fn active_retries_classify_before_local_busy_and_cancelled_retries_stay_st
             let active_events = events.events();
             assert_eq!(active_events.len(), 2);
             assert!(matches!(
-                retry.submit("id", "wait", options()).await,
+                retry.turn("wait").options(options()).host_id("id").await,
                 Err(SessionError::HostTurnInProgress(_))
             ));
             assert!(matches!(
-                retry.submit("id", "changed", options()).await,
+                retry.turn("changed").options(options()).host_id("id").await,
                 Err(SessionError::HostTurnConflict)
             ));
             assert!(matches!(
-                retry.submit("other", "hello", options()).await,
+                retry
+                    .turn("hello")
+                    .options(options())
+                    .host_id("other")
+                    .await,
                 Err(SessionError::Busy { .. })
             ));
             assert_eq!(events.events(), active_events);
@@ -195,7 +226,7 @@ async fn active_retries_classify_before_local_busy_and_cancelled_retries_stay_st
             LifecycleEventKind::TurnFailed { .. }
         ));
         let Err(SessionError::HostTurnStopped(record)) =
-            retry.submit("id", "wait", options()).await
+            retry.turn("wait").options(options()).host_id("id").await
         else {
             std::panic::resume_unwind(Box::new("interrupted"))
         };
@@ -203,7 +234,9 @@ async fn active_retries_classify_before_local_busy_and_cancelled_retries_stay_st
         assert_eq!(events.events(), cancelled_events);
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         retry
-            .submit("new", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("new")
             .await
             .expect("successor");
         control.cancel();
@@ -230,7 +263,9 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
             .create()
             .await
             .expect("seed");
-        seed.submit("id", "hello", options())
+        seed.turn("hello")
+            .options(options())
+            .host_id("id")
             .await
             .expect("seed result");
         let request = seed
@@ -323,11 +358,15 @@ async fn sqlite_reopen_recovers_original_outcomes_after_history_eviction() {
         .await
         .expect("session");
     let original = session
-        .submit("id", "hello", options())
+        .turn("hello")
+        .options(options())
+        .host_id("id")
         .await
         .expect("original");
     session
-        .submit("failure", "fail", options())
+        .turn("fail")
+        .options(options())
+        .host_id("failure")
         .await
         .expect_err("failure");
     drop(session);
@@ -338,14 +377,20 @@ async fn sqlite_reopen_recovers_original_outcomes_after_history_eviction() {
     let reopened = self::harness(store, &probe);
     let mut session = reopened.resume("session").await.expect("resume");
     let duplicate = session
-        .submit("id", "hello", options())
+        .turn("hello")
+        .options(options())
+        .host_id("id")
         .await
         .expect("recovered");
 
     // Assert
     assert_eq!(original, duplicate);
     assert!(matches!(
-        session.submit("failure", "fail", options()).await,
+        session
+            .turn("fail")
+            .options(options())
+            .host_id("failure")
+            .await,
         Err(SessionError::HostTurnStopped(_))
     ));
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
@@ -364,15 +409,17 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
             .await
             .expect("session");
         session
-            .submit("id", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("id")
             .await
             .expect("original");
         let unidentified = Harness::new(TestModel(Arc::clone(&probe))).store(Arc::clone(&store));
         let revised = self::harness(Arc::clone(&store), &probe).execution_identity(
             ExecutionIdentity::new("test-model-and-filesystem", "2").expect("identity"),
         );
-        let reasoning =
-            self::harness(store, &probe).model_reasoning_effort(ag_harness::ReasoningEffort::High);
+        let reasoning = self::harness(store, &probe)
+            .model_reasoning_effort(ag_harness::model::ReasoningEffort::High);
 
         // Act / Assert
         let changed = TurnOptions::new(
@@ -381,7 +428,7 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
             TurnLimits::default(),
         );
         assert!(matches!(
-            session.submit("id", "hello", changed).await,
+            session.turn("hello").options(changed).host_id("id").await,
             Err(SessionError::HostTurnConflict)
         ));
         assert!(matches!(
@@ -389,7 +436,9 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
                 .resume("session")
                 .await
                 .expect("resume")
-                .submit("id", "hello", options())
+                .turn("hello")
+                .options(options())
+                .host_id("id")
                 .await,
             Err(SessionError::HostTurnConflict)
         ));
@@ -398,7 +447,9 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
                 .resume("session")
                 .await
                 .expect("resume")
-                .submit("id", "hello", options())
+                .turn("hello")
+                .options(options())
+                .host_id("id")
                 .await,
             Err(SessionError::HostTurnConflict)
         ));
@@ -407,7 +458,20 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
                 .resume("session")
                 .await
                 .expect("resume")
-                .submit("id", "hello", options())
+                .turn("hello")
+                .options(options())
+                .host_id("id")
+                .await,
+            Err(SessionError::ExecutionIdentityRequired)
+        ));
+        assert!(matches!(
+            unidentified
+                .resume("session")
+                .await
+                .expect("resume")
+                .turn("hello")
+                .host_id("id")
+                .start()
                 .await,
             Err(SessionError::ExecutionIdentityRequired)
         ));
@@ -440,12 +504,16 @@ async fn retry_of_completed_write_returns_original_report_without_touching_files
 
         // Act
         let original = session
-            .submit("write-id", "write", options.clone())
+            .turn("write")
+            .options(options.clone())
+            .host_id("write-id")
             .await
             .expect("write");
         std::fs::write(directory.path().join("file.txt"), "host edit").expect("host edit");
         let repeated = session
-            .submit("write-id", "write", options)
+            .turn("write")
+            .options(options)
+            .host_id("write-id")
             .await
             .expect("duplicate");
         let record = session

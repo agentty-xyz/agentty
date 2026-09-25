@@ -6,12 +6,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_harness::{
-    AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,
-    ModelMessage, ModelMetadata, NewSession, SessionCheckpoint, SessionError, SessionStore,
-    StoreIdentity, StoredTurnOptions, TurnError, TurnInput, TurnOptions, TurnOutcome, TurnOwner,
-    WriteRecord, WriteStatus,
+use ag_harness::model::{ModelMessage, ModelMetadata};
+use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus};
+use ag_harness::store::{
+    AcquiredTurn, LoadedSession, NewSession, SessionCheckpoint, SessionStore, StoreIdentity,
+    StoredTurnOptions, TurnOwner, WriteRecord, WriteStatus,
 };
+use ag_harness::{SessionError, TurnError, TurnInput, TurnOptions, TurnOutcome};
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Notify;
@@ -303,9 +304,9 @@ impl SessionStore for ExternalStore {
         &self,
         id: &str,
         generation: i64,
-        identity: &ag_harness::ExecutionIdentity,
+        identity: &ag_harness::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::ModelCapabilities,
+        capabilities: ag_harness::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions

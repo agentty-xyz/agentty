@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use tempfile::tempdir;
 
+use crate::TurnError;
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
@@ -12,8 +13,7 @@ use crate::session::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
 use crate::session::{Database, NewSession, SessionError, StoreIdentity};
-use crate::store::SessionStore;
-use crate::{TurnError, WriteStatus};
+use crate::store::{SessionStore, WriteStatus};
 
 #[tokio::test]
 async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle() {

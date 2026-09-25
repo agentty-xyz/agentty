@@ -1,4 +1,15 @@
-//! Provider-specific model adapters.
+//! Built-in model clients.
+//!
+//! Each provider reads its API key from the environment:
+//!
+//! ```no_run
+//! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+//!
+//! let model = Muse::from_env(MUSE_SPARK_1_3)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! [`ModelConfiguration`] selects a provider and model by name at runtime.
 
 mod catalog;
 mod kimi;

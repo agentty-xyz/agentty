@@ -1,3 +1,10 @@
+//! Content-free observability.
+//!
+//! Attach a [`LifecycleObserver`] with `Harness::with_lifecycle_observer` to
+//! receive turn, model, and tool events that never carry prompts or output.
+//! [`LifecycleMetrics`] and [`LifecycleTraceObserver`] project those events to
+//! OpenTelemetry; [`LifecycleObserverSet`] fans out to several observers.
+
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
@@ -12,6 +19,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
+pub use crate::telemetry::LifecycleMetrics;
+pub use crate::trace::LifecycleTraceObserver;
 
 /// Stream-local identifier that correlates lifecycle events for one operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

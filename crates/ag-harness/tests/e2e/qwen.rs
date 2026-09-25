@@ -1,6 +1,7 @@
 //! Live Qwen provider check.
 
-use ag_harness::{ModelClient, QwenConfig};
+use ag_harness::model::ModelClient;
+use ag_harness::provider::QwenConfig;
 
 use crate::{DynError, greeting};
 

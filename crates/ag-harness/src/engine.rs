@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::bash::{BashArguments, BashError};
+use crate::context;
 use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -18,7 +20,6 @@ use crate::turn::{
     TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
-use crate::{BashArguments, BashError, context};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {

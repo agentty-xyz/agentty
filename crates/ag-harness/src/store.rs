@@ -1,4 +1,10 @@
-//! Host-implementable transactional boundary used by session execution.
+//! Where durable sessions live.
+//!
+//! [`SqliteStore`] is the default (configured with `Harness::database`),
+//! [`MemoryStore`] keeps resumable sessions for one process, and custom
+//! backends implement [`SessionStore`] and are injected with `Harness::store`.
+//! The records returned by `Session::writes` and `Session::compact` are also
+//! defined here.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -6,15 +12,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
+pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::input::TurnInput;
+pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::session::{
-    AcquiredTurn, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use crate::session::SessionError;
+pub use crate::session::{
+    AcquiredTurn, Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity,
+    TurnOwner,
 };
-use crate::{
-    HostRequest, HostTurnAcquisition, HostTurnRecord, TurnError, TurnOptions, TurnOutcome,
-    WriteRecord,
-};
+pub use crate::session_model::RecordedModel;
+use crate::turn::{TurnError, TurnOptions, TurnOutcome};
+pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
+pub use crate::write_journal::{WriteRecord, WriteStatus};
 
 /// Owner-scoped mutations validate ownership in the transaction applying their
 /// effects. Acquisition must settle its commit before reporting failure;
@@ -32,7 +43,7 @@ pub trait SessionStore: Send + Sync {
     async fn load_commands(
         &self,
         _session_id: &str,
-    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    ) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
         Err(SessionError::InvalidData {
             reason: "command storage unsupported".into(),
         })
@@ -43,7 +54,7 @@ pub trait SessionStore: Send + Sync {
     async fn command_intent(
         &self,
         _owner: &TurnOwner,
-        _intent: &crate::CommandIntent,
+        _intent: &crate::bash::CommandIntent,
     ) -> Result<i64, SessionError> {
         Err(SessionError::InvalidData {
             reason: "command storage unsupported".into(),
@@ -56,7 +67,7 @@ pub trait SessionStore: Send + Sync {
         &self,
         _owner: &TurnOwner,
         _id: i64,
-        _outcome: &crate::CommandOutcome,
+        _outcome: &crate::bash::CommandOutcome,
     ) -> Result<(), SessionError> {
         Err(SessionError::InvalidData {
             reason: "command storage unsupported".into(),
@@ -101,9 +112,9 @@ pub trait SessionStore: Send + Sync {
         &self,
         id: &str,
         generation: i64,
-        identity: &crate::ExecutionIdentity,
+        identity: &crate::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError>;
 
     /// Bind the reservation to `store` before commit, including abandoned
@@ -114,12 +125,12 @@ pub trait SessionStore: Send + Sync {
     /// method only after acknowledgment. Errors must be definitive: no later
     /// reservation may appear without a retained cleanup owner. A dropped
     /// future must retain that responsibility. Clear incompatible continuation
-    /// atomically, using [`crate::StoredTurnOptions`]. Return only completed
-    /// history bounded by the stored payload budget, revalidated at
-    /// acquisition. Validate `generation` atomically before reserving a turn;
-    /// persist the selected model as immutable turn provenance. Persist the
-    /// validated input through the shared message codec, preserving block
-    /// order and image content.
+    /// atomically, using [`crate::store::StoredTurnOptions`]. Return only
+    /// completed history bounded by the stored payload budget, revalidated
+    /// at acquisition. Validate `generation` atomically before reserving a
+    /// turn; persist the selected model as immutable turn provenance.
+    /// Persist the validated input through the shared message codec,
+    /// preserving block order and image content.
     async fn begin_turn(
         &self,
         store: Arc<dyn SessionStore>,
@@ -154,7 +165,7 @@ pub trait SessionStore: Send + Sync {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &crate::SessionCheckpoint,
+        checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError>;
 
     /// Recover expired reservations and return the canonical request outcome

@@ -1,9 +1,57 @@
-//! Lightweight, Rust-native LLM harness for application-facing agent workflows.
+//! Structured LLM turns with deny-by-default tools and durable sessions.
 //!
-//! The crate provides a provider-neutral model loop, normalized completion
-//! metadata, validated structured output, and deny-by-default repository
-//! inspection and patch tools. Provider and local filesystem implementations
-//! remain behind injectable boundaries.
+//! Every turn ends in JSON that is validated locally against a caller-supplied
+//! [`OutputSchema`]. Tools stay off until the host allows them, and the session
+//! store, not the provider, is the source of truth for conversation state.
+//!
+//! # Quickstart
+//!
+//! ```no_run
+//! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
+//! use ag_harness::{Harness, OutputSchema};
+//! use serde_json::json;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let schema = OutputSchema::new(json!({
+//!     "type": "object",
+//!     "properties": { "summary": { "type": "string" } },
+//!     "required": ["summary"],
+//! }))?;
+//! let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?);
+//!
+//! let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
+//! println!("{}", outcome.output()["summary"]);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Concepts
+//!
+//! - [`Harness`] holds the model, tool defaults, repository, and store.
+//! - [`Session`] is a durable conversation: `harness.session(id, schema)`
+//!   creates one and `harness.resume(id)` reopens it in any process.
+//! - A turn is one prompt run to a schema-valid answer. `run_once` and
+//!   `Session::send` cover the common case; `Harness::turn` and `Session::turn`
+//!   return a builder for per-turn [`TurnOptions`], host request IDs, and
+//!   cancellation through [`TurnControl`].
+//! - [`Tool`]s are denied until allowed with [`Harness::allow`] or a
+//!   [`ToolPolicy`].
+//!
+//! # Modules
+//!
+//! The crate root holds everything a typical host needs. Extension points and
+//! detailed records live in modules:
+//!
+//! | Module        | Contents                                                   |
+//! | ------------- | ---------------------------------------------------------- |
+//! | [`provider`]  | Built-in Muse, Kimi, and Qwen clients                      |
+//! | [`model`]     | The [`Model`] trait, requests, registry, context budgets   |
+//! | [`tool`]      | Tool arguments, results, and the [`tool::FileSystem`] seam |
+//! | [`bash`]      | Sandboxed Bash configuration, executors, command records   |
+//! | [`turn`]      | Turn builders, reports, activity, and settlement errors    |
+//! | [`store`]     | Session stores and durable write and checkpoint records    |
+//! | [`recovery`]  | Execution identities and idempotent host request records   |
+//! | [`lifecycle`] | Content-free events and OpenTelemetry observers            |
 
 #[cfg(test)]
 #[path = "../tests/support/model_switch.rs"]
@@ -27,7 +75,7 @@ mod gated_store_test;
 #[path = "../tests/support/repository.rs"]
 mod repository_fixture;
 
-mod bash;
+pub mod bash;
 mod cancellation;
 #[cfg(test)]
 #[path = "../tests/support/cancellation.rs"]
@@ -51,90 +99,41 @@ mod execution;
 mod file_system;
 mod harness;
 mod input;
-mod lifecycle;
+pub mod lifecycle;
 mod memory_store;
-mod model;
+pub mod model;
 mod model_registry;
 #[cfg(test)]
 #[path = "../tests/support/model_registry.rs"]
 mod model_registry_test;
 mod policy;
-mod provider;
+pub mod provider;
 mod read;
-mod recovery;
+pub mod recovery;
 mod repository;
 mod reservation;
 mod schema_contract;
 mod session;
 mod session_model;
-mod store;
+pub mod store;
 mod telemetry;
-mod tool;
+pub mod tool;
 mod trace;
-mod turn;
+pub mod turn;
 mod turn_options_snapshot;
 mod write;
 mod write_journal;
 
-pub use bash::{BashArguments, BashConfig, BashError};
-pub use cancellation::{ControlledTurn, SettlementError, TurnControl};
-pub use command_journal::{
-    CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
-};
-pub use command_settlement::CommandSettlementError;
-pub use compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
 pub use comparison::{ComparisonBase, ComparisonBaseError};
-pub use context::{ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator};
-pub use effect::EffectSettlementError;
-pub use execution::{
-    BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
-};
-pub use file_system::{FileSystem, LocalFileSystem};
 pub use harness::{Harness, Session, SessionBuilder};
 pub use input::{ImageContent, ImageMediaType, InputBlock, TurnInput, TurnInputError};
-pub use lifecycle::{
-    LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
-    LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
-};
-pub use memory_store::MemoryStore;
-pub use model::{
-    CompletionMetadata, CompletionUsage, Model, ModelClient, ModelCompletion, ModelError,
-    ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
-    ReasoningEffort,
-};
-pub use model_registry::{ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError};
+pub use model::{Model, ModelError};
 pub use policy::ToolPolicy;
-pub use provider::{
-    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, ModelConfiguration,
-    ModelConfigurationError, ModelProvider, ModelProviderParseError, Muse, MuseConfig, QWEN_PLUS,
-    QwenConfig,
-};
-pub use read::{ReadError, ReadOutput};
-pub use recovery::{
-    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
-};
 pub use repository::{Repository, RepositoryError};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
-pub use session::{
-    AcquiredTurn, Database as SqliteStore, LoadedSession, NewSession, SessionError, SessionInfo,
-    StoreIdentity, TurnOwner,
-};
-pub use session_model::RecordedModel;
-pub use store::SessionStore;
-pub use telemetry::LifecycleMetrics;
-pub use tool::{
-    ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
-    WriteArguments,
-};
-pub use trace::LifecycleTraceObserver;
-pub use turn::{
-    HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnLimits, TurnOptions,
-    TurnOutcome, TurnReport,
-};
-pub use turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
-pub use write::{WriteError, WriteOutput};
-pub use write_journal::{WriteRecord, WriteStatus};
+pub use session::SessionError;
+pub use tool::Tool;
+pub use turn::{TurnControl, TurnError, TurnLimits, TurnOptions, TurnOutcome};
 
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.
 /// Run only in a dedicated process, before creating any runtime or threads.

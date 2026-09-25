@@ -158,14 +158,12 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
     drop(harness);
     built.send("builder defaults").await.expect("built turn");
     session
-        .send_with_options(
-            "explicit options",
-            options(
-                OutputSchema::new(json!({"type": "integer"})).expect("integer schema"),
-                ToolPolicy::default(),
-                1,
-            ),
-        )
+        .turn("explicit options")
+        .options(options(
+            OutputSchema::new(json!({"type": "integer"})).expect("integer schema"),
+            ToolPolicy::default(),
+            1,
+        ))
         .await
         .expect("explicit turn");
     session
@@ -231,7 +229,7 @@ async fn equivalent_ephemeral_and_durable_turns_send_the_same_requests() {
 
     // Act
     harness
-        .run_once_with_options("read", options.clone())
+        .turn("read", options.clone())
         .await
         .expect("one-shot turn");
     let mut session = harness
@@ -240,7 +238,8 @@ async fn equivalent_ephemeral_and_durable_turns_send_the_same_requests() {
         .await
         .expect("session");
     session
-        .send_with_options("read", options)
+        .turn("read")
+        .options(options)
         .await
         .expect("durable turn");
 
@@ -291,21 +290,22 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
     // Act
     session.send("default").await.expect("default turn");
     stale
-        .send_with_options("policy change", read)
+        .turn("policy change")
+        .options(read)
         .await
         .expect("policy change");
     session
-        .send_with_options(
-            "schema change",
-            options(integer.clone(), ToolPolicy::default().allow(Tool::Read), 1),
-        )
+        .turn("schema change")
+        .options(options(
+            integer.clone(),
+            ToolPolicy::default().allow(Tool::Read),
+            1,
+        ))
         .await
         .expect("schema change");
     stale
-        .send_with_options(
-            "budget change",
-            options(integer, ToolPolicy::default().allow(Tool::Read), 2),
-        )
+        .turn("budget change")
+        .options(options(integer, ToolPolicy::default().allow(Tool::Read), 2))
         .await
         .expect("budget change");
     let mut reopened = harness.resume("session").await.expect("reopened session");
@@ -371,15 +371,13 @@ async fn empty_explicit_policy_denies_calls_despite_allowed_harness_defaults() {
     let denied = options(object_schema(), ToolPolicy::default(), 1);
 
     // Act
-    let once = harness
-        .run_once_with_options("denied", denied.clone())
-        .await;
+    let once = harness.turn("denied", denied.clone()).await;
     let mut session = harness
         .session("session", object_schema())
         .create()
         .await
         .expect("session");
-    let durable = session.send_with_options("denied", denied).await;
+    let durable = session.turn("denied").options(denied).await;
 
     // Assert
     assert!(matches!(once, Err(TurnError::ToolDenied { .. })));
@@ -416,10 +414,12 @@ async fn explicit_budget_replaces_default_and_resets_for_the_next_turn() {
 
     // Act
     let allowed = session
-        .send_with_options(
-            "two calls",
-            options(object_schema(), ToolPolicy::default().allow(Tool::Read), 2),
-        )
+        .turn("two calls")
+        .options(options(
+            object_schema(),
+            ToolPolicy::default().allow(Tool::Read),
+            2,
+        ))
         .await;
     let limited = session.send("two calls again").await;
 
@@ -466,10 +466,8 @@ async fn options_persistence_failure_prevents_execution_and_reports_session_fail
 
     // Act
     let result = session
-        .send_with_options(
-            "never executed",
-            options(object_schema(), ToolPolicy::default(), 1),
-        )
+        .turn("never executed")
+        .options(options(object_schema(), ToolPolicy::default(), 1))
         .await;
     let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_message")
         .fetch_one(database.pool())
@@ -514,7 +512,8 @@ async fn failed_schema_override_does_not_leak_into_the_next_turn() {
 
     // Act
     let invalid = session
-        .send_with_options("integer", options(integer, ToolPolicy::default(), 1))
+        .turn("integer")
+        .options(options(integer, ToolPolicy::default(), 1))
         .await;
     let valid = session.send("default schema").await;
 
@@ -566,20 +565,20 @@ async fn comparison_changes_clear_native_continuation_using_persisted_options() 
 
     // Act
     session
-        .send_with_options("base", first.clone())
+        .turn("base")
+        .options(first.clone())
         .await
         .expect("first");
-    stale
-        .send_with_options("same", first)
-        .await
-        .expect("same base");
+    stale.turn("same").options(first).await.expect("same base");
     session
-        .send_with_options("next", second)
+        .turn("next")
+        .options(second)
         .await
         .expect("new base");
     let mut reopened = harness.resume("session").await.expect("reopen");
     reopened
-        .send_with_options("no comparisons", without)
+        .turn("no comparisons")
+        .options(without)
         .await
         .expect("removed base");
 
@@ -651,7 +650,8 @@ async fn reopening_preserves_comparison_continuation_across_key_order_and_budget
             harness.resume("session").await.expect("reopened session")
         };
         session
-            .send_with_options("review", options)
+            .turn("review")
+            .options(options)
             .await
             .expect("completed turn");
     }
@@ -708,12 +708,8 @@ async fn comparison_scope_mismatch_fails_before_calling_the_model() {
         .expect("session");
 
     // Act
-    let result = harness
-        .run_once_with_options("wrong repository", selected.clone())
-        .await;
-    let durable = session
-        .send_with_options("wrong repository", selected)
-        .await;
+    let result = harness.turn("wrong repository", selected.clone()).await;
+    let durable = session.turn("wrong repository").options(selected).await;
 
     // Assert
     let error = result.expect_err("scope mismatch");

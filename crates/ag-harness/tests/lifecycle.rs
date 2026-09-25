@@ -5,10 +5,10 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_harness::{
-    LifecycleEvent, LifecycleEventKind, LifecycleObserver, ModelErrorType, ModelResponseType,
-    TurnErrorType,
+use ag_harness::lifecycle::{
+    LifecycleEvent, LifecycleEventKind, LifecycleObserver, ModelResponseType, TurnErrorType,
 };
+use ag_harness::model::ModelErrorType;
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
@@ -61,13 +61,13 @@ struct GatedModel {
 impl ag_harness::Model for GatedModel {
     async fn complete(
         &self,
-        _request: ag_harness::ModelRequest,
-    ) -> Result<ag_harness::ModelCompletion, ag_harness::ModelError> {
+        _request: ag_harness::model::ModelRequest,
+    ) -> Result<ag_harness::model::ModelCompletion, ag_harness::ModelError> {
         self.started.notify_one();
         self.release.notified().await;
 
-        Ok(ag_harness::ModelCompletion::from_response(
-            ag_harness::ModelResponse::Output(json!({"name": "done"})),
+        Ok(ag_harness::model::ModelCompletion::from_response(
+            ag_harness::model::ModelResponse::Output(json!({"name": "done"})),
         ))
     }
 }
@@ -92,8 +92,12 @@ fn success_body() -> serde_json::Value {
     })
 }
 
-fn client(server: &MockServer, model: &str, recorder: EventRecorder) -> ag_harness::ModelClient {
-    ag_harness::ModelClient::qwen(ag_harness::QwenConfig {
+fn client(
+    server: &MockServer,
+    model: &str,
+    recorder: EventRecorder,
+) -> ag_harness::model::ModelClient {
+    ag_harness::model::ModelClient::qwen(ag_harness::provider::QwenConfig {
         api_key: "SECRET_API_KEY".to_string(),
         base_url: server.uri(),
         model: model.to_string(),
@@ -102,8 +106,8 @@ fn client(server: &MockServer, model: &str, recorder: EventRecorder) -> ag_harne
     .with_lifecycle_observer(recorder)
 }
 
-fn request() -> ag_harness::ModelRequest {
-    ag_harness::ModelRequest::new(
+fn request() -> ag_harness::model::ModelRequest {
+    ag_harness::model::ModelRequest::new(
         "SECRET_PROMPT",
         ag_harness::OutputSchema::new(json!({
             "type": "object",
@@ -295,7 +299,10 @@ async fn harness_owns_model_events_without_duplicate_model_observation() {
 
     // Assert
     assert_eq!(output.output(), &json!({"name": "SECRET_OUTPUT"}));
-    assert_eq!(model_events.events(), [] as [ag_harness::LifecycleEvent; 0]);
+    assert_eq!(
+        model_events.events(),
+        [] as [ag_harness::lifecycle::LifecycleEvent; 0]
+    );
     let harness_events = harness_events.events();
     assert_sequence(&harness_events);
     assert_eq!(harness_events.len(), 4);
@@ -371,7 +378,10 @@ async fn cancelling_harness_turn_closes_model_and_turn_lifecycles_once() {
 
     // Assert
     assert!(cancellation.is_cancelled());
-    assert_eq!(model_events.events(), [] as [ag_harness::LifecycleEvent; 0]);
+    assert_eq!(
+        model_events.events(),
+        [] as [ag_harness::lifecycle::LifecycleEvent; 0]
+    );
     let harness_events = harness_events.events();
     assert_sequence(&harness_events);
     assert_eq!(harness_events.len(), 4);

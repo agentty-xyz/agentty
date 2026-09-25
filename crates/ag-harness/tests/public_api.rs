@@ -36,17 +36,27 @@ use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ag_harness::{
+use ag_harness::bash::{
     BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandOutcome, CommandTermination,
-    ComparisonBase, CompletionMetadata, CompletionUsage, ExecutionAccess, ExecutionCommand,
-    ExecutionError, ExecutionIdentity, ExecutionPolicy, FileSystem, Harness, ImageContent,
-    ImageMediaType, InputBlock, LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet,
-    LifecycleTraceObserver, LocalFileSystem, MainExit, MemoryStore, Model, ModelCapabilities,
-    ModelCompletion, ModelConfiguration, ModelError, ModelMessage, ModelMetadata, ModelProvider,
-    ModelRegistry, ModelRequest, ModelResponse, ModelResponseType, OutputSchema, OutputSchemaError,
-    OutputStream, ProcessEvent, Repository, RepositoryError, Session, SessionBuilder, SessionError,
-    SessionInfo, SessionStore, Tool, ToolCall, ToolPolicy, TurnError, TurnInput, TurnInputError,
-    TurnLimits, TurnOptions, UnsandboxedExecutor, WriteStatus,
+    ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit, OutputStream,
+    ProcessEvent, UnsandboxedExecutor,
+};
+use ag_harness::lifecycle::{
+    LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
+    ModelResponseType,
+};
+use ag_harness::model::{
+    CompletionMetadata, CompletionUsage, ModelCapabilities, ModelCompletion, ModelMessage,
+    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+};
+use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
+use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
+use ag_harness::{
+    ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
+    OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
+    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnLimits, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -387,7 +397,7 @@ impl Model for ExternalMetadataModel {
     }
 }
 
-fn assert_observer<Observer: ag_harness::LifecycleObserver>(_observer: Observer) {}
+fn assert_observer<Observer: ag_harness::lifecycle::LifecycleObserver>(_observer: Observer) {}
 
 #[test]
 fn external_consumer_configures_every_catalog_provider() {
@@ -822,15 +832,14 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     let options = TurnOptions::new(schema.clone(), policy, limits);
 
     // Act
-    let once = harness
-        .run_once_with_options("Read the name", options.clone())
-        .await?;
+    let once = harness.turn("Read the name", options.clone()).await?;
     let mut session = harness.session("options", schema.clone()).create().await?;
     let durable = session
-        .send_with_options("Read the name", options.clone())
+        .turn("Read the name")
+        .options(options.clone())
         .await?;
     let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read), limits);
-    let recalled = session.send_with_options("Recall the name", denied).await?;
+    let recalled = session.turn("Recall the name").options(denied).await?;
 
     // Assert
     assert_eq!(once.output(), durable.output());
@@ -840,7 +849,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     assert_eq!(recalled.report().history().evicted_turns(), 0);
     assert_eq!(
         once.report().history(),
-        ag_harness::HistoryActivity::default()
+        ag_harness::turn::HistoryActivity::default()
     );
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
@@ -910,14 +919,12 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
     .with_comparison_base(base.clone());
 
     // Act
-    let once = harness
-        .run_once_with_options("inspect base", options.clone())
-        .await?;
+    let once = harness.turn("inspect base", options.clone()).await?;
     let mut session = harness
         .session("comparison", request()?.schema().clone())
         .create()
         .await?;
-    let durable = session.send_with_options("inspect base", options).await?;
+    let durable = session.turn("inspect base").options(options).await?;
 
     // Assert
     assert_eq!(base, validated);
@@ -1218,13 +1225,19 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
 
     // Act
     let first = session
-        .submit("job", external_image_input(b"one")?, options())
+        .turn(external_image_input(b"one")?)
+        .options(options())
+        .host_id("job")
         .await?;
     let retried = session
-        .submit("job", external_image_input(b"one")?, options())
+        .turn(external_image_input(b"one")?)
+        .options(options())
+        .host_id("job")
         .await?;
     let changed = session
-        .submit("job", external_image_input(b"two")?, options())
+        .turn(external_image_input(b"two")?)
+        .options(options())
+        .host_id("job")
         .await;
 
     // Assert
@@ -1365,9 +1378,7 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
         .repository(repository_fixture::repository_with_host_git(&root));
 
     // Act
-    let outcome = harness
-        .run_once_with_options("printf scripted", options)
-        .await?;
+    let outcome = harness.turn("printf scripted", options).await?;
     let result: CommandOutcome = serde_json::from_value(outcome.into_output())?;
 
     // Assert

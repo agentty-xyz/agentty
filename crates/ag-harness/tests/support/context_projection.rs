@@ -4,12 +4,14 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use ag_harness::{
-    ContextBudget, ContextEstimator, ExecutionIdentity, Harness, HostTurnStatus, Model,
-    ModelCapabilities, ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelRegistry,
-    ModelRequest, ModelResponse, SessionError, SessionStore, ToolCall, ToolDefinition, TurnError,
-    TurnInput, WriteStatus,
+use ag_harness::model::{
+    ContextBudget, ContextEstimator, ModelCapabilities, ModelCompletion, ModelMessage,
+    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
+use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
+use ag_harness::store::{SessionStore, WriteStatus};
+use ag_harness::tool::{ToolCall, ToolDefinition};
+use ag_harness::{Harness, Model, ModelError, SessionError, TurnError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -126,15 +128,21 @@ async fn projection_bounds_requests_and_replays_without_continuation() {
 
         // Act
         let first = session
-            .submit("first", "one", options())
+            .turn("one")
+            .options(options())
+            .host_id("first")
             .await
             .expect("first turn");
         let second = fresh
-            .submit("second", "two", options())
+            .turn("two")
+            .options(options())
+            .host_id("second")
             .await
             .expect("turn on a handle that never saw the first turn");
         let third = session
-            .submit("third", "three", options())
+            .turn("three")
+            .options(options())
+            .host_id("third")
             .await
             .expect("third turn");
 
@@ -198,7 +206,7 @@ async fn oversized_mandatory_content_fails_before_acquisition() {
             .expect("session");
 
         // Act
-        let rejected = session.submit("never", "hi", options()).await;
+        let rejected = session.turn("hi").options(options()).host_id("never").await;
 
         // Assert
         assert!(matches!(

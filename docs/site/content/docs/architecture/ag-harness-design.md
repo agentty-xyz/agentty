@@ -44,8 +44,15 @@ crates/
 - `Harness` owns the model, validated repository, configured defaults, lifecycle
   observers, and the selected session store.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
+- `Session::turn` is the configurable durable-turn entry point: chain `options` and
+  `host_id`, then either await the turn or `start` it for a `TurnControl`.
+  `Harness::turn` takes explicit options for a stateless turn and is likewise awaited or
+  started; it has no host ID.
 - `TurnOptions` fixes the schema, `ToolPolicy`, limits, and optional `ComparisonBase`
   for one execution. Explicit options replace defaults; they are never merged.
+- The crate root exports what a typical host needs; extension points and detailed
+  records live in the `provider`, `model`, `tool`, `bash`, `turn`, `store`, `recovery`,
+  and `lifecycle` modules.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys with declared `ModelCapabilities`.
 - `SessionStore` is the public persistence contract and `BashExecutor` the public
@@ -78,7 +85,7 @@ flowchart TD
   turn acquisition or model switch, the same way for every store.
 - Each turn records its effective options, comparison identity, and model provenance
   before execution. Write and command intents persist before their effects.
-- `submit`/`recover` bind host-assigned request IDs to a fingerprint of the effective
+- `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective
   request, so matching retries return recorded outcomes instead of executing again.
 - `switch_model` selects another registration for an idle session. `compact` publishes a
   schema-validated summary checkpoint that request projection replays ahead of the
@@ -92,12 +99,12 @@ flowchart TD
 
 ## Cancellation and settlement
 
-Controlled turns separate the caller's future from the turn's fate. `TurnControl`
-cancels promptly, then `settled()`, `effects_settled()`, and `commands_settled()`
-observe persistence cleanup, filesystem replacements, and command cleanup independently.
-Retained work survives caller drop, and unresolved effects block new durable turns
-rather than being forgotten. Neither boundary provides rollback or distributed workspace
-fencing.
+Started turns (`turn(...).start()`) separate the caller's future from the turn's fate.
+`TurnControl` cancels promptly, then `settled()`, `effects_settled()`, and
+`commands_settled()` observe persistence cleanup, filesystem replacements, and command
+cleanup independently. Retained work survives caller drop, and unresolved effects block
+new durable turns rather than being forgotten. Neither boundary provides rollback or
+distributed workspace fencing.
 
 ## Permissions and tools
 

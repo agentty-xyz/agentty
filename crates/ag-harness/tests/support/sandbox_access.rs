@@ -2,7 +2,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ag_harness::{BashConfig, CommandOutcome, ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use ag_harness::bash::{BashConfig, CommandOutcome};
+use ag_harness::{ToolPolicy, TurnError, TurnLimits, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
 
@@ -16,7 +17,7 @@ async fn native_linux_denies_keyrings_and_nested_user_namespaces() {
     // Act
     let result = workspace
         .harness()
-        .run_once_with_options(
+        .turn(
             format!(
                 "'{}' keyring && '{}' namespace",
                 fixture.executable().display(),
@@ -32,7 +33,7 @@ async fn native_linux_denies_keyrings_and_nested_user_namespaces() {
     assert_eq!(result.exit_code, Some(0), "{result:?}");
     assert_eq!(
         result.cleanup_scope,
-        ag_harness::CommandCleanupScope::PidNamespace
+        ag_harness::bash::CommandCleanupScope::PidNamespace
     );
 }
 
@@ -58,7 +59,7 @@ async fn native_linux_denies_writes_links_and_renames_outside_grants() {
     // Act
     let result = workspace
         .harness()
-        .run_once_with_options(
+        .turn(
             "set -e; printf allowed > output/file; if printf escaped > /probe; then exit 91; fi; \
              if /bin/mkdir /escaped-directory; then exit 92; fi; if /bin/ln input \
              output/hardlink; then exit 93; fi; if /bin/mv input output/moved; then exit 94; fi; \
@@ -110,7 +111,7 @@ async fn native_linux_protects_existing_metadata_and_permits_new_repositories_in
     // Act
     let result = workspace
         .harness()
-        .run_once_with_options(
+        .turn(
             "set -e; if printf changed > output/nested/.git/config; then exit 91; fi; /bin/mkdir \
              -p output/fresh/.git; printf fresh > output/fresh/.git/config; printf allowed > \
              output/ordinary",
@@ -186,12 +187,12 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
     // Act
     let denied = workspace
         .harness()
-        .run_once_with_options("printf escaped > output/escaped", options)
+        .turn("printf escaped > output/escaped", options)
         .await;
     std::os::unix::fs::symlink(outside.path(), workspace.path().join("alias")).expect("alias");
     let alias = workspace
         .harness()
-        .run_once_with_options(
+        .turn(
             "printf escaped > output/escaped",
             workspace.options(Duration::from_secs(5), 128),
         )
@@ -204,7 +205,7 @@ async fn native_denied_tool_and_unsafe_aliases_never_execute() {
     };
     assert_eq!(
         outcome.execution_failure,
-        Some(ag_harness::BashError::Unavailable)
+        Some(ag_harness::bash::BashError::Unavailable)
     );
     assert!(!workspace.path().join("output/escaped").exists());
 }
@@ -248,7 +249,7 @@ async fn native_rejects_hardlinks_ipc_nodes_and_missing_enforcement_before_execu
         // Act
         let result = workspace
             .harness()
-            .run_once_with_options("printf escaped > output/escaped", options)
+            .turn("printf escaped > output/escaped", options)
             .await;
 
         // Assert
@@ -278,7 +279,9 @@ async fn native_external_contents_require_a_read_grant_and_precancel_never_spawn
         .with_read(secret)
         .expect("read grant");
     let harness = workspace.harness();
-    let cancelled = harness.run_once_controlled("printf escaped > output/escaped", options.clone());
+    let cancelled = harness
+        .turn("printf escaped > output/escaped", options.clone())
+        .start();
     let control = cancelled.control();
     control.cancel();
 
@@ -289,11 +292,11 @@ async fn native_external_contents_require_a_read_grant_and_precancel_never_spawn
         .await
         .expect("no command effects");
     let denied = harness
-        .run_once_with_options(command.as_str(), options.clone())
+        .turn(command.as_str(), options.clone())
         .await
         .expect("denied command result");
     let permitted = harness
-        .run_once_with_options(command.as_str(), options.with_bash(configuration))
+        .turn(command.as_str(), options.with_bash(configuration))
         .await
         .expect("granted command result");
     let denied: CommandOutcome =
@@ -367,7 +370,7 @@ async fn native_inherited_descriptors_and_environment_are_not_command_capabiliti
     // Act
     let result = workspace
         .harness()
-        .run_once_with_options(
+        .turn(
             format!(
                 "'{}' fd {descriptor}; status=$?; printf '%s|%s|%s' \"$status\" \"$VISIBLE\" \
                  \"${{HOME-unset}}\"",
@@ -440,7 +443,7 @@ async fn native_loader_environment_applies_only_after_isolation() {
     // Act
     let result = workspace
         .harness()
-        .run_once_with_options("unused", options.with_bash(configuration))
+        .turn("unused", options.with_bash(configuration))
         .await
         .expect("turn");
     let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
@@ -505,7 +508,7 @@ async fn native_metadata_denials_include_new_names_and_nested_repository_scope()
     .with_write(".".into())
     .expect("nested grant");
     let nested_result = nested
-        .run_once_with_options(
+        .turn(
             "if printf changed > .git/config; then exit 94; fi; /bin/mkdir fresh; if /bin/mkdir \
              fresh/.git; then exit 95; fi; printf allowed > ordinary",
             options.with_bash(with_runtime(configuration, &[])),
@@ -595,10 +598,12 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
     std::fs::create_dir(root.join("output/scope")).expect("grant");
     let (_gate, ready, release, options) = gated_scope_options(&workspace);
     let harness = workspace.harness();
-    let turn = harness.run_once_controlled(
-        "if printf corrupted > output/scope/config; then exit 91; fi; printf confined",
-        options,
-    );
+    let turn = harness
+        .turn(
+            "if printf corrupted > output/scope/config; then exit 91; fi; printf confined",
+            options,
+        )
+        .start();
     let control = turn.control();
     let mut turn = Box::pin(turn);
 
@@ -608,7 +613,7 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
         result = &mut turn => std::panic::resume_unwind(Box::new(format!("victim finished before gate: {result:?}"))),
     }
     let attacker = harness
-        .run_once_with_options(
+        .turn(
             "/bin/mv output/scope output/original; /bin/ln -s ../.git output/scope",
             workspace.options_with_runtime(
                 &["/bin/mv".into(), "/bin/ln".into()],
@@ -646,7 +651,7 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
         assert_eq!(outcome.stdout, "confined");
         assert_eq!(
             outcome.cleanup_scope,
-            ag_harness::CommandCleanupScope::ProcessGroupBestEffort
+            ag_harness::bash::CommandCleanupScope::ProcessGroupBestEffort
         );
     }
     #[cfg(target_os = "linux")]

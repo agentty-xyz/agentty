@@ -8,11 +8,13 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use std::{env, fmt};
 
-use ag_harness::{
-    Harness, KimiConfig, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
-    MUSE_SPARK_1_3, ModelClient, ModelRequestActivity, ModelResponseType, MuseConfig, OutputSchema,
-    QwenConfig, Repository, Tool, ToolActivity, TurnOutcome,
+use ag_harness::lifecycle::{
+    LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, ModelResponseType,
 };
+use ag_harness::model::ModelClient;
+use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QwenConfig};
+use ag_harness::turn::{ModelRequestActivity, ToolActivity};
+use ag_harness::{Harness, OutputSchema, Repository, Tool, TurnOutcome};
 use opentelemetry::global;
 use opentelemetry::trace::SpanId;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};

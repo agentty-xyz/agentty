@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use ag_harness::{CommandOutcome, CommandTermination};
+use ag_harness::bash::{CommandOutcome, CommandTermination};
 
 use super::fixture::{CONFORMANCE_EXECUTORS, Workspace, wait_file};
 #[cfg(target_os = "macos")]
@@ -15,7 +15,7 @@ async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() 
         // Act
         let output = workspace
             .harness()
-            .run_once_with_options(
+            .turn(
                 "(/bin/sleep 0.1; printf finished > output/child) & printf 12345678901234567890; \
                  printf abcdefghijklmnopqrstuvwxyz >&2; exit 7",
                 options,
@@ -52,10 +52,12 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
         // Arrange
         let workspace = Workspace::new();
         let harness = workspace.harness();
-        let turn = harness.run_once_controlled(
-            "printf ready > output/ready; /bin/sleep 30",
-            workspace.executor_options(selected, Duration::from_secs(10), 128),
-        );
+        let turn = harness
+            .turn(
+                "printf ready > output/ready; /bin/sleep 30",
+                workspace.executor_options(selected, Duration::from_secs(10), 128),
+            )
+            .start();
         let control = turn.control();
         let mut turn = Box::pin(turn);
 
@@ -76,7 +78,7 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
             .expect("filesystem settlement");
         control.settled().await.expect("persistence settlement");
         let timeout = harness
-            .run_once_with_options(
+            .turn(
                 "/bin/sleep 30",
                 workspace.executor_options(selected, Duration::from_millis(500), 128),
             )
@@ -114,7 +116,7 @@ async fn native_detached_fork_and_posix_spawn_keep_access_confinement_and_report
             forbidden.display()
         );
         let harness = workspace.harness();
-        let turn = harness.run_once_controlled(command, fixture.options(&workspace));
+        let turn = harness.turn(command, fixture.options(&workspace)).start();
         let control = turn.control();
         let mut turn = Box::pin(turn);
 
@@ -152,7 +154,7 @@ async fn native_detached_fork_and_posix_spawn_keep_access_confinement_and_report
         );
         assert_eq!(
             result.cleanup_scope,
-            ag_harness::CommandCleanupScope::ProcessGroupBestEffort
+            ag_harness::bash::CommandCleanupScope::ProcessGroupBestEffort
         );
     }
 }
@@ -167,7 +169,7 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
         // Act
         let result = workspace
             .harness()
-            .run_once_with_options(
+            .turn(
                 "while :; do printf 'output-flood'; printf 'stderr-flood' >&2; done",
                 options,
             )

@@ -5,12 +5,14 @@ use serde_json::json;
 
 use crate::harness::Harness;
 use crate::harness::tests::support::{model, response_without_metadata};
-use crate::model::{MockModel, ModelError, ModelResponse};
+use crate::model::{MockModel, ModelCapabilities, ModelError, ModelRegistry, ModelResponse};
+use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
+use crate::store::MemoryStore;
 use crate::store_conformance_test::{image_input, png_image};
 use crate::{
-    ExecutionIdentity, InputBlock, MemoryStore, ModelCapabilities, ModelRegistry, OutputSchema,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions,
+    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
+    TurnOptions,
 };
 
 #[tokio::test]

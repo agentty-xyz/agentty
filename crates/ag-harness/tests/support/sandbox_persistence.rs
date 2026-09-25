@@ -2,7 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_harness::{CommandTermination, MemoryStore, SessionStore, SqliteStore, TurnError};
+use ag_harness::bash::CommandTermination;
+use ag_harness::store::{MemoryStore, SessionStore, SqliteStore};
+use ag_harness::{Session, SessionError, TurnError, TurnOptions, TurnOutcome};
 
 use super::fixture::{CONFORMANCE_EXECUTORS, Selected, Workspace, fault_store, schema, wait_file};
 #[tokio::test]
@@ -28,7 +30,9 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
 
             // Act
             let first = session
-                .submit("command-id", command, options.clone())
+                .turn(command)
+                .options(options.clone())
+                .host_id("command-id")
                 .await
                 .expect("first command");
             drop(session);
@@ -45,7 +49,9 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
                 .await
                 .expect("resume Bash history");
             let duplicate = session
-                .submit("command-id", command, options.clone())
+                .turn(command)
+                .options(options.clone())
+                .host_id("command-id")
                 .await
                 .expect("duplicate");
             let records = session.commands().await.expect("command records");
@@ -67,15 +73,15 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
                 "{selected:?}: {records:?}"
             );
             session
-                .submit(
-                    "next-id",
-                    "printf y >> output/executions; printf next",
-                    options.clone(),
-                )
+                .turn("printf y >> output/executions; printf next")
+                .options(options.clone())
+                .host_id("next-id")
                 .await
                 .expect("new turn after reopening Bash history");
             let retry = session
-                .submit("command-id", command, options)
+                .turn(command)
+                .options(options)
+                .host_id("command-id")
                 .await
                 .expect("old ID after another turn");
             assert_eq!(retry, first, "{selected:?}");
@@ -87,8 +93,12 @@ async fn durable_commands_survive_reopen_and_host_retries_do_not_spawn() {
             let changed = workspace.executor_options(selected, Duration::from_secs(6), 128);
             assert!(
                 matches!(
-                    session.submit("command-id", command, changed).await,
-                    Err(ag_harness::SessionError::HostTurnConflict)
+                    session
+                        .turn(command)
+                        .options(changed)
+                        .host_id("command-id")
+                        .await,
+                    Err(SessionError::HostTurnConflict)
                 ),
                 "{selected:?}"
             );
@@ -139,7 +149,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     .expect("intent fault");
 
     // Act
-    let denied = session.submit("intent", command, options.clone()).await;
+    let denied = submit(&mut session, "intent", command, options.clone()).await;
     let spawned = workspace.path().join("output/executions").exists();
     let records = session.commands().await.expect("no intents");
     sqlx::query("DROP TRIGGER fail_intent")
@@ -154,8 +164,10 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     .await
     .expect("outcome fault");
     let turn = session
-        .submit_controlled("outcome", command, options.clone())
-        .expect("turn");
+        .turn(command)
+        .options(options.clone())
+        .host_id("outcome")
+        .start();
     let control = turn.control();
     let failed = turn.await;
     control
@@ -164,7 +176,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
         .expect("persistence independently settled");
     let settlement = control.commands_settled().await;
     let pending = session.commands().await.expect("pending intent");
-    let blocked = session.submit("successor", command, options.clone()).await;
+    let blocked = submit(&mut session, "successor", command, options.clone()).await;
     sqlx::query("DROP TRIGGER fail_outcome")
         .execute(&pool)
         .await
@@ -175,9 +187,8 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
         .expect("retry original recording");
     control.commands_settled().await.expect("settled command");
     let recorded = session.commands().await.expect("observed outcome");
-    let duplicate = session.submit("outcome", command, options.clone()).await;
-    session
-        .submit("successor", "printf next", options)
+    let duplicate = submit(&mut session, "outcome", command, options.clone()).await;
+    submit(&mut session, "successor", "printf next", options)
         .await
         .expect("successor admission");
     control.retry_commands().await.expect("stale retry");
@@ -185,7 +196,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     // Assert
     assert!(matches!(
         denied,
-        Err(ag_harness::SessionError::Turn(TurnError::CommandJournal {
+        Err(SessionError::Turn(TurnError::CommandJournal {
             outcome: None,
             ..
         }))
@@ -194,7 +205,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     assert_eq!(records, []);
     assert!(matches!(
         failed,
-        Err(ag_harness::SessionError::Turn(TurnError::CommandJournal {
+        Err(SessionError::Turn(TurnError::CommandJournal {
             outcome: Some(_),
             ..
         }))
@@ -202,10 +213,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
     assert!(settlement.is_err());
     assert_eq!(pending.len(), 1);
     assert!(pending[0].outcome.is_none());
-    assert!(matches!(
-        blocked,
-        Err(ag_harness::SessionError::Busy { .. })
-    ));
+    assert!(matches!(blocked, Err(SessionError::Busy { .. })));
     assert_eq!(
         recorded[0].outcome.as_ref().expect("outcome").stdout,
         "observed"
@@ -242,12 +250,10 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .await
         .expect("session");
     let turn = session
-        .submit_controlled(
-            "owner",
-            "printf ready > output/ready; /bin/sleep 180",
-            workspace.executor_options(selected, Duration::from_secs(300), 128),
-        )
-        .expect("controlled submission");
+        .turn("printf ready > output/ready; /bin/sleep 180")
+        .options(workspace.executor_options(selected, Duration::from_secs(300), 128))
+        .host_id("owner")
+        .start();
     let control = turn.control();
     let mut turn = Box::pin(turn);
     let ready = workspace.path().join("output/ready");
@@ -270,10 +276,7 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
     let records = session.commands().await.expect("late record");
 
     // Assert
-    assert!(matches!(
-        failure,
-        Err(ag_harness::SessionError::OwnershipLost { .. })
-    ));
+    assert!(matches!(failure, Err(SessionError::OwnershipLost { .. })));
     assert_eq!(records.len(), 1);
     let outcome = records[0]
         .outcome
@@ -282,4 +285,13 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
     assert_eq!(outcome.termination, CommandTermination::Cancelled);
     assert!(!outcome.cleanup_failed);
     assert!(!records[0].blocks_admission());
+}
+
+async fn submit(
+    session: &mut Session,
+    host_id: &str,
+    input: &str,
+    options: TurnOptions,
+) -> Result<TurnOutcome, SessionError> {
+    session.turn(input).options(options).host_id(host_id).await
 }

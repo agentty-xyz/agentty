@@ -457,7 +457,7 @@ pub(super) async fn acquire(
     store: Arc<dyn SessionStore>,
     session_id: &str,
     prompt: &str,
-) -> Result<crate::AcquiredTurn, SessionError> {
+) -> Result<crate::store::AcquiredTurn, SessionError> {
     reservation::acquire(
         store,
         (session_id.to_string(), 0),

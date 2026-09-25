@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{fs, io};
 
-use ag_harness::{ModelProvider, ToolDefinition};
+use ag_harness::provider::ModelProvider;
+use ag_harness::tool::ToolDefinition;
 use assert_cmd::cargo::cargo_bin;
 use serde_json::json;
 use testty::session::PtySessionBuilder;

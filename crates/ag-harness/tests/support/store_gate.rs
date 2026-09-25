@@ -4,11 +4,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ag_harness::{
-    AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, LoadedSession, ModelMessage,
-    ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity, TurnError, TurnInput,
-    TurnOptions, TurnOutcome, TurnOwner, WriteRecord,
+use ag_harness::model::{ModelMessage, ModelMetadata};
+use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use ag_harness::store::{
+    AcquiredTurn, LoadedSession, NewSession, SessionStore, StoreIdentity, TurnOwner, WriteRecord,
 };
+use ag_harness::{SessionError, TurnError, TurnInput, TurnOptions, TurnOutcome};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -68,7 +69,7 @@ impl SessionStore for Gate {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &ag_harness::SessionCheckpoint,
+        checkpoint: &ag_harness::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
@@ -77,9 +78,9 @@ impl SessionStore for Gate {
         &self,
         id: &str,
         generation: i64,
-        identity: &ag_harness::ExecutionIdentity,
+        identity: &ag_harness::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::ModelCapabilities,
+        capabilities: ag_harness::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         if self.panic_switch {
             std::panic::resume_unwind(Box::new("injected switch panic"));

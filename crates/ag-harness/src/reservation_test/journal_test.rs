@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::TurnInput;
 use crate::session::{Database, NewSession};
-use crate::store::SessionStore;
+use crate::store::{SessionStore, WriteStatus};
 use crate::store_conformance_test::{options, schema};
-use crate::{TurnInput, WriteStatus};
 
 async fn create_session(database: &Database) {
     database

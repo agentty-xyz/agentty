@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, io};
 
+use ag_harness::model::ReasoningEffort;
+use ag_harness::provider::{ModelConfiguration, ModelConfigurationError, ModelProvider};
+use ag_harness::store::SessionInfo;
 use ag_harness::{
-    ComparisonBase, Harness, ModelConfiguration, ModelConfigurationError, ModelProvider,
-    OutputSchema, ReasoningEffort, Repository, Session, SessionInfo, Tool, ToolPolicy, TurnLimits,
+    ComparisonBase, Harness, OutputSchema, Repository, Session, Tool, ToolPolicy, TurnLimits,
     TurnOptions, TurnOutcome,
 };
 use clap::builder::{PossibleValuesParser, TypedValueParser};
@@ -417,7 +419,7 @@ fn model_client(
     model: &str,
     base_url: Option<&str>,
     environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
-) -> Result<ag_harness::ModelClient, CliError> {
+) -> Result<ag_harness::model::ModelClient, CliError> {
     let mut configuration = ModelConfiguration::new(provider, model);
     if let Some(base_url) = base_url {
         configuration = configuration.base_url(base_url);
@@ -448,7 +450,7 @@ async fn comparison_options(
 }
 
 fn configured_harness(
-    client: ag_harness::ModelClient,
+    client: ag_harness::model::ModelClient,
     database: PathBuf,
     repository: Repository,
     allow_write: bool,
@@ -517,7 +519,7 @@ where
         if prompt.trim().is_empty() {
             continue;
         }
-        match session.send_with_options(prompt, options.clone()).await {
+        match session.turn(prompt).options(options.clone()).await {
             Ok(outcome) => write_outcome(&mut output, requested_model, &outcome).await?,
             Err(error) if mode == ChatMode::Interactive => {
                 write_turn_error(&mut output, &error).await?;
@@ -590,8 +592,10 @@ async fn write_outcome(
         let model = completion
             .and_then(|metadata| metadata.response_model())
             .unwrap_or(requested_model);
-        let finish_reason =
-            completion.map_or("unavailable", ag_harness::CompletionMetadata::finish_reason);
+        let finish_reason = completion.map_or(
+            "unavailable",
+            ag_harness::model::CompletionMetadata::finish_reason,
+        );
         let model = single_line_terminal_text(model);
         let finish_reason = single_line_terminal_text(finish_reason);
         let usage = completion
@@ -635,7 +639,7 @@ async fn write_turn_error(
     output.flush().await
 }
 
-fn format_usage(usage: &ag_harness::CompletionUsage) -> String {
+fn format_usage(usage: &ag_harness::model::CompletionUsage) -> String {
     let input = usage
         .input_tokens()
         .map_or_else(|| "?".to_string(), |tokens| tokens.to_string());

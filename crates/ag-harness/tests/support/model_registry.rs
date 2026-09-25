@@ -3,11 +3,14 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use ag_harness::{
-    ExecutionIdentity, Harness, Model, ModelCapabilities, ModelCompletion, ModelConfiguration,
-    ModelError, ModelMetadata, ModelProvider, ModelRegistry, ModelRegistryError, ModelRequest,
-    ModelResponse, SessionError, SqliteStore,
+use ag_harness::model::{
+    ModelCapabilities, ModelCompletion, ModelMetadata, ModelRegistry, ModelRegistryError,
+    ModelRequest, ModelResponse,
 };
+use ag_harness::provider::{ModelConfiguration, ModelProvider};
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::SqliteStore;
+use ag_harness::{Harness, Model, ModelError, SessionError};
 use async_trait::async_trait;
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -153,7 +156,9 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
 
         // Act
         let original = session
-            .submit("id", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("id")
             .await
             .expect("original");
         drop(session);
@@ -164,7 +169,9 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
         let mut resumed = harness.resume("session").await.expect("resume");
         drop(harness);
         let duplicate = resumed
-            .submit("id", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("id")
             .await
             .expect("duplicate");
         for (key, revision) in [("primary", "2"), ("other", "1")] {
@@ -201,7 +208,9 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
             .resume("session")
             .await
             .expect("resume")
-            .submit("id", "hello", options())
+            .turn("hello")
+            .options(options())
+            .host_id("id")
             .await;
 
         // Assert
@@ -227,7 +236,9 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
         .await
         .expect("session");
     let original = session
-        .submit("id", "hello", options())
+        .turn("hello")
+        .options(options())
+        .host_id("id")
         .await
         .expect("original");
     drop(session);
@@ -256,8 +267,10 @@ async fn registry_reconstruction_recovers_sqlite_request_after_reopen() {
         .await
         .expect("resume");
     let recovered = session
-        .submit_controlled("id", "hello", options())
-        .expect("controlled")
+        .turn("hello")
+        .options(options())
+        .host_id("id")
+        .start()
         .await
         .expect("recovered");
 

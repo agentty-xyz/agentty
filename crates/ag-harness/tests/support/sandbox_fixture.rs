@@ -5,10 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ag_harness::bash::{BashConfig, CommandOutcome, UnsandboxedExecutor};
+use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
+use ag_harness::recovery::ExecutionIdentity;
+use ag_harness::store::SqliteStore;
+use ag_harness::tool::ToolCall;
 use ag_harness::{
-    BashConfig, CommandOutcome, ExecutionIdentity, Harness, Model, ModelCompletion, ModelError,
-    ModelMessage, ModelRequest, ModelResponse, OutputSchema, Repository, SqliteStore, Tool,
-    ToolCall, ToolPolicy, TurnLimits, TurnOptions, UnsandboxedExecutor,
+    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -175,7 +178,7 @@ impl Workspace {
     pub(super) async fn run(&self, command: &str) -> CommandOutcome {
         let output = self
             .harness()
-            .run_once_with_options(command, self.options(Duration::from_secs(10), 1024))
+            .turn(command, self.options(Duration::from_secs(10), 1024))
             .await
             .expect("turn");
 

@@ -7,13 +7,15 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use super::Status;
+use crate::bash::CommandIntent;
+use crate::model::{ModelMessage, ModelMetadata};
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::Database;
-use crate::store_conformance_test::{harness, options, schema};
-use crate::{
-    CommandIntent, ComparisonBase, HostRequest, HostTurnAcquisition, HostTurnStatus, MemoryStore,
-    ModelError, ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
-    TurnError, TurnInput, TurnOwner, WriteRecord, WriteStatus,
+use crate::store::{
+    MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner, WriteRecord, WriteStatus,
 };
+use crate::store_conformance_test::{harness, options, schema};
+use crate::{ComparisonBase, ModelError, SessionError, TurnError, TurnInput};
 
 #[tokio::test]
 async fn clones_share_state_independent_stores_and_one_shot_are_isolated() {

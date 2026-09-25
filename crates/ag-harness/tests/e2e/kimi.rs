@@ -1,6 +1,7 @@
 //! Live Kimi provider check.
 
-use ag_harness::{KimiConfig, ModelClient};
+use ag_harness::model::ModelClient;
+use ag_harness::provider::KimiConfig;
 
 use crate::{DynError, greeting};
 

@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use crate::TurnOutcome;
 use crate::input::TurnInput;
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, SessionError};
-use crate::{
-    HostRequest, HostTurnAcquisition, HostTurnStatus, NewSession, SessionStore, TurnOutcome,
-    TurnReport,
-};
+use crate::store::{NewSession, SessionStore};
+use crate::turn::TurnReport;
 
 #[tokio::test]
 async fn recovery_acquisition_is_atomic_across_independent_sqlite_pools() {

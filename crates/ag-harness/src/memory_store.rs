@@ -9,13 +9,15 @@ use async_trait::async_trait;
 use tokio::time::Instant;
 
 use crate::input::TurnInput;
+use crate::model::{ModelMessage, ModelMetadata};
+use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
-use crate::write_journal::content_hash;
-use crate::{
-    AcquiredTurn, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus, LoadedSession,
-    ModelMessage, ModelMetadata, NewSession, SessionError, SessionStore, StoreIdentity,
-    StoredTurnOptions, TurnError, TurnOptions, TurnOutcome, TurnOwner, WriteRecord, WriteStatus,
+use crate::store::{
+    AcquiredTurn, LoadedSession, NewSession, SessionStore, StoreIdentity, StoredTurnOptions,
+    TurnOwner, WriteRecord, WriteStatus,
 };
+use crate::write_journal::content_hash;
+use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
 /// In-memory session history and write journals, with no restart durability.
 ///
@@ -85,7 +87,7 @@ impl MemoryStore {
         if session
             .commands
             .iter()
-            .any(crate::CommandRecord::blocks_admission)
+            .any(crate::bash::CommandRecord::blocks_admission)
         {
             return Err(SessionError::Busy {
                 id: session_id.into(),
@@ -194,7 +196,7 @@ impl SessionStore for MemoryStore {
     async fn load_commands(
         &self,
         session_id: &str,
-    ) -> Result<Vec<crate::CommandRecord>, SessionError> {
+    ) -> Result<Vec<crate::bash::CommandRecord>, SessionError> {
         self.lock()
             .sessions
             .get(session_id)
@@ -207,7 +209,7 @@ impl SessionStore for MemoryStore {
     async fn command_intent(
         &self,
         owner: &TurnOwner,
-        intent: &crate::CommandIntent,
+        intent: &crate::bash::CommandIntent,
     ) -> Result<i64, SessionError> {
         self.validate_identity(owner)?;
         let mut state = self.lock();
@@ -218,7 +220,7 @@ impl SessionStore for MemoryStore {
         state.next_command = id;
         let session = state.owned_session(owner)?;
         session.live_turn(owner)?;
-        session.commands.push(crate::CommandRecord::pending(
+        session.commands.push(crate::bash::CommandRecord::pending(
             id,
             owner.clone(),
             intent.clone(),
@@ -231,7 +233,7 @@ impl SessionStore for MemoryStore {
         &self,
         owner: &TurnOwner,
         id: i64,
-        outcome: &crate::CommandOutcome,
+        outcome: &crate::bash::CommandOutcome,
     ) -> Result<(), SessionError> {
         self.validate_identity(owner)?;
         let mut state = self.lock();
@@ -339,7 +341,7 @@ impl SessionStore for MemoryStore {
     async fn publish_checkpoint(
         &self,
         session_id: &str,
-        checkpoint: &crate::SessionCheckpoint,
+        checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError> {
         let mut state = self.lock();
         let session = state
@@ -372,9 +374,9 @@ impl SessionStore for MemoryStore {
         &self,
         id: &str,
         generation: i64,
-        identity: &crate::ExecutionIdentity,
+        identity: &crate::recovery::ExecutionIdentity,
         metadata: Option<ModelMetadata>,
-        capabilities: crate::ModelCapabilities,
+        capabilities: crate::model::ModelCapabilities,
     ) -> Result<i64, SessionError> {
         let mut state = self.lock();
         let session = state
@@ -394,7 +396,7 @@ impl SessionStore for MemoryStore {
             || session
                 .commands
                 .iter()
-                .any(crate::CommandRecord::blocks_admission)
+                .any(crate::bash::CommandRecord::blocks_admission)
         {
             return Err(SessionError::Busy { id: id.to_string() });
         }
@@ -609,7 +611,7 @@ impl State {
 }
 
 struct Record {
-    commands: Vec<crate::CommandRecord>,
+    commands: Vec<crate::bash::CommandRecord>,
     configuration: LoadedSession,
     next_turn: i64,
     turns: Vec<TurnRecord>,
@@ -680,7 +682,7 @@ impl Record {
             .configuration
             .checkpoint
             .as_ref()
-            .map_or(-1, crate::SessionCheckpoint::covered_through);
+            .map_or(-1, crate::store::SessionCheckpoint::covered_through);
         let mut remaining = self.configuration.max_history_bytes;
         let mut turns = Vec::new();
         for turn in self.turns.iter().rev().filter(|turn| {
@@ -716,7 +718,7 @@ struct TurnRecord {
     deadline: Instant,
     error_type: Option<String>,
     messages: Vec<ModelMessage>,
-    model: crate::RecordedModel,
+    model: crate::store::RecordedModel,
     options: String,
     outcome: Option<TurnOutcome>,
     owner: TurnOwner,

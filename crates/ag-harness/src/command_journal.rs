@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::TurnOwner;
+use crate::store::TurnOwner;
 
 /// Frozen invocation stored before a sandbox can spawn. Environment values are
 /// excluded; policy contains their names and host-supplied revision.
@@ -30,7 +30,7 @@ pub struct CommandOutcome {
     /// descendants stopped.
     pub cleanup_scope: CommandCleanupScope,
     /// Content-free execution error classification, if any.
-    pub execution_failure: Option<crate::BashError>,
+    pub execution_failure: Option<crate::bash::BashError>,
     /// Main shell exit code, when observed.
     pub exit_code: Option<i32>,
     /// Main shell terminating signal, when observed.
