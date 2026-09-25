@@ -1027,6 +1027,12 @@ impl SessionHandles {
         }
     }
 
+    /// Reports whether persisted history still needs to be loaded before a
+    /// turn.
+    pub(crate) fn needs_transcript_hydration(&self) -> bool {
+        !self.transcript_is_hydrated.load(Ordering::Acquire)
+    }
+
     /// Creates handles initialized with a typed transcript snapshot.
     pub fn new_with_transcript(status: Status, transcript: SessionTranscript) -> Self {
         Self {

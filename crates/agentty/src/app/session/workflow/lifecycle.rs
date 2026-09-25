@@ -1270,6 +1270,7 @@ impl SessionManager {
     ) -> Result<(), SessionError> {
         let prompt = prompt.into();
         let session_index = self.session_index_or_err(session_id)?;
+        let persisted_prompt = Self::load_draft_prompt(services, session_id).await?;
         let (
             folder,
             persisted_session_id,
@@ -1294,7 +1295,7 @@ impl SessionManager {
 
             let next_attachment_number = session.draft_attachments.len().saturating_add(1);
             let staged_prompt =
-                Self::append_staged_prompt(&session.prompt, &prompt, next_attachment_number);
+                Self::append_staged_prompt(&persisted_prompt, &prompt, next_attachment_number);
             let mut staged_attachments = session.draft_attachments.clone();
             staged_attachments.extend(Self::renumbered_attachments(
                 &prompt,
@@ -1344,28 +1345,13 @@ impl SessionManager {
             }
         }
 
-        let title_generation_task_generation =
-            self.next_title_generation_task_generation(&persisted_session_id);
-        let title_generation_task =
-            Self::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
-                app_event_tx: services.event_sender(),
-                db: services.db().clone(),
-                folder: title_generation_context.folder,
-                latest_request: title_generation_prompt,
-                run_client: services.run_client(),
-                requires_provisional_title: false,
-                reasoning_level: title_generation_context.reasoning_level,
-                session_agent: title_generation_context.agent,
-                session_id: persisted_session_id.clone(),
-                speed_mode: title_generation_context.speed_mode,
-                tracked_generation: Some(title_generation_task_generation),
-            })
-            .await;
-        self.track_draft_title_generation_task(
+        self.schedule_staged_draft_title_generation(
+            services,
             &persisted_session_id,
-            title_generation_task_generation,
-            title_generation_task,
-        );
+            title_generation_prompt,
+            title_generation_context,
+        )
+        .await;
 
         SessionTaskService::emit_session_updated(
             &services.event_sender(),
@@ -1374,6 +1360,47 @@ impl SessionManager {
         );
 
         Ok(())
+    }
+
+    /// Reads the latest staged prompt before appending another draft message.
+    async fn load_draft_prompt(
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<String, SessionError> {
+        let detail = services
+            .db()
+            .sessions()
+            .load_session_detail(session_id)
+            .await?
+            .ok_or(SessionError::NotFound)?;
+
+        Ok(detail.prompt)
+    }
+
+    /// Starts title generation for the newly persisted staged draft.
+    async fn schedule_staged_draft_title_generation(
+        &mut self,
+        services: &AppServices,
+        session_id: &SessionId,
+        staged_prompt: String,
+        context: DraftTitleGenerationContext,
+    ) {
+        let generation = self.next_title_generation_task_generation(session_id);
+        let task = Self::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
+            app_event_tx: services.event_sender(),
+            db: services.db().clone(),
+            folder: context.folder,
+            latest_request: staged_prompt,
+            run_client: services.run_client(),
+            requires_provisional_title: false,
+            reasoning_level: context.reasoning_level,
+            session_agent: context.agent,
+            session_id: session_id.clone(),
+            speed_mode: context.speed_mode,
+            tracked_generation: Some(generation),
+        })
+        .await;
+        self.track_draft_title_generation_task(session_id, generation, task);
     }
 
     /// Tracks a newly spawned draft-title task or clears a superseded task
@@ -2424,16 +2451,17 @@ impl SessionManager {
         // rejected acceptance after an earlier successful enqueue.
         let should_replay_history = self.should_replay_history(session_id)
             || operation_id.as_deref() == Some(format!("workspace:{session_id}").as_str());
-        let (replay_transcript, is_first_message, persisted_session_id, title_to_save) = match self
-            .prepare_reply_context(session_id, &prompt, should_replay_history, eligibility)
-        {
-            Ok(reply_context) => reply_context,
-            Err(error) => {
-                self.append_reply_status_error(services, session_id, &error)
-                    .await;
-
-                return false;
-            }
+        let Some((replay_transcript, is_first_message, persisted_session_id, title_to_save)) = self
+            .prepare_hydrated_reply_context(
+                services,
+                session_id,
+                &prompt,
+                should_replay_history,
+                eligibility,
+            )
+            .await
+        else {
+            return false;
         };
 
         let app_event_tx = services.event_sender();
@@ -2517,6 +2545,38 @@ impl SessionManager {
         }
 
         enqueued != ReplyEnqueueOutcome::Failed
+    }
+
+    /// Hydrates a restarted session before replay context is captured.
+    async fn prepare_hydrated_reply_context(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: &TurnPrompt,
+        should_replay_history: bool,
+        eligibility: ReplyEligibility,
+    ) -> Option<ReplyContext> {
+        let hydration = if self
+            .state
+            .handle(session_id)
+            .is_some_and(SessionHandles::needs_transcript_hydration)
+        {
+            self.try_load_session_detail_into_state(services.db(), session_id)
+                .await
+        } else {
+            Ok(())
+        };
+
+        match hydration.and_then(|()| {
+            self.prepare_reply_context(session_id, prompt, should_replay_history, eligibility)
+        }) {
+            Ok(context) => Some(context),
+            Err(error) => {
+                self.append_reply_status_error(services, session_id, &error)
+                    .await;
+                None
+            }
+        }
     }
 
     /// Persists first-message metadata and starts a reply that targets a

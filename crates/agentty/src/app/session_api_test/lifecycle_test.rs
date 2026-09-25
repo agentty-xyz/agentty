@@ -12,7 +12,7 @@ use super::support::{
     persist_inherited_launch_settings, request_coordinator_message, request_message,
     request_session, request_session_creation, seed_active_orchestration_session,
 };
-use crate::app::AppEvent;
+use crate::app::{App, AppEvent};
 use crate::domain::orchestration::OrchestrationTaskKind;
 
 #[tokio::test]
@@ -321,6 +321,114 @@ async fn runtime_backend_starts_regular_and_staged_draft_messages() {
             .session_for_id(&draft_session_id)
             .map(|session| session.prompt.as_str()),
         Some("draft prompt")
+    );
+}
+
+#[tokio::test]
+async fn runtime_backend_preserves_saved_draft_when_message_arrives_after_restart() {
+    // Arrange
+    let (mut app, temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let session_id = request_session_creation(
+        &mut app,
+        CreateSessionRequest {
+            inherit_from_session_id: None,
+            mode: CreateSessionMode::Draft,
+            project_id,
+        },
+    )
+    .await
+    .expect("draft session should be created");
+    let database = app.services.db().clone();
+    database
+        .sessions()
+        .update_session_prompt(&session_id, "Saved draft")
+        .await
+        .expect("saved draft prompt");
+    drop(app);
+
+    let mut app_server = MockAppServerClient::new();
+    app_server
+        .expect_run_isolated_turn()
+        .times(0..)
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(AppServerTurnResponse {
+                    assistant_message: r#"{"answer":"ready","questions":[]}"#.to_string(),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    pid: None,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    app_server
+        .expect_shutdown_session()
+        .times(0..)
+        .returning(|_| Box::pin(async {}));
+    let clients = crate::test_support::test_app_clients()
+        .with_app_server_client_override(Arc::new(app_server));
+    let project_path = temp_dir.path().to_owned();
+    let mut reopened_app = App::new_with_clients(
+        project_path.clone(),
+        project_path,
+        Some("main".to_string()),
+        database.clone(),
+        clients,
+    )
+    .await
+    .expect("app should restart");
+    assert_eq!(
+        reopened_app
+            .sessions
+            .session_for_id(&session_id)
+            .expect("draft should reload")
+            .prompt,
+        ""
+    );
+    reopened_app
+        .sessions
+        .load_session_detail_into_state(reopened_app.services.db(), &session_id)
+        .await;
+    assert_eq!(
+        reopened_app
+            .sessions
+            .session_for_id(&session_id)
+            .expect("draft detail should load")
+            .prompt,
+        "Saved draft"
+    );
+    reopened_app.refresh_sessions_now().await;
+    assert_eq!(
+        reopened_app
+            .sessions
+            .session_for_id(&session_id)
+            .expect("draft should survive refresh")
+            .prompt,
+        ""
+    );
+
+    // Act
+    request_message(&mut reopened_app, session_id.clone(), "New draft")
+        .await
+        .expect("API message should start saved draft");
+
+    // Assert
+    let saved_detail = database
+        .sessions()
+        .load_session_detail(&session_id)
+        .await
+        .expect("draft detail should load")
+        .expect("draft should remain saved");
+    assert_eq!(saved_detail.prompt, "Saved draft\n\nNew draft");
+    assert_eq!(
+        reopened_app
+            .sessions
+            .session_for_id(&session_id)
+            .expect("draft should remain loaded")
+            .prompt,
+        "Saved draft\n\nNew draft"
     );
 }
 
