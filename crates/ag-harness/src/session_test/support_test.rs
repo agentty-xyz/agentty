@@ -6,6 +6,7 @@ use serde_json::json;
 use sqlx::migrate::{Migration, MigrationType, Migrator};
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::{SqlSafeStr as _, SqlitePool};
+use tokio::sync::Notify;
 
 use crate::effect::Effects;
 use crate::input::TurnInput;
@@ -393,6 +394,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 pub(super) struct ReservationCommitControl {
     pub(super) commit_seen: std::sync::atomic::AtomicBool,
     pub(super) pause_once: std::sync::atomic::AtomicBool,
+    commit_notification: Notify,
 }
 
 impl ReservationCommitControl {
@@ -400,6 +402,13 @@ impl ReservationCommitControl {
         Self {
             commit_seen: std::sync::atomic::AtomicBool::new(false),
             pause_once: std::sync::atomic::AtomicBool::new(true),
+            commit_notification: Notify::new(),
+        }
+    }
+
+    pub(super) async fn wait_for_commit(&self) {
+        while !self.commit_seen.load(std::sync::atomic::Ordering::SeqCst) {
+            self.commit_notification.notified().await;
         }
     }
 
@@ -412,6 +421,7 @@ impl ReservationCommitControl {
         }
         self.commit_seen
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.commit_notification.notify_one();
 
         true
     }

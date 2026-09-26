@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 ag-runtime.workspace = true
+ag-scheduler.workspace = true
 ag-session.workspace = true
 ag-contracts.workspace = true
 async-trait.workspace = true

@@ -22,7 +22,9 @@ merge locally or publish a review request. See
 
 Agentty restores your last list tab on startup. Session chat shows the current model,
 reasoning, changed-line totals, active-work timer, token usage, and linked review
-request. The footer shows the active directory, branch, and ahead/behind counts.
+request. The footer shows the active directory, branch, and ahead/behind counts. Up to
+eight session agent turns can execute at once; additional turns wait for capacity while
+their sessions remain responsive.
 
 ### Resource Usage
 

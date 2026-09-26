@@ -9,3 +9,5 @@ Agentty separates reusable execution components from application workflows and t
 
 - [Execution](@/docs/core-components/execution.md): run workers, runtime contracts,
   harnesses, and LLMs.
+- [Scheduler](@/docs/core-components/scheduler.md): shared session admission and
+  campaign task selection.

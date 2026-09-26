@@ -19,6 +19,7 @@ For file-level detail, read the module docstrings directly.
 | `ag-clipboard`     | Host clipboard reads                                             |
 | `ag-contracts`     | Transport-independent execution types and interfaces             |
 | `ag-runtime`       | Adapter composition and dispatch                                 |
+| `ag-scheduler`     | Shared session admission and campaign task selection             |
 | `ag-worker`        | Scheduling, cancellation, heartbeats, recovery, execution policy |
 | `ag-agent`         | External CLI and app-server adapters, policy enforcement         |
 | `ag-forge`         | GitHub/GitLab review requests and comments                       |
