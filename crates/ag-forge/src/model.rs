@@ -174,7 +174,7 @@ pub struct ReviewRequestSummary {
 impl ReviewRequestSummary {
     /// Status-summary component persisted for a GitHub PR with a clean merge
     /// state at the latest forge refresh.
-    pub const GITHUB_READY_STATUS_COMPONENT: &'static str = "PR ready";
+    pub const GITHUB_READY_STATUS_COMPONENT: &str = "PR ready";
 
     /// Returns whether the latest GitHub refresh marked this open PR ready.
     pub fn is_github_pr_ready(&self) -> bool {

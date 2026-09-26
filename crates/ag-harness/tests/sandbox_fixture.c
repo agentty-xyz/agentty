@@ -28,7 +28,9 @@ __attribute__((constructor)) static void loader_effect(void) {
 static int wait_file(const char *path) {
     for (int attempt = 0; attempt < 1000 && access(path, F_OK); attempt++) {
         struct timespec delay = { .tv_sec = 0, .tv_nsec = 10000000 };
-        while (nanosleep(&delay, &delay) && errno == EINTR) {}
+        while (nanosleep(&delay, &delay) && errno == EINTR) {
+            /* Resume the remaining delay after an interrupted sleep. */
+        }
     }
     return access(path, F_OK) ? 9 : 0;
 }
