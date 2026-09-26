@@ -207,8 +207,11 @@ class ValidationHookTests(unittest.TestCase):
         utility_suites = {
             path.stem for path in (ROOT / "crates/ag-xtask/tests").glob("*.rs")
         }
-        self.assertTrue(utility_suites <= cli_targets)
-        self.assertTrue({"sandbox", "public_api", "lifecycle", "telemetry", "benchmark_summary"} <= cli_targets)
+        self.assertLessEqual(utility_suites, cli_targets)
+        self.assertLessEqual(
+            {"sandbox", "public_api", "lifecycle", "telemetry", "benchmark_summary"},
+            cli_targets,
+        )
         self.assertEqual(
             generation["rustflags"],
             "-C debuginfo=1 -C llvm-args=-runtime-counter-relocation",
