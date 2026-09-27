@@ -207,6 +207,11 @@ impl ImageContent {
         &self.bytes
     }
 
+    /// Shares validated bytes with another in-process model boundary.
+    pub(crate) fn shared_bytes(&self) -> Arc<[u8]> {
+        Arc::clone(&self.bytes)
+    }
+
     /// Returns the validated media type.
     pub fn media_type(&self) -> ImageMediaType {
         self.media_type
@@ -240,14 +245,6 @@ impl ImageContent {
             bytes: bytes.into(),
             media_type,
         })
-    }
-
-    pub(crate) fn to_data_url(&self) -> String {
-        format!(
-            "{DATA_URL_PREFIX}{}{DATA_URL_SEPARATOR}{}",
-            self.media_type.as_str(),
-            BASE64_STANDARD.encode(&self.bytes)
-        )
     }
 
     pub(crate) fn content_digest(&self) -> String {

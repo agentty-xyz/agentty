@@ -7,9 +7,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
     MODEL_API_BASE_URL_ENV, MODEL_API_KEY_ENV, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, Muse,
-    MuseConfig, reasoning_effort_name,
+    MuseConfig,
 };
-use crate::model::{CompletionMetadata, Model, ReasoningEffort};
+use crate::model::{CompletionMetadata, Model};
 use crate::provider::catalog::ModelConfigurationError;
 use crate::schema_contract::OutputSchema;
 use crate::store_conformance_test::image_input;
@@ -87,24 +87,6 @@ fn exposes_standard_and_contributor_model_identifiers() {
 
     // Assert
     assert_eq!(models, ["muse-spark-1.3", "muse-spark-1.3-contributor"]);
-}
-
-#[test]
-fn reasoning_effort_maps_max_to_xhigh_and_preserves_supported_values() {
-    // Arrange
-    let cases = [
-        (ReasoningEffort::Low, "low"),
-        (ReasoningEffort::Medium, "medium"),
-        (ReasoningEffort::High, "high"),
-        (ReasoningEffort::XHigh, "xhigh"),
-        (ReasoningEffort::Max, "xhigh"),
-    ];
-
-    // Act
-    let actual = cases.map(|(effort, _)| reasoning_effort_name(effort));
-
-    // Assert
-    assert_eq!(actual, cases.map(|(_, expected)| expected));
 }
 
 #[test]

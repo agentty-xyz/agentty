@@ -126,7 +126,9 @@ let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K2_6)
     .client_from_environment(|name| std::env::var(name))?;
 ```
 
-Implement the `model::Model` trait to bring any other provider.
+Built-in clients call `ag-router` for provider transport and schema validation. Hosts
+can also use `ag-router` directly for structured chat calls without a harness. Implement
+the `model::Model` trait to bring any other provider into `ag-harness`.
 
 `model::ModelRegistry` selects models by stable host keys with declared capabilities:
 

@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{input, model, schema_contract, tool};
+use crate::{input, model, schema as schema_contract, tool};
 
 pub(crate) const ERROR_BODY_LIMIT_BYTES: usize = 4 * 1024;
 const JSON_STRING_MAX_EXPANSION: usize = 6;
@@ -74,7 +74,6 @@ pub(crate) struct ChatCompletionProviderPolicy {
     pub(crate) reasoning_format: ReasoningFormat,
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
-    pub(crate) telemetry_name: &'static str,
     pub(crate) unsupported_schema_reason: &'static str,
 }
 
@@ -128,21 +127,6 @@ pub(crate) struct ChatCompletionBackend {
 }
 
 impl ChatCompletionBackend {
-    /// Creates a structured-output backend with the production HTTP client.
-    pub(crate) fn new(
-        api_key: String,
-        base_url: String,
-        model: String,
-        policy: ChatCompletionProviderPolicy,
-    ) -> Self {
-        Self::with_client(api_key, base_url, model, policy, default_client())
-    }
-
-    /// Returns the backend's telemetry identity.
-    pub(crate) fn identity(&self) -> (&'static str, &str) {
-        (self.policy.telemetry_name, &self.model)
-    }
-
     pub(crate) fn validate_schema(
         &self,
         schema: &schema_contract::OutputSchema,
@@ -181,7 +165,7 @@ impl ChatCompletionBackend {
             .map(ChatCompletionTool::from)
             .collect();
         let response_format = (tools.is_empty() || self.policy.response_format_with_tools)
-            .then(|| self.response_format(request.schema()));
+            .then(|| self.response_format(&request.response_format));
         let payload = ChatCompletionPayload {
             enable_thinking: self.enable_thinking(request),
             messages: self.messages(request)?,
@@ -311,10 +295,10 @@ impl ChatCompletionBackend {
                     messages.push(self.user_input_message(input)?);
                 }
                 model::ModelMessage::AssistantToolCall(call) => {
-                    messages.push(self.assistant_tool_call_message(std::slice::from_ref(call))?);
+                    messages.push(self.assistant_tool_call_message(std::slice::from_ref(call)));
                 }
                 model::ModelMessage::AssistantToolCalls(calls) => {
-                    messages.push(self.assistant_tool_call_message(calls)?);
+                    messages.push(self.assistant_tool_call_message(calls));
                 }
                 model::ModelMessage::ToolResult {
                     call_id,
@@ -369,7 +353,7 @@ impl ChatCompletionBackend {
     fn assistant_tool_call_message(
         &self,
         calls: &[tool::ToolCall],
-    ) -> Result<ChatCompletionMessagePayload, model::ModelError> {
+    ) -> ChatCompletionMessagePayload {
         let reasoning_content = self
             .policy
             .structured_output
@@ -383,27 +367,25 @@ impl ChatCompletionBackend {
             .flatten();
         let tool_calls = calls
             .iter()
-            .map(|call| {
-                Ok(ChatCompletionOutgoingToolCall {
-                    function: ChatCompletionOutgoingFunctionCall {
-                        arguments: call.arguments_json().map_err(model::ModelError::request)?,
-                        name: call.name().to_string(),
-                    },
-                    id: call.id().to_string(),
-                    kind: "function",
-                })
+            .map(|call| ChatCompletionOutgoingToolCall {
+                function: ChatCompletionOutgoingFunctionCall {
+                    arguments: call.arguments_json(),
+                    name: call.name().to_string(),
+                },
+                id: call.id().to_string(),
+                kind: "function",
             })
-            .collect::<Result<_, model::ModelError>>()?;
+            .collect();
 
-        Ok(ChatCompletionMessagePayload::AssistantToolCall {
+        ChatCompletionMessagePayload::AssistantToolCall {
             content: None,
             reasoning_content,
             role: "assistant",
             tool_calls,
-        })
+        }
     }
 
-    fn response_format<'a>(&self, schema: &'a schema_contract::OutputSchema) -> ResponseFormat<'a> {
+    fn response_format<'a>(&self, format: &'a model::JsonSchemaFormat) -> ResponseFormat<'a> {
         match self.policy.structured_output {
             StructuredOutputMode::JsonObject { .. } => ResponseFormat {
                 json_schema: None,
@@ -411,8 +393,8 @@ impl ChatCompletionBackend {
             },
             StructuredOutputMode::JsonSchema => ResponseFormat {
                 json_schema: Some(JsonSchemaResponseFormat {
-                    name: "ag_harness_output",
-                    schema: schema.value(),
+                    name: format.name(),
+                    schema: format.schema().value(),
                 }),
                 kind: "json_schema",
             },
@@ -936,7 +918,7 @@ struct ResponseFormat<'a> {
 
 #[derive(Serialize)]
 struct JsonSchemaResponseFormat<'a> {
-    name: &'static str,
+    name: &'a str,
     schema: &'a Value,
 }
 
@@ -963,7 +945,7 @@ impl<'a> From<&'a tool::ToolDefinition> for ChatCompletionTool<'a> {
 #[derive(Serialize)]
 struct ChatCompletionFunction<'a> {
     description: &'a str,
-    name: &'static str,
+    name: &'a str,
     parameters: &'a Value,
 }
 

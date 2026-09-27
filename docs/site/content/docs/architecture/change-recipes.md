@@ -47,6 +47,18 @@ through the correct modules without crossing layer boundaries.
    registry; application workflows continue through worker clients.
 1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
 
+## Add a Built-in `ag-router` Model
+
+1. Add the model's wire capabilities and reasoning mapping in
+   `crates/ag-router/src/provider.rs`; keep provider HTTP and response decoding in
+   `ag-router`.
+1. Add local HTTP tests for the schema format, image and tool capabilities, reasoning
+   fields, and error mapping. Keep harness tool execution and permissions in
+   `ag-harness`.
+1. Expose the built-in model through `ag-harness` configuration only if the harness
+   supports its capabilities; Agentty product integration still follows the worker and
+   runtime boundary.
+
 ## Add or Change a Utility Agent Prompt
 
 1. Submit an owned `OneShotRequest` through the worker `RunClient`; do not select a CLI,

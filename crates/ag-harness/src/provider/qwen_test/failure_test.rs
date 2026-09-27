@@ -3,7 +3,9 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{qwen, request};
-use crate::chat_completion::{ERROR_BODY_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES};
+use crate::provider::test_support::{
+    ERROR_BODY_LIMIT_BYTES, SUCCESS_BODY_LIMIT_BYTES, reqwest_source,
+};
 use crate::{model, schema_contract};
 
 #[tokio::test]
@@ -141,12 +143,7 @@ async fn returns_request_error_for_http_failure() {
         "model request failed: Qwen returned HTTP 401 Unauthorized: \
          {\"error\":{\"message\":\"invalid API key\"}}"
     );
-    let provider_error =
-        std::error::Error::source(&error).expect("HTTP failure should retain its provider error");
-    let source = provider_error
-        .source()
-        .and_then(<dyn std::error::Error>::downcast_ref::<reqwest::Error>)
-        .expect("HTTP failure should retain its reqwest source");
+    let source = reqwest_source(&error).expect("HTTP failure should retain its reqwest source");
     assert_eq!(source.status(), Some(reqwest::StatusCode::UNAUTHORIZED));
     assert_eq!(error.error_type(), model::ModelErrorType::Provider);
     assert_eq!(error.http_status(), Some(401));

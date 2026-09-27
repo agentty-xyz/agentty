@@ -6,8 +6,8 @@ use super::support::{
     kimi, kimi_model, mount_tool_response, person_schema, person_schema_value, read_request,
     read_tool_wire,
 };
-use crate::chat_completion::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::harness::Harness;
+use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::{model, schema_contract};
 
 #[tokio::test]

@@ -1,38 +1,11 @@
-use async_trait::async_trait;
 use serde_json::json;
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::chat_completion::{
-    ChatCompletion, ChatCompletionClient, ChatCompletionError, ChatCompletionRequest,
-    STRUCTURED_OUTPUT_INSTRUCTION,
-};
 use crate::provider::qwen::{QWEN_PLUS, QwenConfig};
+use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::schema_contract::OutputSchema;
 use crate::{model, tool};
-
-pub(super) struct StubClient;
-
-#[async_trait]
-impl ChatCompletionClient for StubClient {
-    async fn complete(
-        &self,
-        request: ChatCompletionRequest<'_>,
-    ) -> Result<Option<ChatCompletion>, ChatCompletionError> {
-        assert_eq!(request.api_key(), "stub-key");
-        assert_eq!(
-            request.endpoint(),
-            "https://stub.example/v1/chat/completions"
-        );
-        assert_eq!(request.payload()["model"], "qwen-stub");
-        assert_eq!(request.payload()["response_format"]["type"], "json_object");
-
-        Ok(Some(ChatCompletion::new(
-            "stop".to_string(),
-            Some(r#"{"name":"Ada"}"#.to_string()),
-        )))
-    }
-}
 
 pub(super) fn person_schema_value() -> serde_json::Value {
     json!({

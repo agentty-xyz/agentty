@@ -714,6 +714,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_stable_frame(300, 3000)
         .press_key("Esc")
         .wait_for_text("Add regression coverage.", 3000)
+        .wait_for_text("Enter: comment", 5000)
         .capture_labeled(
             "whole_file_comment",
             "Multiline whole-file feedback appears above the selected patch",
@@ -742,6 +743,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .wait_for_text("Why print review?|", 3000)
         .press_key(ENTER_KEY)
         .wait_for_text("Why print review?", 3000)
+        .wait_for_text("Enter: comment", 5000)
         .wait_for_stable_frame(1000, 5000)
         .capture_labeled(
             "inline_line_comments",
@@ -824,6 +826,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         "Add regression coverage.",
         &file_comment_full,
     );
+    assertion::assert_text_in_region(&file_comment_frame, "Enter: comment", &file_comment_full);
 
     let selected_comment_frame = common::frame_from_capture(&report.captures[1]);
     let selected_comment_full =
@@ -843,6 +846,7 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
     let diff_full = Region::full(diff_frame.cols(), diff_frame.rows());
     assertion::assert_text_in_region(&diff_frame, "Explain the entry point. Updated.", &diff_full);
     assertion::assert_text_in_region(&diff_frame, "Why print review?", &diff_full);
+    assertion::assert_text_in_region(&diff_frame, "Enter: comment", &diff_full);
 
     let restored_frame = common::frame_from_capture(&report.captures[3]);
     let restored_full = Region::full(restored_frame.cols(), restored_frame.rows());
