@@ -397,9 +397,12 @@ svg {
     width: 100%;
 }
 
-.site-section,
-.site-footer {
+.site-section {
     margin-bottom: clamp(4rem, 9vw, 6.5rem);
+}
+
+.site-section:last-child {
+    margin-bottom: 0;
 }
 
 .hero-section {
@@ -1013,10 +1016,89 @@ svg {
 }
 
 .site-footer {
+    margin: 0 auto;
+    padding: 2rem clamp(1rem, 3vw, 1.5rem) 3rem;
     border-top: 1px solid var(--color-border);
-    padding-top: 2rem;
     text-align: center;
-    margin-top: 4rem;
+}
+
+.site-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.4rem 0;
+    margin-top: 0.9rem;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.site-footer-links > * + *::before {
+    content: "·";
+    margin: 0 0.75rem;
+    color: var(--color-border-strong);
+}
+
+.site-footer-links a,
+.site-footer-links button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-dim);
+    font: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    transition: color var(--transition-fast);
+}
+
+.site-footer-links a:hover,
+.site-footer-links button:hover {
+    color: var(--color-accent);
+}
+
+.analytics-notice {
+    position: fixed;
+    z-index: 50;
+    right: 1rem;
+    bottom: 1rem;
+    left: 1rem;
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 1.25rem;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-raised);
+    box-shadow: var(--shadow-panel);
+    font-size: 0.9rem;
+}
+
+.analytics-notice p {
+    margin: 0 0 1rem;
+    color: var(--color-muted);
+}
+
+.analytics-notice .analytics-notice-title {
+    margin-bottom: 0.4rem;
+    color: var(--color-accent);
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.analytics-notice-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.analytics-notice-actions .button {
+    flex: 1 1 10rem;
+    cursor: pointer;
+}
+
+.website-analytics-page {
+    margin: 3rem auto;
 }
 
 .docs-section-title {

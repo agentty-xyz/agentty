@@ -1,3 +1,5 @@
+{% set posthog_project_token = config.extra.posthog_project_token %}
+{% set posthog_api_host = config.extra.posthog_api_host %}
 <!DOCTYPE html>
 <html lang="en">
     <head>
@@ -148,6 +150,40 @@
             {% block content %}
             {% endblock content %}
         </main>
+        <footer class="site-footer site-container">
+            <p class="site-footer-text">Built for developers who want control over their AI coding sessions.</p>
+            <nav class="site-footer-links" aria-label="Footer">
+                <a href="{{ config.extra.github_repo }}"
+                   target="_blank"
+                   rel="noopener"
+                   data-analytics-event="github_clicked">GitHub</a>
+                <a href="{{ get_url(path='@/website-analytics.md') }}">Website analytics</a>
+                {% if posthog_project_token and posthog_api_host %}
+                    <button type="button" data-analytics-settings>Analytics settings</button>
+                {% endif %}
+            </nav>
+        </footer>
+        {% if posthog_project_token and posthog_api_host %}
+            <aside class="analytics-notice"
+                   data-analytics-notice
+                   hidden
+                   aria-labelledby="analytics-notice-title">
+                <p class="analytics-notice-title" id="analytics-notice-title">Help shape Agentty 🌱</p>
+                <p>
+                    We're a small team building in the open. Allowing analytics lets us see which
+                    features you come back for, so we know what to build next.
+                    <a href="{{ get_url(path='@/website-analytics.md') }}">Learn more</a>
+                </p>
+                <div class="analytics-notice-actions">
+                    <button type="button" class="button button-primary" data-analytics-allow>Sure, count me in</button>
+                    <button type="button" class="button button-secondary" data-analytics-decline>No thanks</button>
+                </div>
+            </aside>
+            <script defer
+                    src="{{ get_url(path='site-analytics.js') }}"
+                    data-posthog-project-token="{{ posthog_project_token }}"
+                    data-posthog-api-host="{{ posthog_api_host }}"></script>
+        {% endif %}
         <div class="search-dialog" data-search-dialog hidden>
             <button class="search-dialog-backdrop"
                     type="button"

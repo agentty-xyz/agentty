@@ -20,11 +20,14 @@
         <h1 class="hero-title">Ship AI-assisted changes with control.</h1>
         <div class="hero-description">{{ section.content | safe }}</div>
         <div class="hero-actions">
-            <a class="button button-primary" href="/docs/getting-started/overview/">Get started</a>
+            <a class="button button-primary"
+               href="/docs/getting-started/overview/"
+               data-analytics-event="get_started_clicked">Get started</a>
             <a class="button button-secondary"
                href="{{ config.extra.github_repo }}"
                target="_blank"
-               rel="noopener">View on GitHub</a>
+               rel="noopener"
+               data-analytics-event="github_clicked">View on GitHub</a>
         </div>
     </section>
     <section class="site-section">
@@ -114,6 +117,9 @@
     activeTab.classList.add('is-active');
     activeTab.setAttribute('aria-selected', 'true');
     activeTab.tabIndex = 0;
+    document.dispatchEvent(new CustomEvent('agentty:install-method-selected', {
+      detail: { method: activeTab.textContent.trim() }
+    }));
   }
 
   tabs.forEach(function (tab) {
@@ -140,6 +146,9 @@
     navigator.clipboard.writeText(cmdText.textContent).then(function () {
       copyBtn.textContent = 'copied!';
       setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
+      document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
+        detail: { method: document.querySelector('.install-tab.is-active').textContent.trim() }
+      }));
     });
   });
 })();
@@ -309,7 +318,4 @@
         </div>
         <p class="roadmap-caption">Strategic directions, not release commitments.</p>
     </section>
-    <footer class="site-footer">
-        <p class="site-footer-text">Built for developers who want control over their AI coding sessions.</p>
-    </footer>
 {% endblock content %}
