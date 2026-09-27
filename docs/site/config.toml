@@ -28,3 +28,6 @@ theme = "gruvbox-dark-medium"
 github_repo = "https://github.com/agentty-xyz/agentty"
 github_repo_slug = "agentty-xyz/agentty"
 npm_package = "https://www.npmjs.com/package/agentty"
+# PostHog project tokens are public, write-only ingestion keys.
+posthog_project_token = "phc_DoaheXXuZ8t7jnkvb9SYuhhpvYFmYr8AMaAHJraKRtGW"
+posthog_api_host = "https://us.i.posthog.com"

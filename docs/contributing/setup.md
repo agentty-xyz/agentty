@@ -61,8 +61,11 @@ cache optimization.
 Install Zola before running the docs-site gate or previewing `docs/site/`:
 
 ```sh
-zola serve --root docs/site
+zola --root docs/site serve
 ```
+
+The local preview uses the production PostHog project from `docs/site/config.toml`, so
+local visits send real events; exclude them in PostHog by filtering on `$host`.
 
 Use the cataloged `zola-check` hook for validation. Intentional feature recording also
 needs a running Podman environment; follow `docs/contributing/feature-test/recording.md`
