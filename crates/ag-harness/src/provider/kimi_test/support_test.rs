@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::chat_completion::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::provider::kimi::KimiConfig;
+use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::schema_contract::OutputSchema;
 use crate::{model, tool};
 

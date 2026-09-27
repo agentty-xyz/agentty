@@ -154,6 +154,11 @@ before discarding it without integration.
 
 ### Standalone Harness CLI
 
+The `ag-router` library provides one Rust API for structured chat requests to Muse,
+Kimi, and Qwen. Every request supplies a JSON Schema; the router validates terminal JSON
+locally and returns tool calls for the caller to execute. `ag-harness` uses this router
+beneath its model and tool loop.
+
 The separate `ag-harness-cli` crate provides the `ag-harness` command. Repository
 comparisons require `--comparison-base <REV>` on `run` or `resume`; the selected commit
 stays fixed for that invocation. Without the flag, ordinary repository reads remain

@@ -84,6 +84,7 @@ dependencies = [
 name = "ag-harness"
 version = "0.16.2"
 dependencies = [
+ "ag-router",
  "async-trait",
  "base64 0.23.1",
  "close_fds",
@@ -150,6 +151,21 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "ag-router"
+version = "0.16.2"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "jsonschema",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]

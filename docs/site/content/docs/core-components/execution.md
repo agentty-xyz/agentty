@@ -106,8 +106,8 @@ decides when to continue or finish. External agent tools provide this loop today
 
 The LLM is the model invoked by the harness for reasoning and generation. It does not
 schedule Agentty runs or execute tools itself. `ag-harness` separates model access
-behind its `ModelClient` contract; external harnesses manage their own model
-integrations.
+behind its `ModelClient` contract and uses `ag-router` for built-in provider chat
+requests; external harnesses manage their own model integrations.
 
 ## Supporting Boundaries
 

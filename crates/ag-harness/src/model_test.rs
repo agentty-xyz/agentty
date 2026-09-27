@@ -11,12 +11,13 @@ use super::{
     ModelErrorType, ModelMessage, ModelMetadata, ModelMetadataError, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
+use crate::input::StoredTurnInput;
 use crate::lifecycle::LifecycleEventKind;
-use crate::provider::QwenConfig;
+use crate::provider::{KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
 use crate::store_conformance_test::image_input;
-use crate::tool;
 use crate::tool::{ReadArguments, ToolCall};
+use crate::{ImageContent, ImageMediaType, InputBlock, TurnInput, tool};
 
 struct ResponseOnlyModel;
 
@@ -186,6 +187,42 @@ async fn client_observes_success_unless_request_is_already_observed() {
         events[1].kind(),
         LifecycleEventKind::ModelRequestCompleted { .. }
     ));
+}
+
+#[tokio::test]
+async fn client_sends_slash_qualified_model_unchanged() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(wiremock::matchers::body_partial_json(json!({
+            "model": "team/custom-model"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": r#"{"name":"Ada"}"#}
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let client = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.uri(),
+        model: "team/custom-model".to_string(),
+    })
+    .expect("slash-qualified model should construct");
+
+    // Act
+    let completion = client
+        .complete(test_request())
+        .await
+        .expect("slash-qualified model should complete");
+
+    // Assert
+    assert_eq!(client.metadata().model(), "team/custom-model");
+    assert_eq!(completion.response().output(), Some(&json!({"name":"Ada"})));
 }
 
 #[tokio::test]
@@ -461,7 +498,7 @@ fn response_exposes_terminal_output() {
     let value = json!({ "name": "Ada" });
 
     // Act
-    let response = ModelResponse::from_output(value.clone());
+    let response = ModelResponse::Output(value.clone());
 
     // Assert
     assert_eq!(response.output(), Some(&value));
@@ -488,7 +525,7 @@ fn response_exposes_multiple_tool_calls() {
     ];
 
     // Act
-    let response = ModelResponse::tool_calls(calls);
+    let response = ModelResponse::ToolCalls(calls);
 
     // Assert
     assert!(response.output().is_none());
@@ -547,7 +584,7 @@ fn completion_exposes_normalized_metadata_and_response() {
         Some("fingerprint-1".to_string()),
         Some(usage),
     );
-    let response = ModelResponse::from_output(json!({ "name": "Ada" }));
+    let response = ModelResponse::Output(json!({ "name": "Ada" }));
     let completion = ModelCompletion::new(metadata, response.clone())
         .with_provider_session_id("provider-session-1");
 
@@ -597,7 +634,7 @@ fn response_debug_redacts_provider_reasoning() {
         "path": "Cargo.toml"
     }))
     .expect("read arguments should be valid");
-    let response = ModelResponse::tool_call(ToolCall::read(
+    let response = ModelResponse::ToolCall(ToolCall::read(
         "call_read".to_string(),
         arguments,
         Some(secret_reasoning.to_string()),
@@ -870,4 +907,205 @@ fn converts_oversized_content_error() {
         error.to_string(),
         "model response content exceeds the size limit"
     );
+}
+
+#[test]
+fn routed_request_preserves_image_batch_and_all_reasoning_efforts() {
+    // Arrange
+    let client = ModelClient::kimi(KimiConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "kimi-k2.6".to_string(),
+    })
+    .expect("valid model identity");
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let image =
+        ImageContent::new(ImageMediaType::Jpeg, vec![0xFF, 0xD8, 0xFF, 0xE0]).expect("valid JPEG");
+    let original_image_bytes = image.bytes().as_ptr();
+    let input = TurnInput::from_blocks(vec![
+        InputBlock::Text("describe".to_string()),
+        InputBlock::Image(image),
+    ])
+    .expect("valid input");
+    let call = ToolCall::read(
+        "call-1".to_string(),
+        serde_json::from_value(json!({"path":"Cargo.toml"})).expect("valid read arguments"),
+        Some("provider thought".to_string()),
+    );
+    let history = vec![
+        ModelMessage::UserInput(input),
+        ModelMessage::AssistantToolCalls(vec![call]),
+        ModelMessage::ToolResult {
+            call_id: "call-1".to_string(),
+            content: "done".to_string(),
+            name: "read".to_string(),
+        },
+    ];
+    let efforts = [
+        (ReasoningEffort::Low, ag_router::ReasoningEffort::Low),
+        (ReasoningEffort::Medium, ag_router::ReasoningEffort::Medium),
+        (ReasoningEffort::High, ag_router::ReasoningEffort::High),
+        (ReasoningEffort::XHigh, ag_router::ReasoningEffort::XHigh),
+        (ReasoningEffort::Max, ag_router::ReasoningEffort::Max),
+    ];
+
+    // Act / Assert
+    for (effort, expected) in efforts {
+        let request = ModelRequest::with_history(history.clone(), "follow up", schema.clone())
+            .with_model_reasoning_effort(effort)
+            .with_tool(tool::ToolDefinition::read());
+        let routed = client
+            .to_router_request(&request)
+            .expect("valid history must route");
+        assert_eq!(routed.options.reasoning_effort, Some(expected));
+        assert!(matches!(
+            routed.messages()[0],
+            ag_router::ModelMessage::UserInput(_)
+        ));
+        assert!(matches!(
+            &routed.messages()[0],
+            ag_router::ModelMessage::UserInput(input)
+                if matches!(&input.blocks()[1], ag_router::InputBlock::Image(image)
+                    if std::ptr::eq(image.bytes().as_ptr(), original_image_bytes))
+        ));
+        assert!(matches!(
+            routed.messages()[1],
+            ag_router::ModelMessage::AssistantToolCalls(_)
+        ));
+        assert!(matches!(
+            routed.messages()[2],
+            ag_router::ModelMessage::ToolResult { .. }
+        ));
+        assert_eq!(routed.tools()[0].name(), "read");
+    }
+}
+
+#[tokio::test]
+async fn routed_request_rejects_invalid_replayed_tool_call_before_network() {
+    // Arrange
+    let client = ModelClient::kimi(KimiConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "kimi-k2.6".to_string(),
+    })
+    .expect("valid model identity");
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let call = ToolCall::read(
+        " ".to_string(),
+        serde_json::from_value(json!({"path":"Cargo.toml"})).expect("valid read arguments"),
+        None,
+    );
+    let request = ModelRequest::with_history(
+        vec![ModelMessage::AssistantToolCall(call)],
+        "follow up",
+        schema,
+    );
+
+    // Act
+    let error = client
+        .complete(request)
+        .await
+        .expect_err("invalid call ID must fail");
+
+    // Assert
+    assert!(matches!(error, ModelError::InvalidToolCallId));
+}
+
+#[tokio::test]
+async fn routed_request_rejects_persisted_input_above_current_image_limit() {
+    // Arrange
+    let client = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "muse-spark-1.3".to_string(),
+    })
+    .expect("valid model identity");
+    let blocks = vec![
+        json!({
+            "kind":"image", "media_type":"image/png", "bytes":"iVBORw0KGgo="
+        });
+        TurnInput::MAX_IMAGES + 1
+    ];
+    let stored: StoredTurnInput = serde_json::from_value(json!({
+        "version":1, "blocks":blocks
+    }))
+    .expect("valid stored input");
+    let input = stored
+        .into_input()
+        .expect("valid historical image signatures");
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let request =
+        ModelRequest::with_history(vec![ModelMessage::UserInput(input)], "follow up", schema);
+
+    // Act
+    let error = client
+        .complete(request)
+        .await
+        .expect_err("replayed image count must fail");
+
+    // Assert
+    assert_eq!(error.error_type(), ModelErrorType::Request);
+}
+
+#[tokio::test]
+async fn routed_request_rejects_persisted_image_above_current_per_image_limit() {
+    // Arrange
+    let client = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "muse-spark-1.3".to_string(),
+    })
+    .expect("valid model identity");
+    let mut bytes = vec![0; ImageContent::MAX_BYTES + 1];
+    bytes[..8].copy_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    let image = ImageContent::from_persisted(ImageMediaType::Png, bytes)
+        .expect("persisted image signature should be valid");
+    let input = TurnInput::from_blocks(vec![InputBlock::Image(image)])
+        .expect("historical input should fit aggregate bounds");
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let request =
+        ModelRequest::with_history(vec![ModelMessage::UserInput(input)], "follow up", schema);
+
+    // Act
+    let error = client
+        .complete(request)
+        .await
+        .expect_err("oversized replayed image must fail");
+
+    // Assert
+    assert_eq!(error.error_type(), ModelErrorType::Request);
+}
+
+#[test]
+fn maps_router_request_and_duplicate_call_errors() {
+    // Arrange / Act
+    let request = ModelClient::from_router_error(ag_router::ModelError::InvalidModelId);
+    let duplicate = ModelClient::from_router_error(ag_router::ModelError::DuplicateToolCallId {
+        id: "call-1".to_string(),
+    });
+
+    // Assert
+    assert_eq!(request.error_type(), ModelErrorType::Request);
+    assert!(matches!(duplicate, ModelError::DuplicateToolCallId { id } if id == "call-1"));
+}
+
+#[tokio::test]
+async fn classifies_router_transport_failure() {
+    // Arrange
+    let client = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: "not-a-url".to_string(),
+        model: "muse-spark-1.3".to_string(),
+    })
+    .expect("valid model identity");
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+
+    // Act
+    let error = client
+        .complete(ModelRequest::new("hello", schema))
+        .await
+        .expect_err("invalid URL must fail transport");
+
+    // Assert
+    assert_eq!(error.error_type(), ModelErrorType::Transport);
 }

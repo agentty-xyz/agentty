@@ -136,27 +136,6 @@ fn from_blocks_enforces_count_aggregate_and_encoded_limits() {
 }
 
 #[test]
-fn encoded_accounting_matches_data_url_length() {
-    // Arrange
-    for image in [png_image(5), png_image(6), png_image(7)] {
-        // Act / Assert
-        assert_eq!(image.encoded_data_url_bytes(), image.to_data_url().len());
-    }
-}
-
-#[test]
-fn data_url_uses_media_type_and_base64_content() {
-    // Arrange
-    let image = ImageContent::new(ImageMediaType::Jpeg, jpeg_bytes(2)).expect("valid JPEG");
-
-    // Act
-    let url = image.to_data_url();
-
-    // Assert
-    assert_eq!(url, "data:image/jpeg;base64,/9j/4CIi");
-}
-
-#[test]
 fn image_debug_excludes_content() {
     // Arrange
     let image = png_image(16);

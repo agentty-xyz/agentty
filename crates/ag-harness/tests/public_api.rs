@@ -374,6 +374,51 @@ impl Model for ExternalModel {
 
 struct ExternalMetadataModel;
 
+#[test]
+fn completion_metadata_shares_router_type_and_storage_format() {
+    // Arrange
+    let metadata = CompletionMetadata::new(
+        "stop".to_string(),
+        Some("response-1".to_string()),
+        Some("provider-model".to_string()),
+        None,
+        Some(CompletionUsage::new(
+            Some(3),
+            None,
+            Some(5),
+            Some(2),
+            None,
+            Some(7),
+        )),
+    );
+    let router_metadata: ag_router::CompletionMetadata = metadata.clone();
+
+    // Act
+    let encoded = serde_json::to_value(&router_metadata).expect("metadata serializes");
+    let decoded: CompletionMetadata =
+        serde_json::from_value(encoded.clone()).expect("metadata deserializes");
+
+    // Assert
+    assert_eq!(decoded, metadata);
+    assert_eq!(
+        encoded,
+        json!({
+            "finish_reason": "stop",
+            "response_id": "response-1",
+            "response_model": "provider-model",
+            "system_fingerprint": null,
+            "usage": {
+                "cache_hit": 3,
+                "cache_miss": null,
+                "input": 5,
+                "output": 2,
+                "reasoning": null,
+                "total": 7
+            }
+        })
+    );
+}
+
 #[async_trait]
 impl Model for ExternalMetadataModel {
     fn metadata(&self) -> Option<ModelMetadata> {

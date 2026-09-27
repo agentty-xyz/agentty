@@ -9,8 +9,9 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::ops::Deref;
 
+pub use ag_router::{CompletionMetadata, CompletionUsage};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -22,9 +23,9 @@ use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };
-use crate::provider::{self, KimiConfig, MuseConfig, QwenConfig};
+use crate::provider::{KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError, bounded_diagnostic};
-use crate::{chat_completion, telemetry, tool};
+use crate::{telemetry, tool};
 
 /// Object-safe boundary for provider-neutral model requests.
 ///
@@ -80,10 +81,11 @@ pub trait Model: Send + Sync {
 /// Application-facing client for provider-neutral model requests.
 ///
 /// Provider request execution remains private so every request passes through
-/// [`ModelClient::complete`], which owns telemetry and structured-output
-/// validation.
+/// [`ModelClient::complete`], which owns telemetry while `ag-router` validates
+/// structured output.
 pub struct ModelClient {
-    backend: chat_completion::ChatCompletionBackend,
+    router: ag_router::Router,
+    router_model: String,
     lifecycle: LifecycleEmitter,
     metadata: ModelMetadata,
 }
@@ -96,9 +98,12 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn kimi(config: KimiConfig) -> Result<Self, ModelMetadataError> {
-        let policy = provider::kimi_policy(&config.model);
-
-        Self::chat_completion(config.api_key, config.base_url, config.model, policy)
+        Self::routed(
+            ag_router::Provider::Kimi,
+            config.api_key,
+            config.base_url,
+            &config.model,
+        )
     }
 
     /// Creates a client backed by Meta's Model API for Muse models.
@@ -108,9 +113,12 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn muse(config: MuseConfig) -> Result<Self, ModelMetadataError> {
-        let policy = provider::muse_policy(&config.model);
-
-        Self::chat_completion(config.api_key, config.base_url, config.model, policy)
+        Self::routed(
+            ag_router::Provider::Muse,
+            config.api_key,
+            config.base_url,
+            &config.model,
+        )
     }
 
     /// Creates a client backed by Alibaba Cloud Model Studio's Qwen API.
@@ -120,9 +128,12 @@ impl ModelClient {
     /// Returns [`ModelMetadataError`] when the configured model identifier is
     /// empty or contains only whitespace.
     pub fn qwen(config: QwenConfig) -> Result<Self, ModelMetadataError> {
-        let policy = provider::qwen_policy(&config.model);
-
-        Self::chat_completion(config.api_key, config.base_url, config.model, policy)
+        Self::routed(
+            ag_router::Provider::Qwen,
+            config.api_key,
+            config.base_url,
+            &config.model,
+        )
     }
 
     /// Returns the validated provider and model identity retained by the
@@ -154,44 +165,30 @@ impl ModelClient {
             self.lifecycle
                 .start_model_request(Some(self.metadata.clone()), 0, None)
         };
-        let operation = self.backend.generate(&request);
+        let operation = async {
+            let routed = self
+                .to_router_request(&request)
+                .map_err(|error| (error, None))?;
+            self.router.execute(routed).await.map_err(|error| {
+                let metadata = error.metadata().cloned();
+                (Self::from_router_error(error), metadata)
+            })
+        };
         let generated = match lifecycle.as_ref() {
             Some(lifecycle) => lifecycle.scope(operation).await,
             None => operation.await,
         };
         let (result, failure_metadata) = match generated {
-            Ok(chat_completion::GeneratedResponse::Failed { error, metadata }) => {
-                (Err(error), Some(metadata))
+            Ok(completion) => {
+                let metadata = match &completion {
+                    ag_router::Completion::Output { metadata, .. }
+                    | ag_router::Completion::ToolCalls { metadata, .. } => metadata.clone(),
+                };
+                let result = Self::from_router_completion(completion);
+                let failure_metadata = result.as_ref().err().map(|_| metadata);
+                (result, failure_metadata)
             }
-            Ok(chat_completion::GeneratedResponse::Output {
-                metadata,
-                output,
-                reasoning_content,
-            }) => match request.schema().parse_and_validate(&output) {
-                Ok(response) => (
-                    Ok(
-                        ModelCompletion::new(metadata, ModelResponse::from_output(response))
-                            .with_reasoning_content(reasoning_content),
-                    ),
-                    None,
-                ),
-                Err(error) => (Err(ModelError::from(error)), Some(metadata)),
-            },
-            Ok(chat_completion::GeneratedResponse::ToolCall { call, metadata }) => (
-                Ok(ModelCompletion::new(
-                    metadata,
-                    ModelResponse::tool_call(call),
-                )),
-                None,
-            ),
-            Ok(chat_completion::GeneratedResponse::ToolCalls { calls, metadata }) => (
-                Ok(ModelCompletion::new(
-                    metadata,
-                    ModelResponse::tool_calls(calls),
-                )),
-                None,
-            ),
-            Err(error) => (Err(error), None),
+            Err((error, metadata)) => (Err(error), metadata),
         };
 
         match &result {
@@ -216,21 +213,225 @@ impl ModelClient {
         result
     }
 
-    fn chat_completion(
+    fn routed(
+        provider: ag_router::Provider,
         api_key: String,
         base_url: String,
-        model: String,
-        policy: chat_completion::ChatCompletionProviderPolicy,
+        model: &str,
     ) -> Result<Self, ModelMetadataError> {
-        let backend = chat_completion::ChatCompletionBackend::new(api_key, base_url, model, policy);
-        let (provider, model) = backend.identity();
-        let metadata = ModelMetadata::new(provider, model)?;
+        let metadata = ModelMetadata::new(provider_telemetry_name(provider), model)?;
+        let router_model = format!("{}/{model}", provider.as_str());
+        let router = ag_router::Router::single(ag_router::ProviderConfig {
+            provider,
+            api_key,
+            base_url,
+        });
 
         Ok(Self {
-            backend,
+            router,
+            router_model,
             lifecycle: LifecycleEmitter::default(),
             metadata,
         })
+    }
+
+    fn to_router_request(
+        &self,
+        request: &ModelRequest,
+    ) -> Result<ag_router::ModelRequest, ModelError> {
+        let format =
+            ag_router::JsonSchemaFormat::new("ag_harness_output", request.schema().clone())
+                .map_err(Self::from_router_error)?;
+        let messages = request
+            .messages()
+            .iter()
+            .map(Self::to_router_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        let tools = request
+            .tools()
+            .iter()
+            .map(|tool| {
+                ag_router::ToolDefinition::new(
+                    tool.name(),
+                    tool.description(),
+                    tool.parameters().clone(),
+                )
+            })
+            .collect();
+        let mut routed = ag_router::ModelRequest::chat(&self.router_model, messages, tools, format);
+        routed.options.reasoning_effort =
+            request.model_reasoning_effort().map(|effort| match effort {
+                ReasoningEffort::Low => ag_router::ReasoningEffort::Low,
+                ReasoningEffort::Medium => ag_router::ReasoningEffort::Medium,
+                ReasoningEffort::High => ag_router::ReasoningEffort::High,
+                ReasoningEffort::XHigh => ag_router::ReasoningEffort::XHigh,
+                ReasoningEffort::Max => ag_router::ReasoningEffort::Max,
+            });
+        Ok(routed)
+    }
+
+    fn to_router_message(message: &ModelMessage) -> Result<ag_router::ModelMessage, ModelError> {
+        use ag_router::ModelMessage as Routed;
+        Ok(match message {
+            ModelMessage::Assistant(content) => Routed::Assistant(content.clone()),
+            ModelMessage::AssistantReasoning {
+                content,
+                reasoning_content,
+            } => Routed::AssistantReasoning {
+                content: content.clone(),
+                reasoning_content: reasoning_content.clone(),
+            },
+            ModelMessage::AssistantToolCall(call) => {
+                Routed::AssistantToolCall(Self::to_router_call(call)?)
+            }
+            ModelMessage::AssistantToolCalls(calls) => Routed::AssistantToolCalls(
+                calls
+                    .iter()
+                    .map(Self::to_router_call)
+                    .collect::<Result<_, _>>()?,
+            ),
+            ModelMessage::System(content) => Routed::System(content.clone()),
+            ModelMessage::ToolResult {
+                call_id,
+                content,
+                name,
+            } => Routed::ToolResult {
+                call_id: call_id.clone(),
+                content: content.clone(),
+                name: name.clone(),
+            },
+            ModelMessage::User(content) => Routed::User(content.clone()),
+            ModelMessage::UserInput(input) => Routed::UserInput(Self::to_router_input(input)?),
+        })
+    }
+
+    fn to_router_input(input: &TurnInput) -> Result<ag_router::TurnInput, ModelError> {
+        let blocks = input
+            .blocks()
+            .iter()
+            .map(|block| {
+                Ok(match block {
+                    crate::InputBlock::Text(text) => ag_router::InputBlock::Text(text.clone()),
+                    crate::InputBlock::Image(image) => ag_router::InputBlock::Image(
+                        ag_router::ImageContent::from_shared(
+                            match image.media_type() {
+                                crate::ImageMediaType::Jpeg => ag_router::ImageMediaType::Jpeg,
+                                crate::ImageMediaType::Png => ag_router::ImageMediaType::Png,
+                            },
+                            image.shared_bytes(),
+                        )
+                        .map_err(ModelError::request)?,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, ModelError>>()?;
+
+        ag_router::TurnInput::new(blocks).map_err(ModelError::request)
+    }
+
+    fn to_router_call(call: &tool::ToolCall) -> Result<ag_router::ToolCall, ModelError> {
+        ag_router::ToolCall::from_json(
+            call.id().to_string(),
+            call.name(),
+            &call.arguments_json().map_err(ModelError::request)?,
+            call.reasoning_content().map(str::to_string),
+        )
+        .map_err(Self::from_router_error)
+    }
+
+    fn from_router_completion(
+        completion: ag_router::Completion,
+    ) -> Result<ModelCompletion, ModelError> {
+        Ok(match completion {
+            ag_router::Completion::Output {
+                value,
+                metadata,
+                reasoning_content,
+            } => ModelCompletion::new(metadata, ModelResponse::Output(value))
+                .with_reasoning_content(reasoning_content),
+            ag_router::Completion::ToolCalls { calls, metadata } => {
+                let mut calls = calls
+                    .into_iter()
+                    .map(|call| {
+                        tool::ToolCall::from_json(
+                            call.id().to_string(),
+                            call.name(),
+                            &call.arguments_json(),
+                            call.reasoning_content().map(str::to_string),
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let response = if calls.len() == 1 {
+                    ModelResponse::ToolCall(calls.remove(0))
+                } else {
+                    ModelResponse::ToolCalls(calls)
+                };
+                ModelCompletion::new(metadata, response)
+            }
+        })
+    }
+
+    fn from_router_error(error: ag_router::ModelError) -> ModelError {
+        let error_type = match error.error_class() {
+            ag_router::ErrorClass::Request => ModelErrorType::Request,
+            ag_router::ErrorClass::Transport => ModelErrorType::Transport,
+            ag_router::ErrorClass::Provider => ModelErrorType::Provider,
+            ag_router::ErrorClass::InvalidProviderResponse => {
+                ModelErrorType::InvalidProviderResponse
+            }
+            ag_router::ErrorClass::InvalidResponse => ModelErrorType::InvalidResponse,
+            ag_router::ErrorClass::UnsupportedOutput => ModelErrorType::UnsupportedOutput,
+            ag_router::ErrorClass::UnsupportedInput => ModelErrorType::UnsupportedInput,
+            ag_router::ErrorClass::ResponseTooLarge => ModelErrorType::ResponseTooLarge,
+            ag_router::ErrorClass::InvalidOutput => ModelErrorType::InvalidOutput,
+            ag_router::ErrorClass::InvalidToolCall => ModelErrorType::InvalidToolCall,
+        };
+        let http_status = error.http_status();
+        match error {
+            ag_router::ModelError::WithMetadata { source, .. } => Self::from_router_error(*source),
+            ag_router::ModelError::InvalidResponse => ModelError::InvalidResponse,
+            ag_router::ModelError::IncompleteResponse { reason } => {
+                ModelError::IncompleteResponse { reason }
+            }
+            ag_router::ModelError::ResponseBodyTooLarge => ModelError::ResponseBodyTooLarge,
+            ag_router::ModelError::UnsupportedOutputSchema { reason } => {
+                ModelError::UnsupportedOutputSchema { reason }
+            }
+            ag_router::ModelError::UnsupportedImageInput { reason } => {
+                ModelError::UnsupportedImageInput { reason }
+            }
+            ag_router::ModelError::ResponseContentTooLarge => ModelError::ResponseContentTooLarge,
+            ag_router::ModelError::InvalidJson { reason } => ModelError::InvalidJson { reason },
+            ag_router::ModelError::SchemaViolation { path, reason } => {
+                ModelError::SchemaViolation { path, reason }
+            }
+            ag_router::ModelError::MissingToolCall => ModelError::MissingToolCall,
+            ag_router::ModelError::InvalidToolCallId => ModelError::InvalidToolCallId,
+            ag_router::ModelError::DuplicateToolCallId { id } => {
+                ModelError::DuplicateToolCallId { id }
+            }
+            ag_router::ModelError::TerminalResponseWithToolCalls => {
+                ModelError::TerminalResponseWithToolCalls
+            }
+            ag_router::ModelError::UnsupportedToolType { kind } => {
+                ModelError::UnsupportedToolType { kind }
+            }
+            ag_router::ModelError::UnsupportedToolName { name } => {
+                ModelError::UnsupportedToolName { name }
+            }
+            ag_router::ModelError::InvalidToolArguments { reason } => {
+                ModelError::InvalidToolArguments { reason }
+            }
+            error => ModelError::classified_request(error_type, http_status, error.into_source()),
+        }
+    }
+}
+
+fn provider_telemetry_name(provider: ag_router::Provider) -> &'static str {
+    match provider {
+        ag_router::Provider::Kimi => telemetry::PROVIDER_MOONSHOT_AI,
+        ag_router::Provider::Muse => telemetry::PROVIDER_META,
+        ag_router::Provider::Qwen => telemetry::PROVIDER_ALIBABA_CLOUD,
     }
 }
 
@@ -241,11 +442,16 @@ impl Model for ModelClient {
     }
 
     fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
-        self.backend.validate_schema(schema)
+        self.router
+            .validate_schema(&self.router_model, schema)
+            .map_err(Self::from_router_error)
     }
 
     fn validate_input(&self, input: &TurnInput) -> Result<(), ModelError> {
-        self.backend.validate_input(input)
+        let router_input = Self::to_router_input(input)?;
+        self.router
+            .validate_input(&self.router_model, &router_input)
+            .map_err(Self::from_router_error)
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
@@ -681,123 +887,6 @@ impl Deref for ModelCompletion {
     }
 }
 
-/// Provider-reported facts about one completed model request.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct CompletionMetadata {
-    finish_reason: String,
-    response_id: Option<String>,
-    response_model: Option<String>,
-    system_fingerprint: Option<String>,
-    usage: Option<CompletionUsage>,
-}
-
-impl CompletionMetadata {
-    /// Creates normalized provider completion metadata.
-    pub fn new(
-        finish_reason: String,
-        response_id: Option<String>,
-        response_model: Option<String>,
-        system_fingerprint: Option<String>,
-        usage: Option<CompletionUsage>,
-    ) -> Self {
-        Self {
-            finish_reason,
-            response_id,
-            response_model,
-            system_fingerprint,
-            usage,
-        }
-    }
-
-    /// Returns the provider's reason that generation stopped.
-    pub fn finish_reason(&self) -> &str {
-        &self.finish_reason
-    }
-
-    /// Returns the provider-assigned response identifier, when reported.
-    pub fn response_id(&self) -> Option<&str> {
-        self.response_id.as_deref()
-    }
-
-    /// Returns the model identifier reported in the response, when present.
-    pub fn response_model(&self) -> Option<&str> {
-        self.response_model.as_deref()
-    }
-
-    /// Returns the provider's backend fingerprint, when reported.
-    pub fn system_fingerprint(&self) -> Option<&str> {
-        self.system_fingerprint.as_deref()
-    }
-
-    /// Returns provider-reported token usage, when present.
-    pub fn usage(&self) -> Option<&CompletionUsage> {
-        self.usage.as_ref()
-    }
-}
-
-/// Provider-reported token counts for one completed model request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct CompletionUsage {
-    cache_hit: Option<u64>,
-    cache_miss: Option<u64>,
-    input: Option<u64>,
-    output: Option<u64>,
-    reasoning: Option<u64>,
-    total: Option<u64>,
-}
-
-impl CompletionUsage {
-    /// Creates normalized provider-reported token usage.
-    pub fn new(
-        cache_hit_tokens: Option<u64>,
-        cache_miss_tokens: Option<u64>,
-        input_tokens: Option<u64>,
-        output_tokens: Option<u64>,
-        reasoning_tokens: Option<u64>,
-        total_tokens: Option<u64>,
-    ) -> Self {
-        Self {
-            cache_hit: cache_hit_tokens,
-            cache_miss: cache_miss_tokens,
-            input: input_tokens,
-            output: output_tokens,
-            reasoning: reasoning_tokens,
-            total: total_tokens,
-        }
-    }
-
-    /// Returns input tokens served from a provider cache, when reported.
-    pub fn cache_hit_tokens(self) -> Option<u64> {
-        self.cache_hit
-    }
-
-    /// Returns input tokens that missed a provider cache, when reported.
-    pub fn cache_miss_tokens(self) -> Option<u64> {
-        self.cache_miss
-    }
-
-    /// Returns the provider-reported input token count.
-    pub fn input_tokens(self) -> Option<u64> {
-        self.input
-    }
-
-    /// Returns the provider-reported output token count.
-    pub fn output_tokens(self) -> Option<u64> {
-        self.output
-    }
-
-    /// Returns output tokens used for provider-exposed reasoning, when
-    /// reported.
-    pub fn reasoning_tokens(self) -> Option<u64> {
-        self.reasoning
-    }
-
-    /// Returns the provider-reported total token count.
-    pub fn total_tokens(self) -> Option<u64> {
-        self.total
-    }
-}
-
 /// Provider-neutral output from one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelResponse {
@@ -838,18 +927,6 @@ impl ModelResponse {
             Self::ToolCall(call) => std::slice::from_ref(call),
             Self::ToolCalls(calls) => calls,
         }
-    }
-
-    fn from_output(output: Value) -> Self {
-        Self::Output(output)
-    }
-
-    fn tool_call(call: tool::ToolCall) -> Self {
-        Self::ToolCall(call)
-    }
-
-    fn tool_calls(calls: Vec<tool::ToolCall>) -> Self {
-        Self::ToolCalls(calls)
     }
 
     pub(crate) fn response_type(&self) -> ModelResponseType {
@@ -958,15 +1035,9 @@ impl ModelError {
     /// Returns a stable, low-cardinality classification for this failure.
     pub fn error_type(&self) -> ModelErrorType {
         match self {
-            Self::Request(source) => {
-                if source.downcast_ref::<ProviderRequestError>().is_some() {
-                    ModelErrorType::Provider
-                } else {
-                    source
-                        .downcast_ref::<ClassifiedRequestError>()
-                        .map_or(ModelErrorType::Request, |error| error.error_type)
-                }
-            }
+            Self::Request(source) => source
+                .downcast_ref::<ClassifiedRequestError>()
+                .map_or(ModelErrorType::Request, |error| error.error_type),
             Self::InvalidResponse | Self::IncompleteResponse { .. } => {
                 ModelErrorType::InvalidResponse
             }
@@ -995,29 +1066,10 @@ impl ModelError {
     pub fn http_status(&self) -> Option<u16> {
         match self {
             Self::Request(source) => source
-                .downcast_ref::<ProviderRequestError>()
-                .map(|error| error.status.as_u16())
-                .or_else(|| {
-                    source
-                        .downcast_ref::<ClassifiedRequestError>()
-                        .and_then(|error| error.http_status)
-                }),
+                .downcast_ref::<ClassifiedRequestError>()
+                .and_then(|error| error.http_status),
             _ => None,
         }
-    }
-
-    pub(crate) fn provider_request(
-        provider: &'static str,
-        body: String,
-        source: reqwest::Error,
-        status: reqwest::StatusCode,
-    ) -> Self {
-        Self::Request(Box::new(ProviderRequestError {
-            body,
-            provider,
-            source,
-            status,
-        }))
     }
 
     pub(crate) fn classified_request(
@@ -1084,16 +1136,6 @@ struct ClassifiedRequestError {
     http_status: Option<u16>,
     #[source]
     source: Box<dyn Error + Send + Sync>,
-}
-
-#[derive(Debug, Error)]
-#[error("{provider} returned HTTP {status}: {body}")]
-struct ProviderRequestError {
-    body: String,
-    provider: &'static str,
-    #[source]
-    source: reqwest::Error,
-    status: reqwest::StatusCode,
 }
 
 pub(crate) fn ensure_unique_tool_call_ids(calls: &[tool::ToolCall]) -> Result<(), ModelError> {

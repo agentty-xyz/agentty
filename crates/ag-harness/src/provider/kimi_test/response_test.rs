@@ -5,8 +5,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::support::{
     escaped_value_schema, kimi, mount_structured_response, person_schema_value, request,
 };
-use crate::chat_completion::RESPONSE_ENVELOPE_LIMIT_BYTES;
 use crate::provider::kimi::KimiConfig;
+use crate::provider::test_support::RESPONSE_ENVELOPE_LIMIT_BYTES;
 use crate::schema_contract::OutputSchema;
 use crate::{model, schema_contract};
 

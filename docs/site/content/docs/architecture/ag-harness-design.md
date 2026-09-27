@@ -15,7 +15,8 @@ It is not yet an Agentty backend; product integration must follow the
 ```mermaid
 flowchart LR
     App["Application"] --> H["Harness"]
-    H --> M["Model provider"]
+    H --> R["ag-router"]
+    R --> M["Model provider"]
     H --> T["Repository tools"]
     H --> S["Session store"]
 ```
@@ -27,14 +28,15 @@ flowchart LR
 - **Structured output** — every turn validates against a caller-supplied JSON schema.
 - **Durable sessions** — SQLite by default; memory and custom stores share the same
   public contract.
-- **Provider-neutral models** — built-in Muse, Kimi, and Qwen adapters behind one
-  object-safe `Model` trait.
+- **Provider-neutral models** — built-in Muse, Kimi, and Qwen clients use `ag-router`
+  behind the object-safe `Model` trait.
 - **Typed lifecycle events** — content-free turn, model, and tool observations.
 
 ## Crates
 
 ```text
 crates/
+├── ag-router        # structured chat routing + provider transports
 ├── ag-harness       # library + ag-harness-sandbox launcher binary
 └── ag-harness-cli   # interactive terminal host
 ```
@@ -126,6 +128,14 @@ Repository tools receive a validated `Repository` with a trusted Git executable 
 the containing worktree; the library never searches `PATH`.
 
 ## Provider transport
+
+`ag-router` owns built-in Chat Completions transport, provider wire policies, and local
+JSON Schema validation. Its public `Router::execute` request names a `provider/model`
+and always includes a `JsonSchemaFormat`; terminal output is validated JSON, while
+intermediate function calls return to the caller for execution. The harness converts its
+built-in tool requests and responses at this boundary and retains tool permissions,
+sessions, lifecycle events, and telemetry. The router currently covers chat completion;
+it has no streaming or automatic provider fallback.
 
 Built-in Chat Completions clients bound one provider request to three minutes, because
 reasoning models can spend more than a minute on one completion; a timed-out request is

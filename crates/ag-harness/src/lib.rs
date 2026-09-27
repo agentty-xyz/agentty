@@ -81,7 +81,6 @@ mod cancellation;
 #[path = "../tests/support/cancellation.rs"]
 mod cancellation_test;
 
-mod chat_completion;
 mod command_journal;
 mod command_settlement;
 mod compaction;

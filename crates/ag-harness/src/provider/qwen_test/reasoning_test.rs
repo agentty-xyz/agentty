@@ -6,7 +6,7 @@ use super::support::{
     mount_qwen_3_8_continuation, mount_qwen_3_8_tool_response, person_schema_value, qwen,
     qwen_model, read_request, read_tool_wire,
 };
-use crate::chat_completion::STRUCTURED_OUTPUT_INSTRUCTION;
+use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::tool;
 
 #[tokio::test]

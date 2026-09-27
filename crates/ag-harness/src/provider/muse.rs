@@ -4,10 +4,7 @@ use async_trait::async_trait;
 
 use super::catalog::{ModelConfiguration, ModelConfigurationError, ModelProvider};
 use crate::lifecycle::LifecycleObserver;
-use crate::model::{
-    Model, ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelRequest, ReasoningEffort,
-};
-use crate::{chat_completion, telemetry};
+use crate::model::{Model, ModelClient, ModelCompletion, ModelError, ModelMetadata, ModelRequest};
 
 pub(crate) const DEFAULT_BASE_URL: &str = "https://api.meta.ai/v1";
 pub(crate) const MODEL_API_BASE_URL_ENV: &str = "MODEL_API_BASE_URL";
@@ -20,27 +17,6 @@ pub const MUSE_SPARK_1_3: &str = "muse-spark-1.3";
 /// Discounted Muse Spark 1.3 model that permits Meta to use prompts and
 /// completions to train future models.
 pub const MUSE_SPARK_1_3_CONTRIBUTOR: &str = "muse-spark-1.3-contributor";
-
-pub(crate) fn policy(model: &str) -> chat_completion::ChatCompletionProviderPolicy {
-    chat_completion::ChatCompletionProviderPolicy {
-        display_name: "Meta Model API",
-        // Meta documents base64 data-URL image parts for the Muse Spark 1.3
-        // configurations.
-        image_input: matches!(model, MUSE_SPARK_1_3 | MUSE_SPARK_1_3_CONTRIBUTOR),
-        reasoning_format: chat_completion::ReasoningFormat::Effort(reasoning_effort_name),
-        response_format_with_tools: true,
-        structured_output: chat_completion::StructuredOutputMode::JsonSchema,
-        telemetry_name: telemetry::PROVIDER_META,
-        unsupported_schema_reason: "Muse structured output requires an explicit object root schema",
-    }
-}
-
-fn reasoning_effort_name(reasoning_effort: ReasoningEffort) -> &'static str {
-    match reasoning_effort {
-        ReasoningEffort::Max => ReasoningEffort::XHigh.as_str(),
-        reasoning_effort => reasoning_effort.as_str(),
-    }
-}
 
 /// Muse model configured from the standard Model API environment variables.
 pub struct Muse {

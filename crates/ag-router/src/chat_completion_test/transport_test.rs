@@ -3,7 +3,6 @@ use std::io::{Read as _, Write as _};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use super::support::max_as_xhigh;
 use crate::chat_completion::{
     ChatCompletionBackend, ChatCompletionClient as _, ChatCompletionError,
     ChatCompletionProviderPolicy, ChatCompletionRequest, MAX_PROVIDER_RETRY_DELAY,
@@ -12,6 +11,13 @@ use crate::chat_completion::{
     append_success_chunk, default_client, rate_limit_retry_delay,
 };
 use crate::model;
+
+fn max_as_xhigh(effort: model::ReasoningEffort) -> &'static str {
+    match effort {
+        model::ReasoningEffort::Max => "xhigh",
+        _ => effort.as_str(),
+    }
+}
 
 #[test]
 fn rejects_success_chunk_that_exceeds_remaining_capacity() {
@@ -60,7 +66,6 @@ fn normalizes_transport_error_classification() {
             reasoning_format: ReasoningFormat::Effort(max_as_xhigh),
             response_format_with_tools: true,
             structured_output: StructuredOutputMode::JsonSchema,
-            telemetry_name: "provider",
             unsupported_schema_reason: "object schema required",
         },
         default_client(),
@@ -71,7 +76,7 @@ fn normalizes_transport_error_classification() {
     let error = backend.map_completion_error(transport_error);
 
     // Assert
-    assert_eq!(error.error_type(), model::ModelErrorType::Transport);
+    assert_eq!(error.error_class(), model::ErrorClass::Transport);
     assert_eq!(error.http_status(), None);
     assert_eq!(
         error.to_string(),
@@ -365,4 +370,52 @@ async fn retains_http_status_when_error_body_read_fails() {
         source.status(),
         Some(reqwest::StatusCode::TOO_MANY_REQUESTS)
     );
+}
+
+#[tokio::test]
+async fn reports_error_body_read_failure_without_partial_body() {
+    // Arrange
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener
+        .local_addr()
+        .expect("listener should have an address");
+    let server = tokio::task::spawn_blocking(move || {
+        let (mut stream, _) = listener.accept().expect("server should accept a request");
+        let mut request = [0; 2_048];
+        assert!(
+            stream
+                .read(&mut request)
+                .expect("server should read request")
+                > 0
+        );
+        stream
+            .write_all(
+                b"HTTP/1.1 500 Internal Server Error\r\n\
+                  Content-Length: 64\r\n\
+                  Connection: close\r\n\r\n",
+            )
+            .expect("server should write headers");
+    });
+    let client = ReqwestChatCompletionClient {
+        client: reqwest::Client::new(),
+        request_timeout: REQUEST_TIMEOUT,
+    };
+    let request = ChatCompletionRequest::new(
+        "test-key",
+        format!("http://{address}"),
+        serde_json::json!({}),
+    );
+
+    // Act
+    let result = client.complete(request).await;
+    server.await.expect("server should finish");
+    let error = result.err().expect("empty truncated response should fail");
+
+    // Assert
+    assert!(matches!(
+        &error,
+        ChatCompletionError::Http { status, .. }
+            if *status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    ));
+    assert!(error.to_string().contains("[error body read failed:"));
 }

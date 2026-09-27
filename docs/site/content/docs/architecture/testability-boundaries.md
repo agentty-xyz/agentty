@@ -64,6 +64,11 @@ qualification, not a passed or silently skipped check. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for platform
 limitations.
 
+`ag-router` tests use local HTTP servers to verify provider payloads, bounded transport,
+response decoding, and schema validation. `ag-harness` provider tests exercise its
+public adapter into the router, including tool-call translation and telemetry; live
+provider qualification remains separate.
+
 Focused review persistence is checked against its active invocation in SQLite. Store
 tests exercise the write and invalidation boundary with the real adapter.
 

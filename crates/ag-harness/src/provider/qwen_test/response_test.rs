@@ -1,14 +1,10 @@
-use std::sync::Arc;
-
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::support::{StubClient, escaped_value_schema, qwen, request};
-use crate::chat_completion::{
-    ChatCompletionBackend, GeneratedResponse, RESPONSE_ENVELOPE_LIMIT_BYTES,
-};
-use crate::provider::qwen::{QwenConfig, policy};
+use super::support::{escaped_value_schema, qwen, request};
+use crate::provider::qwen::QwenConfig;
+use crate::provider::test_support::RESPONSE_ENVELOPE_LIMIT_BYTES;
 use crate::schema_contract::OutputSchema;
 use crate::{model, schema_contract};
 
@@ -82,31 +78,6 @@ async fn completes_with_normalized_provider_metadata() {
     assert_eq!(usage.cache_hit_tokens(), Some(4));
     assert_eq!(usage.cache_miss_tokens(), None);
     assert_eq!(usage.reasoning_tokens(), Some(2));
-}
-
-#[tokio::test]
-async fn completes_through_injected_client() {
-    // Arrange
-    let model = ChatCompletionBackend::with_client(
-        "stub-key".to_string(),
-        "https://stub.example/v1/".to_string(),
-        "qwen-stub".to_string(),
-        policy("qwen-stub"),
-        Arc::new(StubClient),
-    );
-
-    // Act
-    let output = model
-        .generate(&request("extract the name"))
-        .await
-        .expect("stubbed Qwen request should succeed");
-
-    // Assert
-    assert!(matches!(
-        output,
-        GeneratedResponse::Output { output, .. }
-            if output == r#"{"name":"Ada"}"#
-    ));
 }
 
 #[tokio::test]

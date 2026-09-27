@@ -28,6 +28,7 @@ For file-level detail, read the module docstrings directly.
 | `ag-harness-cli`   | Companion harness CLI                                            |
 | `ag-orchestration` | Campaign planning, verification, integration                     |
 | `ag-protocol`      | Response schemas, parsing, prompt envelopes                      |
+| `ag-router`        | Structured chat routing and provider transports                  |
 | `ag-session`       | Session models, policies, catalog, lifecycle API                 |
 | `ag-store`         | Persistence contracts, SQLite adapters, migrations               |
 | `ag-tui-text`      | Markdown, forge HTML, terminal diagrams and text layout          |
