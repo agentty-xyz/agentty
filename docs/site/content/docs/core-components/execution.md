@@ -21,6 +21,7 @@ flowchart TD
 
 | Component          | Crates                         | Responsibility                                    |
 | ------------------ | ------------------------------ | ------------------------------------------------- |
+| Scheduler          | `ag-scheduler`                 | Session admission and campaign task selection     |
 | Run Worker         | `ag-worker`                    | Admission, scheduling, cancellation, recovery     |
 | Agent Runtime      | `ag-runtime`                   | Adapter composition, dispatch, provider lifecycle |
 | Shared contracts   | `ag-contracts`, `ag-protocol`  | Requests, events, policy types, response schemas  |
@@ -34,6 +35,10 @@ flowchart TD
 `ag-worker` schedules runs and coordinates heartbeats, cancellation, completion, and
 restart recovery. Hosts supply workflow policy and persistence; the worker has no TUI,
 Git, or database implementation dependency.
+
+`ag-scheduler` supplies the shared session-turn capacity and pure campaign selection.
+The worker still owns per-session ordering and runtime cleanup; see
+[Scheduler](@/docs/core-components/scheduler.md).
 
 One boundary does not mean one global queue. Session commands remain ordered through
 post-processing; isolated utility runs execute concurrently with a bounded capacity. A

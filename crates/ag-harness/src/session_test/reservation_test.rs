@@ -385,28 +385,28 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
     replacement_database.reservation_observer = commit_control.clone();
 
     // Act
-    let cancellation = tokio::time::timeout(
-        Duration::from_secs(1),
-        database.begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("cancelled"),
-            &turn_options(),
-            0,
-        ),
+    let cancelled_database = database.clone();
+    let cancellation = tokio::spawn(async move {
+        cancelled_database
+            .begin_turn(
+                Arc::new(cancelled_database.clone()),
+                "session-a",
+                &TurnInput::from("cancelled"),
+                &turn_options(),
+                0,
+            )
+            .await
+    });
+    commit_control.wait_for_commit().await;
+    cancellation.abort();
+    let cancelled = cancellation.await;
+    let acquired = acquire(
+        Arc::new(replacement_database.clone()),
+        "session-a",
+        "replacement",
     )
-    .await;
-    let commit_seen = commit_control.commit_seen.load(Ordering::SeqCst);
-    let acquired = replacement_database
-        .begin_turn(
-            Arc::new(replacement_database.clone()),
-            "session-a",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement turn should begin immediately");
+    .await
+    .expect("replacement turn should begin immediately");
     let turns = sqlx::query_as::<_, (i64, String)>(
         r"
 SELECT turn_position, status
@@ -420,8 +420,7 @@ ORDER BY turn_position
     .expect("turn states should load");
 
     // Assert
-    assert!(cancellation.is_err());
-    assert!(commit_seen);
+    assert!(matches!(cancelled, Err(error) if error.is_cancelled()));
     assert_eq!(acquired.guard.owner().turn_position, 1);
     assert_eq!(
         turns,

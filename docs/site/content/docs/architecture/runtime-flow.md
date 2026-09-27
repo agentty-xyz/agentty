@@ -61,7 +61,9 @@ primary; periodic polling provides recovery from missed updates.
 Composition injects `SessionRunFactory`, which returns a worker-owned
 `SessionRunClient`. The worker obtains its adapter from `ag-runtime`; application
 workflows do not retain raw adapters. `SessionWorkerHandle` owns the mailbox, task,
-ordering, and wakeups. Hosts supply command policy and ordered effects.
+ordering, and wakeups. Hosts supply command policy and ordered effects. The shared
+`ag-scheduler` admission pool limits concurrent session turns across regular and managed
+sessions without changing their mailbox order.
 
 Model changes pause scheduling, wait for active work, and atomically save selection and
 conversation reset. Failed saves preserve pending work. Successful switches retire the
@@ -151,7 +153,8 @@ flowchart TD
 1. The worker checks cancellation, preparation, and isolation, then executes in shared
    submission order. Active branch actions reuse the existing worker.
 1. Turn preparation resolves current permission, reasoning, style, speed, and
-   personality settings and submits a `TurnRequest` through `SessionRunClient`.
+   personality settings and submits a `TurnRequest` through `SessionRunClient` after
+   acquiring shared session capacity.
 1. Progress remains transient. Post-turn handling persists the answer, questions, usage,
    and provider continuation state before projecting them into the UI.
 1. Ordered post-processing commits changes, coordinates publishing and stacked children,

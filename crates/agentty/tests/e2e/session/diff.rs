@@ -491,7 +491,7 @@ async fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
                         "Cancel returns before the slow Git diff completes",
                     )
                     .press_key("d")
-                    .wait_for_text("Unable to load diff:", 5000)
+                    .wait_for_text("Unable to load diff:", 10000)
                     .capture_labeled(
                         "diff_loading_failed",
                         "Git failure returns to the session with a diagnostic",

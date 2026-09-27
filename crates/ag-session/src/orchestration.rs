@@ -9,6 +9,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
+use ag_scheduler::{CampaignCandidate, select_campaign_tasks};
+
 use crate::model::SessionStatus;
 
 /// Maximum number of automatic focused-review remediation turns per managed
@@ -424,25 +426,22 @@ impl OrchestrationPolicy {
         max_parallelism: usize,
         task_statuses: &[Option<OrchestrationTaskStatus>],
     ) -> OrchestrationScheduleDecision {
-        let occupied_slots = task_statuses
+        let candidates = task_statuses
             .iter()
-            .filter(|status| status.is_some_and(OrchestrationTaskStatus::occupies_parallelism_slot))
-            .count();
-        let planned_tasks = task_statuses
-            .iter()
-            .filter(|status| **status == Some(OrchestrationTaskStatus::Planned))
-            .count();
-        let spawn_count = max_parallelism
-            .saturating_sub(occupied_slots)
-            .min(planned_tasks);
-        let should_submit = !task_statuses.is_empty()
-            && task_statuses
-                .iter()
-                .all(|status| status.is_some_and(OrchestrationTaskStatus::is_settled));
+            .enumerate()
+            .map(|(key, status)| CampaignCandidate {
+                key,
+                planned: *status == Some(OrchestrationTaskStatus::Planned),
+                occupies_slot: status
+                    .is_some_and(OrchestrationTaskStatus::occupies_parallelism_slot),
+                settled: status.is_some_and(OrchestrationTaskStatus::is_settled),
+            })
+            .collect::<Vec<_>>();
+        let decision = select_campaign_tasks(max_parallelism, &candidates);
 
         OrchestrationScheduleDecision {
-            should_submit,
-            spawn_count,
+            should_submit: decision.all_settled,
+            spawn_count: decision.selected.len(),
         }
     }
 }

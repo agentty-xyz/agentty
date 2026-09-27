@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, ToolPolicy};
+use ag_scheduler::SessionAdmission;
 use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
 
 /// Provider configuration used by the worker to compose its runtimes.
@@ -10,9 +11,19 @@ use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
 pub struct RuntimeConfig {
     pub(crate) factory: ag_runtime::RuntimeFactory,
     pub(crate) policies: BTreeMap<String, ExecutionPolicy>,
+    pub(crate) session_admission: SessionAdmission,
 }
 
 impl RuntimeConfig {
+    /// Sets the concurrency limit shared by session clients built from this
+    /// configuration. Existing clients retain their original admission pool.
+    #[must_use]
+    pub fn with_session_parallelism(mut self, limit: NonZeroUsize) -> Self {
+        self.session_admission = SessionAdmission::new(limit);
+
+        self
+    }
+
     /// Replaces one harness's execution policy for subsequently constructed
     /// session and utility workers. Existing workers retain their snapshot.
     #[must_use]
@@ -36,6 +47,9 @@ impl Default for RuntimeConfig {
         let subagents = NonZeroUsize::new(2);
         Self {
             factory: ag_runtime::RuntimeFactory::default(),
+            session_admission: SessionAdmission::new(
+                NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+            ),
             policies: BTreeMap::from([
                 (
                     AgentKind::Codex.to_string(),

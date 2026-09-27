@@ -23,6 +23,7 @@ ag-harness = { path = "crates/ag-harness", version = "0.16.2" }
 ag-orchestration = { path = "crates/ag-orchestration", version = "0.16.2" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.16.2" }
 ag-runtime = { path = "crates/ag-runtime", version = "0.16.2" }
+ag-scheduler = { path = "crates/ag-scheduler", version = "0.16.2" }
 ag-session = { path = "crates/ag-session", version = "0.16.2" }
 ag-store = { path = "crates/ag-store", version = "0.16.2" }
 ag-tui-text = { path = "crates/ag-tui-text", version = "0.16.2" }

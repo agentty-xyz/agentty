@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -7,7 +8,7 @@ use ag_contracts::{
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
 use ag_protocol::TurnPrompt;
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::test_support::{AppServerTurnResponse, MockAppServerClient};
@@ -152,6 +153,66 @@ async fn cancellation_before_submission_bounds_unresponsive_shutdown() {
     assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
 }
 
+#[tokio::test(start_paused = true)]
+async fn cancellation_before_submission_waits_for_cleanup_capacity_before_timeout() {
+    // Arrange
+    let admission = ag_scheduler::SessionAdmission::new(NonZeroUsize::MIN);
+    let occupied_cleanup = admission.acquire_cleanup().await.expect("cleanup slot");
+    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let shutdown_started_for_channel = Arc::clone(&shutdown_started);
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_shutdown_session()
+        .once()
+        .returning(move |_| {
+            shutdown_started_for_channel.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        });
+    let client = session_client_with_admission("waiting", channel, admission);
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let mut submission = tokio::spawn(async move {
+        client
+            .submit(request(), mpsc::unbounded_channel().0, cancellation)
+            .await
+    });
+
+    // Act
+    let before_capacity = tokio::time::timeout(Duration::from_secs(6), &mut submission).await;
+    let shutdown_ran_early = shutdown_started.load(Ordering::SeqCst);
+    drop(occupied_cleanup);
+    let result = submission.await.expect("submission task");
+
+    // Assert
+    assert!(before_capacity.is_err());
+    assert!(!shutdown_ran_early);
+    assert!(shutdown_started.load(Ordering::SeqCst));
+    assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
+}
+
+#[tokio::test]
+async fn cancellation_still_attempts_shutdown_after_admission_closes() {
+    // Arrange
+    let admission = ag_scheduler::SessionAdmission::new(NonZeroUsize::MIN);
+    admission.close();
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let client = session_client_with_admission("closed", channel, admission);
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+
+    // Act
+    let result = client
+        .submit(request(), mpsc::unbounded_channel().0, cancellation)
+        .await;
+
+    // Assert
+    assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
+}
+
 /// Records when a polled turn relinquishes its owned execution resources.
 struct DropFlag(Arc<AtomicBool>);
 
@@ -208,6 +269,54 @@ async fn cancellation_drops_started_turn_before_bounded_shutdown() {
             Duration::from_secs(if stuck { 5 } else { 0 })
         );
     }
+}
+
+#[tokio::test]
+async fn cancellation_of_running_turn_shuts_down_without_a_cleanup_slot() {
+    // Arrange
+    let admission = ag_scheduler::SessionAdmission::new(NonZeroUsize::MIN);
+    let occupied_cleanup = admission.acquire_cleanup().await.expect("cleanup slot");
+    let (started_tx, started_rx) = oneshot::channel();
+    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let shutdown_started_for_channel = Arc::clone(&shutdown_started);
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .once()
+        .return_once(move |_, _, _| {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                std::future::pending().await
+            })
+        });
+    channel
+        .expect_shutdown_session()
+        .once()
+        .returning(move |_| {
+            shutdown_started_for_channel.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        });
+    let client = session_client_with_admission("running", channel, admission);
+    let cancellation = CancellationToken::new();
+    let cancel = cancellation.clone();
+    let submission = tokio::spawn(async move {
+        client
+            .submit(request(), mpsc::unbounded_channel().0, cancellation)
+            .await
+    });
+    started_rx.await.expect("turn started");
+
+    // Act
+    cancel.cancel();
+    let result = tokio::time::timeout(Duration::from_secs(5), submission)
+        .await
+        .expect("running turn does not wait for cleanup capacity")
+        .expect("submission task");
+
+    // Assert
+    assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
+    assert!(shutdown_started.load(Ordering::SeqCst));
+    drop(occupied_cleanup);
 }
 
 #[tokio::test]
@@ -281,4 +390,195 @@ async fn session_client_keeps_identity_across_clones_and_propagates_cleanup_fail
         cleanup.expect_err("cleanup error").to_string(),
         "cleanup failure"
     );
+}
+
+#[tokio::test]
+async fn session_clients_share_global_admission_and_cancel_waiting_turns() {
+    // Arrange
+    let config = RuntimeConfig::default().with_session_parallelism(NonZeroUsize::MIN);
+    let admission = config.session_admission.clone();
+    let (started_tx, started_rx) = oneshot::channel();
+    let release = Arc::new(Notify::new());
+    let release_turn = Arc::clone(&release);
+    let mut first_channel = MockAgentChannel::new();
+    first_channel
+        .expect_run_turn()
+        .once()
+        .return_once(move |_, _, _| {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                release_turn.notified().await;
+                Ok(completed_turn())
+            })
+        });
+    let second_started = Arc::new(AtomicBool::new(false));
+    let second_started_turn = Arc::clone(&second_started);
+    let mut second_channel = MockAgentChannel::new();
+    second_channel
+        .expect_run_turn()
+        .once()
+        .returning(move |_, _, _| {
+            second_started_turn.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(completed_turn()) })
+        });
+    let cleanup_started = Arc::new(AtomicBool::new(false));
+    let cleanup_started_for_channel = Arc::clone(&cleanup_started);
+    let mut canceled_channel = MockAgentChannel::new();
+    canceled_channel
+        .expect_shutdown_session()
+        .once()
+        .returning(move |_| {
+            cleanup_started_for_channel.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        });
+    let first = session_client_with_admission("regular", first_channel, admission.clone());
+    let second = session_client_with_admission("managed", second_channel, admission.clone());
+    let canceled = session_client_with_admission("canceled", canceled_channel, admission);
+    let cancellation = CancellationToken::new();
+
+    // Act
+    let first_turn = tokio::spawn(async move {
+        first
+            .submit(
+                request(),
+                mpsc::unbounded_channel().0,
+                CancellationToken::new(),
+            )
+            .await
+    });
+    started_rx.await.expect("first turn started");
+    let second_turn = tokio::spawn(async move {
+        second
+            .submit(
+                request(),
+                mpsc::unbounded_channel().0,
+                CancellationToken::new(),
+            )
+            .await
+    });
+    let cancellation_for_waiter = cancellation.clone();
+    let canceled_turn = tokio::spawn(async move {
+        canceled
+            .submit(
+                request(),
+                mpsc::unbounded_channel().0,
+                cancellation_for_waiter,
+            )
+            .await
+    });
+    tokio::task::yield_now().await;
+    let second_waited = !second_started.load(Ordering::SeqCst);
+    cancellation.cancel();
+    let canceled_result = canceled_turn.await.expect("canceled task");
+    let cleanup_ran_while_turn_occupied = cleanup_started.load(Ordering::SeqCst);
+    release.notify_one();
+    let first_result = first_turn.await.expect("regular task");
+    let second_result = second_turn.await.expect("managed task");
+
+    // Assert
+    assert!(second_waited);
+    assert!(matches!(
+        canceled_result,
+        Err(AgentError::InterruptedByUser(_))
+    ));
+    assert!(cleanup_ran_while_turn_occupied);
+    assert_eq!(first_result.expect("regular result").output_tokens, 5);
+    assert_eq!(second_result.expect("managed result").output_tokens, 5);
+    assert!(second_started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn normal_shutdown_waits_for_shared_cleanup_capacity() {
+    // Arrange
+    let admission = ag_scheduler::SessionAdmission::new(NonZeroUsize::MIN);
+    let (started_tx, started_rx) = oneshot::channel();
+    let release = Arc::new(Notify::new());
+    let release_first = Arc::clone(&release);
+    let mut first_channel = MockAgentChannel::new();
+    first_channel
+        .expect_shutdown_session()
+        .once()
+        .return_once(move |_| {
+            Box::pin(async move {
+                let _ = started_tx.send(());
+                release_first.notified().await;
+                Ok(())
+            })
+        });
+    let second_started = Arc::new(AtomicBool::new(false));
+    let second_started_for_channel = Arc::clone(&second_started);
+    let mut second_channel = MockAgentChannel::new();
+    second_channel
+        .expect_shutdown_session()
+        .once()
+        .returning(move |_| {
+            second_started_for_channel.store(true, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        });
+    let first = session_client_with_admission("first", first_channel, admission.clone());
+    let second = session_client_with_admission("second", second_channel, admission);
+
+    // Act
+    let first_shutdown = tokio::spawn(async move { first.shutdown().await });
+    started_rx.await.expect("first cleanup started");
+    let second_shutdown = tokio::spawn(async move { second.shutdown().await });
+    tokio::task::yield_now().await;
+    let second_waited = !second_started.load(Ordering::SeqCst);
+    release.notify_one();
+    let first_result = first_shutdown.await.expect("first shutdown task");
+    let second_result = second_shutdown.await.expect("second shutdown task");
+
+    // Assert
+    assert!(second_waited);
+    assert!(first_result.is_ok());
+    assert!(second_result.is_ok());
+    assert!(second_started.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn closed_admission_rejects_a_turn_before_harness_dispatch() {
+    // Arrange
+    let admission = ag_scheduler::SessionAdmission::new(NonZeroUsize::MIN);
+    admission.close();
+    let channel = MockAgentChannel::new();
+    let client = session_client_with_admission("closed", channel, admission);
+
+    // Act
+    let result = client
+        .submit(
+            request(),
+            mpsc::unbounded_channel().0,
+            CancellationToken::new(),
+        )
+        .await;
+    let cleanup = client.shutdown().await;
+
+    // Assert
+    assert!(
+        matches!(result, Err(AgentError::Runtime(message)) if message.contains("Session admission closed"))
+    );
+    assert!(
+        matches!(cleanup, Err(AgentError::Runtime(message)) if message.contains("Session cleanup admission closed"))
+    );
+}
+
+fn session_client_with_admission(
+    session_id: &str,
+    channel: MockAgentChannel,
+    admission: ag_scheduler::SessionAdmission,
+) -> SessionRunClient {
+    let mut client = SessionRunClient::from_channel(session_id.into(), Arc::new(channel));
+    client.session_admission = admission;
+
+    client
+}
+
+fn completed_turn() -> TurnResult {
+    TurnResult {
+        assistant_message: ag_protocol::AgentResponse::plain("done"),
+        context_reset: false,
+        input_tokens: 3,
+        output_tokens: 5,
+        provider_conversation_id: None,
+    }
 }

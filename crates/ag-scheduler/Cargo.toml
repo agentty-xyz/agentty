@@ -1,0 +1,14 @@
+[package]
+name = "ag-scheduler"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared admission and task selection for Agentty work"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio.workspace = true

@@ -64,6 +64,11 @@ jobs:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p ag-contracts --token "$CRATES_IO_TOKEN"
 
+      - name: Publish `ag-scheduler` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-scheduler --token "$CRATES_IO_TOKEN"
+
       - name: Publish `ag-session` to crates.io
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}

@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use ag_contracts::{AgentError, TurnEvent, TurnRequest, TurnResult};
+use ag_scheduler::SessionAdmission;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 pub struct SessionRunClient {
     execution_policy: ag_contracts::ExecutionPolicy,
     runtime: ag_runtime::SessionRuntime,
+    session_admission: SessionAdmission,
     session_id: String,
 }
 
@@ -27,12 +29,14 @@ impl SessionRunClient {
             session_id,
             config.factory.session(kind),
             config.execution_policy(kind),
+            config.session_admission.clone(),
         )
     }
 
     /// Executes a turn under worker cancellation and runtime cleanup.
     /// Cancellation drops the turn before allowing up to five seconds for
-    /// adapter shutdown, including when the turn has never been polled.
+    /// adapter shutdown. Before a turn starts, cleanup admission may delay
+    /// the interruption result; its five-second timer starts after admission.
     ///
     /// # Errors
     /// Returns the runtime failure or a typed user interruption.
@@ -48,12 +52,21 @@ impl SessionRunClient {
         let interrupted =
             || AgentError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string());
         if cancellation.is_cancelled() {
-            let _ =
-                tokio::time::timeout(Duration::from_secs(5), runtime.shutdown(session_id)).await;
+            self.shutdown_after_cancellation().await;
             return Err(interrupted());
         }
+        let turn_permit = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                self.shutdown_after_cancellation().await;
+                return Err(interrupted());
+            }
+            permit = self.session_admission.acquire() => {
+                permit.map_err(|error| AgentError::Runtime(format!("Session admission closed: {error}")))?
+            }
+        };
         let mut turn = runtime.run_turn(session_id.clone(), request, events);
-        tokio::select! {
+        let result = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
                 drop(turn);
@@ -61,14 +74,25 @@ impl SessionRunClient {
                 Err(interrupted())
             }
             result = &mut turn => result,
-        }
+        };
+        drop(turn_permit);
+
+        result
     }
 
     /// Releases the runtime after the session mailbox drains or is abandoned.
     ///
     /// # Errors
-    /// Returns the runtime's cleanup failure.
+    /// Returns the runtime's cleanup failure or an admission closure.
     pub async fn shutdown(&self) -> Result<(), AgentError> {
+        let _permit = self
+            .session_admission
+            .acquire_cleanup()
+            .await
+            .map_err(|error| {
+                AgentError::Runtime(format!("Session cleanup admission closed: {error}"))
+            })?;
+
         self.runtime.shutdown(self.session_id.clone()).await
     }
 
@@ -76,12 +100,25 @@ impl SessionRunClient {
         session_id: String,
         runtime: ag_runtime::SessionRuntime,
         execution_policy: ag_contracts::ExecutionPolicy,
+        session_admission: SessionAdmission,
     ) -> Self {
         Self {
             execution_policy,
             runtime,
+            session_admission,
             session_id,
         }
+    }
+
+    async fn shutdown_after_cancellation(&self) {
+        // Closed admission means the process is stopping; still attempt
+        // provider shutdown before reporting the cancellation.
+        let _permit = self.session_admission.acquire_cleanup().await.ok();
+        let _ = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.runtime.shutdown(self.session_id.clone()),
+        )
+        .await;
     }
 }
 

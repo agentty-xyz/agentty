@@ -164,12 +164,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-scheduler"
+version = "0.16.2"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "ag-session"
 version = "0.16.2"
 dependencies = [
  "ag-contracts",
  "ag-forge",
  "ag-protocol",
+ "ag-scheduler",
  "async-trait",
  "rustc-hash",
  "serde",
@@ -210,6 +218,7 @@ dependencies = [
  "ag-contracts",
  "ag-protocol",
  "ag-runtime",
+ "ag-scheduler",
  "ag-session",
  "async-trait",
  "mockall",
