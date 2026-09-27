@@ -429,6 +429,29 @@ delete with `d`, and reorder with `J` / `K`. `Enter` saves an edit; `Esc` cancel
 When Agentty runs in `tmux`, session-view `o` runs a configured command in the worktree
 or opens a selector if several commands exist.
 
+## Telemetry
+
+<a id="telemetry"></a> Telemetry is enabled by default and sends events to the Agentty
+PostHog project at `https://us.i.posthog.com`. Release builds bundle its public,
+write-only project token; debug builds, including tests, send nothing. Set
+`AGENTTY_TELEMETRY_ENABLED=0` before launching Agentty to disable it; unset or `1` keeps
+it enabled, and any other value disables it.
+
+```bash
+AGENTTY_TELEMETRY_ENABLED=0 agentty
+```
+
+| Event             | When sent                                                           | Properties                                                      |
+| ----------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `agentty_launch`  | After the database opens on a launch with telemetry enabled         | `app_version`                                                   |
+| `agentty_failure` | When startup after the database opens or the terminal runtime fails | `app_version`, `failure_category` (`database` or `application`) |
+
+Each event carries a random installation ID that Agentty creates on the first launch
+with telemetry enabled and stores in its database, so events from one Agentty root share
+an ID. Events set `$process_person_profile=false`. PostHog receives the request's source
+IP address and derives an approximate location from it. Agentty does not send error
+messages, stack traces, project paths, or prompts.
+
 ## Auto-Update
 
 <a id="usage-auto-update"></a> Agentty checks npm at startup and hourly, then installs

@@ -145,6 +145,11 @@ Only one Agentty instance can use a given Agentty root at a time. Close the runn
 instance before launching another. Separate `AGENTTY_ROOT` directories can run
 independently.
 
+Telemetry is enabled by default: release builds send launch and failure events to the
+Agentty PostHog project. Set `AGENTTY_TELEMETRY_ENABLED=0` to disable it. See the
+[telemetry details](docs/site/content/docs/usage/workflow.md#telemetry) for the exact
+events and fields.
+
 ## Documentation
 
 Documentation for installation and workflows is available at

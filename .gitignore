@@ -12,3 +12,4 @@ __pycache__/
 *_frame_actual.txt
 **/e2e_artifacts/
 testty_proof_output/
+.env
