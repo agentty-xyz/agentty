@@ -441,10 +441,10 @@ it enabled, and any other value disables it.
 AGENTTY_TELEMETRY_ENABLED=0 agentty
 ```
 
-| Event             | When sent                                                           | Properties                                                      |
-| ----------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `agentty_launch`  | After the database opens on a launch with telemetry enabled         | `app_version`                                                   |
-| `agentty_failure` | When startup after the database opens or the terminal runtime fails | `app_version`, `failure_category` (`database` or `application`) |
+| Event             | When sent                                                           | Properties                                                                            |
+| ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `agentty_launch`  | After the database opens on a launch with telemetry enabled         | `app_source` (`cli`), `app_version`                                                   |
+| `agentty_failure` | When startup after the database opens or the terminal runtime fails | `app_source` (`cli`), `app_version`, `failure_category` (`database` or `application`) |
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share

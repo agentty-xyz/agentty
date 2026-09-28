@@ -134,10 +134,11 @@ fn assert_event(event: &Value, token: &str, name: &str, category: Option<&str>) 
 
     let properties = &event["properties"];
     assert_eq!(properties["$process_person_profile"], false);
+    assert_eq!(properties["app_source"], "cli");
     assert_eq!(properties["app_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(properties["failure_category"].as_str(), category);
     assert_eq!(
         properties.as_object().map(serde_json::Map::len),
-        Some(if category.is_some() { 3 } else { 2 })
+        Some(if category.is_some() { 4 } else { 3 })
     );
 }
