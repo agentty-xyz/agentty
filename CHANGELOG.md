@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.3] - 2026-09-27
+
+### Added
+
+- `agentty`: show ready GitHub pull requests in the session list and keep focused
+  reviews visible after conflict-free rebases.
+- `agentty`: add shared session and campaign scheduling, PostHog telemetry, and optional
+  website analytics consent and tracking.
+- `ag-router`: extract model routing into a reusable crate with documented provider
+  boundaries.
+
+### Changed
+
+- `ag-harness`: improve turn reservation, observability, and resilience under live
+  reasoning models; update its CLI.
+- `agentty`: load session details when opened, render only visible session rows, and
+  limit commit message generation to eight provider calls.
+- workspace: enforce the agent execution boundary, address code quality issues, update
+  dependencies and GitHub Actions, and simplify contributor documentation.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.3`.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.16.2] - 2026-09-23
 
 ### Changed
