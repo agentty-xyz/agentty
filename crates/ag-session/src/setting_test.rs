@@ -49,6 +49,10 @@ fn test_as_str_returns_persisted_keys() {
             SettingName::OrchestrationParallelism,
             "OrchestrationParallelism",
         ),
+        (
+            SettingName::TelemetryInstallationId,
+            "TelemetryInstallationId",
+        ),
         (SettingName::Theme, "Theme"),
     ];
 
@@ -83,6 +87,7 @@ fn test_display_matches_as_str() {
         SettingName::LaunchConfiguration,
         SettingName::LastUsedModelAsDefault,
         SettingName::OrchestrationParallelism,
+        SettingName::TelemetryInstallationId,
         SettingName::Theme,
     ];
 

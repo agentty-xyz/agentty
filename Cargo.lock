@@ -336,6 +336,7 @@ dependencies = [
  "libproc",
  "mockall",
  "ratatui",
+ "reqwest",
  "rustc-hash",
  "semver",
  "serde",

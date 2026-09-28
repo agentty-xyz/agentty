@@ -1,11 +1,18 @@
 //! Agentty command-line entry point and terminal runtime bootstrap.
 
+use std::future::Future;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use ag_git::{GitClient, RealGitClient};
+use agentty::analytics::Analytics;
+#[cfg(not(debug_assertions))]
+use agentty::analytics::TELEMETRY_ENABLED_ENV;
 use agentty::app::{AGENTTY_WT_DIR, App, AppError, agentty_home};
+#[cfg(not(debug_assertions))]
+use agentty::infra::db::AppRepositories;
 use agentty::infra::db::{
     DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
@@ -43,6 +50,57 @@ async fn main() -> ExitCode {
 /// Returns an error if database startup, app construction, or runtime
 /// execution fails.
 async fn run(cli: Cli) -> Result<(), AppError> {
+    run_application(cli, agentty::runtime::run).await
+}
+
+async fn run_with_analytics(
+    application: impl Future<Output = Result<(), AppError>>,
+    analytics: Option<&Analytics>,
+) -> Result<(), AppError> {
+    let launch = async {
+        if let Some(analytics) = analytics {
+            analytics.record_launch().await;
+        }
+    };
+    tokio::pin!(application);
+    tokio::pin!(launch);
+    let mut launch_completed = false;
+    let result = tokio::select! {
+        result = &mut application => result,
+        () = &mut launch => {
+            launch_completed = true;
+            application.await
+        }
+    };
+
+    let _ = tokio::time::timeout(Duration::from_millis(200), async {
+        let finish_launch = async {
+            if !launch_completed {
+                launch.await;
+            }
+        };
+        let report_failure = async {
+            if let Err(error) = &result
+                && let Some(analytics) = analytics
+            {
+                analytics.record_failure(error).await;
+            }
+        };
+        tokio::join!(finish_launch, report_failure);
+    })
+    .await;
+
+    result
+}
+
+fn map_runtime_result(result: io::Result<()>) -> Result<(), AppError> {
+    result.map_err(|error| AppError::Workflow(format!("Failed to run terminal UI: {error}")))
+}
+
+async fn run_application(
+    cli: Cli,
+    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
+) -> Result<(), AppError> {
     let home = agentty_home();
     let _instance_lock = acquire_instance_lock(&home).await.map_err(|error| {
         let message = if error.kind() == io::ErrorKind::WouldBlock {
@@ -62,12 +120,25 @@ async fn run(cli: Cli) -> Result<(), AppError> {
 
     let db_path = home.join(DB_DIR).join(DB_FILE);
     let db = Database::open_with_timestamp_source(&db_path, environment_timestamp_source()).await?;
+    // Debug builds, including tests, never report to the public project.
+    #[cfg(debug_assertions)]
+    let analytics: Option<Analytics> = None;
+    #[cfg(not(debug_assertions))]
+    let analytics = if Analytics::is_enabled(std::env::var_os(TELEMETRY_ENABLED_ENV).as_deref()) {
+        Analytics::posthog(&AppRepositories::from(db.clone())).await
+    } else {
+        None
+    };
 
-    let mut app = App::new(!cli.no_update, base_path, working_dir, git_branch, db).await?;
+    run_with_analytics(
+        Box::pin(async {
+            let mut app = App::new(!cli.no_update, base_path, working_dir, git_branch, db).await?;
 
-    agentty::runtime::run(&mut app)
-        .await
-        .map_err(|error| AppError::Workflow(format!("Failed to run terminal UI: {error}")))
+            map_runtime_result(runtime(&mut app).await)
+        }),
+        analytics.as_ref(),
+    )
+    .await
 }
 
 #[cfg(test)]

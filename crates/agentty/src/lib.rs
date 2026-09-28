@@ -5,6 +5,7 @@
 //! workflows without duplicating production wiring. Reusable provider, Git,
 //! protocol, and terminal-text APIs live in their dedicated workspace crates.
 
+pub mod analytics;
 pub mod app;
 pub mod domain;
 pub mod infra;

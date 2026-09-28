@@ -53,6 +53,8 @@ pub enum SettingName {
     LastUsedModelAsDefault,
     /// Persists how many orchestration children may run at once.
     OrchestrationParallelism,
+    /// Persists the random installation ID attached to telemetry events.
+    TelemetryInstallationId,
     /// Persists the active terminal color theme.
     Theme,
 }
@@ -81,6 +83,7 @@ impl SettingName {
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::OrchestrationParallelism => "OrchestrationParallelism",
+            Self::TelemetryInstallationId => "TelemetryInstallationId",
             Self::Theme => "Theme",
         }
     }
