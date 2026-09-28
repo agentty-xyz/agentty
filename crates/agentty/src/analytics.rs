@@ -100,6 +100,7 @@ impl Analytics {
     async fn send(&self, name: &str, category: Option<&str>) {
         let mut properties = json!({
             "$process_person_profile": false,
+            "app_source": "cli",
             "app_version": env!("CARGO_PKG_VERSION"),
         });
         if let Some(category) = category {
