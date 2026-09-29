@@ -441,16 +441,19 @@ it enabled, and any other value disables it.
 AGENTTY_TELEMETRY_ENABLED=0 agentty
 ```
 
-| Event             | When sent                                                           | Properties                                                                            |
-| ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `agentty_launch`  | After the database opens on a launch with telemetry enabled         | `app_source` (`cli`), `app_version`                                                   |
-| `agentty_failure` | When startup after the database opens or the terminal runtime fails | `app_source` (`cli`), `app_version`, `failure_category` (`database` or `application`) |
+| Event             | When sent                                                           | Properties                                                                                              |
+| ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `agentty_launch`  | After the database opens on a launch with telemetry enabled         | `app_source` (`cli`), `app_version`, `install_method` (`npm`, `sh`, `cargo`, or `unknown`)              |
+| `agentty_failure` | When startup after the database opens or the terminal runtime fails | `app_source` (`cli`), `app_version`, `install_method`, `failure_category` (`database` or `application`) |
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share
 an ID. Events set `$process_person_profile=false`. PostHog receives the request's source
 IP address and derives an approximate location from it. Agentty does not send error
-messages, stack traces, project paths, or prompts.
+messages, stack traces, project paths, or prompts. The install method is inferred from
+the npm package path, the shell install receipt, or Cargo install metadata. It is
+`unknown` when no signal is available. These values describe launches, not installation
+counts; metadata left behind after replacing a binary can report an older method.
 
 ## Auto-Update
 
