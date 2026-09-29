@@ -1,16 +1,26 @@
+default_stages: [pre-commit]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [pre-commit]
       - id: end-of-file-fixer
+        stages: [pre-commit]
       - id: check-yaml
+        stages: [pre-commit]
       - id: check-toml
+        stages: [pre-commit]
       - id: check-merge-conflict
+        stages: [pre-commit]
       - id: check-case-conflict
+        stages: [pre-commit]
       - id: detect-private-key
+        stages: [pre-commit]
       - id: check-added-large-files
         args: ['--maxkb=5120']
+        stages: [pre-commit]
 
   - repo: local
     hooks:
@@ -62,6 +72,7 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
         pass_filenames: false
+        stages: [manual]
       - id: cargo-check-ag-harness-benchmark
         name: cargo check ag-harness benchmark
         description: Compile-check the manual ag-harness live benchmark without executing it.
