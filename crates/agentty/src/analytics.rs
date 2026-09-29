@@ -1,6 +1,8 @@
 //! Optional application events sent to `PostHog`.
 
 use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use reqwest::Client;
@@ -25,7 +27,122 @@ pub struct Analytics {
     client: Client,
     distinct_id: String,
     endpoint: String,
+    install_method: InstallMethod,
     token: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstallMethod {
+    Npm,
+    Sh,
+    Cargo,
+    Unknown,
+}
+
+impl InstallMethod {
+    fn detect() -> Self {
+        let executable = std::env::current_exe().ok();
+        let receipt = Self::receipt_path(
+            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+        );
+
+        executable.as_deref().map_or(Self::Unknown, |path| {
+            Self::from_paths(path, receipt.as_deref())
+        })
+    }
+
+    fn receipt_path(xdg_config_home: Option<PathBuf>, home: Option<PathBuf>) -> Option<PathBuf> {
+        xdg_config_home
+            .or_else(|| home.map(|home| home.join(".config")))
+            .map(|home| home.join("agentty/agentty-receipt.json"))
+    }
+
+    fn from_paths(executable: &Path, receipt: Option<&Path>) -> Self {
+        if executable.ends_with("node_modules/.bin_real/agentty")
+            && executable.ancestors().nth(3).and_then(Path::file_name)
+                == Some(OsStr::new("agentty"))
+        {
+            return Self::Npm;
+        }
+
+        if receipt.is_some_and(|path| Self::matches_shell_receipt(executable, path)) {
+            return Self::Sh;
+        }
+
+        if Self::matches_cargo_install(executable) {
+            return Self::Cargo;
+        }
+
+        Self::Unknown
+    }
+
+    fn matches_shell_receipt(executable: &Path, receipt: &Path) -> bool {
+        let Ok(contents) = fs::read(receipt) else {
+            return false;
+        };
+        let Ok(data) = serde_json::from_slice::<Value>(&contents) else {
+            return false;
+        };
+        if data["provider"]["source"] != "cargo-dist"
+            || data["source"]["app_name"] != "agentty"
+            || data["version"] != env!("CARGO_PKG_VERSION")
+        {
+            return false;
+        }
+        let Some(prefix) = data["install_prefix"].as_str() else {
+            return false;
+        };
+        let expected = match data["install_layout"].as_str() {
+            Some("cargo-home") => Path::new(prefix).join("bin/agentty"),
+            Some("flat") => Path::new(prefix).join("agentty"),
+            _ => return false,
+        };
+
+        fs::canonicalize(executable)
+            .ok()
+            .zip(fs::canonicalize(expected).ok())
+            .is_some_and(|(actual, expected)| actual == expected)
+    }
+
+    fn matches_cargo_install(executable: &Path) -> bool {
+        if executable.file_name() != Some(OsStr::new("agentty")) {
+            return false;
+        }
+        let Some(root) = executable
+            .parent()
+            .filter(|parent| parent.file_name() == Some(OsStr::new("bin")))
+            .and_then(Path::parent)
+        else {
+            return false;
+        };
+        let Ok(contents) = fs::read(root.join(".crates2.json")) else {
+            return false;
+        };
+        let Ok(data) = serde_json::from_slice::<Value>(&contents) else {
+            return false;
+        };
+        let Some(installs) = data["installs"].as_object() else {
+            return false;
+        };
+        let prefix = format!("agentty {} (", env!("CARGO_PKG_VERSION"));
+
+        installs.iter().any(|(package, metadata)| {
+            package.starts_with(&prefix)
+                && metadata["bins"]
+                    .as_array()
+                    .is_some_and(|bins| bins.iter().any(|bin| bin == "agentty"))
+        })
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Sh => "sh",
+            Self::Cargo => "cargo",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl Analytics {
@@ -72,14 +189,9 @@ impl Analytics {
         let client = Client::builder()
             .timeout(Duration::from_secs(2))
             .build()
-            .ok()?;
+            .ok();
 
-        Some(Self {
-            client,
-            distinct_id: distinct_id.to_string(),
-            endpoint: format!("{}/i/v0/e/", host.trim_end_matches('/')),
-            token: token.to_string(),
-        })
+        Self::with_client(token, host, distinct_id, client)
     }
 
     /// Records one application launch attempt.
@@ -97,11 +209,29 @@ impl Analytics {
         self.send("agentty_failure", Some(category)).await;
     }
 
+    fn with_client(
+        token: &str,
+        host: &str,
+        distinct_id: &str,
+        client: Option<Client>,
+    ) -> Option<Self> {
+        let client = client?;
+
+        Some(Self {
+            client,
+            distinct_id: distinct_id.to_string(),
+            endpoint: format!("{}/i/v0/e/", host.trim_end_matches('/')),
+            install_method: InstallMethod::detect(),
+            token: token.to_string(),
+        })
+    }
+
     async fn send(&self, name: &str, category: Option<&str>) {
         let mut properties = json!({
             "$process_person_profile": false,
             "app_source": "cli",
             "app_version": env!("CARGO_PKG_VERSION"),
+            "install_method": self.install_method.as_str(),
         });
         if let Some(category) = category {
             properties["failure_category"] = Value::String(category.to_string());
