@@ -22,22 +22,22 @@ fn test_parse_model_parses_current_codex_models() {
 
     // Act
     let parsed_astra = codex_kind.parse_model("gpt-6-astra");
-    let parsed_gpt_6_sol = codex_kind.parse_model("gpt-6-sol");
+    let parsed_gpt_61_sol = codex_kind.parse_model("gpt-6.1-sol");
     let parsed_gpt_6_luna = codex_kind.parse_model("gpt-6-luna");
     let parsed_terra = codex_kind.parse_model("gpt-5.6-terra");
     let parsed_spark = codex_kind.parse_model("gpt-5.3-codex-spark");
-    let gpt_6_sol_description = AgentModel::Gpt6Sol.description();
+    let gpt_61_sol_description = AgentModel::Gpt61Sol.description();
     let gpt_6_luna_description = AgentModel::Gpt6Luna.description();
 
     // Assert
     assert_eq!(parsed_astra, Some(AgentModel::Gpt6Astra));
-    assert_eq!(parsed_gpt_6_sol, Some(AgentModel::Gpt6Sol));
+    assert_eq!(parsed_gpt_61_sol, Some(AgentModel::Gpt61Sol));
     assert_eq!(parsed_gpt_6_luna, Some(AgentModel::Gpt6Luna));
     assert_eq!(parsed_terra, Some(AgentModel::Gpt56Terra));
     assert_eq!(parsed_spark, Some(AgentModel::Gpt53CodexSpark));
     assert_eq!(
-        gpt_6_sol_description,
-        "Codex model for complex coding and agentic workflows."
+        gpt_61_sol_description,
+        "Near-Astra Codex model for complex work at a lower cost."
     );
     assert_eq!(
         gpt_6_luna_description,
@@ -178,7 +178,7 @@ fn test_codex_models_are_supported_by_codex() {
     // Arrange
     let models = [
         AgentModel::Gpt6Astra,
-        AgentModel::Gpt6Sol,
+        AgentModel::Gpt61Sol,
         AgentModel::Gpt6Luna,
         AgentModel::Gpt56Terra,
         AgentModel::Gpt53CodexSpark,

@@ -17,16 +17,17 @@ fn test_retired_replacement_maps_only_retired_ids() {
             AgentModel::Gemini35FlashLite,
         ),
         ("claude-opus-5", AgentModel::ClaudeOpus55),
-        ("gpt-5.6-sol", AgentModel::Gpt6Sol),
+        ("gpt-6-sol", AgentModel::Gpt61Sol),
+        ("gpt-5.6-sol", AgentModel::Gpt61Sol),
         ("gpt-5.6-luna", AgentModel::Gpt6Luna),
         ("claude-opus-4-8", AgentModel::ClaudeOpus55),
         ("claude-opus-4-6", AgentModel::ClaudeOpus55),
         ("claude-opus-4-7", AgentModel::ClaudeOpus55),
         ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
-        ("gpt-5.5", AgentModel::Gpt6Sol),
+        ("gpt-5.5", AgentModel::Gpt61Sol),
         ("gpt-5.4-mini", AgentModel::Gpt6Luna),
-        ("gpt-5.4", AgentModel::Gpt6Sol),
-        ("gpt-5.3-codex", AgentModel::Gpt6Sol),
+        ("gpt-5.4", AgentModel::Gpt61Sol),
+        ("gpt-5.3-codex", AgentModel::Gpt61Sol),
         ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
     ];
 
@@ -40,6 +41,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
         "claude-opus-5-5",
+        "gpt-6.1-sol",
     ]
     .map(AgentModel::retired_replacement);
     let unknown_replacement = AgentModel::retired_replacement("not-a-model");
@@ -51,7 +53,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
     );
     assert_eq!(persisted_parses, retired_ids.map(|(_, model)| Ok(model)));
     assert!(selectable_parses.iter().all(Result::is_err));
-    assert_eq!(current_replacements, [None; 4]);
+    assert_eq!(current_replacements, [None; 5]);
     assert_eq!(unknown_replacement, None);
 }
 
@@ -85,7 +87,7 @@ fn test_parse_persisted_handles_supported_and_retired_models() {
     assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet5));
     assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet5));
     assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt6Luna));
-    assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt6Sol));
+    assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt61Sol));
     assert_eq!(parsed_gemini_38_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_37_flash, Ok(AgentModel::Gemini38Flash));
     assert_eq!(parsed_gemini_36_flash, Ok(AgentModel::Gemini38Flash));
@@ -213,7 +215,7 @@ fn test_parse_persisted_session_agent_model_resolves_legacy_gemini_rows() {
 fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
     // Arrange
     let cases = [
-        (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt6Sol),
+        (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt61Sol),
         (
             Some("unknown"),
             "unknown-model",

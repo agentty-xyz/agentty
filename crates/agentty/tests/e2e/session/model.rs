@@ -266,9 +266,10 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_not_visible(frame, "gpt-5.6-sol");
+                    assertion::assert_not_visible(frame, "gpt-6-sol");
                     assertion::assert_not_visible(frame, "gpt-5.6-luna");
                     assertion::assert_text_in_region(frame, "gpt-6-astra", &full);
-                    assertion::assert_text_in_region(frame, "gpt-6-sol", &full);
+                    assertion::assert_text_in_region(frame, "gpt-6.1-sol", &full);
                     assertion::assert_text_in_region(frame, "gpt-6-luna", &full);
                     assertion::assert_text_in_region(frame, "gpt-5.6-terra", &full);
                     assertion::assert_text_in_region(frame, "gpt-5.3-codex-spark", &full);

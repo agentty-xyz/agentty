@@ -35,7 +35,7 @@ fn auto_compact_input_token_threshold_uses_1050k_limit_for_codex_models() {
     // Arrange
     let large_context_models = [
         AgentModel::Gpt6Astra,
-        AgentModel::Gpt6Sol,
+        AgentModel::Gpt61Sol,
         AgentModel::Gpt6Luna,
         AgentModel::Gpt56Terra,
     ];

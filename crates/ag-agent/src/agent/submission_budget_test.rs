@@ -22,7 +22,7 @@ fn request(limit: usize) -> OneShotRequest {
         harness: (AgentKind::Codex).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
-        model: AgentModel::Gpt6Sol.as_str().to_string(),
+        model: AgentModel::Gpt61Sol.as_str().to_string(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: "Summarize changes".into(),
         provider_call_budget: Some(ProviderCallBudget::new(limit)),

@@ -25,8 +25,8 @@ pub enum AgentKind {
 pub enum AgentModel {
     /// Codex Astra model backed by `gpt-6-astra`.
     Gpt6Astra,
-    /// Codex Sol model backed by `gpt-6-sol`.
-    Gpt6Sol,
+    /// Codex Sol model backed by `gpt-6.1-sol`.
+    Gpt61Sol,
     /// Codex Luna model backed by `gpt-6-luna`.
     Gpt6Luna,
     /// Codex Terra model backed by `gpt-5.6-terra`.
@@ -93,7 +93,7 @@ impl AgentSelection {
                 | (
                     AgentKind::Codex,
                     AgentModel::Gpt6Astra
-                        | AgentModel::Gpt6Sol
+                        | AgentModel::Gpt61Sol
                         | AgentModel::Gpt6Luna
                         | AgentModel::Gpt56Terra
                 )
@@ -114,7 +114,7 @@ impl AgentSelection {
         match self.kind {
             AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             AgentKind::Codex if self.model == AgentModel::Gpt53CodexSpark => {
-                Self::new(AgentKind::Codex, AgentModel::Gpt6Sol)
+                Self::new(AgentKind::Codex, AgentModel::Gpt61Sol)
             }
             AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => self,
         }
@@ -136,7 +136,7 @@ impl AgentModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gpt6Astra => "gpt-6-astra",
-            Self::Gpt6Sol => "gpt-6-sol",
+            Self::Gpt61Sol => "gpt-6.1-sol",
             Self::Gpt6Luna => "gpt-6-luna",
             Self::Gpt56Terra => "gpt-5.6-terra",
             Self::Gemini38Flash => "gemini-3.8-flash",
@@ -201,16 +201,17 @@ impl AgentModel {
                 AgentModel::Gemini35FlashLite,
             ),
             ("claude-opus-5", AgentModel::ClaudeOpus55),
-            ("gpt-5.6-sol", AgentModel::Gpt6Sol),
+            ("gpt-6-sol", AgentModel::Gpt61Sol),
+            ("gpt-5.6-sol", AgentModel::Gpt61Sol),
             ("gpt-5.6-luna", AgentModel::Gpt6Luna),
             ("claude-opus-4-8", AgentModel::ClaudeOpus55),
             ("claude-opus-4-6", AgentModel::ClaudeOpus55),
             ("claude-opus-4-7", AgentModel::ClaudeOpus55),
             ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
-            ("gpt-5.5", AgentModel::Gpt6Sol),
+            ("gpt-5.5", AgentModel::Gpt61Sol),
             ("gpt-5.4-mini", AgentModel::Gpt6Luna),
-            ("gpt-5.4", AgentModel::Gpt6Sol),
-            ("gpt-5.3-codex", AgentModel::Gpt6Sol),
+            ("gpt-5.4", AgentModel::Gpt61Sol),
+            ("gpt-5.3-codex", AgentModel::Gpt61Sol),
             ("gpt-5.2-codex", AgentModel::Gpt53CodexSpark),
         ];
 
@@ -402,7 +403,7 @@ impl FromStr for AgentModel {
             "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
             "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
             "gpt-6-astra" => Ok(Self::Gpt6Astra),
-            "gpt-6-sol" => Ok(Self::Gpt6Sol),
+            "gpt-6.1-sol" => Ok(Self::Gpt61Sol),
             "gpt-6-luna" => Ok(Self::Gpt6Luna),
             "gpt-5.6-terra" => Ok(Self::Gpt56Terra),
             "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
@@ -428,7 +429,7 @@ impl AgentSelectionMetadata for AgentModel {
                 "Lightweight Gemini model for fast, cost-conscious workloads."
             }
             Self::Gpt6Astra => "Most capable Codex model for the hardest end-to-end work.",
-            Self::Gpt6Sol => "Codex model for complex coding and agentic workflows.",
+            Self::Gpt61Sol => "Near-Astra Codex model for complex work at a lower cost.",
             Self::Gpt6Luna => "Efficient Codex model for focused, high-volume tasks.",
             Self::Gpt56Terra => "Current Codex model for balanced coding performance.",
             Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
@@ -464,7 +465,7 @@ impl AgentKind {
         match self {
             Self::Antigravity | Self::Gemini => AgentModel::Gemini31Pro,
             Self::Claude => AgentModel::ClaudeFable5,
-            Self::Codex => AgentModel::Gpt6Sol,
+            Self::Codex => AgentModel::Gpt61Sol,
         }
     }
 
@@ -497,7 +498,7 @@ impl AgentKind {
         ];
         const CODEX_MODELS: &[AgentModel] = &[
             AgentModel::Gpt6Astra,
-            AgentModel::Gpt6Sol,
+            AgentModel::Gpt61Sol,
             AgentModel::Gpt6Luna,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt53CodexSpark,

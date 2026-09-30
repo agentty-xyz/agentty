@@ -60,7 +60,7 @@ async fn workers_reuse_channels_and_recompose_after_model_switch_and_shutdown() 
         queued_messages: context.queued_messages,
         queued_work_sequence: Arc::default(),
         review_request_client: context.review_request_client,
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         session_id: "first".into(),
         session_update_versions: context.session_update_versions,
         status: context.status,
@@ -146,7 +146,7 @@ async fn model_switch_commits_before_retiring_runtime_and_discards_queue() {
         .expect("runtime");
     let old_agent = runtime.session_agent;
     let new_agent = if old_agent.kind() == AgentKind::Claude {
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
     } else {
         AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     };
@@ -240,7 +240,7 @@ async fn failed_model_save_preserves_the_old_worker_and_pending_messages() {
         .expect("runtime");
     let old_agent = runtime.session_agent;
     let new_agent = if old_agent.kind() == AgentKind::Claude {
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
     } else {
         AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     };
@@ -327,7 +327,7 @@ async fn model_switch_holds_scheduling_during_lookup_and_resumes_after_lookup_fa
         .expect("runtime");
     let old_agent = runtime.session_agent;
     let new_agent = if old_agent.kind() == AgentKind::Claude {
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol)
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
     } else {
         AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
     };

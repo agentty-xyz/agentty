@@ -63,7 +63,7 @@ async fn load_default_review_agent_setting_uses_inactive_project_baseline() {
                 ),
                 (
                     SettingName::DefaultSmartModel,
-                    AgentModel::Gpt6Sol.as_str().to_string(),
+                    AgentModel::Gpt61Sol.as_str().to_string(),
                 ),
             ],
         )

@@ -123,7 +123,7 @@ async fn load_sessions_skips_invalid_permission_mode_without_hiding_valid_siblin
         .expect("project should be created");
     for session_id in ["valid-mode", "invalid-mode"] {
         db.sessions()
-            .insert_draft_session(session_id, "gpt-6-sol", "main", "Draft", project_id)
+            .insert_draft_session(session_id, "gpt-6.1-sol", "main", "Draft", project_id)
             .await
             .expect("session should be created");
     }
@@ -1385,7 +1385,7 @@ fn parse_review_request_returns_none_for_invalid_row() {
         in_progress_total_seconds: 0,
         input_tokens: 0,
         is_draft: false,
-        model: "gpt-6-sol".to_string(),
+        model: "gpt-6.1-sol".to_string(),
         output_tokens: 0,
         parent_session_id: None,
         permission_mode: "auto_edit".to_string(),

@@ -31,7 +31,7 @@ fn build_command_builds_app_server_runtime_for_start_requests() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6-sol",
+            model: "gpt-6.1-sol",
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Run checks",
@@ -66,7 +66,7 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6-sol",
+            model: "gpt-6.1-sol",
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Continue edits",
@@ -84,7 +84,13 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
     // Assert
     assert_eq!(
         arguments,
-        vec!["--model", "gpt-6-sol", "app-server", "--listen", "stdio://"]
+        vec![
+            "--model",
+            "gpt-6.1-sol",
+            "app-server",
+            "--listen",
+            "stdio://"
+        ]
     );
 }
 
@@ -148,7 +154,7 @@ fn build_command_builds_app_server_runtime_for_utility_prompts() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6-sol",
+            model: "gpt-6.1-sol",
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",

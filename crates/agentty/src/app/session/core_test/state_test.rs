@@ -73,7 +73,7 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .expect("failed to create session");
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
     )
     .await
     .expect("failed to set app-server model");
