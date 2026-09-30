@@ -7,11 +7,11 @@ use ag_git as git;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
-    load_persisted_session_row, rollback_git_client, session_manager_with_one_session,
-    test_services, test_services_with_fs_client, test_session,
+    load_persisted_session_row, orchestration_task_ids, rollback_git_client,
+    session_manager_with_one_session, test_services, test_services_with_fs_client, test_session,
 };
 use crate::app::SessionManager;
-use crate::app::session::{SessionCreationKind, SessionError};
+use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
 use crate::domain::agent::ResponseStyle;
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -21,6 +21,113 @@ use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::FixedClock;
+use crate::test_support::telemetry::capture_events;
+
+#[tokio::test]
+async fn successful_reservations_report_creation_types() {
+    // Arrange
+    let source = test_session("private prompt", Status::Review, Some("Source"), "history");
+    let source_id = source.id.clone();
+    let database = database_with_session(&source).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id(&source_id)
+        .await
+        .expect("project lookup")
+        .expect("source project");
+    let task_ids = orchestration_task_ids(&database, &source_id).await;
+    let mut git = git::MockGitClient::new();
+    git.expect_find_git_repo_root()
+        .returning(|path| Box::pin(async move { Some(path) }));
+    git.expect_ref_hash()
+        .returning(|_, _| Box::pin(async { Ok("frozen-source-commit".to_string()) }));
+    let mut services = test_services_with_fs_client(
+        &database,
+        Arc::new(RealClock),
+        Arc::new(create_passthrough_mock_fs_client()),
+        Arc::new(git),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let settings = SessionCreationSettings {
+        agent: source.agent,
+        permission_mode: source.permission_mode,
+        personality_id: None,
+        reasoning_level: source.reasoning_level_override.unwrap_or_default(),
+        response_style: source.response_style,
+        role: source.role,
+        speed_mode: source.speed_mode,
+    };
+    let mut manager = session_manager_with_one_session(source);
+    let (analytics, receiver) = capture_events(7);
+    services.set_analytics(Some(analytics));
+
+    // Act
+    for parent in [None, Some(source_id.as_str())] {
+        manager
+            .create_draft_session_for_project_with_parent(
+                &services,
+                project_id,
+                "main",
+                parent,
+                Some(settings.clone()),
+            )
+            .await
+            .expect("draft reservation");
+    }
+    manager
+        .reserve_fork_session(&services, &source_id)
+        .await
+        .expect("fork reservation");
+    for creation_kind in [
+        SessionCreationKind::Worker,
+        SessionCreationKind::Orchestrator,
+        SessionCreationKind::OrchestrationChild {
+            task_id: task_ids[0],
+        },
+        SessionCreationKind::OrchestrationResearch {
+            task_id: task_ids[1],
+        },
+    ] {
+        SessionManager::reserve_session(
+            &services,
+            project_id,
+            "main",
+            settings.clone(),
+            creation_kind,
+        )
+        .await
+        .expect("regular reservation");
+    }
+    services.wait_for_cleanup_tasks().await;
+    let events = receiver.join().expect("telemetry receiver");
+
+    // Assert
+    let mut types = events
+        .iter()
+        .map(|event| {
+            assert_eq!(event["event"], "agentty_session_start");
+            assert!(!event.to_string().contains("private prompt"));
+            assert!(!event.to_string().contains(source_id.as_str()));
+
+            event["properties"]["session_type"]
+                .as_str()
+                .expect("session type")
+        })
+        .collect::<Vec<_>>();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        vec![
+            "draft",
+            "fork",
+            "orchestration_child",
+            "orchestration_research",
+            "orchestrator",
+            "regular",
+            "stacked",
+        ]
+    );
+}
 
 #[tokio::test]
 async fn record_session_creation_activity_uses_injected_clock() {

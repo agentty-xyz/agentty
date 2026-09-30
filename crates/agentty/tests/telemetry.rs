@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
-use agentty::analytics::Analytics;
+use agentty::analytics::{Analytics, SessionType};
 use agentty::app::AppError;
 use agentty::infra::db::DbError;
 use serde_json::Value;
@@ -49,7 +49,7 @@ async fn outbound_events_contain_only_allowlisted_properties() -> TestResult<()>
         &failure,
         "test-token",
         "agentty_failure",
-        Some("application"),
+        Some(("failure_category", "application")),
     );
     assert!(!failure.to_string().contains("private path"));
     assert!(!failure.to_string().contains("prompt text"));
@@ -74,8 +74,57 @@ async fn database_failures_use_a_fixed_category() -> TestResult<()> {
         .map_err(|_| io::Error::other("receiver thread panicked"))??;
 
     // Assert
-    assert_event(&event, "token", "agentty_failure", Some("database"));
+    assert_event(
+        &event,
+        "token",
+        "agentty_failure",
+        Some(("failure_category", "database")),
+    );
     assert!(!event.to_string().contains("secret database path"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_starts_report_each_bounded_type_and_turn_starts_have_no_content() -> TestResult<()>
+{
+    // Arrange
+    let session_types = [
+        (SessionType::Regular, "regular"),
+        (SessionType::Draft, "draft"),
+        (SessionType::Stacked, "stacked"),
+        (SessionType::Fork, "fork"),
+        (SessionType::Orchestrator, "orchestrator"),
+        (SessionType::OrchestrationChild, "orchestration_child"),
+        (SessionType::OrchestrationResearch, "orchestration_research"),
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let host = format!("http://{}", listener.local_addr()?);
+    let receiver = std::thread::spawn(move || -> TestResult<Vec<Value>> {
+        (0..8).map(|_| receive_event(&listener)).collect()
+    });
+    let analytics = Analytics::new("token", &host, INSTALLATION_ID)
+        .ok_or_else(|| io::Error::other("configured sender"))?;
+
+    // Act
+    for (session_type, _) in session_types {
+        analytics.record_session_start(session_type).await;
+    }
+    analytics.record_turn_start().await;
+    let events = receiver
+        .join()
+        .map_err(|_| io::Error::other("receiver thread panicked"))??;
+
+    // Assert
+    for (event, (_, expected_type)) in events.iter().zip(session_types) {
+        assert_event(
+            event,
+            "token",
+            "agentty_session_start",
+            Some(("session_type", expected_type)),
+        );
+    }
+    assert_event(&events[7], "token", "agentty_turn_start", None);
 
     Ok(())
 }
@@ -126,7 +175,7 @@ fn receive_event(listener: &TcpListener) -> TestResult<Value> {
     }
 }
 
-fn assert_event(event: &Value, token: &str, name: &str, category: Option<&str>) {
+fn assert_event(event: &Value, token: &str, name: &str, property: Option<(&str, &str)>) {
     assert_eq!(event.as_object().map(serde_json::Map::len), Some(4));
     assert_eq!(event["api_key"], token);
     assert_eq!(event["event"], name);
@@ -137,9 +186,11 @@ fn assert_event(event: &Value, token: &str, name: &str, category: Option<&str>) 
     assert_eq!(properties["app_source"], "cli");
     assert_eq!(properties["app_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(properties["install_method"], "unknown");
-    assert_eq!(properties["failure_category"].as_str(), category);
+    if let Some((key, value)) = property {
+        assert_eq!(properties[key], value);
+    }
     assert_eq!(
         properties.as_object().map(serde_json::Map::len),
-        Some(if category.is_some() { 5 } else { 4 })
+        Some(if property.is_some() { 5 } else { 4 })
     );
 }

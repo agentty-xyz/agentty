@@ -34,6 +34,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use super::event::AppEvent;
+use crate::analytics::Analytics;
 use crate::app;
 use crate::app::session_diff::PendingSessionDiffRequest;
 use crate::app::{AppError, session};
@@ -257,6 +258,13 @@ pub struct App {
 }
 
 impl App {
+    /// Configures optional lifecycle telemetry. New apps start with it
+    /// disabled. Call this before running the app so background workflows
+    /// share the sender.
+    pub fn set_analytics(&mut self, analytics: Option<Analytics>) {
+        self.services.set_analytics(analytics);
+    }
+
     /// Returns an advisory message when the active project declares
     /// pre-commit validation without an executable Git hook.
     pub(crate) async fn pre_commit_hook_warning(&self) -> Option<String> {

@@ -133,6 +133,7 @@ async fn run_application(
     run_with_analytics(
         Box::pin(async {
             let mut app = App::new(!cli.no_update, base_path, working_dir, git_branch, db).await?;
+            app.set_analytics(analytics.clone());
 
             map_runtime_result(runtime(&mut app).await)
         }),

@@ -21,6 +21,7 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
     AppMode, DiffCommentTarget, DiffFocus, DiffLineComments, DiffPreview, DiffReviewComments,
 };
+use crate::test_support::telemetry::capture_events;
 
 /// Verifies pushing a review session surfaces forge-specific git
 /// authentication guidance when the remote rejects credentials.
@@ -261,6 +262,41 @@ async fn apply_turn_started_clears_saved_diff_comments() {
 
     // Assert
     assert!(!app.diff_comment_progress.contains_key("session-1"));
+}
+
+#[tokio::test]
+async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let (analytics, receiver) = capture_events(2);
+    app.set_analytics(Some(analytics));
+    app.services.emit_app_event(AppEvent::SessionTurnStarted {
+        session_id: "private-session".into(),
+    });
+
+    // Act
+    app.apply_app_events(AppEvent::SessionTurnStarted {
+        session_id: "private-session".into(),
+    })
+    .await;
+    app.services.wait_for_cleanup_tasks().await;
+    app.set_analytics(None);
+    app.apply_app_events(AppEvent::SessionTurnStarted {
+        session_id: "private-session".into(),
+    })
+    .await;
+    let events = receiver.join().expect("telemetry receiver");
+
+    // Assert
+    assert_eq!(events.len(), 2);
+    for event in events {
+        assert_eq!(event["event"], "agentty_turn_start");
+        assert!(!event.to_string().contains("private-session"));
+        assert_eq!(
+            event["properties"].as_object().map(serde_json::Map::len),
+            Some(4)
+        );
+    }
 }
 
 #[tokio::test]

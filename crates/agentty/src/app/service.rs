@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
+use crate::analytics::{Analytics, SessionType};
 use crate::app::AppEvent;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind};
@@ -27,6 +28,7 @@ use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalog
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
 pub struct AppServices {
+    analytics: Option<Analytics>,
     available_agent_clis: Arc<Mutex<Vec<AgentCliInfo>>>,
     available_agent_kinds: Arc<[AgentKind]>,
     base_path: PathBuf,
@@ -44,6 +46,7 @@ pub struct AppServices {
     run_worker: Arc<RunWorker>,
     session_run_factory: Arc<dyn SessionRunFactory>,
     session_update_versions: SessionUpdateVersionMap,
+    telemetry_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl AppServices {
@@ -85,6 +88,7 @@ impl AppServices {
             .unwrap_or_else(|| Arc::new(RealPersonalityCatalogClient));
 
         Self {
+            analytics: None,
             available_agent_clis: Arc::new(Mutex::new(available_agent_clis)),
             available_agent_kinds: Arc::<[AgentKind]>::from(available_agent_kinds),
             base_path,
@@ -102,6 +106,30 @@ impl AppServices {
             repositories,
             review_request_client,
             session_update_versions: Arc::default(),
+            telemetry_task_handles: Arc::default(),
+        }
+    }
+
+    /// Replaces the optional telemetry sender before session work starts.
+    pub(crate) fn set_analytics(&mut self, analytics: Option<Analytics>) {
+        self.analytics = analytics;
+    }
+
+    /// Reports a session reservation without delaying the lifecycle workflow.
+    pub(crate) fn record_session_start(&self, session_type: SessionType) {
+        if let Some(analytics) = self.analytics.clone() {
+            self.track_telemetry_task(tokio::spawn(async move {
+                analytics.record_session_start(session_type).await;
+            }));
+        }
+    }
+
+    /// Reports an accepted turn without delaying foreground event reduction.
+    pub(crate) fn record_turn_start(&self) {
+        if let Some(analytics) = self.analytics.clone() {
+            self.track_telemetry_task(tokio::spawn(async move {
+                analytics.record_turn_start().await;
+            }));
         }
     }
 
@@ -248,8 +276,8 @@ impl AppServices {
         }
     }
 
-    /// Settles worker execution, worktree creation, and tracked cleanup tasks
-    /// within one deadline. Escalates worker shutdown when grace expires.
+    /// Settles worker execution, worktree creation, cleanup, and telemetry
+    /// tasks within one deadline. Escalates worker shutdown when grace expires.
     ///
     /// The task list is drained before awaiting so the synchronous mutex guard
     /// is never held across an `.await`. The loop repeats in case a cleanup
@@ -275,6 +303,7 @@ impl AppServices {
         Self::wait_for_cleanup_task_handles(&Mutex::new(creation_tasks), deadline).await;
 
         Self::wait_for_cleanup_task_handles(self.cleanup_task_handles.as_ref(), deadline).await;
+        Self::wait_for_cleanup_task_handles(self.telemetry_task_handles.as_ref(), deadline).await;
     }
 
     /// Returns a clone of the app event sender.
@@ -300,6 +329,15 @@ impl AppServices {
     /// Returns the shared per-app session update version counters.
     pub(crate) fn session_update_versions(&self) -> SessionUpdateVersionMap {
         Arc::clone(&self.session_update_versions)
+    }
+
+    /// Reaps completed telemetry before retaining new work for graceful
+    /// shutdown.
+    fn track_telemetry_task(&self, join_handle: JoinHandle<()>) {
+        if let Ok(mut telemetry_task_handles) = self.telemetry_task_handles.lock() {
+            telemetry_task_handles.retain(|task| !task.is_finished());
+            telemetry_task_handles.push(join_handle);
+        }
     }
 
     /// Returns a stable instrumentation label for one app event variant.

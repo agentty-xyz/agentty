@@ -4,6 +4,9 @@
 //! surface so tests can share canonical naming and render-buffer rules without
 //! widening app APIs.
 
+#[path = "telemetry_capture_test.rs"]
+pub(crate) mod telemetry;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
