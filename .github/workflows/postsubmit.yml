@@ -70,6 +70,12 @@ jobs:
         id: source-tests
         run: prek run ${{ matrix.hook }} --all-files --hook-stage manual
 
+      - name: Retain source test timings
+        if: ${{ always() }}
+        uses: $/.github/actions/upload-test-results
+        with:
+          name: source-test-results-${{ matrix.member }}
+
       - name: Upload source test results to Trunk
         if: ${{ !cancelled() && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
         continue-on-error: true

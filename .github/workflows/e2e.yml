@@ -10,6 +10,8 @@ jobs:
   test:
     name: Run suite
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: target
     container:
       image: ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
       # GitHub requires the default root user to access `GITHUB_WORKSPACE`.
@@ -25,5 +27,19 @@ jobs:
       - name: Trust checked-out repository
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Restore E2E Rust cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: agentty-e2e
+          key: ${{ hashFiles('container/e2e.Containerfile', '.github/workflows/e2e.yml') }}
+          cache-bin: "false"
+          cache-workspace-crates: "true"
+
       - name: Run end-to-end feature suite
         run: prek run test-agentty-e2e --all-files --hook-stage manual
+
+      - name: Retain E2E test timings
+        if: ${{ always() }}
+        uses: $/.github/actions/upload-test-results
+        with:
+          name: e2e-test-results

@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::future::pending;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +13,7 @@ use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
 use ag_worker::SessionRunClient;
 use tempfile::tempdir;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::instrument::WithSubscriber;
 
@@ -25,13 +26,13 @@ use super::super::{
     SessionWorkerContext, SessionWorkerRebaseAssistClient, SessionWorkerService, TurnMetadata,
 };
 use super::support::{
-    apply_worker_turn_result, auto_commit_run_client, cancel_token_after_short_delay,
-    default_turn_metadata, empty_transcript, expect_clean_main_checkout_snapshot,
-    expect_safe_auto_push_state, insert_in_progress_research_session,
-    insert_in_progress_test_session, mock_fs_client_with_existing_directories,
-    mock_git_client_detecting_main_repo, persist_test_personality_state, queue_test_context,
-    queued_message, research_title_run_client, resume_command, seed_recovery_test_operation,
-    successful_turn_result, transcript_text, turn_prompt_with_attachment,
+    apply_worker_turn_result, auto_commit_run_client, default_turn_metadata, empty_transcript,
+    expect_clean_main_checkout_snapshot, expect_safe_auto_push_state,
+    insert_in_progress_research_session, insert_in_progress_test_session,
+    mock_fs_client_with_existing_directories, mock_git_client_detecting_main_repo,
+    persist_test_personality_state, queue_test_context, queued_message, research_title_run_client,
+    resume_command, seed_recovery_test_operation, successful_turn_result, transcript_text,
+    turn_prompt_with_attachment,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
@@ -570,6 +571,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         .await
         .expect("failed to persist provisional research title");
 
+    let turn_started = Arc::new(Notify::new());
     let mut mock_channel = MockAgentChannel::new();
     mock_channel
         .expect_run_turn()
@@ -577,11 +579,17 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
             request.permission_mode == PermissionMode::ReadOnly
                 && !request.prompt.text.contains("# Read Only Mode")
         })
-        .returning(|_session_id, _req, _events| {
-            Box::pin(async {
-                tokio::time::sleep(std::time::Duration::from_hours(1)).await;
-                unreachable!("should be cancelled before completing")
-            })
+        .returning({
+            let turn_started = Arc::clone(&turn_started);
+
+            move |_session_id, _req, _events| {
+                let turn_started = Arc::clone(&turn_started);
+
+                Box::pin(async move {
+                    turn_started.notify_one();
+                    pending().await
+                })
+            }
         });
     mock_channel
         .expect_shutdown_session()
@@ -617,18 +625,21 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         status: Arc::new(Mutex::new(Status::InProgress)),
     };
 
-    cancel_token_after_short_delay(Arc::clone(&cancel_token));
-
     // Act
-    let result = run_channel_turn(
-        &context,
-        research_title_run_client(),
-        default_turn_metadata(),
-        AgentRequestKind::SessionStart,
-        None,
-        "test prompt".into(),
-    )
-    .await;
+    let (result, ()) = tokio::join!(
+        run_channel_turn(
+            &context,
+            research_title_run_client(),
+            default_turn_metadata(),
+            AgentRequestKind::SessionStart,
+            None,
+            "test prompt".into(),
+        ),
+        async {
+            turn_started.notified().await;
+            cancel_token.lock().expect("cancel token lock").cancel();
+        }
+    );
 
     // Assert
     let error_message = result.expect_err("should return an error").to_string();

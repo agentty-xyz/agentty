@@ -119,7 +119,10 @@ async fn test_handle_question_then_help_then_exit_preserves_restore_question() {
     ));
 
     // Act — close help overlay, returning to diff.
-    crate::runtime::mode::help::handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    crate::runtime::mode::help::handle(
+        &mut app.mode,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    );
 
     // Intermediate assert — diff still carries the snapshot.
     assert!(matches!(

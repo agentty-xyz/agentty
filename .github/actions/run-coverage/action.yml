@@ -33,6 +33,13 @@ runs:
         export AGENTTY_COVERAGE_BASE="origin/${coverage_base_ref#refs/heads/}"
         prek run coverage --all-files --hook-stage manual
 
+    - name: Retain coverage test timings
+      if: ${{ always() }}
+      uses: $/.github/actions/upload-test-results
+      with:
+        name: coverage-test-results
+        build-directory: target/llvm-cov-target
+
     - name: SonarQube Scan
       if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
       uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2

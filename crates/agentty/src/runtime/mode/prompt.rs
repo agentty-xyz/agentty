@@ -595,7 +595,7 @@ where
         }
     }
 
-    navigate_prompt_history_up(app);
+    navigate_prompt_history_up(&mut app.mode);
     sync_prompt_at_mention_state(app);
 
     Ok(())
@@ -626,19 +626,19 @@ where
         }
     }
 
-    navigate_prompt_history_down(app);
+    navigate_prompt_history_down(&mut app.mode);
     sync_prompt_at_mention_state(app);
 
     Ok(())
 }
 
-fn navigate_prompt_history_up(app: &mut App) {
+fn navigate_prompt_history_up(mode: &mut AppMode) {
     if let AppMode::Prompt {
         attachment_state,
         history_state,
         input,
         ..
-    } = &mut app.mode
+    } = mode
     {
         if history_state.entries.is_empty() {
             return;
@@ -660,13 +660,13 @@ fn navigate_prompt_history_up(app: &mut App) {
     }
 }
 
-fn navigate_prompt_history_down(app: &mut App) {
+fn navigate_prompt_history_down(mode: &mut AppMode) {
     if let AppMode::Prompt {
         attachment_state,
         history_state,
         input,
         ..
-    } = &mut app.mode
+    } = mode
     {
         let Some(selected_index) = history_state.selected_index else {
             return;

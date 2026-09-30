@@ -172,9 +172,14 @@ fn receive_event(listener: &TcpListener) -> TestResult<Value> {
     let (mut stream, _) = loop {
         match listener.accept() {
             Ok(connection) => break connection,
-            Err(error)
-                if error.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
-            {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out waiting for a telemetry HTTP request",
+                    )
+                    .into());
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(error) => return Err(error.into()),
@@ -204,7 +209,11 @@ fn receive_event(listener: &TcpListener) -> TestResult<Value> {
                 .ok_or_else(|| io::Error::other("missing content length"))?;
             if request.len() >= header_end + length {
                 let event = serde_json::from_slice(&request[header_end..header_end + length])?;
-                stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")?;
+                // The fixture handles one request per socket, so prevent the
+                // client's pool from reusing it before it observes the close.
+                stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )?;
 
                 return Ok(event);
             }

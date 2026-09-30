@@ -37,3 +37,9 @@ jobs:
           rustc --version
       - name: Native sandbox public contract and launcher coverage
         run: prek run coverage-ag-harness-sandbox --all-files --hook-stage manual
+      - name: Retain native sandbox test timings
+        if: ${{ always() }}
+        uses: $/.github/actions/upload-test-results
+        with:
+          name: native-sandbox-test-results-${{ matrix.os }}
+          build-directory: target/llvm-cov-target

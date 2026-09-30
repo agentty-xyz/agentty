@@ -116,7 +116,7 @@ where
 
                 Ok(result)
             }
-            AppMode::Help { .. } => Ok(mode::help::handle(app, key)),
+            AppMode::Help { .. } => Ok(mode::help::handle(&mut app.mode, key)),
             AppMode::LaunchConfigurationSelector { .. } => {
                 unreachable!(
                     "launch-configuration selector mode is handled before dispatch matching"

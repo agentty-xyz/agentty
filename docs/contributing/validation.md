@@ -8,7 +8,8 @@ Select required gates from the root `AGENTS.md` and invoke their definitions thr
 During iteration, select the behavior being changed:
 
 ```sh
-AGENTTY_TEST_FILTER='package(=ag-git) and test(worktree)' \
+AGENTTY_TEST_PACKAGES='ag-git' \
+  AGENTTY_TEST_FILTER='package(=ag-git) and test(worktree)' \
   prek run test-focused --all-files --hook-stage manual
 ```
 
@@ -21,10 +22,26 @@ AGENTTY_TEST_FILTER='package(=ag-git) or deps(=ag-git) or rdeps(=ag-git)' \
   prek run test-focused --all-files --hook-stage manual
 ```
 
+`AGENTTY_TEST_PACKAGES` optionally limits compilation to a whitespace-separated list of
+Cargo package names. Without it, the hook builds the workspace. Cargo still builds
+dependencies required by the selected packages. For final validation, select every
+affected package, dependency, and dependent, or omit the build limit and use the
+dependency-graph filter above. An execution filter does not select compilation packages.
+
 `test-focused` requires a nonempty filter and fails when no tests match. Both it and
 `test-workspace` retain public integration tests, excluding only targets selected by the
 separate `test-agentty-e2e` gate. A filter narrows execution, not necessarily
 compilation. Use `test-workspace` when impact is uncertain.
+
+## Test Timings
+
+Nextest hooks write test execution durations to `target/nextest/ci/junit.xml` and Cargo
+compilation timings to the build directory's `cargo-timings/cargo-timing.html`. CI
+retains both as artifacts for 14 days for workspace, source, coverage, native sandbox,
+and E2E jobs, including reports available after failures. Compare compilation and
+execution separately, and distinguish cold builds from cache restores before tuning
+concurrency or partitioning suites. E2E builds use a cache isolated by the pinned
+container and Rust environment.
 
 ## Coverage
 
@@ -54,13 +71,12 @@ The `ag-xtask` unit and public CLI tests cover valid and broken instruction fixt
 Use the affected-package recipe above with `ag-xtask`; the standard Rust coverage gate
 includes its CLI suites to cover dispatch and process exit paths as well as the checker.
 
-Hook-contract regression tests are intentionally absent. CI executes the real gates, but
-a successful run does not verify rejection of stale reports after failed generation,
-propagation of comparison failures, or literal handling of filters and base refs.
-Removing the standalone suite accepts this regression-coverage gap; configuration and
-instruction checks are not replacements. Review changes to coverage, focused-test
-commands, compiler wrappers, and native sandbox setup for argument quoting, failure
-propagation, report freshness, and setup ordering.
+`crates/ag-xtask/tests/test_focused.rs` executes the cataloged focused-test command with
+a stub runner to verify build selection, literal filters, required inputs, and failure
+propagation. Coverage-hook rejection of stale reports, comparison failures, and literal
+base refs still lacks regression coverage. Configuration and instruction checks are not
+replacements. Review changes to coverage commands, compiler wrappers, and native sandbox
+setup for argument quoting, failure propagation, report freshness, and setup ordering.
 
 ## TUI Snapshots
 

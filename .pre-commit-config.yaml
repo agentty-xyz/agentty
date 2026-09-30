@@ -98,7 +98,7 @@ repos:
         name: cargo nextest workspace
         description: Run workspace source and public API tests with `cargo-nextest`.
         entry: >-
-          cargo nextest run --locked --profile ci --workspace
+          cargo nextest run --locked --timings --profile ci --workspace
           -E 'not (package(=agentty) and kind(test) and
           (binary(=showcase) or binary(=protocol_compliance_e2e) or binary(=e2e)))'
         language: system
@@ -115,9 +115,16 @@ repos:
         stages: [manual]
       - id: test-focused
         name: cargo nextest focused
-        description: Run source and public integration tests selected by AGENTTY_TEST_FILTER, excluding the separately gated Agentty E2E targets.
+        description: Run tests selected by AGENTTY_TEST_FILTER, optionally compiling only AGENTTY_TEST_PACKAGES, excluding separately gated Agentty E2E targets.
         entry: >-
-          bash -eu -o pipefail -c 'cargo nextest run --locked --profile ci --workspace
+          bash -eu -o pipefail -c 'package_args=(--workspace);
+          if [[ -n "${AGENTTY_TEST_PACKAGES:-}" ]]; then
+          set -f; packages=($AGENTTY_TEST_PACKAGES); set +f;
+          if [[ ${#packages[@]} -eq 0 ]]; then
+          echo "AGENTTY_TEST_PACKAGES must contain package names" >&2; exit 1; fi;
+          package_args=();
+          for package in "${packages[@]}"; do package_args+=(-p "$package"); done; fi;
+          cargo nextest run --locked --timings --profile ci "${package_args[@]}"
           --no-tests=fail -E "(${AGENTTY_TEST_FILTER:?Set AGENTTY_TEST_FILTER to a nextest filterset})
           and not (package(=agentty) and kind(test) and
           (binary(=showcase) or binary(=protocol_compliance_e2e) or binary(=e2e)))"'
@@ -128,7 +135,7 @@ repos:
       - id: test-ag-forge-src
         name: cargo nextest ag-forge src
         description: Source tests for `crates/ag-forge/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-forge --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-forge --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -136,7 +143,7 @@ repos:
       - id: test-ag-git-src
         name: cargo nextest ag-git src
         description: Source tests for `crates/ag-git/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-git --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-git --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -144,7 +151,7 @@ repos:
       - id: test-ag-harness-src
         name: cargo nextest ag-harness src
         description: Source tests for `crates/ag-harness/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-harness --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-harness --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -152,7 +159,7 @@ repos:
       - id: test-ag-harness-cli-src
         name: cargo nextest ag-harness-cli src
         description: Source tests for `crates/ag-harness-cli/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-harness-cli --bin ag-harness
+        entry: cargo nextest run --locked --timings --profile ci -p ag-harness-cli --bin ag-harness
         language: system
         always_run: true
         pass_filenames: false
@@ -160,7 +167,7 @@ repos:
       - id: test-ag-orchestration-src
         name: cargo nextest ag-orchestration src
         description: Source tests for `crates/ag-orchestration/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-orchestration --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-orchestration --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -168,7 +175,7 @@ repos:
       - id: test-ag-protocol-src
         name: cargo nextest ag-protocol src
         description: Source tests for `crates/ag-protocol/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-protocol --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-protocol --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -176,7 +183,7 @@ repos:
       - id: test-ag-clipboard-src
         name: cargo nextest ag-clipboard src
         description: Source tests for `crates/ag-clipboard/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-clipboard --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-clipboard --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -184,7 +191,7 @@ repos:
       - id: test-ag-agent-src
         name: cargo nextest ag-agent src
         description: Source tests for `crates/ag-agent/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-agent --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-agent --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -192,7 +199,7 @@ repos:
       - id: test-ag-contracts-src
         name: cargo nextest ag-contracts src
         description: Source tests for the provider-independent execution contracts.
-        entry: cargo nextest run --locked --profile ci -p ag-contracts --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-contracts --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -200,7 +207,7 @@ repos:
       - id: test-ag-worker
         name: cargo nextest ag-worker
         description: Worker source tests and the public headless execution contract.
-        entry: cargo nextest run --locked --profile ci -p ag-worker
+        entry: cargo nextest run --locked --timings --profile ci -p ag-worker
         language: system
         always_run: true
         pass_filenames: false
@@ -208,7 +215,7 @@ repos:
       - id: test-ag-session-src
         name: cargo nextest ag-session src
         description: Source tests for `crates/ag-session/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-session --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-session --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -216,7 +223,7 @@ repos:
       - id: test-ag-store-src
         name: cargo nextest ag-store src
         description: Source tests for `crates/ag-store/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-store --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-store --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -224,7 +231,7 @@ repos:
       - id: test-ag-tui-text-src
         name: cargo nextest ag-tui-text src
         description: Source tests for `crates/ag-tui-text/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-tui-text --lib
+        entry: cargo nextest run --locked --timings --profile ci -p ag-tui-text --lib
         language: system
         always_run: true
         pass_filenames: false
@@ -233,7 +240,7 @@ repos:
         name: cargo nextest agentty src
         description: Source tests for `crates/agentty/src`.
         entry: >-
-          cargo nextest run --locked --profile ci -p agentty --lib --bin agentty
+          cargo nextest run --locked --timings --profile ci -p agentty --lib --bin agentty
           -E 'not (package(agentty) and kind(test))'
         language: system
         always_run: true
@@ -242,7 +249,7 @@ repos:
       - id: test-ag-xtask-src
         name: cargo nextest ag-xtask src
         description: Source tests for `crates/ag-xtask/src`.
-        entry: cargo nextest run --locked --profile ci -p ag-xtask --bin ag-xtask
+        entry: cargo nextest run --locked --timings --profile ci -p ag-xtask --bin ag-xtask
         language: system
         always_run: true
         pass_filenames: false
@@ -250,7 +257,7 @@ repos:
       - id: test-testty-src
         name: cargo nextest testty src
         description: Source tests for `crates/testty/src`.
-        entry: cargo nextest run --locked --profile ci -p testty --lib --bins
+        entry: cargo nextest run --locked --timings --profile ci -p testty --lib --bins
         language: system
         always_run: true
         pass_filenames: false
@@ -259,7 +266,7 @@ repos:
         name: cargo nextest agentty e2e
         description: Agentty integration tests from `crates/agentty/tests`.
         entry: >-
-          env TESTTY_GIF_MODE=check cargo nextest run --locked --profile ci -p agentty
+          env TESTTY_GIF_MODE=check cargo nextest run --locked --timings --profile ci -p agentty
           --test showcase --test protocol_compliance_e2e --test e2e
         language: system
         always_run: true
@@ -280,9 +287,9 @@ repos:
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags"
-          cargo llvm-cov nextest --workspace
+          cargo llvm-cov nextest --timings --workspace
           --lib --bins --examples --test check_execution_boundary --test check_instruction
-          --test check_migration --test sandbox
+          --test check_migration --test test_focused --test sandbox
           --test public_api --test lifecycle --test telemetry --test benchmark_summary
           --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
@@ -310,7 +317,7 @@ repos:
           CARGO_UNSTABLE_BUILD_DIR_NEW_LAYOUT=false
           CARGO_UNSTABLE_FINE_GRAIN_LOCKING=false
           RUSTFLAGS="$coverage_rustflags"
-          cargo llvm-cov nextest --locked --profile ci -p ag-harness --test sandbox
+          cargo llvm-cov nextest --locked --timings --profile ci -p ag-harness --test sandbox
           --lib --test public_api --test lifecycle --test telemetry --test benchmark_summary
           --lcov --output-path target/harness-sandbox.lcov'
         language: system
