@@ -21,7 +21,7 @@ use crate::domain::session::{
     ForgeKind, ReviewRequestState, ReviewRequestSummary, Session, SessionHandles, SessionId, Status,
 };
 use crate::infra::clock::RealClock;
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, PersistedOrchestrationTask};
 use crate::infra::{db, fs};
 
 /// One-shot boundary that holds title generation until the test releases
@@ -175,6 +175,37 @@ pub(super) fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
         .returning(|path| path.is_dir());
 
     mock_fs_client
+}
+
+/// Persists implementation and research tasks for child reservation tests.
+pub(super) async fn orchestration_task_ids(
+    database: &AppRepositories,
+    session_id: &str,
+) -> [i64; 2] {
+    let orchestration_id = database
+        .orchestrations()
+        .insert_orchestration(session_id, "Running", 2)
+        .await
+        .expect("orchestration");
+    let mut task_ids = [0; 2];
+    for (index, kind) in ["Implementation", "Research"].into_iter().enumerate() {
+        task_ids[index] = database
+            .orchestrations()
+            .upsert_orchestration_task(PersistedOrchestrationTask {
+                acceptance_criteria: "[]".to_string(),
+                kind: kind.to_string(),
+                merge_position: 0,
+                prompt: "private task prompt".to_string(),
+                session_orchestration_id: orchestration_id,
+                task_key: kind.to_string(),
+                title: kind.to_string(),
+                touched_areas: "[]".to_string(),
+            })
+            .await
+            .expect("orchestration task");
+    }
+
+    task_ids
 }
 
 /// Persists one session row that matches the in-memory fixture.

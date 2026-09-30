@@ -281,6 +281,7 @@ enum AppEventEffect {
     ReloadSessions,
     ReloadProjects,
     RefreshGitStatus,
+    RecordTurnStarts(usize),
     ApplyReviewUpdates(Vec<(SessionId, ReviewUpdate)>),
     PersistDeferredAutoReviewTriggers(
         Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
@@ -385,6 +386,8 @@ pub(super) struct AppEventBatch {
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
+    /// Counts accepted messages even when their UI updates are coalesced.
+    pub(super) session_turn_start_count: usize,
     pub(super) session_turn_started_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
@@ -419,6 +422,10 @@ impl AppEventBatch {
         }
         if self.should_refresh_git_status {
             before_snapshot_effects.push(AppEventEffect::RefreshGitStatus);
+        }
+        let turn_start_count = std::mem::take(&mut self.session_turn_start_count);
+        if turn_start_count > 0 {
+            before_snapshot_effects.push(AppEventEffect::RecordTurnStarts(turn_start_count));
         }
         let changes_observable_state = self.should_reload_sessions
             || self.should_reload_projects
@@ -699,6 +706,7 @@ impl AppEventBatch {
                 self.session_queued_sync_resolved_ids.insert(session_id);
             }
             AppEvent::SessionTurnStarted { session_id } => {
+                self.session_turn_start_count += 1;
                 self.session_turn_started_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
@@ -1448,6 +1456,11 @@ impl App {
                 AppEventEffect::ReloadSessions => self.refresh_sessions_now().await,
                 AppEventEffect::ReloadProjects => self.reload_projects().await,
                 AppEventEffect::RefreshGitStatus => self.restart_git_status_task(),
+                AppEventEffect::RecordTurnStarts(count) => {
+                    for _ in 0..count {
+                        self.services.record_turn_start();
+                    }
+                }
                 AppEventEffect::ApplyReviewUpdates(review_updates) => {
                     let focused_review_persistence = apply_review_updates(
                         &mut self.review_cache,

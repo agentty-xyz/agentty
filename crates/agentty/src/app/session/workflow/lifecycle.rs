@@ -19,6 +19,7 @@ use super::{
     SessionTaskService, StatusTransition, draft, isolation, session_branch, session_folder,
     unix_timestamp_from_system_time,
 };
+use crate::analytics::SessionType;
 use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
@@ -705,6 +706,11 @@ impl SessionManager {
         })?;
 
         Self::record_session_creation_activity(services, &session_id).await;
+        services.record_session_start(if parent_session_id.is_some() {
+            SessionType::Stacked
+        } else {
+            SessionType::Draft
+        });
 
         Ok(session_id)
     }
@@ -820,6 +826,7 @@ impl SessionManager {
             )
             .await?;
         Self::record_session_creation_activity(services, &session_id).await;
+        services.record_session_start(SessionType::Fork);
 
         self.mark_history_replay_pending(&session_id);
 
@@ -926,6 +933,12 @@ impl SessionManager {
             })
             .await?;
         Self::record_session_creation_activity(services, &session_id).await;
+        services.record_session_start(match creation_kind {
+            SessionCreationKind::Worker => SessionType::Regular,
+            SessionCreationKind::Orchestrator => SessionType::Orchestrator,
+            SessionCreationKind::OrchestrationChild { .. } => SessionType::OrchestrationChild,
+            SessionCreationKind::OrchestrationResearch { .. } => SessionType::OrchestrationResearch,
+        });
 
         Ok(session_id)
     }

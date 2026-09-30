@@ -259,6 +259,103 @@ fn app_event_label_names_turn_starts() {
 }
 
 #[tokio::test]
+async fn telemetry_tracking_reaps_completed_tasks_and_preserves_pending_work() {
+    // Arrange
+    let (app, _directory) = crate::test_support::new_test_app().await;
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    app.services.track_telemetry_task(tokio::spawn(async move {
+        release_rx.await.expect("release pending telemetry");
+    }));
+
+    for _ in 0..64 {
+        let completed = tokio::spawn(async {});
+        while !completed.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        // Act
+        app.services.track_telemetry_task(completed);
+
+        // Assert
+        let tasks = app.services.telemetry_task_handles.lock().expect("tracker");
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks.iter().filter(|task| !task.is_finished()).count(), 1);
+    }
+
+    // Act
+    release_tx.send(()).expect("release telemetry");
+    app.services.wait_for_cleanup_tasks().await;
+
+    // Assert
+    assert!(
+        app.services
+            .telemetry_task_handles
+            .lock()
+            .expect("tracker")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn telemetry_completes_when_its_task_tracker_is_poisoned() {
+    // Arrange
+    let (app, _directory) = crate::test_support::new_test_app().await;
+    let tracker = Arc::clone(&app.services.telemetry_task_handles);
+    let poisoner = std::thread::spawn(move || {
+        let _guard = tracker.lock().expect("tracker");
+        drop(CleanupResource {
+            should_succeed: false,
+        });
+    });
+    assert!(poisoner.join().is_err());
+    assert!(app.services.telemetry_task_handles.is_poisoned());
+    let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+
+    // Act
+    app.services.track_telemetry_task(tokio::spawn(async move {
+        completed_tx.send(()).expect("report telemetry completion");
+    }));
+    let completion = time::timeout(Duration::from_secs(1), completed_rx).await;
+
+    // Assert
+    assert_eq!(completion.expect("telemetry must finish"), Ok(()));
+}
+
+#[tokio::test]
+async fn telemetry_shutdown_cancels_pending_tasks_after_shared_deadline() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let released = CancellationToken::new();
+    app.services
+        .track_telemetry_task(pending_cleanup_task(&released));
+    app.services.clock = Arc::new(FixedClock::new(
+        time::Instant::now()
+            .into_std()
+            .checked_sub(Duration::from_secs(6))
+            .expect("expired deadline"),
+        std::time::SystemTime::UNIX_EPOCH,
+    ));
+
+    // Act
+    time::timeout(
+        Duration::from_secs(1),
+        app.services.wait_for_cleanup_tasks(),
+    )
+    .await
+    .expect("telemetry must honor the shared deadline");
+
+    // Assert
+    assert!(released.is_cancelled());
+    assert!(
+        app.services
+            .telemetry_task_handles
+            .lock()
+            .expect("tracker")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn creation_completion_releases_handles_and_preserves_pending_work() {
     // Arrange
     let (mut app, _directory) = crate::test_support::new_test_app().await;

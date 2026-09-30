@@ -23,12 +23,46 @@ const POSTHOG_API_HOST: &str = "https://us.i.posthog.com";
 pub const TELEMETRY_ENABLED_ENV: &str = "AGENTTY_TELEMETRY_ENABLED";
 
 /// A telemetry sender. Callers check [`Analytics::is_enabled`] before use.
+#[derive(Clone)]
 pub struct Analytics {
     client: Client,
     distinct_id: String,
     endpoint: String,
     install_method: InstallMethod,
     token: String,
+}
+
+/// Bounded creation types reported without session or project identifiers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionType {
+    /// Independent session with an eagerly prepared worktree.
+    Regular,
+    /// Root session whose worktree is prepared on first send.
+    Draft,
+    /// Draft based on another session's branch.
+    Stacked,
+    /// Independent session copied from an existing conversation.
+    Fork,
+    /// Controller that delegates work to child sessions.
+    Orchestrator,
+    /// Worker owned by an orchestration task.
+    OrchestrationChild,
+    /// Read-only researcher owned by an orchestration task.
+    OrchestrationResearch,
+}
+
+impl SessionType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Draft => "draft",
+            Self::Stacked => "stacked",
+            Self::Fork => "fork",
+            Self::Orchestrator => "orchestrator",
+            Self::OrchestrationChild => "orchestration_child",
+            Self::OrchestrationResearch => "orchestration_research",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,6 +233,20 @@ impl Analytics {
         self.send("agentty_launch", None).await;
     }
 
+    /// Records a newly reserved session using only its creation type.
+    pub async fn record_session_start(&self, session_type: SessionType) {
+        self.send(
+            "agentty_session_start",
+            Some(("session_type", session_type.as_str())),
+        )
+        .await;
+    }
+
+    /// Records an accepted first or follow-up message without its contents.
+    pub async fn record_turn_start(&self) {
+        self.send("agentty_turn_start", None).await;
+    }
+
     /// Records a failure using only a bounded category, never its message.
     pub async fn record_failure(&self, error: &AppError) {
         let category = match error {
@@ -206,7 +254,8 @@ impl Analytics {
             _ => "application",
         };
 
-        self.send("agentty_failure", Some(category)).await;
+        self.send("agentty_failure", Some(("failure_category", category)))
+            .await;
     }
 
     fn with_client(
@@ -226,15 +275,15 @@ impl Analytics {
         })
     }
 
-    async fn send(&self, name: &str, category: Option<&str>) {
+    async fn send(&self, name: &str, property: Option<(&str, &str)>) {
         let mut properties = json!({
             "$process_person_profile": false,
             "app_source": "cli",
             "app_version": env!("CARGO_PKG_VERSION"),
             "install_method": self.install_method.as_str(),
         });
-        if let Some(category) = category {
-            properties["failure_category"] = Value::String(category.to_string());
+        if let Some((key, value)) = property {
+            properties[key] = Value::String(value.to_string());
         }
 
         let event = json!({
