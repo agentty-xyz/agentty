@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 use agentty::analytics::{Analytics, SessionType, TurnOutcome};
 use agentty::app::AppError;
 use agentty::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
-use agentty::infra::db::DbError;
+use agentty::infra::db::{DbError, acquire_instance_lock};
 use serde_json::Value;
+use wiremock::MockServer;
 
 type TestResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -238,5 +239,61 @@ fn assert_event(event: &Value, token: &str, name: &str, event_properties: &[(&st
     assert_eq!(
         properties.as_object().map(serde_json::Map::len),
         Some(4 + event_properties.len())
+    );
+}
+
+#[tokio::test]
+async fn environment_configuration_does_not_enable_otlp_without_the_argument() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+    let _owner = acquire_instance_lock(root.path()).await.expect("lock");
+    let receiver = MockServer::start().await;
+
+    // Act
+    let output = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("agentty"))
+        .arg("--no-update")
+        .env("AGENTTY_ROOT", root.path())
+        .env("OTEL_EXPORTER_OTLP_ENDPOINT", receiver.uri())
+        .env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "invalid endpoint")
+        .env("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+        .output()
+        .await
+        .expect("application output");
+
+    // Assert
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Another Agentty instance"));
+    assert!(
+        receiver
+            .received_requests()
+            .await
+            .expect("requests")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn invalid_cli_endpoint_fails_before_application_startup() {
+    // Arrange
+    let root = tempfile::tempdir().expect("root");
+
+    // Act
+    let output = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("agentty"))
+        .args(["--otlp-endpoint", "http://user:private@host/traces"])
+        .env("AGENTTY_ROOT", root.path())
+        .output()
+        .await
+        .expect("application output");
+
+    // Assert
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(stderr.contains("--otlp-endpoint"));
+    assert!(!stderr.contains("private"));
+    assert_eq!(
+        std::fs::read_dir(root.path())
+            .expect("root entries")
+            .count(),
+        0
     );
 }

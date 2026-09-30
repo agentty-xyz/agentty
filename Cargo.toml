@@ -27,6 +27,7 @@ ag-router = { path = "crates/ag-router", version = "0.16.4" }
 ag-scheduler = { path = "crates/ag-scheduler", version = "0.16.4" }
 ag-session = { path = "crates/ag-session", version = "0.16.4" }
 ag-store = { path = "crates/ag-store", version = "0.16.4" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.16.4" }
 ag-tui-text = { path = "crates/ag-tui-text", version = "0.16.4" }
 ag-worker = { path = "crates/ag-worker", version = "0.16.4" }
 testty = { path = "crates/testty", version = "0.16.4" }
@@ -48,10 +49,10 @@ mockall = "0.15"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
-opentelemetry = { version = "0.33", default-features = false, features = ["metrics", "trace"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["internal-logs", "metrics", "trace"] }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client", "trace"] }
 opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "metrics", "trace"] }
-opentelemetry_sdk = { version = "0.33.0", default-features = false, features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.33.0", default-features = false, features = ["internal-logs", "metrics", "trace"] }
 percent-encoding = "2"
 portable-pty = "0.9"
 prost = "0.14"

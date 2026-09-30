@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 use ag_contracts::{ExecutionPolicy, OneShotError, OneShotRequest, OneShotSubmission};
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use async_trait::async_trait;
 use tokio::sync::{Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -150,6 +151,7 @@ impl RunClient for RunWorker {
             }
             let execution = Arc::clone(&self.execution);
             let scope = RunContext::current();
+            let trace = scope.trace.clone();
             let session = scope
                 .scope
                 .session_id
@@ -161,18 +163,21 @@ impl RunClient for RunWorker {
                     session.cancellation.clone()
                 });
             let id = uuid::Uuid::new_v4().to_string();
-            self.tasks.spawn(async move {
-                let session_id = scope.scope.session_id.clone();
-                tokio::select! {
-                    biased;
-                    () = execution.force_shutdown.cancelled() => {},
-                    () = execution.execute(request, scope, &id, cancellation, sender) => {},
+            self.tasks.spawn(
+                async move {
+                    let session_id = scope.scope.session_id.clone();
+                    tokio::select! {
+                        biased;
+                        () = execution.force_shutdown.cancelled() => {},
+                        () = execution.execute(request, scope, &id, cancellation, sender) => {},
+                    }
+                    if let (Some(session_id), Some((session, task))) = (session_id, session) {
+                        drop(task);
+                        execution.release_session(&session_id, &session);
+                    }
                 }
-                if let (Some(session_id), Some((session, task))) = (session_id, session) {
-                    drop(task);
-                    execution.release_session(&session_id, &session);
-                }
-            });
+                .with_context(trace),
+            );
         }
 
         receiver
@@ -255,12 +260,27 @@ impl Execution {
                 .unwrap_or_else(|| format!("{:?}", request.request_kind)),
             session_id: scope.session_id,
         };
+        let span = Span::child("utility.run");
+        span.attribute("agentty.harness", request.harness.clone());
+        span.attribute("gen_ai.request.model", request.model.clone());
+        if let Some(session_id) = &run.session_id {
+            span.attribute("agentty.session.id", session_id.clone());
+        }
+        if let Some(parent_id) = &run.parent_id {
+            span.attribute("agentty.operation.id", parent_id.clone());
+        }
+        span.attribute("agentty.run.id", run.id.clone());
+        span.attribute("agentty.purpose", run.purpose.clone());
+        let trace = span.context();
         if let Err(error) = self.repository.create(&run).await {
+            span.finish(Outcome::Failed);
             let _ = sender.send(Err(error));
             return;
         }
         let cancellation = CancellationToken::new();
-        let work = self.run(&run.id, request, cancellation.clone());
+        let work = self
+            .run(&run.id, request, cancellation.clone())
+            .with_context(trace);
         tokio::pin!(work);
         // Observe unwinding while polling the runtime, including cancellation
         // cleanup, so a provider panic cannot bypass terminal persistence.
@@ -301,6 +321,11 @@ impl Execution {
                 Err(error)
             }
         };
+        span.finish(match state {
+            RunState::Canceled => Outcome::Canceled,
+            _ if result.is_ok() => Outcome::Completed,
+            _ => Outcome::Failed,
+        });
         let _ = sender.send(result);
     }
 
@@ -317,12 +342,14 @@ impl Execution {
             .and_then(|kind| self.policies.get(&kind.to_string()))
             .cloned()
             .unwrap_or_default();
+        let admission = Span::child("admission.wait");
         let permit = tokio::select! {
             biased;
             () = cancellation.cancelled() => return Err(OneShotError::new("[Stopped] Agent run canceled")),
             permit = self.capacity.acquire() => permit,
         };
         let _permit = permit.map_err(|error| OneShotError::new(error.to_string()))?;
+        admission.finish(Outcome::Completed);
         self.repository
             .transition(id, RunState::Running, None)
             .await?;

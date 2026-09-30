@@ -472,6 +472,34 @@ install metadata. It is `unknown` when no signal is available. These values desc
 launches, not installation counts; metadata left behind after replacing a binary can
 report an older method.
 
+### Session Traces
+
+Session traces are separate from PostHog analytics and disabled by default. Pass a
+complete OTLP HTTP/protobuf traces endpoint to enable them, including in debug builds:
+
+```sh
+agentty --otlp-endpoint http://localhost:4318/v1/traces
+```
+
+Agentty uses the supplied traces path without appending `/v1/traces`. Endpoint
+environment variables cannot enable tracing or override this argument. For authenticated
+endpoints, set `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, falling back to
+`OTEL_EXPORTER_OTLP_HEADERS`.
+
+Each turn has a separate trace correlated by session and operation identifiers. Spans
+measure queue and capacity waits, workspace and context preparation, agent startup and
+attempts, response validation, persistence, and post-processing. Utility calls inherit
+their initiating context; work started after its parent finishes uses a linked trace.
+External agents do not always expose internal model or tool timings; first activity is
+not a time-to-first-token measurement.
+
+Traces contain execution identifiers, provider/model selections, token counts, and
+bounded outcomes. They exclude prompts, transcripts, thought fragments, tool output,
+command arguments, and project paths. All observed spans are sampled while enabled.
+Export is asynchronous and best effort: a full queue or unavailable receiver may lose
+spans. Agentty reports a coalesced diagnostic summary after restoring the terminal and
+limits final export flushing to three seconds.
+
 ## Auto-Update
 
 <a id="usage-auto-update"></a> Agentty checks npm at startup and hourly, then installs

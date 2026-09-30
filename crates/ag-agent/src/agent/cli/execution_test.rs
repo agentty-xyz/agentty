@@ -11,6 +11,10 @@ use std::time::Duration;
 use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::TurnPromptAttachment;
 use ag_session::AgentKind;
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use opentelemetry::global;
+use opentelemetry::trace::Status;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use rustix::process::{self, Pid, WaitId, WaitIdOptions};
 use tempfile::tempdir;
 use tokio::io::{AsyncRead, ReadBuf};
@@ -21,6 +25,7 @@ use crate::agent::cli::execution::{
     ProcessGroupGuard, capture_stderr, capture_stdout, execute_cli_command, finish_cli_execution,
     require_pipe,
 };
+use crate::telemetry::TRACER_PROVIDER_LOCK;
 
 /// Observer that records all streaming callbacks for assertions.
 struct RecordingObserver {
@@ -96,6 +101,71 @@ fn shell_command(script: &str) -> Command {
     command.arg("-c").arg(script);
 
     command
+}
+
+#[tokio::test]
+async fn cli_attempt_spans_classify_unsuccessful_exits_without_changing_raw_output() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider);
+    let folder = tempdir().expect("temporary folder");
+    let request_kind = AgentRequestKind::UtilityPrompt;
+    for (script, status, outcome) in [
+        ("printf output; exit 0", CliExitStatus::Success, "completed"),
+        (
+            "printf output; exit 7",
+            CliExitStatus::NonZero(Some(7)),
+            "failed",
+        ),
+        (
+            "printf output; kill -TERM $$",
+            CliExitStatus::Signaled(15),
+            "failed",
+        ),
+    ] {
+        exporter.reset();
+        let mut backend = MockAgentBackend::new();
+        backend
+            .expect_build_command()
+            .once()
+            .returning(move |_| Ok(shell_command(script)));
+
+        // Act
+        let root = Span::root("test.cli.execution", Vec::new());
+        let trace_id = root.context().span().span_context().trace_id();
+        let output = root
+            .scope(execute_cli_command(
+                &backend,
+                AgentKind::Codex,
+                build_request(&[], folder.path(), "prompt", &request_kind),
+                &CollectingCliObserver,
+                None,
+            ))
+            .await
+            .expect("raw execution result");
+
+        // Assert
+        assert_eq!(output.exit_status, status);
+        assert_eq!(output.stdout, "output");
+        let spans = exporter.get_finished_spans().expect("finished spans");
+        let attempt = spans
+            .iter()
+            .find(|span| span.name == "agent.attempt" && span.span_context.trace_id() == trace_id)
+            .expect("attempt");
+        assert!(
+            attempt
+                .attributes
+                .contains(&KeyValue::new("agentty.outcome", outcome))
+        );
+        assert_eq!(
+            matches!(attempt.status, Status::Error { .. }),
+            outcome == "failed"
+        );
+    }
 }
 
 #[tokio::test]

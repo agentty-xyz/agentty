@@ -17,6 +17,7 @@ use agentty::infra::db::{
     DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
 };
+use agentty::infra::telemetry::Telemetry;
 use clap::Parser;
 
 /// Command-line options for launching Agentty.
@@ -26,6 +27,9 @@ struct Cli {
     /// Disables automatic application updates.
     #[arg(long)]
     no_update: bool,
+    /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
+    #[arg(long, value_name = "URL")]
+    otlp_endpoint: Option<String>,
 }
 
 /// Runs the `agentty` application runtime using the configured workspace and
@@ -34,7 +38,7 @@ struct Cli {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    match run(cli).await {
+    match run(cli, agentty::runtime::run).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(io::stderr().lock(), "{error}");
@@ -49,8 +53,31 @@ async fn main() -> ExitCode {
 /// # Errors
 /// Returns an error if database startup, app construction, or runtime
 /// execution fails.
-async fn run(cli: Cli) -> Result<(), AppError> {
-    run_application(cli, agentty::runtime::run).await
+async fn run(
+    cli: Cli,
+    runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
+) -> Result<(), AppError> {
+    let telemetry = Telemetry::start(cli.otlp_endpoint.as_deref())
+        .await
+        .map_err(AppError::Workflow)?;
+    let result = async {
+        if let Some(telemetry) = &telemetry {
+            telemetry.install().map_err(AppError::Workflow)?;
+        }
+        run_application(cli, runtime).await
+    }
+    .await;
+    if let Some(telemetry) = telemetry {
+        let warnings = telemetry.shutdown().await;
+        if warnings > 0 {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "OTLP export reported {warnings} warnings or failures; some traces may be missing."
+            );
+        }
+    }
+
+    result
 }
 
 async fn run_with_analytics(

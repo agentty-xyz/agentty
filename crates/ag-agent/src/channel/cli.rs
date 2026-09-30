@@ -275,33 +275,44 @@ async fn parse_or_repair_cli_response(
     backend: &Arc<dyn AgentBackend>,
     events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<AgentResponse, AgentError> {
-    let protocol_profile = req.request_kind.protocol_profile();
+    let span = ag_telemetry::Span::child("response.validate");
+    span.run(
+        async {
+            let protocol_profile = req.request_kind.protocol_profile();
 
-    let parse_error = match agent::parse_turn_response(kind, content, protocol_profile) {
-        Ok(response) => return Ok(response),
-        Err(error) => error,
-    };
+            let parse_error = match agent::parse_turn_response(kind, content, protocol_profile) {
+                Ok(response) => return Ok(response),
+                Err(error) => error,
+            };
 
-    let _ = events.send(TurnEvent::ThoughtDelta(format!(
-        "Protocol parse error; retrying schema repair for {kind}."
-    )));
+            let _ = events.send(TurnEvent::ThoughtDelta(format!(
+                "Protocol parse error; retrying schema repair for {kind}."
+            )));
 
-    let repair_prompt =
-        build_protocol_repair_prompt(&parse_error, content).map_err(AgentError::Backend)?;
+            ag_telemetry::milestone("schema_repair");
+            let repair_prompt =
+                build_protocol_repair_prompt(&parse_error, content).map_err(AgentError::Backend)?;
 
-    let repair_content = execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt)
-        .await
-        .map_err(|error| {
-            AgentError::Backend(format!(
-                "{parse_error}\nprotocol repair transport failed: {error}"
-            ))
-        })?;
+            let repair_content =
+                execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt)
+                    .await
+                    .map_err(|error| {
+                        AgentError::Backend(format!(
+                            "{parse_error}\nprotocol repair transport failed: {error}"
+                        ))
+                    })?;
 
-    agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(|repair_error| {
-        AgentError::Backend(format!(
-            "{parse_error}\nprotocol repair retry also failed: {repair_error}"
-        ))
-    })
+            agent::parse_turn_response(kind, &repair_content, protocol_profile).map_err(
+                |repair_error| {
+                    AgentError::Backend(format!(
+                        "{parse_error}\nprotocol repair retry also failed: {repair_error}"
+                    ))
+                },
+            )
+        },
+        |_| ag_telemetry::Outcome::Failed,
+    )
+    .await
 }
 
 /// Maximum wall-clock time for one protocol-repair CLI subprocess.

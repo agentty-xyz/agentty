@@ -11,9 +11,41 @@ use super::support::{
     test_services_with_event_receiver, test_session,
 };
 use crate::app::{AppEvent, SessionManager};
-use crate::domain::session::Status;
+use crate::domain::session::{QueuedMessage, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::turn_prompt::TurnPrompt;
+
+#[test]
+fn retracting_from_a_poisoned_queue_preserves_its_pending_message() {
+    // Arrange
+    let session = test_session("", Status::InProgress, None, "");
+    let mut manager = session_manager_with_one_session(session);
+    let queue = Arc::clone(
+        &manager
+            .session_handles()
+            .get("session-id")
+            .expect("handles")
+            .queued_messages,
+    );
+    queue
+        .lock()
+        .expect("queue")
+        .push_back(QueuedMessage::new(0, "pending".into()));
+    let poisoned = std::panic::catch_unwind(|| {
+        let _guard = queue.lock().expect("queue");
+        std::panic::resume_unwind(Box::new("poison queue"));
+    });
+    assert!(poisoned.is_err());
+
+    // Act
+    let removed = manager.pop_last_queued_message("session-id");
+
+    // Assert
+    assert!(removed.is_none());
+    let error = queue.lock().expect_err("queue stays poisoned");
+    assert_eq!(error.get_ref().len(), 1);
+    assert_eq!(error.get_ref()[0].transcript_text(), "pending");
+}
 
 #[test]
 /// Ensures follow-up replies keep the existing title unchanged.

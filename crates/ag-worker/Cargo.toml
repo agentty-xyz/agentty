@@ -11,6 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+ag-telemetry.workspace = true
 ag-runtime.workspace = true
 ag-scheduler.workspace = true
 ag-session.workspace = true
@@ -23,6 +24,8 @@ uuid.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 ag-runtime = { workspace = true, features = ["test-utils"] }
 ag-protocol.workspace = true

@@ -8,6 +8,7 @@ description.workspace = true
 repository.workspace = true
 
 [dependencies]
+ag-telemetry.workspace = true
 ag-protocol.workspace = true
 ag-contracts.workspace = true
 ag-session.workspace = true
@@ -27,6 +28,8 @@ uuid.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+opentelemetry.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-session = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true

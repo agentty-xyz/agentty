@@ -9,6 +9,7 @@ use ag_forge as forge;
 use ag_git::GitClient;
 use ag_orchestration as orchestration;
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 use serde_json;
 use tokio::sync::mpsc;
@@ -491,6 +492,7 @@ async fn apply_successful_turn_result(
         &assistant_message.review_comment_outcomes,
     )
     .await?;
+    let persistence = Span::child("turn.persist");
     let turn_applied_state = match (TurnPersistence {
         context,
         personality,
@@ -505,8 +507,12 @@ async fn apply_successful_turn_result(
     )
     .await)
     {
-        Ok(turn_applied_state) => turn_applied_state,
+        Ok(turn_applied_state) => {
+            persistence.finish(Outcome::Completed);
+            turn_applied_state
+        }
         Err(error) => {
+            persistence.finish(Outcome::Failed);
             handle_turn_persistence_failure(context, &error).await;
 
             return Err(error);

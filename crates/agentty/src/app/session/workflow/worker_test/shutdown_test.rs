@@ -1,7 +1,11 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::MockAgentChannel;
+use ag_telemetry::{KeyValue, QueuedTrace};
+use ag_worker::WorkerHost as _;
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
 
 use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerHost};
@@ -12,6 +16,62 @@ use super::support::{
 use crate::app::AppEvent;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
+use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn shutdown_releases_only_the_stopped_sessions_queued_traces() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_shutdown_session()
+        .once()
+        .returning(|_| Box::pin(async { Ok(()) }));
+    let (context, _db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::Question).await;
+    let stopped_key = (context.session_id.clone(), 1);
+    let other_key = ("other-session".into(), 2);
+    let message_traces = Arc::new(Mutex::new(HashMap::from([
+        (
+            stopped_key.clone(),
+            QueuedTrace::new("test.stopped.turn", Vec::new()),
+        ),
+        (
+            other_key.clone(),
+            QueuedTrace::new("test.other.turn", Vec::new()),
+        ),
+    ])));
+    let host = SessionWorkerHost {
+        context,
+        message_traces: Arc::clone(&message_traces),
+        run_client: auto_commit_run_client(),
+    };
+
+    // Act
+    host.shutdown().await;
+
+    // Assert
+    let traces = message_traces.lock().expect("message traces");
+    assert!(!traces.contains_key(&stopped_key));
+    assert!(traces.contains_key(&other_key));
+    let spans = exporter.get_finished_spans().expect("spans");
+    let stopped = spans
+        .iter()
+        .find(|span| span.name == "test.stopped.turn")
+        .expect("canceled queued trace");
+    assert!(
+        stopped
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "canceled"))
+    );
+    assert!(!spans.iter().any(|span| span.name == "test.other.turn"));
+}
 
 #[tokio::test]
 async fn closed_worker_settles_paused_operations_and_notifies_callers() {
@@ -59,6 +119,7 @@ async fn closed_worker_settles_paused_operations_and_notifies_callers() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = event_tx;
         let host = SessionWorkerHost {
+            message_traces: Arc::default(),
             context,
             run_client: auto_commit_run_client(),
         };

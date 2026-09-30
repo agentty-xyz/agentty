@@ -8,6 +8,9 @@ use ag_contracts::{
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
 use ag_protocol::TurnPrompt;
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -151,6 +154,50 @@ async fn cancellation_before_submission_bounds_unresponsive_shutdown() {
         .await;
     // Assert
     assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
+}
+
+#[tokio::test]
+async fn failed_cleanup_before_submission_preserves_the_interruption_and_records_failure() {
+    // Arrange
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().never();
+    channel.expect_shutdown_session().once().returning(|_| {
+        Box::pin(async { Err(AgentError::Runtime("private cleanup failure".into())) })
+    });
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let client = SessionRunClient::from_channel("session".into(), Arc::new(channel));
+    let root = Span::root("test.cancellation.cleanup", Vec::new());
+    let trace_id = root.context().span().span_context().trace_id();
+
+    // Act
+    let result = root
+        .scope(client.submit(request(), mpsc::unbounded_channel().0, cancellation))
+        .await;
+
+    // Assert
+    assert!(matches!(result, Err(AgentError::InterruptedByUser(_))));
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let cleanup = spans
+        .iter()
+        .find(|span| span.span_context.trace_id() == trace_id && span.name == "cleanup")
+        .expect("failed cleanup span");
+    assert!(
+        cleanup
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "failed"))
+    );
+    assert!(
+        !spans
+            .iter()
+            .any(|span| span.span_context.trace_id() == trace_id && span.name == "agent.run")
+    );
 }
 
 #[tokio::test(start_paused = true)]

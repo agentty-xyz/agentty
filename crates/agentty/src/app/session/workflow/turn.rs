@@ -7,6 +7,7 @@ use ag_contracts::{
     AgentError, AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnEvent,
     TurnRequest, TurnResult,
 };
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -168,7 +169,10 @@ pub(super) async fn run_channel_turn(
     prepare_session_turn(context, &request_kind).await;
 
     let post_turn_context = PostTurnContext::from_worker(context, Arc::clone(&run_client));
-    let main_checkout_snapshot = match MainCheckoutSnapshot::capture(context).await {
+    let main_checkout_snapshot = match Span::child("workspace.prepare")
+        .run(MainCheckoutSnapshot::capture(context), |_| Outcome::Failed)
+        .await
+    {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return finalize_turn_setup_failure(
@@ -182,10 +186,21 @@ pub(super) async fn run_channel_turn(
         }
     };
 
-    let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
-    let permission_mode = match load_session_permission_mode(&context.db, &context.session_id).await
+    let PreparedTurnRequest {
+        personality_persistence,
+        request: req,
+        session_project_id,
+    } = match prepare_turn_request(
+        context,
+        &turn_metadata,
+        request_kind,
+        replay_transcript,
+        &prompt,
+        main_checkout_snapshot.as_ref(),
+    )
+    .await
     {
-        Ok(permission_mode) => permission_mode,
+        Ok(prepared) => prepared,
         Err(error) => {
             return finalize_turn_setup_failure(
                 context,
@@ -197,41 +212,16 @@ pub(super) async fn run_channel_turn(
             .await;
         }
     };
-    let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
-    let response_style = load_session_response_style(&context.db, &context.session_id).await;
-    let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
-    let continuation = load_turn_continuation(context, replay_transcript).await;
-    let ResolvedTurnPersonality {
-        persistence: personality_persistence,
-        prompt: personality,
-    } = resolve_turn_personality(context).await;
-
-    let agent_prompt = prepare_agent_prompt(context, prompt.clone(), permission_mode).await;
-    let model = turn_metadata.session_agent.model().provider_model_str();
-    let req = TurnRequest {
-        execution_policy: ag_contracts::ExecutionPolicy::default(),
-        continuation,
-        folder: context.folder.clone(),
-        main_checkout_root: main_checkout_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.main_repo_root.clone()),
-        model: model.to_string(),
-        permission_mode,
-        personality,
-        prompt: agent_prompt,
-        reasoning_level,
-        request_kind: request_kind.clone(),
-        response_style,
-        speed_mode,
-    };
-
     let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-    let consumer = tokio::spawn(consume_turn_events(
-        event_rx,
-        context.app_event_tx.clone(),
-        context.session_id.clone(),
-        Arc::clone(&context.child_pid),
-    ));
+    let consumer = tokio::spawn(
+        consume_turn_events(
+            event_rx,
+            context.app_event_tx.clone(),
+            context.session_id.clone(),
+            Arc::clone(&context.child_pid),
+        )
+        .with_context(ag_telemetry::Context::current()),
+    );
 
     spawn_turn_title_generation(
         context,
@@ -253,17 +243,88 @@ pub(super) async fn run_channel_turn(
 
     let turn_result =
         add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
-    let finalizer_context = post_turn::TurnFinalizerContext::from_worker(context);
-    let result = post_turn::apply_turn_result(
-        &post_turn_context,
-        turn_metadata,
-        personality_persistence,
-        turn_result,
-    )
-    .await;
-    post_turn::finalize_channel_turn(&finalizer_context, &result).await;
+    let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
+    let result = Span::child("postprocess")
+        .run(
+            post_turn::apply_turn_result(
+                &post_turn_context,
+                turn_metadata,
+                personality_persistence,
+                turn_result,
+            ),
+            |error| match error {
+                SessionError::StoppedByUser(_) => Outcome::Canceled,
+                _ => Outcome::Failed,
+            },
+        )
+        .await;
+    Span::child("session.finalize")
+        .scope(post_turn::finalize_channel_turn(&finalizer, &result))
+        .await;
 
     result.map(|_| ())
+}
+
+/// Request and host bookkeeping resolved together during context preparation.
+struct PreparedTurnRequest {
+    personality_persistence: post_turn::TurnPersonalityPersistence,
+    request: TurnRequest,
+    session_project_id: Option<i64>,
+}
+
+/// Measures configuration and prompt preparation, preserving setup failures.
+async fn prepare_turn_request(
+    context: &SessionWorkerContext,
+    turn_metadata: &TurnMetadata,
+    request_kind: AgentRequestKind,
+    replay_transcript: Option<String>,
+    prompt: &TurnPrompt,
+    main_checkout_snapshot: Option<&MainCheckoutSnapshot>,
+) -> Result<PreparedTurnRequest, SessionError> {
+    Span::child("context.prepare")
+        .run(
+            async {
+                let session_project_id =
+                    load_session_project_id(&context.db, &context.session_id).await;
+                let permission_mode =
+                    load_session_permission_mode(&context.db, &context.session_id).await?;
+                let reasoning_level =
+                    load_session_reasoning_level(&context.db, &context.session_id).await;
+                let response_style =
+                    load_session_response_style(&context.db, &context.session_id).await;
+                let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
+                let continuation = load_turn_continuation(context, replay_transcript).await;
+                let ResolvedTurnPersonality {
+                    persistence: personality_persistence,
+                    prompt: personality,
+                } = resolve_turn_personality(context).await;
+                let agent_prompt =
+                    prepare_agent_prompt(context, prompt.clone(), permission_mode).await;
+                let model = turn_metadata.session_agent.model().provider_model_str();
+
+                Ok(PreparedTurnRequest {
+                    personality_persistence,
+                    request: TurnRequest {
+                        execution_policy: ag_contracts::ExecutionPolicy::default(),
+                        continuation,
+                        folder: context.folder.clone(),
+                        main_checkout_root: main_checkout_snapshot
+                            .map(|snapshot| snapshot.main_repo_root.clone()),
+                        model: model.to_string(),
+                        permission_mode,
+                        personality,
+                        prompt: agent_prompt,
+                        reasoning_level,
+                        request_kind,
+                        response_style,
+                        speed_mode,
+                    },
+                    session_project_id,
+                })
+            },
+            |_| Outcome::Failed,
+        )
+        .await
 }
 
 /// Applies role-specific controller and read-only chat instructions.

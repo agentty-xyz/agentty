@@ -385,17 +385,24 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<String, SessionError> {
-        let base_branch = projects.git_branch().ok_or_else(|| {
-            SessionError::Workflow("Git branch is required to create a session".to_string())
-        })?;
+        let span = ag_telemetry::Span::child("session.create");
+        span.run(
+            async {
+                let base_branch = projects.git_branch().ok_or_else(|| {
+                    SessionError::Workflow("Git branch is required to create a session".to_string())
+                })?;
 
-        self.create_session_for_project(
-            services,
-            projects.active_project_id(),
-            base_branch,
-            projects.working_dir().to_path_buf(),
-            None,
-            SessionCreationKind::Worker,
+                self.create_session_for_project(
+                    services,
+                    projects.active_project_id(),
+                    base_branch,
+                    projects.working_dir().to_path_buf(),
+                    None,
+                    SessionCreationKind::Worker,
+                )
+                .await
+            },
+            |_| ag_telemetry::Outcome::Failed,
         )
         .await
     }
@@ -417,12 +424,23 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) -> Result<String, SessionError> {
-        let base_branch = projects.git_branch().ok_or_else(|| {
-            SessionError::Workflow("Git branch is required to create a session".to_string())
-        })?;
+        let span = ag_telemetry::Span::child("session.create");
+        span.run(
+            async {
+                let base_branch = projects.git_branch().ok_or_else(|| {
+                    SessionError::Workflow("Git branch is required to create a session".to_string())
+                })?;
 
-        self.create_draft_session_for_project(services, projects.active_project_id(), base_branch)
-            .await
+                self.create_draft_session_for_project(
+                    services,
+                    projects.active_project_id(),
+                    base_branch,
+                )
+                .await
+            },
+            |_| ag_telemetry::Outcome::Failed,
+        )
+        .await
     }
 
     /// Creates a blank draft session stacked on top of a selected parent
@@ -736,29 +754,36 @@ impl SessionManager {
         services: &AppServices,
         source_session_id: &str,
     ) -> Result<String, SessionError> {
-        let (session_id, repo_root) = self
-            .reserve_fork_session_with_repo_root(services, source_session_id)
-            .await?;
-        if let Err(error) = Self::prepare_reserved_session(services, &session_id).await {
-            let folder = session_folder(services.base_path(), &session_id);
-            let has_worktree = services.fs_client().is_dir(folder.clone());
-            Self::rollback_failed_session_creation(
-                services,
-                &folder,
-                &repo_root,
-                &session_id,
-                &session_branch(&session_id),
-                true,
-                has_worktree,
-            )
-            .await;
-            self.clear_history_replay_pending(&session_id);
+        let span = ag_telemetry::Span::child("session.fork");
+        span.run(
+            async {
+                let (session_id, repo_root) = self
+                    .reserve_fork_session_with_repo_root(services, source_session_id)
+                    .await?;
+                if let Err(error) = Self::prepare_reserved_session(services, &session_id).await {
+                    let folder = session_folder(services.base_path(), &session_id);
+                    let has_worktree = services.fs_client().is_dir(folder.clone());
+                    Self::rollback_failed_session_creation(
+                        services,
+                        &folder,
+                        &repo_root,
+                        &session_id,
+                        &session_branch(&session_id),
+                        true,
+                        has_worktree,
+                    )
+                    .await;
+                    self.clear_history_replay_pending(&session_id);
 
-            return Err(error);
-        }
-        services.emit_session_and_project_refresh_events();
+                    return Err(error);
+                }
+                services.emit_session_and_project_refresh_events();
 
-        Ok(session_id)
+                Ok(session_id)
+            },
+            |_| ag_telemetry::Outcome::Failed,
+        )
+        .await
     }
 
     /// Freezes fork history and its source commit before background checkout.
@@ -973,38 +998,45 @@ impl SessionManager {
         worktree_branch: &str,
         start_ref: &str,
     ) -> Result<(), SessionError> {
-        services
-            .git_client()
-            .create_worktree(
-                repo_root.to_path_buf(),
-                folder.to_path_buf(),
-                worktree_branch.to_string(),
-                start_ref.to_string(),
-            )
-            .await
-            .map_err(|error| {
-                SessionError::Workflow(format!("Failed to create git worktree: {error}"))
-            })?;
+        let span = ag_telemetry::Span::child("workspace.prepare");
+        span.run(
+            async {
+                services
+                    .git_client()
+                    .create_worktree(
+                        repo_root.to_path_buf(),
+                        folder.to_path_buf(),
+                        worktree_branch.to_string(),
+                        start_ref.to_string(),
+                    )
+                    .await
+                    .map_err(|error| {
+                        SessionError::Workflow(format!("Failed to create git worktree: {error}"))
+                    })?;
 
-        let data_dir = folder.join(SESSION_DATA_DIR);
-        if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
-            Self::rollback_failed_session_creation(
-                services,
-                folder,
-                repo_root,
-                session_id,
-                worktree_branch,
-                false,
-                true,
-            )
-            .await;
+                let data_dir = folder.join(SESSION_DATA_DIR);
+                if let Err(error) = services.fs_client().create_dir_all(data_dir).await {
+                    Self::rollback_failed_session_creation(
+                        services,
+                        folder,
+                        repo_root,
+                        session_id,
+                        worktree_branch,
+                        false,
+                        true,
+                    )
+                    .await;
 
-            return Err(SessionError::Workflow(format!(
-                "Failed to create session metadata directory: {error}"
-            )));
-        }
+                    return Err(SessionError::Workflow(format!(
+                        "Failed to create session metadata directory: {error}"
+                    )));
+                }
 
-        Ok(())
+                Ok(())
+            },
+            |_| ag_telemetry::Outcome::Failed,
+        )
+        .await
     }
 
     /// Ensures a draft session has a usable worktree and backend setup before
@@ -1921,7 +1953,10 @@ impl SessionManager {
         // Sync critical section (single push, no `.await`); `std::sync::Mutex`
         // is the correct choice per CLAUDE.md §"Mutex Selection".
         let order = handles.next_queued_work_order();
-        if let Ok(mut guard) = handles.queued_messages.lock() {
+        let queued_messages = Arc::clone(&handles.queued_messages);
+        if let Ok(mut guard) = queued_messages.lock() {
+            self.worker_service_mut()
+                .trace_queued_message(session_id, order);
             guard.push_back(QueuedMessage::new(order, prompt));
         }
 
@@ -1934,6 +1969,23 @@ impl SessionManager {
         );
 
         Ok(())
+    }
+
+    /// Retracts the newest queued prompt and immediately releases its trace.
+    /// The live handle and visible snapshot remain synchronized.
+    pub(crate) fn pop_last_queued_message(&mut self, session_id: &str) -> Option<QueuedMessage> {
+        let message = self
+            .session_handles()
+            .get(session_id)?
+            .queued_messages
+            .lock()
+            .ok()?
+            .pop_back()?;
+        self.worker_service
+            .discard_message_trace(session_id, message.order());
+        self.state.sync_session_from_handle(session_id);
+
+        Some(message)
     }
 
     /// Updates and persists the agent/model selection for a single session.
@@ -2246,18 +2298,22 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
     ) {
-        let Some(cleanup) = self
-            .remove_selected_session_from_state_and_db(projects, services)
-            .await
-        else {
-            return;
-        };
+        let span = ag_telemetry::Span::child("session.delete");
+        span.scope(async {
+            let Some(cleanup) = self
+                .remove_selected_session_from_state_and_db(projects, services)
+                .await
+            else {
+                return;
+            };
 
-        Self::cleanup_deleted_session_resources(
-            services.fs_client(),
-            services.git_client(),
-            cleanup,
-        )
+            Self::cleanup_deleted_session_resources(
+                services.fs_client(),
+                services.git_client(),
+                cleanup,
+            )
+            .await;
+        })
         .await;
     }
 

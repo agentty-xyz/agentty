@@ -11,8 +11,8 @@ use super::support::{
     load_persisted_session_row, orchestration_task_ids, rollback_git_client,
     session_manager_with_one_session, test_services, test_services_with_fs_client, test_session,
 };
-use crate::app::SessionManager;
 use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
+use crate::app::{ProjectManager, SessionManager};
 use crate::domain::agent::{AgentSelection, AgentSelectionMetadata, ResponseStyle};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -23,6 +23,67 @@ use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::test_support::FixedClock;
 use crate::test_support::telemetry::capture_events;
+
+#[tokio::test]
+async fn draft_creation_uses_the_active_project_and_requires_a_git_branch() {
+    for branch in [None, Some("active-branch")] {
+        // Arrange
+        let source = test_session("", Status::Draft, None, "");
+        let database = database_with_session(&source).await;
+        let project_id = database
+            .sessions()
+            .load_session_project_id(&source.id)
+            .await
+            .expect("project lookup")
+            .expect("project");
+        let projects = ProjectManager::new(
+            project_id,
+            "active project".into(),
+            branch.map(ToString::to_string),
+            None,
+            Vec::new(),
+            PathBuf::from("."),
+        );
+        let mut git = git::MockGitClient::new();
+        git.expect_create_worktree().never();
+        let services = test_services(
+            &database,
+            Arc::new(git),
+            Arc::new(forge::MockReviewRequestClient::new()),
+        );
+        let mut manager = session_manager_with_one_session(source);
+
+        // Act
+        let result = manager.create_draft_session(&projects, &services).await;
+
+        // Assert
+        if let Some(branch) = branch {
+            let id = result.expect("draft creation");
+            let draft = database
+                .sessions()
+                .load_session(&id)
+                .await
+                .expect("persisted draft")
+                .expect("draft exists");
+            assert_eq!(draft.project_id, Some(project_id));
+            assert_eq!(draft.base_branch, branch);
+            assert!(draft.is_draft);
+            assert_eq!(draft.status, "Draft");
+        } else {
+            assert!(matches!(result, Err(SessionError::Workflow(ref message))
+                if message == "Git branch is required to create a session"));
+            assert_eq!(
+                database
+                    .sessions()
+                    .load_sessions_metadata()
+                    .await
+                    .expect("session count")
+                    .0,
+                1
+            );
+        }
+    }
+}
 
 #[tokio::test]
 async fn successful_reservations_report_creation_types() {

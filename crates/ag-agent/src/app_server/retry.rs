@@ -76,7 +76,7 @@ where
     let had_existing_runtime = session_runtime.is_some();
     let mut session_runtime = match session_runtime {
         Some(existing_runtime) => existing_runtime,
-        None => start_runtime(&request).await?,
+        None => start_observed_runtime(start_runtime(&request), false).await?,
     };
     let first_replays = needs_replay(had_existing_runtime, &request, &inspector, &session_runtime);
     let first_attempt = {
@@ -125,7 +125,7 @@ where
         return Err(first_error);
     }
 
-    let mut restarted = start_runtime(&request).await?;
+    let mut restarted = start_observed_runtime(start_runtime(&request), true).await?;
     let retry_replays = needs_replay(false, &request, &inspector, &restarted);
     let (retry_prompt, _retry_replay) = build_attempt_prompt(
         &request,
@@ -199,6 +199,19 @@ where
     }
 
     Ok(session_runtime)
+}
+
+/// Measures each initial or restarted provider startup independently.
+async fn start_observed_runtime<Runtime>(
+    startup: AppServerFuture<Result<Runtime, AppServerError>>,
+    restarted: bool,
+) -> Result<Runtime, AppServerError> {
+    if restarted {
+        ag_telemetry::milestone("runtime_restart");
+    }
+    ag_telemetry::Span::child("agent.startup")
+        .run(startup, |_| ag_telemetry::Outcome::Failed)
+        .await
 }
 
 /// Completes a successful turn, either retaining or shutting down its runtime,
@@ -279,35 +292,46 @@ where
     >,
     ShutdownRuntime: for<'scope> FnMut(&'scope mut Runtime) -> BorrowedAppServerFuture<'scope, ()>,
 {
-    let cancellation_token = active_turn.token();
-    if cancellation_token.is_cancelled() {
-        shutdown_runtime(runtime).await;
+    let span = ag_telemetry::Span::child("agent.attempt");
+    span.attribute("agentty.transport", "app_server");
+    span.run(
+        async {
+            let cancellation_token = active_turn.token();
+            if cancellation_token.is_cancelled() {
+                shutdown_runtime(runtime).await;
 
-        return Err(interrupted_by_user_error());
-    }
+                return Err(interrupted_by_user_error());
+            }
 
-    if let Some(budget) = provider_call_budget {
-        budget
-            .consume()
-            .map_err(|error| AppServerError::Provider(error.to_string()))?;
-    }
-    let turn_outcome = {
-        let turn_future = run_turn_with_runtime(runtime, prompt);
-        tokio::pin!(turn_future);
-        tokio::select! {
-            result = &mut turn_future => TurnAttemptOutcome::Completed(result),
-            () = cancellation_token.cancelled() => TurnAttemptOutcome::Interrupted,
-        }
-    };
+            if let Some(budget) = provider_call_budget {
+                budget
+                    .consume()
+                    .map_err(|error| AppServerError::Provider(error.to_string()))?;
+            }
+            let turn_outcome = {
+                let turn_future = run_turn_with_runtime(runtime, prompt);
+                tokio::pin!(turn_future);
+                tokio::select! {
+                    result = &mut turn_future => TurnAttemptOutcome::Completed(result),
+                    () = cancellation_token.cancelled() => TurnAttemptOutcome::Interrupted,
+                }
+            };
 
-    match turn_outcome {
-        TurnAttemptOutcome::Completed(result) => result,
-        TurnAttemptOutcome::Interrupted => {
-            shutdown_runtime(runtime).await;
+            match turn_outcome {
+                TurnAttemptOutcome::Completed(result) => result,
+                TurnAttemptOutcome::Interrupted => {
+                    shutdown_runtime(runtime).await;
 
-            Err(interrupted_by_user_error())
-        }
-    }
+                    Err(interrupted_by_user_error())
+                }
+            }
+        },
+        |error| match error {
+            AppServerError::InterruptedByUser(_) => ag_telemetry::Outcome::Canceled,
+            _ => ag_telemetry::Outcome::Failed,
+        },
+    )
+    .await
 }
 
 /// Result of racing one app-server turn against cancellation.

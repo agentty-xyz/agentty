@@ -19,6 +19,7 @@ use ag_protocol::{
     format_protocol_parse_debug_details, parse_protocol_response_strict,
 };
 use ag_session::AgentKind;
+use ag_telemetry::{Context, FutureExt as _};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -165,6 +166,7 @@ async fn submit_app_server_session(
 ) -> Result<OneShotSubmission, String> {
     let cancellation = cancellation.child_token();
     let _cancel_on_drop = cancellation.clone().drop_guard();
+    let trace = Context::current();
     tokio::spawn(async move {
         let session_id = lease.as_ref().map_or_else(
             || format!("one-shot-{}", uuid::Uuid::new_v4()),
@@ -180,7 +182,7 @@ async fn submit_app_server_session(
         };
         clear_child_pid_slot(child_pid.as_deref());
         result
-    })
+    }.with_context(trace))
     .await
     .map_err(|error| format!("One-shot cleanup task failed: {error}"))?
 }

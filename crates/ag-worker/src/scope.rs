@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
+use ag_telemetry::{Context, FutureExt as _, TraceContextExt as _};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +32,7 @@ pub struct RunScope {
 #[derive(Clone, Default)]
 pub(crate) struct RunContext {
     pub(crate) scope: RunScope,
+    pub(crate) trace: Context,
     cancellations: Vec<CancellationToken>,
 }
 
@@ -39,15 +41,21 @@ impl RunContext {
         Self {
             cancellations: scope.cancellation.iter().cloned().collect(),
             scope,
+            trace: Context::current(),
         }
     }
 
     pub(crate) fn current() -> Self {
-        CURRENT.try_with(Clone::clone).unwrap_or_default()
+        CURRENT
+            .try_with(Clone::clone)
+            .unwrap_or_else(|_| Self::new(RunScope::default()))
     }
 
     fn inherited(mut self) -> Self {
         let parent = Self::current();
+        if !self.trace.span().span_context().is_valid() {
+            self.trace = parent.trace;
+        }
         self.cancellations.extend(parent.cancellations);
         self.scope = RunScope {
             cancellation: self.scope.cancellation.or(parent.scope.cancellation),
@@ -84,14 +92,16 @@ impl RunContext {
 /// Executes host work with inherited run ownership. Spawned tasks must carry a
 /// scoped client explicitly; Tokio task-local values do not cross task spawns.
 pub async fn in_scope<T>(scope: RunScope, work: impl Future<Output = T>) -> T {
+    let context = RunContext::new(scope).inherited();
     CURRENT
-        .scope(RunContext::new(scope).inherited(), work)
+        .scope(context.clone(), work.with_context(context.trace))
         .await
 }
 
 /// Captures ownership for a utility client passed to another task or workflow.
 /// Child submissions execute directly under worker supervision, never behind
 /// a waiting parent in the session command queue.
+/// Clients captured without a trace inherit the submitting scope's trace.
 pub fn scoped_client(client: Arc<dyn RunClient>, scope: RunScope) -> Arc<dyn RunClient> {
     Arc::new(ScopedClient {
         client,
@@ -107,10 +117,11 @@ struct ScopedClient {
 #[async_trait]
 impl RunClient for ScopedClient {
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        let context = self.context.clone().inherited();
         CURRENT
             .scope(
-                self.context.clone().inherited(),
-                self.client.submit(request),
+                context.clone(),
+                self.client.submit(request).with_context(context.trace),
             )
             .await
     }

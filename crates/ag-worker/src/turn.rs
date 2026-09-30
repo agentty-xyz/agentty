@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ag_contracts::{AgentError, TurnEvent, TurnRequest, TurnResult};
 use ag_scheduler::SessionAdmission;
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -55,6 +56,7 @@ impl SessionRunClient {
             self.shutdown_after_cancellation().await;
             return Err(interrupted());
         }
+        let admission = Span::child("admission.wait");
         let turn_permit = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
@@ -65,16 +67,43 @@ impl SessionRunClient {
                 permit.map_err(|error| AgentError::Runtime(format!("Session admission closed: {error}")))?
             }
         };
-        let mut turn = runtime.run_turn(session_id.clone(), request, events);
+        admission.finish(Outcome::Completed);
+        let span = Span::child("agent.run");
+        span.attribute("agentty.session.id", session_id.clone());
+        span.attribute("gen_ai.request.model", request.model.clone());
+        let mut turn = Box::pin(
+            runtime
+                .run_turn(session_id.clone(), request, events)
+                .with_context(span.context()),
+        );
         let result = tokio::select! {
             biased;
             () = cancellation.cancelled() => {
+                ag_telemetry::milestone("cancellation_observed");
                 drop(turn);
-                let _ = tokio::time::timeout(Duration::from_secs(5), runtime.shutdown(session_id)).await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), Span::child("cleanup").run(runtime.shutdown(session_id), |_| Outcome::Failed)).await;
                 Err(interrupted())
             }
             result = &mut turn => result,
         };
+        let outcome = match &result {
+            Ok(result) => {
+                ag_telemetry::milestone("agent.completed");
+                span.attribute(
+                    "gen_ai.usage.input_tokens",
+                    i64::try_from(result.input_tokens).unwrap_or(i64::MAX),
+                );
+                span.attribute(
+                    "gen_ai.usage.output_tokens",
+                    i64::try_from(result.output_tokens).unwrap_or(i64::MAX),
+                );
+                span.attribute("agentty.context_reset", result.context_reset);
+                Outcome::Completed
+            }
+            Err(AgentError::InterruptedByUser(_)) => Outcome::Canceled,
+            Err(_) => Outcome::Failed,
+        };
+        span.finish(outcome);
         drop(turn_permit);
 
         result
@@ -93,7 +122,11 @@ impl SessionRunClient {
                 AgentError::Runtime(format!("Session cleanup admission closed: {error}"))
             })?;
 
-        self.runtime.shutdown(self.session_id.clone()).await
+        Span::child("cleanup")
+            .run(self.runtime.shutdown(self.session_id.clone()), |_| {
+                Outcome::Failed
+            })
+            .await
     }
 
     pub(crate) fn from_runtime(
@@ -111,12 +144,15 @@ impl SessionRunClient {
     }
 
     async fn shutdown_after_cancellation(&self) {
+        ag_telemetry::milestone("cancellation_observed");
         // Closed admission means the process is stopping; still attempt
         // provider shutdown before reporting the cancellation.
         let _permit = self.session_admission.acquire_cleanup().await.ok();
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
-            self.runtime.shutdown(self.session_id.clone()),
+            Span::child("cleanup").run(self.runtime.shutdown(self.session_id.clone()), |_| {
+                Outcome::Failed
+            }),
         )
         .await;
     }

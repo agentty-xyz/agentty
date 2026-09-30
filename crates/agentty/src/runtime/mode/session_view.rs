@@ -807,17 +807,11 @@ async fn end_in_progress_turn(app: &mut App, session_id: &str) {
 /// token, persisted status, and auto-review suppression untouched so the
 /// running turn can keep streaming.
 async fn pop_last_queued_chat_message_if_any(app: &mut App, session_id: &str) -> bool {
-    let popped_message = app
-        .sessions
-        .session_handles()
-        .get(session_id)
-        .and_then(|handles| handles.queued_messages.lock().ok()?.pop_back());
+    let popped_message = app.sessions.pop_last_queued_message(session_id);
 
     let Some(popped_message) = popped_message else {
         return false;
     };
-
-    app.sessions.sync_session_from_handle(session_id);
 
     app.cleanup_prompt_attachment_files(popped_message.prompt())
         .await;

@@ -1,0 +1,18 @@
+[package]
+name = "ag-telemetry"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Content-free tracing contexts and lifecycle guards for agent execution"
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+opentelemetry.workspace = true
+
+[dev-dependencies]
+opentelemetry_sdk.workspace = true
+tokio.workspace = true

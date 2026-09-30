@@ -137,9 +137,15 @@ pattern.
 ```sh
 agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
+agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
+
+Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP
+HTTP/protobuf traces URL. Authentication headers can come from
+`OTEL_EXPORTER_OTLP_TRACES_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`. Traces contain step
+timings and execution metadata, excluding prompts and output.
 
 Only one Agentty instance can use a given Agentty root at a time. Close the running
 instance before launching another. Separate `AGENTTY_ROOT` directories can run
