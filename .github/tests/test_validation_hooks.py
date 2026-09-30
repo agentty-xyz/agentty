@@ -135,6 +135,23 @@ class ValidationHookTests(unittest.TestCase):
         ])
         self.assertEqual(HOOKS["prompt-evaluation"]["stages"], ["manual"])
 
+    def test_full_gates_run_only_on_demand_or_in_ci(self):
+        self.assertEqual(CONFIG["default_stages"], ["pre-commit"])
+        for hook_id in ("cargo-check", "coverage", "test-agentty-e2e", "test-workspace"):
+            self.assertEqual(HOOKS[hook_id]["stages"], ["manual"])
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/workspace-validation.yml").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "prek run cargo-check --all-files --hook-stage manual",
+            [step.get("run") for step in workflow["jobs"]["validate"]["steps"]],
+        )
+        for repository in CONFIG["repos"]:
+            for hook in repository["hooks"]:
+                if repository["repo"] != "local":
+                    self.assertEqual(hook["stages"], ["pre-commit"])
+                self.assertNotIn("pre-push", hook.get("stages", CONFIG["default_stages"]))
+
     def test_coverage_target_is_isolated_and_overridable(self):
         for hook in ("coverage", "coverage-ag-harness-sandbox"):
             for target in ("", "custom coverage/target"):

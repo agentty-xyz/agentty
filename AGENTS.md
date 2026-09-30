@@ -49,9 +49,8 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
 - Use integration tests appropriate to the public surface for other CLI, library, or
   backend features.
 - Every code change requires automated tests covering 100% of its coverable changed
-  lines. Before handoff, run `prek run coverage --all-files --hook-stage manual` once
-  for the final relevant state. This hook generates a fresh report and enforces both
-  workspace and changed-line thresholds.
+  lines. CI enforces this with the `coverage` hook, which generates a fresh report and
+  checks workspace and changed-line thresholds.
 - Never bypass `prek`-managed hooks with `--no-verify`, `--no-gpg-sign`, or an
   equivalent flag. Fix the failure.
 - Prefer removing obsolete behavior within the requested scope. Ask only when choosing
@@ -71,13 +70,14 @@ implementations elsewhere.
   `AGENTTY_TEST_FILTER`; use `docs/contributing/validation.md` for selection recipes and
   `docs/contributing/setup.md` for environment setup. Keep gate policy here and
   executable definitions in the hook catalog.
-- Before handoff, run one impact-based validation rung covering every touched file and
-  all affected dependencies and dependents:
+- Handoff means the task's final state, not each reply in a multi-turn session. Before
+  handoff, run one impact-based validation rung covering every touched file and all
+  affected dependencies and dependents:
   - Markdown: `mdformat` and the default hooks for the touched paths.
   - Docs site: the Markdown checks plus `zola-check`; reformat touched templates with
     `djlint-reformat`.
-  - Rust: `rustfmt-fix`, `cargo-check`, `clippy`, affected crate/dependent tests, and
-    `coverage`.
+  - Rust: `rustfmt-fix`, `clippy`, and `test-focused` for the touched crates and their
+    dependents.
   - Manifests, migrations, and the hook catalog: add their dedicated checks from
     `.pre-commit-config.yaml`.
 - Run required checks once for the final relevant state. Reuse successful results while
@@ -87,13 +87,13 @@ implementations elsewhere.
 - Preserve public-contract integration tests when selecting affected suites. Source test
   hooks and coverage do not replace them; use `test-focused` without a test-name
   restriction for affected packages, dependencies, and dependents, or `test-workspace`.
-- For cross-cutting changes or uncertain impact, run `prek run --all-files`, then
-  `prek run test-workspace --all-files --hook-stage manual`.
+- For cross-cutting changes, run `prek run --all-files` and `test-focused` for the
+  affected dependency graph. Run `test-workspace` locally when the impact cannot be
+  bounded confidently.
 - Run mutating fixers one at a time and inspect their diffs before continuing.
-- If Rust code is added, modified, or deleted, run the full E2E suite once for the final
-  relevant state before handoff:
-  `prek run test-agentty-e2e --all-files --hook-stage manual`. Focused iteration does
-  not replace this final gate or the full CI suites.
+- Pull-request CI runs `cargo-check`, `coverage`, `test-workspace`, and the full
+  `test-agentty-e2e` suite. Do not run them locally by default; run one with
+  `--hook-stage manual` only to diagnose its CI failure or when the user asks.
 - Let the runner's configured timeouts govern individual tests. After five minutes
   without output, inspect build and process activity; terminate and report a confirmed
   stall rather than treating silence alone as failure. After three failed repair

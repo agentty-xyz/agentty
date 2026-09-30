@@ -19,10 +19,11 @@ cargo install cargo-llvm-cov
 cargo install cargo-nextest --locked
 ```
 
-The coverage hook needs both Cargo subcommands. It also runs the native `ag-harness`
-sandbox qualification, which fails closed without enforcement: Linux hosts need
-Bubblewrap at `/usr/bin/bwrap` with unprivileged user namespaces, mirrored for CI in
-`.github/actions/setup-native-sandbox/action.yml`. CI tooling is configured in
+`prek install -f` installs the fast `pre-commit` checks. CI runs the full validation
+gates. The coverage hook needs both Cargo subcommands. It also runs the native
+`ag-harness` sandbox qualification, which fails closed without enforcement. Linux hosts
+need Bubblewrap at `/usr/bin/bwrap` with unprivileged user namespaces, mirrored for CI
+in `.github/actions/setup-native-sandbox/action.yml`. CI tooling is configured in
 `.github/actions/setup-rust-prek/action.yml`; consult it when reproducing CI setup. Run
 `cargo run -p agentty --bin agentty` to launch the application from the workspace.
 Public runtime prerequisites and backend authentication are documented in `README.md`.

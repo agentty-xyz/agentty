@@ -57,6 +57,9 @@ jobs:
       - name: Default validation hooks
         run: prek run --all-files
 
+      - name: Check Rust workspace
+        run: prek run cargo-check --all-files --hook-stage manual
+
       - name: Dependency advisory audit
         if: ${{ inputs['cargo-audit'] }}
         run: prek run cargo-audit --all-files --hook-stage manual
