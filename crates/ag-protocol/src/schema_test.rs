@@ -269,6 +269,7 @@ fn focused_review_json_schema_describes_structured_findings() {
         "definition properties should contain only fields"
     );
     assert!(suggestion_properties.contains_key("details"));
+    assert!(suggestion_properties.contains_key("evidence"));
     assert!(suggestion_properties.contains_key("severity"));
     assert_eq!(
         schema["$defs"]["FocusedReviewSuggestion"]["additionalProperties"],

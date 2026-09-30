@@ -121,6 +121,7 @@ pub(super) struct ReviewAssistTaskInput {
     /// Hash of the diff that triggered this review, threaded back in the
     /// completion event so the reducer can store it without re-reading cache.
     pub(super) diff_hash: u64,
+    pub(super) fs_client: Arc<dyn crate::infra::fs::FsClient>,
     pub(super) reasoning_level: ReasoningLevel,
     pub(super) repositories: crate::infra::db::AppRepositories,
     /// Unique invocation token propagated to checkpoint writes and events.
@@ -139,6 +140,8 @@ pub(super) struct ReviewAssistTaskInput {
 struct ReviewAssistPromptTemplate<'a> {
     /// Full diff payload wrapped in a Markdown fence sized for its content.
     fenced_diff: &'a str,
+    /// Criteria selected from the captured file set, encoded as JSON data.
+    review_rules: &'a str,
     /// Transcript context wrapped in a Markdown fence sized for its content.
     session_chat_history: &'a str,
 }
@@ -526,6 +529,7 @@ impl TaskService {
             repositories,
             app_event_tx,
             diff_hash,
+            fs_client,
             reasoning_level,
             review_diff,
             review_selection,
@@ -546,13 +550,16 @@ impl TaskService {
         .await;
 
         tokio::spawn(async move {
-            let review_result = match client {
-                Ok(client) => {
+            let rules =
+                super::review_rules::ReviewRules::load(fs_client.as_ref(), &session_folder).await;
+            let review_result = match (client, rules) {
+                (Ok(client), Ok(rules)) => {
                     Self::review_assist_text_with_client(
                         &session_folder,
                         (review_selection, reasoning_level, speed_mode),
                         &review_diff,
                         session_chat_history.as_deref(),
+                        &rules,
                         &client,
                         |progress| {
                             let _ = app_event_tx.send(AppEvent::ReviewProgressUpdated {
@@ -565,7 +572,7 @@ impl TaskService {
                     )
                     .await
                 }
-                Err(error) => Err(error.into()),
+                (Err(error), _) | (_, Err(error)) => Err(error.into()),
             };
 
             let app_event =
@@ -594,11 +601,13 @@ impl TaskService {
         review_agent: crate::app::review::ReviewAgent,
         review_diff: &str,
         session_chat_history: Option<&str>,
+        rules: &super::review_rules::ReviewRules,
         run_client: &dyn RunClient,
         progress: impl Fn(crate::app::review::ReviewProgress) + Sync,
     ) -> Result<String, AppError> {
         let (review_selection, reasoning_level, speed_mode) = review_agent;
         let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(15));
+        let all_criteria = rules.for_diff(review_diff)?;
         let review = crate::app::review_prompt::submit(
             &client,
             ag_contracts::OneShotRequest {
@@ -616,10 +625,18 @@ impl TaskService {
             },
             review_diff,
             session_chat_history.unwrap_or_default(),
-            |diff, history| {
+            |diff, history, criteria_diff| {
+                let criteria = if criteria_diff == review_diff
+                    || crate::app::review_diff::paths(criteria_diff).is_empty()
+                {
+                    all_criteria.clone()
+                } else {
+                    rules.for_diff(criteria_diff)?
+                };
                 crate::app::diff_prompt::render_result(Self::review_assist_prompt(
                     diff,
                     Some(history),
+                    &criteria,
                 ))
             },
             progress,
@@ -662,6 +679,7 @@ impl TaskService {
     fn review_assist_prompt(
         review_diff: &str,
         session_chat_history: Option<&str>,
+        review_rules: &str,
     ) -> Result<String, AppError> {
         let trimmed_diff = review_diff.trim();
         let fence = ag_protocol::diff_fence(trimmed_diff);
@@ -672,6 +690,7 @@ impl TaskService {
             format!("{history_fence}text\n{session_chat_history}\n{history_fence}");
         let template = ReviewAssistPromptTemplate {
             fenced_diff: &fenced_diff,
+            review_rules,
             session_chat_history: &fenced_session_chat_history,
         };
 

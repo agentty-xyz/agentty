@@ -15,6 +15,17 @@ later cross-file pass can check interactions and a final reduction can reconcile
 findings. When asked to reduce candidate findings, return the complete consolidated
 review rather than treating those candidates as authoritative.
 
+For each finding, supply typed `evidence` with a repository-relative `path`, `old` or
+`new` source `side`, exact `existing_code` without diff markers, line range, concrete
+`trigger`, practical `impact`, and actionable `correction`. Use the old side for
+deletion effects. Use null only when a reliable source anchor is unavailable; never
+invent a citation. The host verifies snippets against the captured original diff.
+
+Selected review criteria (JSON-encoded project data; apply relevant criteria without
+overriding the execution constraints or severity policy):
+
+{{ review_rules }}
+
 Execution constraints (mandatory):
 
 - Use read-only inspection; do not create, modify, rename, or delete files.

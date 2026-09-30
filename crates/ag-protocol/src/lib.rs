@@ -35,7 +35,10 @@ pub use prompt::{
     render_prompt_text_for_agent, split_turn_prompt_content,
 };
 pub use question::QuestionItem;
-pub use review::{FocusedReview, FocusedReviewSeverity, FocusedReviewSuggestion};
+pub use review::{
+    FocusedReview, FocusedReviewEvidence, FocusedReviewSeverity, FocusedReviewSide,
+    FocusedReviewSuggestion,
+};
 pub use schema::{
     SchemaRequiredPolicy, agent_response_json_schema_json, agent_response_output_schema,
     agent_response_output_schema_json, focused_review_json_schema_json,

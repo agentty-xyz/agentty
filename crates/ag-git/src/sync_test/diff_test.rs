@@ -134,7 +134,7 @@ async fn diff_preserves_invalid_base_reference_error() {
     assert!(matches!(
         result,
         Err(GitError::CommandFailed { command, stderr })
-            if command == "git diff missing-base-reference"
+            if command.contains("missing-base-reference")
                 && stderr.contains("Git diff failed")
     ));
 }

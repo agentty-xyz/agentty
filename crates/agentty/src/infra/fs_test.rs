@@ -1,7 +1,27 @@
 use tempfile::tempdir;
 
 use super::RealFsClient;
-use crate::infra::fs::FsClient;
+use crate::infra::fs::{FsClient, FsError};
+
+#[tokio::test]
+async fn prefix_read_reports_open_and_read_errors() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory");
+
+    // Act
+    let missing = RealFsClient
+        .read_file_prefix(directory.path().join("missing"), 65_537)
+        .await;
+    let unreadable = RealFsClient
+        .read_file_prefix(directory.path().to_path_buf(), 65_537)
+        .await;
+
+    // Assert
+    assert!(
+        matches!(missing, Err(FsError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound)
+    );
+    assert!(unreadable.is_err());
+}
 
 #[tokio::test]
 async fn startup_cleanup_scans_worktrees_without_following_links() {

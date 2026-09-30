@@ -192,24 +192,40 @@ async fn seed_clean_review_session_with_worktree_edit(env: &BuilderEnv) -> E2eRe
     install_worktree_edit_tmux_stub(env)
 }
 
-/// Seeds a failing review diff whose external driver stays busy long enough
+/// Seeds a failing review diff whose Git wrapper stays busy long enough
 /// to prove that the TUI accepts cancellation before Git completes.
 async fn seed_slow_review_diff(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
-    let session_worktree = env.agentty_root.join("wt").join("review-s");
-    let slow_diff_driver = session_worktree.join("slow-diff.sh");
-    std::fs::write(&slow_diff_driver, "#!/bin/sh\nsleep 3\nexit 1\n")?;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let real_git = real_git.to_string_lossy().replace('\'', "'\"'\"'");
+    let git_path = env.stub_bin.join("git");
+    let script = format!(
+        r#"#!/bin/sh
+is_diff=false
+for argument in "$@"; do
+  case "$argument" in
+    diff) is_diff=true ;;
+    --name-only|--numstat|--stat) exec '{real_git}' "$@" ;;
+  esac
+done
+if [ "$is_diff" = true ]; then
+  sleep 3
+  printf 'simulated diff failure\n' >&2
+  exit 1
+fi
+exec '{real_git}' "$@"
+"#
+    );
+    std::fs::write(&git_path, script)?;
     #[cfg(unix)]
-    std::fs::set_permissions(&slow_diff_driver, std::fs::Permissions::from_mode(0o750))?;
-    let slow_diff_driver = slow_diff_driver
-        .to_str()
-        .ok_or("slow diff driver path must be valid UTF-8")?;
-    run_git(
-        &session_worktree,
-        &["config", "diff.external", slow_diff_driver],
-    )
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
 }
 
 /// Seeds enough changed lines to demonstrate right-pane cursor navigation and
@@ -317,6 +333,7 @@ async fn diff_preview_opens_from_session() -> E2eResult {
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
                     .wait_for_text("j/k: select file", 5000)
+                    .wait_for_text("println!(\"review\")", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled("diff_preview", "Diff preview after pressing d")
@@ -716,7 +733,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .write_text("C")
         .wait_for_text("File comment", 5000);
 
-    enter_multiline_diff_file_comment(scenario)
+    let scenario = enter_multiline_diff_file_comment(scenario)
         .wait_for_stable_frame(300, 3000)
         .press_key("Esc")
         .wait_for_text("Add regression coverage.", 3000)
@@ -767,43 +784,9 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .capture_labeled(
             "restored_line_comments",
             "Diff comments survive a round trip through session chat",
-        )
-        .wait_for_text("s: submit comments", 3000)
-        .press_key("s")
-        .wait_for_text("File comments:", 5000)
-        .wait_for_text("src/main.rs: Review the whole file.", 5000)
-        .wait_for_text("| Check the tests too.", 5000)
-        .wait_for_text("| Add regression coverage.", 5000)
-        .wait_for_text("Line comments:", 5000)
-        .wait_for_text(
-            "src/main.rs:1 [new]: Explain the entry point. Updated.",
-            5000,
-        )
-        .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
-        .wait_for_text("Ctrl+c: stop", 5000)
-        .wait_for_text("Line comment received.", 5000)
-        .wait_for_text("Enter: reply", 5000)
-        .wait_for_text("[Commit] No changes to commit.", 5000)
-        // VHS reuses the reviewed diff, so automatic review may be skipped.
-        .write_text("G")
-        .wait_for_stable_frame(1000, 5000)
-        .viewing_pause_ms(1500)
-        .capture_labeled(
-            "line_comment_submitted",
-            "Line comment submitted in the next session turn",
-        )
-        .press_key("d")
-        .wait_for_text("j/k: select file", 5000)
-        .wait_for_text("main.rs", 5000)
-        .press_key("j")
-        .wait_for_text("Shift+C: comment", 5000)
-        .wait_for_stable_frame(300, 5000)
-        .capture_labeled(
-            "submitted_comments_purged",
-            "Submitted comments no longer appear in the next diff view",
-        )
-        .press_key("q")
-        .wait_for_text("Line comment received.", 5000)
+        );
+
+    submit_diff_line_comments(scenario)
 }
 
 /// Enters enough file-comment rows to exercise completed-editor expansion.
@@ -820,6 +803,51 @@ fn enter_multiline_diff_file_comment(scenario: Scenario) -> Scenario {
         .write_text("Handle errors explicitly.")
         .press_key("Ctrl+j")
         .write_text("Add regression coverage.")
+}
+
+/// Submits completed comments, inspects the response, and verifies their purge.
+fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
+    scenario
+        .wait_for_text("s: submit comments", 3000)
+        .press_key("s")
+        .wait_for_text("File comments:", 5000)
+        .wait_for_text("src/main.rs: Review the whole file.", 5000)
+        .wait_for_text("| Check the tests too.", 5000)
+        .wait_for_text("| Add regression coverage.", 5000)
+        .wait_for_text("Line comments:", 5000)
+        .wait_for_text(
+            "src/main.rs:1 [new]: Explain the entry point. Updated.",
+            5000,
+        )
+        .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
+        .wait_for_text("Ctrl+c: stop", 5000)
+        .wait_for_text("Enter: reply", 5000)
+        // VHS reuses the reviewed diff, so automatic review may be skipped.
+        .write_text("G")
+        .wait_for_stable_frame(1000, 5000)
+        .viewing_pause_ms(1500)
+        .capture_labeled(
+            "line_comment_submitted",
+            "Line comment submitted in the next session turn",
+        )
+        .press_key("Ctrl+u")
+        .wait_for_stable_frame(1000, 5000)
+        .capture_labeled(
+            "line_comment_response",
+            "Submitted feedback response above the automatic review",
+        )
+        .press_key("d")
+        .wait_for_text("j/k: select file", 5000)
+        .wait_for_text("main.rs", 5000)
+        .press_key("j")
+        .wait_for_text("Shift+C: comment", 5000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "submitted_comments_purged",
+            "Submitted comments no longer appear in the next diff view",
+        )
+        .press_key("q")
+        .wait_for_text("Enter: reply", 5000)
 }
 
 /// Verifies inline comment selection, editing, and next-turn submission.
@@ -862,13 +890,26 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         &restored_full,
     );
 
-    let purged_frame = common::frame_from_capture(&report.captures[5]);
+    let response_frames = [
+        common::frame_from_capture(&report.captures[4]),
+        common::frame_from_capture(&report.captures[5]),
+    ];
+    for text in ["Line comment received.", "[Commit] No changes to commit."] {
+        assert!(
+            response_frames
+                .iter()
+                .any(|response_frame| !response_frame.find_text(text).is_empty()),
+            "{text} must be visible at the transcript end or above the automatic review"
+        );
+    }
+
+    let purged_frame = common::frame_from_capture(&report.captures[6]);
     assertion::assert_not_visible(&purged_frame, "Explain the entry point. Updated.");
     assertion::assert_not_visible(&purged_frame, "Why print review?");
     assertion::assert_not_visible(&purged_frame, "s: submit comments");
 
     let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(frame, "Line comment received.", &full);
+    assertion::assert_text_in_region(frame, "Enter: reply", &full);
 }
 
 /// Verify that `Shift+V` selects a changed-row range for one inline comment.
@@ -1043,6 +1084,7 @@ async fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                     )
                     .press_key("d")
                     .wait_for_text("j/k: select file", 5000)
+                    .wait_for_text("println!(\"review\")", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(

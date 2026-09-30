@@ -447,6 +447,7 @@ pub(crate) async fn start_review_assist(
             repositories: services.db().clone(),
             app_event_tx: services.event_sender(),
             diff_hash,
+            fs_client: services.fs_client(),
             reasoning_level,
             review_diff: review_diff.to_string(),
             review_selection,

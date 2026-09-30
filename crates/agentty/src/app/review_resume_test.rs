@@ -214,7 +214,7 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
             request(),
             &diff,
             "",
-            |diff, context| Ok(format!("{context}\n{diff}")),
+            |diff, context, _| Ok(format!("{context}\n{diff}")),
             |_| {},
         )
         .await
