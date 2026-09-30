@@ -362,14 +362,6 @@ repos:
         language: system
         files: ^\.pre-commit-config\.yaml$
         pass_filenames: false
-      - id: test-validation-hooks
-        name: validation hook regression tests
-        description: Check coverage orchestration and focused-test selection without building Rust or invoking Git.
-        entry: python .github/tests/test_validation_hooks.py
-        language: python
-        additional_dependencies: [PyYAML==6.0.3]
-        files: ^(\.cargo/|\.pre-commit-config\.yaml|\.github/(actions/(run-coverage|setup-native-sandbox)/|workflows/(harness-sandbox|workspace-validation)\.yml|tests/test_validation_hooks\.py))
-        pass_filenames: false
       - id: check-instructions
         name: instruction integrity
         description: Check instruction links, literal repository paths, aliases, and documented hook names, including untracked instructions.

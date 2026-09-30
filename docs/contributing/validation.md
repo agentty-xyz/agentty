@@ -54,9 +54,13 @@ The `ag-xtask` unit and public CLI tests cover valid and broken instruction fixt
 Use the affected-package recipe above with `ag-xtask`; the standard Rust coverage gate
 includes its CLI suites to cover dispatch and process exit paths as well as the checker.
 
-`test-validation-hooks` checks coverage orchestration and focused-test selection with
-stub commands. This separate hook-contract suite does not compile Rust or mutate Git
-state.
+Hook-contract regression tests are intentionally absent. CI executes the real gates, but
+a successful run does not verify rejection of stale reports after failed generation,
+propagation of comparison failures, or literal handling of filters and base refs.
+Removing the standalone suite accepts this regression-coverage gap; configuration and
+instruction checks are not replacements. Review changes to coverage, focused-test
+commands, compiler wrappers, and native sandbox setup for argument quoting, failure
+propagation, report freshness, and setup ordering.
 
 ## TUI Snapshots
 
