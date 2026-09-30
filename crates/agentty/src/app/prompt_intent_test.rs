@@ -136,7 +136,7 @@ async fn incompatible_prompt_model_switch_disables_fast_mode() {
     );
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
     )
     .await
     .expect("initial model should update");
@@ -179,7 +179,7 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
             .await
             .expect("session should be created"),
     );
-    let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
+    let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
     app.set_session_model(&session_id, fast_agent)
         .await
         .expect("initial model should update");

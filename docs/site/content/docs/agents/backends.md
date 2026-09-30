@@ -183,7 +183,7 @@ Both providers share the same Gemini model ids:
 ### Codex Models
 
 - `gpt-6-astra`: Most capable Codex model for the hardest end-to-end work.
-- `gpt-6-sol` (default): Codex model for complex coding and agentic workflows.
+- `gpt-6.1-sol` (default): Near-Astra Codex model for complex work at a lower cost.
 - `gpt-6-luna`: Efficient Codex model for focused, high-volume tasks.
 - `gpt-5.6-terra`: Current Codex model for balanced coding performance.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
@@ -207,7 +207,7 @@ and may switch to a compatible model:
 | Selection   | Model used with Fast |
 | ----------- | -------------------- |
 | Claude      | `claude-opus-5-5`    |
-| Codex Spark | `gpt-6-sol`          |
+| Codex Spark | `gpt-6.1-sol`        |
 
 Returning to `Normal` keeps the resulting model. Choosing an incompatible model resets
 speed to `Normal`. These changes do not alter project defaults. Gemini and Antigravity

@@ -258,7 +258,7 @@ fn test_session_manager(session_id: &str) -> SessionManager {
             role: SessionRole::default(),
             agent: crate::domain::agent::AgentSelection::new(
                 crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt6Sol,
+                AgentModel::Gpt61Sol,
             ),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
@@ -288,7 +288,7 @@ fn test_session_manager(session_id: &str) -> SessionManager {
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt6Sol,
+            model: AgentModel::Gpt61Sol,
         },
         Arc::new(git::MockGitClient::new()),
         state,

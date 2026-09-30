@@ -19,7 +19,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
         .expect("failed to persist default smart model");
     database
         .settings()
-        .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt6Sol.as_str())
+        .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt61Sol.as_str())
         .await
         .expect("failed to persist default fast model");
     database
@@ -55,7 +55,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
     );
     assert_eq!(
         default_fast_model,
-        Some(AgentModel::Gpt6Sol.as_str().to_string())
+        Some(AgentModel::Gpt61Sol.as_str().to_string())
     );
     assert_eq!(
         default_review_model,

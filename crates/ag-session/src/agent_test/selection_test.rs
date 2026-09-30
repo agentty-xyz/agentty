@@ -21,7 +21,7 @@ fn test_agent_selection_speed_compatibility() {
         (
             AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             false,
         ),
         (
@@ -37,9 +37,9 @@ fn test_agent_selection_speed_compatibility() {
             true,
         ),
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             SpeedMode::Fast,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             true,
         ),
         (
@@ -92,7 +92,7 @@ fn test_selectable_models_for_agent_kinds_uses_provider_order() {
         selectable_models,
         vec![
             AgentModel::Gpt6Astra,
-            AgentModel::Gpt6Sol,
+            AgentModel::Gpt61Sol,
             AgentModel::Gpt6Luna,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt53CodexSpark,
@@ -238,8 +238,11 @@ fn test_available_selected_model_is_preserved() {
     let selected = AgentModel::Gpt6Astra;
 
     // Act
-    let resolved =
-        resolve_model_for_available_agent_kinds(selected, &[AgentKind::Codex], AgentModel::Gpt6Sol);
+    let resolved = resolve_model_for_available_agent_kinds(
+        selected,
+        &[AgentKind::Codex],
+        AgentModel::Gpt61Sol,
+    );
 
     // Assert
     assert_eq!(resolved, selected);

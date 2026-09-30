@@ -1505,7 +1505,7 @@ async fn test_handle_prompt_slash_submit_prefills_speed_selection() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
     app.sessions.sessions_mut()[0].agent =
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
     app.sessions.sessions_mut()[0].speed_mode = SpeedMode::Fast;
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 

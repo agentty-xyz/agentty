@@ -79,7 +79,7 @@ done
         env,
         &[
             ("DefaultSmartAgent", "codex"),
-            ("DefaultSmartModel", "gpt-6-sol"),
+            ("DefaultSmartModel", "gpt-6.1-sol"),
         ],
     )
     .await

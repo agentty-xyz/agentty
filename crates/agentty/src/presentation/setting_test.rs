@@ -23,12 +23,12 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
     SettingsView {
         available_model_selections: vec![
             smart_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         ],
         auto_approve_orchestration_research: true,
         default_fast_reasoning_level: ReasoningLevel::Low,
-        default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol),
+        default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         default_fast_speed_mode: SpeedMode::Fast,
         default_review_reasoning_level: ReasoningLevel::XHigh,
         default_review_selection: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
@@ -503,7 +503,7 @@ fn previous_launch_selection_wraps_and_all_row_options_are_available() {
 #[test]
 fn last_used_speed_capable_model_value_includes_speed() {
     // Arrange
-    let selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Sol);
+    let selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
 
     // Act
     let display_value =

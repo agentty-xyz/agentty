@@ -258,7 +258,7 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
     );
     app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt6Sol,
+        AgentModel::Gpt61Sol,
     );
     app.sessions.sessions_mut()[0].status = Status::AgentReview;
     let output_width = 14;

@@ -379,7 +379,7 @@ async fn seed_session_with_typed_marker_collision(
     let session_id = "typed-marker-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-6-sol", "main", "Review")
+        SessionSeed::regular(session_id, "gpt-6.1-sol", "main", "Review")
             .with_title("Typed marker collision"),
     )
     .await?;
@@ -418,7 +418,7 @@ async fn seed_session_with_typed_marker_collision(
 async fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(LOADER_SESSION_ID, "gpt-6-sol", "main", "InProgress")
+        SessionSeed::regular(LOADER_SESSION_ID, "gpt-6.1-sol", "main", "InProgress")
             .with_title("Loader session"),
     )
     .await?;
@@ -440,7 +440,7 @@ async fn seed_session_with_scrollable_output(
 
     common::seed_session(
         env,
-        SessionSeed::regular(SESSION_ID, "gpt-6-sol", "main", "Review")
+        SessionSeed::regular(SESSION_ID, "gpt-6.1-sol", "main", "Review")
             .with_title("Scrollable output"),
     )
     .await?;

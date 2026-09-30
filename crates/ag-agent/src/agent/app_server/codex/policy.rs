@@ -115,7 +115,7 @@ pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
         AgentKind::Codex.parse_model(model),
         Some(
             AgentModel::Gpt6Astra
-                | AgentModel::Gpt6Sol
+                | AgentModel::Gpt61Sol
                 | AgentModel::Gpt6Luna
                 | AgentModel::Gpt56Terra
         )
