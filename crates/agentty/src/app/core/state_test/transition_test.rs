@@ -11,10 +11,12 @@ use tempfile::tempdir;
 
 use super::super::App;
 use super::support::{new_test_app_with_selected_session, seed_selected_session_empty_diff_state};
+use crate::analytics::TurnOutcome;
 use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::AppEvent;
 use crate::app::{AppError, session};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata};
 use crate::domain::session::{PublishBranchAction, SESSION_DATA_DIR, SessionDiffState, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::tmux::MockTmuxClient;
@@ -256,6 +258,7 @@ async fn apply_turn_started_clears_saved_diff_comments() {
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnStarted {
+        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "session-1".into(),
     })
     .await;
@@ -271,17 +274,20 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
     let (analytics, receiver) = capture_events(2);
     app.set_analytics(Some(analytics));
     app.services.emit_app_event(AppEvent::SessionTurnStarted {
+        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "private-session".into(),
     });
 
     // Act
     app.apply_app_events(AppEvent::SessionTurnStarted {
+        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "private-session".into(),
     })
     .await;
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
     app.set_analytics(None);
     app.apply_app_events(AppEvent::SessionTurnStarted {
+        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "private-session".into(),
     })
     .await;
@@ -291,10 +297,12 @@ async fn turn_telemetry_counts_each_event_before_batch_coalescing() {
     assert_eq!(events.len(), 2);
     for event in events {
         assert_eq!(event["event"], "agentty_turn_start");
+        assert_eq!(event["properties"]["agent"], "antigravity");
+        assert_eq!(event["properties"]["model"], "gemini-3.8-flash");
         assert!(!event.to_string().contains("private-session"));
         assert_eq!(
             event["properties"].as_object().map(serde_json::Map::len),
-            Some(4)
+            Some(6)
         );
     }
 }
@@ -614,4 +622,57 @@ async fn test_new_with_clients_fails_when_no_backend_cli_is_available() {
             if message
                 == "No supported backend CLI found on `PATH`. Install `codex`, `claude`, `gemini`, or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then restart `agentty`."
     ));
+}
+
+#[tokio::test]
+async fn turn_end_telemetry_preserves_each_outcome_and_queued_selection() {
+    // Arrange
+    let (mut app, _directory) = crate::test_support::new_test_app().await;
+    let (analytics, receiver) = capture_events(3);
+    app.set_analytics(Some(analytics));
+    let agents = [
+        AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini38Flash),
+        AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+    ];
+    for agent in agents[..2].iter().copied() {
+        app.services.emit_app_event(AppEvent::SessionTurnEnded {
+            agent,
+            outcome: TurnOutcome::Finished,
+        });
+    }
+
+    // Act
+    app.apply_app_events(AppEvent::SessionTurnEnded {
+        agent: agents[2],
+        outcome: TurnOutcome::Interrupted,
+    })
+    .await;
+    app.services.wait_for_cleanup_tasks(None).await;
+    app.set_analytics(None);
+    app.apply_app_events(AppEvent::SessionTurnEnded {
+        agent: agents[2],
+        outcome: TurnOutcome::Interrupted,
+    })
+    .await;
+    let events = receiver.join().expect("telemetry receiver");
+
+    // Assert
+    assert_eq!(events.len(), 3);
+    for (agent, name) in agents.into_iter().zip([
+        "agentty_turn_finish",
+        "agentty_turn_finish",
+        "agentty_turn_interrupt",
+    ]) {
+        let event = events
+            .iter()
+            .find(|event| event["properties"]["agent"] == agent.kind().name())
+            .expect("event for each provider");
+        assert_eq!(event["event"], name);
+        assert_eq!(event["properties"]["model"], agent.model().as_str());
+        assert_eq!(
+            event["properties"].as_object().map(serde_json::Map::len),
+            Some(6)
+        );
+    }
 }

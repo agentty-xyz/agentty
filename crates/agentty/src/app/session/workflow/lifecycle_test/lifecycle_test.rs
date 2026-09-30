@@ -4,6 +4,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ag_forge as forge;
 use ag_git as git;
+use serde_json::Value;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
@@ -12,7 +13,7 @@ use super::support::{
 };
 use crate::app::SessionManager;
 use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
-use crate::domain::agent::ResponseStyle;
+use crate::domain::agent::{AgentSelection, AgentSelectionMetadata, ResponseStyle};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::setting::SettingName;
@@ -98,16 +99,14 @@ async fn successful_reservations_report_creation_types() {
         .await
         .expect("regular reservation");
     }
-    services.wait_for_cleanup_tasks().await;
+    services.wait_for_cleanup_tasks(None).await;
     let events = receiver.join().expect("telemetry receiver");
 
     // Assert
     let mut types = events
         .iter()
         .map(|event| {
-            assert_eq!(event["event"], "agentty_session_start");
-            assert!(!event.to_string().contains("private prompt"));
-            assert!(!event.to_string().contains(source_id.as_str()));
+            assert_session_start_metadata(event, settings.agent, &source_id);
 
             event["properties"]["session_type"]
                 .as_str()
@@ -635,4 +634,12 @@ async fn resolve_session_creation_settings_uses_project_response_style_default()
 
     // Assert
     assert_eq!(creation_settings.response_style, ResponseStyle::Detailed);
+}
+
+fn assert_session_start_metadata(event: &Value, agent: AgentSelection, private_session_id: &str) {
+    assert_eq!(event["event"], "agentty_session_start");
+    assert_eq!(event["properties"]["agent"], agent.kind().name());
+    assert_eq!(event["properties"]["model"], agent.model().as_str());
+    assert!(!event.to_string().contains("private prompt"));
+    assert!(!event.to_string().contains(private_session_id));
 }

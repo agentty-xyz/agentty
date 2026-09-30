@@ -2,11 +2,11 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{AgentError, MockAgentChannel, TurnResult};
+use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, OneShotError, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
-use ag_worker::SessionRunClient;
+use ag_worker::{MockRunClient, RunClient, SessionRunClient};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -18,8 +18,9 @@ use super::super::{
 use super::support::{
     apply_worker_turn_result, auto_commit_run_client, empty_transcript,
     preparation_test_worker_context, queue_helper_context, queue_saved_stacked_prompt,
-    queue_test_context, queued_message, resume_command,
+    queue_test_context, queued_message, resume_command, successful_turn_result,
 };
+use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
@@ -476,4 +477,168 @@ async fn test_clear_queued_messages_tolerates_a_poisoned_queue() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_failures_and_utilities()
+{
+    for (request_kind, provider_result, expected_outcome) in [
+        (
+            AgentRequestKind::SessionStart,
+            Ok(successful_turn_result("private answer")),
+            Some(TurnOutcome::Finished),
+        ),
+        (
+            AgentRequestKind::SessionResume,
+            Err(AgentError::InterruptedByUser("private stop reason".into())),
+            Some(TurnOutcome::Interrupted),
+        ),
+        (
+            AgentRequestKind::SessionResume,
+            Err(AgentError::Backend("private error".into())),
+            None,
+        ),
+        (
+            AgentRequestKind::UtilityPrompt,
+            Ok(successful_turn_result("private answer")),
+            None,
+        ),
+    ] {
+        // Arrange
+        let mut channel = MockAgentChannel::new();
+        channel
+            .expect_run_turn()
+            .times(1)
+            .return_once(move |_, _, _| Box::pin(async move { provider_result }));
+        let (mut context, db, _queue, _directory) =
+            queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = event_tx;
+        let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        let command = SessionCommand::Run {
+            operation_id: "telemetry-turn".into(),
+            request_kind: request_kind.clone(),
+            replay_transcript: None,
+            prompt: "private prompt".into(),
+            turn_metadata: TurnMetadata {
+                published_upstream_ref: None,
+                review_comment_thread_ids: Vec::new(),
+                session_agent: expected_agent,
+            },
+        };
+        db.operations()
+            .insert_session_operation("telemetry-turn", &context.session_id, command.kind())
+            .await
+            .expect("operation");
+
+        // Act
+        let result = SessionWorkerService::process_session_command(
+            &context,
+            &auto_commit_run_client(),
+            command,
+        )
+        .await;
+        let mut starts = Vec::new();
+        let mut ends = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            match event {
+                AppEvent::SessionTurnStarted { agent, session_id } => {
+                    starts.push((agent, session_id));
+                }
+                AppEvent::SessionTurnEnded { agent, outcome } => ends.push((agent, outcome)),
+                _ => {}
+            }
+        }
+
+        // Assert
+        assert!(result.is_some());
+        if request_kind == AgentRequestKind::UtilityPrompt {
+            assert_eq!(starts, Vec::new());
+        } else {
+            assert_eq!(starts, vec![(expected_agent, context.session_id.clone())]);
+        }
+        assert_eq!(
+            ends,
+            expected_outcome
+                .into_iter()
+                .map(|outcome| (expected_agent, outcome))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[tokio::test]
+async fn turn_telemetry_reports_interruption_during_auto_commit() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, _| {
+        Box::pin(async { Ok(successful_turn_result("Completed provider work.")) })
+    });
+    let (mut context, db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/sess1".into()) }));
+    git.expect_main_checkout_working_tree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git.expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git.expect_diff()
+        .times(2)
+        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".into()) }));
+    git.expect_has_commits_since()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    git.expect_commit_all_preserving_single_commit().never();
+    context.git_client = Arc::new(git);
+    let cancellation = Arc::clone(&context.cancel_token);
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(2).returning(move |_| {
+        cancellation
+            .lock()
+            .expect("turn cancellation token")
+            .cancel();
+
+        Err(OneShotError::new("[Stopped] Agent run canceled"))
+    });
+    let run_client: Arc<dyn RunClient> = Arc::new(run_client);
+    let command = resume_command("auto-commit-cancellation");
+    let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+    db.operations()
+        .insert_session_operation(
+            "auto-commit-cancellation",
+            &context.session_id,
+            command.kind(),
+        )
+        .await
+        .expect("operation");
+
+    // Act
+    let result =
+        SessionWorkerService::process_session_command(&context, &run_client, command).await;
+    let ends = std::iter::from_fn(|| event_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::SessionTurnEnded { agent, outcome } => Some((agent, outcome)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        matches!(result, Some(Ok(()))),
+        "auto-commit cancellation is swallowed by post-processing"
+    );
+    assert!(
+        context
+            .cancel_token
+            .lock()
+            .expect("turn cancellation token")
+            .is_cancelled()
+    );
+    assert_eq!(ends, vec![(expected_agent, TurnOutcome::Interrupted)]);
 }

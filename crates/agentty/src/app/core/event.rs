@@ -22,6 +22,7 @@ use app::review::{
 use tracing::warn;
 
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
+use crate::analytics::TurnOutcome;
 use crate::app::session::{
     SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
 };
@@ -31,7 +32,7 @@ use crate::app::sync::{
     SyncMainReviewUpdate,
 };
 use crate::app::{self, SessionRuntimeCommand};
-use crate::domain::agent::AgentCliInfo;
+use crate::domain::agent::{AgentCliInfo, AgentSelection};
 use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
@@ -195,7 +196,16 @@ pub(crate) enum AppEvent {
     /// A rebase conflict invalidated the focused review before assistance.
     SessionRebaseReviewInvalidated { session_id: SessionId },
     /// Indicates a session start or resume command began its turn.
-    SessionTurnStarted { session_id: SessionId },
+    SessionTurnStarted {
+        agent: AgentSelection,
+        session_id: SessionId,
+    },
+    /// Reports a successful or user-interrupted session turn after
+    /// post-processing.
+    SessionTurnEnded {
+        agent: AgentSelection,
+        outcome: TurnOutcome,
+    },
     /// Indicates review assist output became available for a session.
     ReviewPrepared {
         request_id: uuid::Uuid,
@@ -281,7 +291,9 @@ enum AppEventEffect {
     ReloadSessions,
     ReloadProjects,
     RefreshGitStatus,
-    RecordTurnStarts(usize),
+    RecordTurnStarts(Vec<AgentSelection>),
+    /// Sends every completed turn without coalescing outcomes.
+    RecordTurnEnds(Vec<(AgentSelection, TurnOutcome)>),
     ApplyReviewUpdates(Vec<(SessionId, ReviewUpdate)>),
     PersistDeferredAutoReviewTriggers(
         Vec<crate::app::session_diff::DeferredAutoReviewPersistenceRetry>,
@@ -386,8 +398,10 @@ pub(super) struct AppEventBatch {
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
-    /// Counts accepted messages even when their UI updates are coalesced.
-    pub(super) session_turn_start_count: usize,
+    /// Retains every settled turn even when UI updates are coalesced.
+    pub(super) session_turn_ends: Vec<(AgentSelection, TurnOutcome)>,
+    /// Retains queued selections for every accepted message before coalescing.
+    pub(super) session_turn_starts: Vec<AgentSelection>,
     pub(super) session_turn_started_ids: HashSet<SessionId>,
     pub(super) session_update_versions: HashMap<SessionId, u64>,
     pub(super) session_workflow_notice_updates: HashMap<SessionId, Vec<String>>,
@@ -423,9 +437,13 @@ impl AppEventBatch {
         if self.should_refresh_git_status {
             before_snapshot_effects.push(AppEventEffect::RefreshGitStatus);
         }
-        let turn_start_count = std::mem::take(&mut self.session_turn_start_count);
-        if turn_start_count > 0 {
-            before_snapshot_effects.push(AppEventEffect::RecordTurnStarts(turn_start_count));
+        let turn_starts = std::mem::take(&mut self.session_turn_starts);
+        if !turn_starts.is_empty() {
+            before_snapshot_effects.push(AppEventEffect::RecordTurnStarts(turn_starts));
+        }
+        let turn_ends = std::mem::take(&mut self.session_turn_ends);
+        if !turn_ends.is_empty() {
+            before_snapshot_effects.push(AppEventEffect::RecordTurnEnds(turn_ends));
         }
         let changes_observable_state = self.should_reload_sessions
             || self.should_reload_projects
@@ -493,6 +511,13 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::SessionTurnStarted { agent, session_id } => {
+                self.session_turn_starts.push(agent);
+                self.session_turn_started_ids.insert(session_id);
+            }
+            AppEvent::SessionTurnEnded { agent, outcome } => {
+                self.session_turn_ends.push((agent, outcome));
+            }
             AppEvent::ReviewProgressUpdated {
                 request_id,
                 diff_hash,
@@ -641,7 +666,6 @@ impl AppEventBatch {
             | AppEvent::BranchPublishActionResolved { .. }
             | AppEvent::BranchPublishActionStarted { .. }
             | AppEvent::SessionQueuedSyncResolved { .. }
-            | AppEvent::SessionTurnStarted { .. }
             | AppEvent::ReviewPrepared { .. }
             | AppEvent::ReviewPreparationFailed { .. }
             | AppEvent::DeferredAutoReviewPersistenceRetry { .. }
@@ -669,7 +693,9 @@ impl AppEventBatch {
             | AppEvent::SessionRebaseReviewInvalidated { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
-            | AppEvent::RefreshGitStatus => {
+            | AppEvent::RefreshGitStatus
+            | AppEvent::SessionTurnStarted { .. }
+            | AppEvent::SessionTurnEnded { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
             }
         }
@@ -704,10 +730,6 @@ impl AppEventBatch {
             }
             AppEvent::SessionQueuedSyncResolved { session_id } => {
                 self.session_queued_sync_resolved_ids.insert(session_id);
-            }
-            AppEvent::SessionTurnStarted { session_id } => {
-                self.session_turn_start_count += 1;
-                self.session_turn_started_ids.insert(session_id);
             }
             AppEvent::ReviewPrepared {
                 request_id,
@@ -788,7 +810,9 @@ impl AppEventBatch {
             | AppEvent::SyncMainConflictResolutionStarted { .. }
             | AppEvent::SessionDiffStatsUpdated { .. }
             | AppEvent::SessionRebaseReviewInvalidated { .. }
-            | AppEvent::SessionTitleGenerationFinished { .. } => {
+            | AppEvent::SessionTitleGenerationFinished { .. }
+            | AppEvent::SessionTurnStarted { .. }
+            | AppEvent::SessionTurnEnded { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
             }
         }
@@ -1456,9 +1480,14 @@ impl App {
                 AppEventEffect::ReloadSessions => self.refresh_sessions_now().await,
                 AppEventEffect::ReloadProjects => self.reload_projects().await,
                 AppEventEffect::RefreshGitStatus => self.restart_git_status_task(),
-                AppEventEffect::RecordTurnStarts(count) => {
-                    for _ in 0..count {
-                        self.services.record_turn_start();
+                AppEventEffect::RecordTurnStarts(agents) => {
+                    for agent in agents {
+                        self.services.record_turn_start(agent);
+                    }
+                }
+                AppEventEffect::RecordTurnEnds(turns) => {
+                    for (agent, outcome) in turns {
+                        self.services.record_turn_end(agent, outcome);
                     }
                 }
                 AppEventEffect::ApplyReviewUpdates(review_updates) => {

@@ -22,6 +22,7 @@ use super::merge::{
 };
 use super::task::SessionTranscriptMessageAppend;
 use super::{SessionTaskService, isolation, session_folder, turn};
+use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
     run_branch_publish_action,
@@ -1144,17 +1145,21 @@ impl SessionWorkerService {
             Self::append_preparation_prompt(context, request_kind, prompt);
         }
 
-        if matches!(
-            command,
-            SessionCommand::Run {
-                request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
-                ..
-            }
-        ) {
+        let turn_agent = if let SessionCommand::Run {
+            request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
+            turn_metadata,
+            ..
+        } = &command
+        {
             let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
+                agent: turn_metadata.session_agent,
                 session_id: context.session_id.clone(),
             });
-        }
+
+            Some(turn_metadata.session_agent)
+        } else {
+            None
+        };
 
         let result = ag_worker::execute(
             context.db.operations(),
@@ -1172,6 +1177,24 @@ impl SessionWorkerService {
             |error| tracing::warn!(%error, "Worker operation tracking failed"),
         )
         .await;
+
+        // Auto-commit can swallow cancellation errors during post-processing.
+        // The active turn's token still records the user's interruption.
+        let interrupted = context
+            .cancel_token
+            .lock()
+            .is_ok_and(|token| token.is_cancelled());
+        let outcome = match &result {
+            _ if interrupted => Some(TurnOutcome::Interrupted),
+            Ok(()) => Some(TurnOutcome::Finished),
+            Err(SessionError::StoppedByUser(_)) => Some(TurnOutcome::Interrupted),
+            Err(_) => None,
+        };
+        if let (Some(agent), Some(outcome)) = (turn_agent, outcome) {
+            let _ = context
+                .app_event_tx
+                .send(AppEvent::SessionTurnEnded { agent, outcome });
+        }
 
         Some(result)
     }

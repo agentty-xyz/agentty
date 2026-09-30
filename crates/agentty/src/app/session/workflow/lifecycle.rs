@@ -706,11 +706,14 @@ impl SessionManager {
         })?;
 
         Self::record_session_creation_activity(services, &session_id).await;
-        services.record_session_start(if parent_session_id.is_some() {
-            SessionType::Stacked
-        } else {
-            SessionType::Draft
-        });
+        services.record_session_start(
+            if parent_session_id.is_some() {
+                SessionType::Stacked
+            } else {
+                SessionType::Draft
+            },
+            session_agent,
+        );
 
         Ok(session_id)
     }
@@ -776,7 +779,7 @@ impl SessionManager {
         services: &AppServices,
         source_session_id: &str,
     ) -> Result<(String, PathBuf), SessionError> {
-        let source_branch = {
+        let (source_branch, source_agent) = {
             let source_session = self.session_or_err(source_session_id)?;
             if !source_session.allows_fork_action() {
                 return Err(SessionError::Workflow(
@@ -784,8 +787,11 @@ impl SessionManager {
                 ));
             }
 
-            self.session_branch_name(&source_session.id)
-                .map_or_else(|| session_branch(&source_session.id), str::to_string)
+            (
+                self.session_branch_name(&source_session.id)
+                    .map_or_else(|| session_branch(&source_session.id), str::to_string),
+                source_session.agent,
+            )
         };
         services
             .db()
@@ -826,7 +832,7 @@ impl SessionManager {
             )
             .await?;
         Self::record_session_creation_activity(services, &session_id).await;
-        services.record_session_start(SessionType::Fork);
+        services.record_session_start(SessionType::Fork, source_agent);
 
         self.mark_history_replay_pending(&session_id);
 
@@ -933,12 +939,17 @@ impl SessionManager {
             })
             .await?;
         Self::record_session_creation_activity(services, &session_id).await;
-        services.record_session_start(match creation_kind {
-            SessionCreationKind::Worker => SessionType::Regular,
-            SessionCreationKind::Orchestrator => SessionType::Orchestrator,
-            SessionCreationKind::OrchestrationChild { .. } => SessionType::OrchestrationChild,
-            SessionCreationKind::OrchestrationResearch { .. } => SessionType::OrchestrationResearch,
-        });
+        services.record_session_start(
+            match creation_kind {
+                SessionCreationKind::Worker => SessionType::Regular,
+                SessionCreationKind::Orchestrator => SessionType::Orchestrator,
+                SessionCreationKind::OrchestrationChild { .. } => SessionType::OrchestrationChild,
+                SessionCreationKind::OrchestrationResearch { .. } => {
+                    SessionType::OrchestrationResearch
+                }
+            },
+            creation_settings.agent,
+        );
 
         Ok(session_id)
     }

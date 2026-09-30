@@ -102,7 +102,7 @@ async fn replacing_fixture_clients_preserves_utility_cancellation_and_deletion_c
                     .await;
             } else {
                 app.services.cancel_agent_runs("owned-session");
-                app.services.wait_for_cleanup_tasks().await;
+                app.services.wait_for_cleanup_tasks(None).await;
             }
         });
         time::timeout(Duration::from_secs(5), stopping_rx)

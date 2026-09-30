@@ -444,15 +444,19 @@ AGENTTY_TELEMETRY_ENABLED=0 agentty
 Every event includes `app_source` (`cli`), `app_version`, and `install_method` (`npm`,
 `sh`, `cargo`, or `unknown`).
 
-| Event                   | When sent                                                           | Additional properties                            |
-| ----------------------- | ------------------------------------------------------------------- | ------------------------------------------------ |
-| `agentty_launch`        | After the database opens                                            | None                                             |
-| `agentty_failure`       | When startup after the database opens or the terminal runtime fails | `failure_category` (`database` or `application`) |
-| `agentty_session_start` | When new session metadata is reserved                               | `session_type`                                   |
-| `agentty_turn_start`    | When a first or follow-up message begins execution                  | None                                             |
+| Event                    | When sent                                                           | Additional properties                            |
+| ------------------------ | ------------------------------------------------------------------- | ------------------------------------------------ |
+| `agentty_launch`         | After the database opens                                            | None                                             |
+| `agentty_failure`        | When startup after the database opens or the terminal runtime fails | `failure_category` (`database` or `application`) |
+| `agentty_session_start`  | When new session metadata is reserved                               | `session_type`, `agent`, `model`                 |
+| `agentty_turn_start`     | When a first or follow-up message begins execution                  | `agent`, `model`                                 |
+| `agentty_turn_finish`    | When a turn and its post-processing complete successfully           | `agent`, `model`                                 |
+| `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`                                 |
 
 Session types are `regular`, `draft`, `stacked`, `fork`, `orchestrator`,
-`orchestration_child`, and `orchestration_research`.
+`orchestration_child`, and `orchestration_research`. `agent` identifies the selected
+provider; `model` is its supported model identifier. Turn events use the selection
+captured when the turn was queued.
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share
@@ -461,10 +465,12 @@ IP address and derives an approximate location from it. Agentty does not send er
 messages, stack traces, project paths, session IDs, or prompts. Session-start events
 count metadata reservations even if workspace preparation later fails. Turn-start events
 count messages that begin execution, including queued messages, rather than messages
-discarded before execution. The install method is inferred from the npm package path,
-the shell install receipt, or Cargo install metadata. It is `unknown` when no signal is
-available. These values describe launches, not installation counts; metadata left behind
-after replacing a binary can report an older method.
+discarded before execution. Queued messages discarded by cancellation do not produce
+turn-interruption events. Failed turns do not produce turn-finish events. The install
+method is inferred from the npm package path, the shell install receipt, or Cargo
+install metadata. It is `unknown` when no signal is available. These values describe
+launches, not installation counts; metadata left behind after replacing a binary can
+report an older method.
 
 ## Auto-Update
 

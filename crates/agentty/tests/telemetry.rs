@@ -5,8 +5,9 @@ use std::io::{self, Read, Write};
 use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
-use agentty::analytics::{Analytics, SessionType};
+use agentty::analytics::{Analytics, SessionType, TurnOutcome};
 use agentty::app::AppError;
+use agentty::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
 use agentty::infra::db::DbError;
 use serde_json::Value;
 
@@ -44,12 +45,12 @@ async fn outbound_events_contain_only_allowlisted_properties() -> TestResult<()>
         .map_err(|_| io::Error::other("receiver thread panicked"))??;
 
     // Assert
-    assert_event(&launch, "test-token", "agentty_launch", None);
+    assert_event(&launch, "test-token", "agentty_launch", &[]);
     assert_event(
         &failure,
         "test-token",
         "agentty_failure",
-        Some(("failure_category", "application")),
+        &[("failure_category", "application")],
     );
     assert!(!failure.to_string().contains("private path"));
     assert!(!failure.to_string().contains("prompt text"));
@@ -78,7 +79,7 @@ async fn database_failures_use_a_fixed_category() -> TestResult<()> {
         &event,
         "token",
         "agentty_failure",
-        Some(("failure_category", "database")),
+        &[("failure_category", "database")],
     );
     assert!(!event.to_string().contains("secret database path"));
 
@@ -86,8 +87,7 @@ async fn database_failures_use_a_fixed_category() -> TestResult<()> {
 }
 
 #[tokio::test]
-async fn session_starts_report_each_bounded_type_and_turn_starts_have_no_content() -> TestResult<()>
-{
+async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> TestResult<()> {
     // Arrange
     let session_types = [
         (SessionType::Regular, "regular"),
@@ -98,19 +98,36 @@ async fn session_starts_report_each_bounded_type_and_turn_starts_have_no_content
         (SessionType::OrchestrationChild, "orchestration_child"),
         (SessionType::OrchestrationResearch, "orchestration_research"),
     ];
+    let agents = [
+        AgentKind::Codex,
+        AgentKind::Claude,
+        AgentKind::Gemini,
+        AgentKind::Antigravity,
+    ]
+    .map(|kind| AgentSelection::new(kind, kind.default_model()));
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
     let receiver = std::thread::spawn(move || -> TestResult<Vec<Value>> {
-        (0..8).map(|_| receive_event(&listener)).collect()
+        (0..19).map(|_| receive_event(&listener)).collect()
     });
     let analytics = Analytics::new("token", &host, INSTALLATION_ID)
         .ok_or_else(|| io::Error::other("configured sender"))?;
 
     // Act
     for (session_type, _) in session_types {
-        analytics.record_session_start(session_type).await;
+        analytics
+            .record_session_start(session_type, agents[0])
+            .await;
     }
-    analytics.record_turn_start().await;
+    for agent in agents {
+        analytics.record_turn_start(agent).await;
+        analytics
+            .record_turn_end(agent, TurnOutcome::Finished)
+            .await;
+        analytics
+            .record_turn_end(agent, TurnOutcome::Interrupted)
+            .await;
+    }
     let events = receiver
         .join()
         .map_err(|_| io::Error::other("receiver thread panicked"))??;
@@ -121,10 +138,30 @@ async fn session_starts_report_each_bounded_type_and_turn_starts_have_no_content
             event,
             "token",
             "agentty_session_start",
-            Some(("session_type", expected_type)),
+            &[
+                ("session_type", expected_type),
+                ("agent", agents[0].kind().name()),
+                ("model", agents[0].model().as_str()),
+            ],
         );
     }
-    assert_event(&events[7], "token", "agentty_turn_start", None);
+    for (turn_events, agent) in events[7..].as_chunks::<3>().0.iter().zip(agents) {
+        for (event, name) in turn_events.iter().zip([
+            "agentty_turn_start",
+            "agentty_turn_finish",
+            "agentty_turn_interrupt",
+        ]) {
+            assert_event(
+                event,
+                "token",
+                name,
+                &[
+                    ("agent", agent.kind().name()),
+                    ("model", agent.model().as_str()),
+                ],
+            );
+        }
+    }
 
     Ok(())
 }
@@ -175,7 +212,7 @@ fn receive_event(listener: &TcpListener) -> TestResult<Value> {
     }
 }
 
-fn assert_event(event: &Value, token: &str, name: &str, property: Option<(&str, &str)>) {
+fn assert_event(event: &Value, token: &str, name: &str, event_properties: &[(&str, &str)]) {
     assert_eq!(event.as_object().map(serde_json::Map::len), Some(4));
     assert_eq!(event["api_key"], token);
     assert_eq!(event["event"], name);
@@ -186,11 +223,11 @@ fn assert_event(event: &Value, token: &str, name: &str, property: Option<(&str, 
     assert_eq!(properties["app_source"], "cli");
     assert_eq!(properties["app_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(properties["install_method"], "unknown");
-    if let Some((key, value)) = property {
+    for &(key, value) in event_properties {
         assert_eq!(properties[key], value);
     }
     assert_eq!(
         properties.as_object().map(serde_json::Map::len),
-        Some(if property.is_some() { 5 } else { 4 })
+        Some(4 + event_properties.len())
     );
 }

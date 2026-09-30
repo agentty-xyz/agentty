@@ -193,7 +193,7 @@ async fn failed_merged_worktree_cleanup_persists_a_warning() {
 
     // Act
     app.spawn_externally_merged_session_cleanup(session_id, folder, "topic".to_string(), handles);
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 
     // Assert
     let messages = app
