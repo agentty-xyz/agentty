@@ -111,7 +111,7 @@ async fn test_process_queued_message_auto_pushes_after_last_published_branch_fol
             while sync_events.len() < 2 || turn_started_session_id.is_none() {
                 let event = app_event_rx.recv().await.expect("missing app event");
                 match event {
-                    AppEvent::SessionTurnStarted { session_id } => {
+                    AppEvent::SessionTurnStarted { session_id, .. } => {
                         turn_started_session_id = Some(session_id);
                     }
                     AppEvent::PublishedBranchSyncUpdated {

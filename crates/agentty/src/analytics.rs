@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::app::AppError;
+use crate::domain::agent::{AgentSelection, AgentSelectionMetadata};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 
@@ -61,6 +62,24 @@ impl SessionType {
             Self::Orchestrator => "orchestrator",
             Self::OrchestrationChild => "orchestration_child",
             Self::OrchestrationResearch => "orchestration_research",
+        }
+    }
+}
+
+/// Completed execution outcomes reported without turn contents.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnOutcome {
+    /// The turn and its post-processing completed successfully.
+    Finished,
+    /// The running turn was stopped by the user.
+    Interrupted,
+}
+
+impl TurnOutcome {
+    fn event_name(self) -> &'static str {
+        match self {
+            Self::Finished => "agentty_turn_finish",
+            Self::Interrupted => "agentty_turn_interrupt",
         }
     }
 }
@@ -230,21 +249,44 @@ impl Analytics {
 
     /// Records one application launch attempt.
     pub async fn record_launch(&self) {
-        self.send("agentty_launch", None).await;
+        self.send("agentty_launch", &[]).await;
     }
 
-    /// Records a newly reserved session using only its creation type.
-    pub async fn record_session_start(&self, session_type: SessionType) {
+    /// Records a newly reserved session's creation type, provider, and model.
+    pub async fn record_session_start(&self, session_type: SessionType, agent: AgentSelection) {
         self.send(
             "agentty_session_start",
-            Some(("session_type", session_type.as_str())),
+            &[
+                ("session_type", session_type.as_str()),
+                ("agent", agent.kind().name()),
+                ("model", agent.model().as_str()),
+            ],
         )
         .await;
     }
 
     /// Records an accepted first or follow-up message without its contents.
-    pub async fn record_turn_start(&self) {
-        self.send("agentty_turn_start", None).await;
+    pub async fn record_turn_start(&self, agent: AgentSelection) {
+        self.send(
+            "agentty_turn_start",
+            &[
+                ("agent", agent.kind().name()),
+                ("model", agent.model().as_str()),
+            ],
+        )
+        .await;
+    }
+
+    /// Records a successful or user-interrupted turn with its queued selection.
+    pub async fn record_turn_end(&self, agent: AgentSelection, outcome: TurnOutcome) {
+        self.send(
+            outcome.event_name(),
+            &[
+                ("agent", agent.kind().name()),
+                ("model", agent.model().as_str()),
+            ],
+        )
+        .await;
     }
 
     /// Records a failure using only a bounded category, never its message.
@@ -254,7 +296,7 @@ impl Analytics {
             _ => "application",
         };
 
-        self.send("agentty_failure", Some(("failure_category", category)))
+        self.send("agentty_failure", &[("failure_category", category)])
             .await;
     }
 
@@ -275,14 +317,14 @@ impl Analytics {
         })
     }
 
-    async fn send(&self, name: &str, property: Option<(&str, &str)>) {
+    async fn send(&self, name: &str, event_properties: &[(&str, &str)]) {
         let mut properties = json!({
             "$process_person_profile": false,
             "app_source": "cli",
             "app_version": env!("CARGO_PKG_VERSION"),
             "install_method": self.install_method.as_str(),
         });
-        if let Some((key, value)) = property {
+        for &(key, value) in event_properties {
             properties[key] = Value::String(value.to_string());
         }
 

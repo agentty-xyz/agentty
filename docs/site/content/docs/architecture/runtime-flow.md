@@ -329,6 +329,7 @@ owned execution.
 Session deletion waits for utilities before removing resources. Durable admission
 closure rejects late submissions. Application shutdown gives workers, setup, and cleanup
 one shared five-second grace period, then forces remaining runtime resources to drop.
-Unfinished records remain available for startup recovery.
+Pending turn telemetry is flushed after background work settles, within the same
+deadline. Unfinished records remain available for startup recovery.
 
 See [Execution](@/docs/core-components/execution.md) for the shared contract.

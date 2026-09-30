@@ -15,10 +15,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 use tracing::{debug, warn};
 
-use crate::analytics::{Analytics, SessionType};
+use crate::analytics::{Analytics, SessionType, TurnOutcome};
 use crate::app::AppEvent;
 use crate::db::AppRepositories;
-use crate::domain::agent::{AgentCliInfo, AgentKind};
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection};
 use crate::domain::session::SessionId;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
@@ -116,19 +116,28 @@ impl AppServices {
     }
 
     /// Reports a session reservation without delaying the lifecycle workflow.
-    pub(crate) fn record_session_start(&self, session_type: SessionType) {
+    pub(crate) fn record_session_start(&self, session_type: SessionType, agent: AgentSelection) {
         if let Some(analytics) = self.analytics.clone() {
             self.track_telemetry_task(tokio::spawn(async move {
-                analytics.record_session_start(session_type).await;
+                analytics.record_session_start(session_type, agent).await;
             }));
         }
     }
 
     /// Reports an accepted turn without delaying foreground event reduction.
-    pub(crate) fn record_turn_start(&self) {
+    pub(crate) fn record_turn_start(&self, agent: AgentSelection) {
         if let Some(analytics) = self.analytics.clone() {
             self.track_telemetry_task(tokio::spawn(async move {
-                analytics.record_turn_start().await;
+                analytics.record_turn_start(agent).await;
+            }));
+        }
+    }
+
+    /// Reports a settled turn without delaying foreground event reduction.
+    pub(crate) fn record_turn_end(&self, agent: AgentSelection, outcome: TurnOutcome) {
+        if let Some(analytics) = self.analytics.clone() {
+            self.track_telemetry_task(tokio::spawn(async move {
+                analytics.record_turn_end(agent, outcome).await;
             }));
         }
     }
@@ -278,13 +287,19 @@ impl AppServices {
 
     /// Settles worker execution, worktree creation, cleanup, and telemetry
     /// tasks within one deadline. Escalates worker shutdown when grace expires.
+    /// When supplied, pending app events are drained for turn telemetry after
+    /// background work settles, before waiting for telemetry delivery. Other
+    /// events are discarded so shutdown cannot start new workflow work.
     ///
     /// The task list is drained before awaiting so the synchronous mutex guard
     /// is never held across an `.await`. The loop repeats in case a cleanup
     /// task registers additional cleanup work before it exits. Cleanup tasks
     /// share one shutdown deadline; unfinished tasks are canceled after it
     /// expires.
-    pub(crate) async fn wait_for_cleanup_tasks(&self) {
+    pub(crate) async fn wait_for_cleanup_tasks(
+        &self,
+        pending_events: Option<&mut mpsc::UnboundedReceiver<AppEvent>>,
+    ) {
         let deadline = Instant::from_std(self.clock.now_instant()) + CLEANUP_TASK_SHUTDOWN_TIMEOUT;
         if time::timeout_at(deadline, self.run_worker.shutdown())
             .await
@@ -303,6 +318,19 @@ impl AppServices {
         Self::wait_for_cleanup_task_handles(&Mutex::new(creation_tasks), deadline).await;
 
         Self::wait_for_cleanup_task_handles(self.cleanup_task_handles.as_ref(), deadline).await;
+
+        if let Some(event_rx) = pending_events {
+            while let Ok(event) = event_rx.try_recv() {
+                match event {
+                    AppEvent::SessionTurnStarted { agent, .. } => self.record_turn_start(agent),
+                    AppEvent::SessionTurnEnded { agent, outcome } => {
+                        self.record_turn_end(agent, outcome);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Self::wait_for_cleanup_task_handles(self.telemetry_task_handles.as_ref(), deadline).await;
     }
 
@@ -376,6 +404,7 @@ impl AppServices {
             AppEvent::SessionQueuedSyncResolved { .. } => "SessionQueuedSyncResolved",
             AppEvent::SessionRebaseReviewInvalidated { .. } => "SessionRebaseReviewInvalidated",
             AppEvent::SessionTurnStarted { .. } => "SessionTurnStarted",
+            AppEvent::SessionTurnEnded { .. } => "SessionTurnEnded",
             AppEvent::ReviewPrepared { .. } => "ReviewPrepared",
             AppEvent::ReviewProgressUpdated { .. } => "ReviewProgressUpdated",
             AppEvent::ReviewPreparationFailed { .. } => "ReviewPreparationFailed",

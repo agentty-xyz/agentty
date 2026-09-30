@@ -18,13 +18,16 @@ use super::{
     EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState, forced_redraw_elapsed,
     render_frame, run, run_until_quit, run_with_backend, stop_orchestration_task,
 };
+use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
+use crate::domain::agent::{AgentKind, AgentSelection, AgentSelectionMetadata};
 use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::PresentationState;
 use crate::test_support::SessionFixtureBuilder;
+use crate::test_support::telemetry::capture_events;
 
 /// Environment marker used to distinguish the nested PTY test process.
 const PRODUCTION_RUN_CHILD_ENV: &str = "AGENTTY_TEST_PRODUCTION_RUN_CHILD";
@@ -521,6 +524,67 @@ async fn run_with_backend_waits_for_cleanup_tasks_after_quit() {
         "run_with_backend should exit cleanly after cleanup"
     );
     assert!(done_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
+    for (outcome, expected_event) in [
+        (TurnOutcome::Finished, "agentty_turn_finish"),
+        (TurnOutcome::Interrupted, "agentty_turn_interrupt"),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+        let (analytics, receiver) = capture_events(2);
+        app.set_analytics(Some(analytics));
+        let agent = AgentSelection::new(AgentKind::Codex, AgentKind::Codex.default_model());
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let services = app.services.clone();
+        app.services.track_cleanup_task(tokio::spawn(async move {
+            release_rx.await.expect("release turn settlement");
+            services.emit_app_event(AppEvent::RefreshSessions);
+            services.emit_app_event(AppEvent::SessionTurnStarted {
+                agent,
+                session_id: "settled-turn".into(),
+            });
+            services.emit_app_event(AppEvent::SessionTurnEnded { agent, outcome });
+        }));
+        for key in ['q', 'y'] {
+            event_tx
+                .send(Event::Key(KeyEvent::new(
+                    KeyCode::Char(key),
+                    KeyModifiers::NONE,
+                )))
+                .expect("quit key");
+        }
+        let run_future = run_with_backend(&mut app, &mut terminal, &mut event_rx);
+        tokio::pin!(run_future);
+
+        // Act / Assert
+        tokio::select! {
+            result = &mut run_future => {
+                unreachable!("runtime exited before turn settlement: {result:?}");
+            }
+            () = tokio::time::sleep(Duration::from_millis(50)) => {}
+        }
+        release_tx.send(()).expect("settle turn during shutdown");
+        let result = run_future.await;
+        let events = receiver.join().expect("telemetry receiver");
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(events.len(), 2);
+        for name in ["agentty_turn_start", expected_event] {
+            let event = events
+                .iter()
+                .find(|event| event["event"] == name)
+                .expect("turn event sent before shutdown returns");
+            assert_eq!(event["properties"]["agent"], agent.kind().name());
+            assert_eq!(event["properties"]["model"], agent.model().as_str());
+        }
+    }
 }
 
 #[tokio::test]

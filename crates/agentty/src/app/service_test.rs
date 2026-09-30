@@ -13,11 +13,13 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument::WithSubscriber;
 
+use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::BranchPublishTaskFailure;
 use crate::app::service::AppServices;
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
 use crate::app::{AppEvent, UpdateStatus};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
 use crate::infra::clock::Clock;
 use crate::test_support::{FixedClock, TestSubscriber};
@@ -248,6 +250,7 @@ fn app_event_label_names_rebase_review_invalidation() {
 fn app_event_label_names_turn_starts() {
     // Arrange
     let event = AppEvent::SessionTurnStarted {
+        agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
         session_id: "session-id".into(),
     };
 
@@ -284,7 +287,7 @@ async fn telemetry_tracking_reaps_completed_tasks_and_preserves_pending_work() {
 
     // Act
     release_tx.send(()).expect("release telemetry");
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 
     // Assert
     assert!(
@@ -339,7 +342,7 @@ async fn telemetry_shutdown_cancels_pending_tasks_after_shared_deadline() {
     // Act
     time::timeout(
         Duration::from_secs(1),
-        app.services.wait_for_cleanup_tasks(),
+        app.wait_for_background_cleanup_tasks(),
     )
     .await
     .expect("telemetry must honor the shared deadline");
@@ -400,7 +403,7 @@ async fn creation_completion_releases_handles_and_preserves_pending_work() {
     }
 
     release_tx.send(()).expect("release creation");
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
     assert!(
         app.services
             .creation_task_handles
@@ -451,7 +454,7 @@ async fn shutdown_settles_creation_before_cleanup() {
     );
 
     // Act
-    let shutdown = app.services.wait_for_cleanup_tasks();
+    let shutdown = app.services.wait_for_cleanup_tasks(None);
     tokio::pin!(shutdown);
     let completed_before_release = tokio::select! {
         () = &mut shutdown => true,
@@ -482,7 +485,7 @@ async fn shutdown_observes_canceled_creation_task() {
         .track_session_creation_task("canceled".to_string(), task);
 
     // Act
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 
     // Assert
     assert!(
@@ -577,7 +580,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
         // Act
         time::timeout(
             Duration::from_secs(2),
-            app.services.wait_for_cleanup_tasks(),
+            app.services.wait_for_cleanup_tasks(None),
         )
         .await
         .expect("worker, creation, and cleanup must share the deadline");
@@ -901,4 +904,19 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
     let ids = ids.lock().expect("ids");
     assert_eq!(ids.len(), 2);
     assert_eq!(ids[0], ids[1]);
+}
+
+#[test]
+fn app_event_label_names_turn_ends() {
+    // Arrange
+    let event = AppEvent::SessionTurnEnded {
+        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        outcome: TurnOutcome::Finished,
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "SessionTurnEnded");
 }

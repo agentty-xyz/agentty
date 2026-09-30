@@ -104,7 +104,7 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
             .submit(late_request)
             .await
             .expect_err("deleted session cannot execute");
-        app.services.wait_for_cleanup_tasks().await;
+        app.services.wait_for_cleanup_tasks(None).await;
         wait_for_path_absent(&folder).await;
         assert_eq!(
             db.sessions().load_sessions().await.expect("sessions").len(),

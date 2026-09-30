@@ -696,7 +696,7 @@ async fn test_apply_review_request_status_update_merged_restacks_stacked_child()
         .expect("missing persisted child session");
     assert_eq!(db_child_session.parent_session_id, None);
     assert_eq!(db_child_session.base_branch, "main");
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 }
 
 #[tokio::test]
@@ -914,7 +914,7 @@ async fn merged_review_waits_for_successful_manual_sync_before_cleanup() {
 
     // Cleanup
     cleanup_release.notify_one();
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 }
 
 #[tokio::test]
@@ -1075,7 +1075,7 @@ async fn manual_sync_archives_merged_parent_and_merged_stacked_child() {
         .expect("expected merged child session");
     assert_eq!(parent_session.status, Status::Done);
     assert_eq!(child_session.status, Status::Done);
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 }
 
 #[tokio::test]
@@ -1128,7 +1128,7 @@ async fn manual_sync_recovers_merged_child_after_parent_was_already_archived() {
         .session_or_err(child_session_id)
         .expect("expected recovered child session");
     assert_eq!(child_session.status, Status::Done);
-    app.services.wait_for_cleanup_tasks().await;
+    app.services.wait_for_cleanup_tasks(None).await;
 }
 
 #[tokio::test]
