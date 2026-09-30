@@ -7,6 +7,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.4] - 2026-09-29
+
+### Added
+
+- `agentty`: report the installation method in telemetry.
+
+### Changed
+
+- `agentty`: replace GPT-6 Sol with GPT-6.1 Sol, including the Codex default, Spark
+  fallback, and saved model selections.
+- workspace: run full validation gates in CI and on demand, keep local checks focused,
+  and update dependencies and GitHub Actions.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.4`.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.16.3] - 2026-09-27
 
 ### Added
