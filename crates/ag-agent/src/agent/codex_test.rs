@@ -1,4 +1,5 @@
 use ag_contracts::AgentRequestKind;
+use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
@@ -31,7 +32,7 @@ fn build_command_builds_app_server_runtime_for_start_requests() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6.1-sol",
+            model: model_fixture::CODEX_MODEL_ID,
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Run checks",
@@ -66,7 +67,7 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6.1-sol",
+            model: model_fixture::CODEX_MODEL_ID,
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Continue edits",
@@ -86,7 +87,7 @@ fn build_command_builds_app_server_runtime_for_resume_requests() {
         arguments,
         vec![
             "--model",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "app-server",
             "--listen",
             "stdio://"
@@ -154,7 +155,7 @@ fn build_command_builds_app_server_runtime_for_utility_prompts() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gpt-6.1-sol",
+            model: model_fixture::CODEX_MODEL_ID,
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",

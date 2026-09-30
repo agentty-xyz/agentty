@@ -4,7 +4,7 @@ use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
     AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
     QuestionAnswer, ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
-    SessionStatus,
+    SessionStatus, test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
@@ -328,7 +328,7 @@ pub(super) fn session_row() -> SessionRow {
         in_progress_total_seconds: 40,
         input_tokens: 50,
         is_draft: true,
-        model: "gpt-6.1-sol".to_string(),
+        model: model_fixture::CODEX_MODEL_ID.to_string(),
         output_tokens: 60,
         parent_session_id: Some("parent-1".to_string()),
         permission_mode: "read_only".to_string(),

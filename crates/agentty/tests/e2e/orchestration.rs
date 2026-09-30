@@ -1,10 +1,11 @@
 //! Orchestration campaign and managed-worker E2E tests.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use agentty::db::{Database, DbError};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
@@ -116,14 +117,24 @@ async fn seed_orchestrator_auto_review_scope(env: &BuilderEnv) -> E2eResult {
 async fn seed_orchestration_campaign_rows(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
-        SessionSeed::regular(CONTROLLER_ID, "gpt-6.1-sol", "main", "Review")
-            .with_title("Managed feature delivery"),
+        SessionSeed::regular(
+            CONTROLLER_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Managed feature delivery"),
     )
     .await?;
     common::seed_session(
         env,
-        SessionSeed::regular(WORKER_ID, "gpt-6.1-sol", "main", "InProgress")
-            .with_title("Implement protocol contract"),
+        SessionSeed::regular(
+            WORKER_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+        )
+        .with_title("Implement protocol contract"),
     )
     .await?;
 

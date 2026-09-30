@@ -1,8 +1,9 @@
 //! Diff navigation, previews, and line comments.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
@@ -262,8 +263,13 @@ async fn seed_markdown_diff_preview(env: &BuilderEnv) -> Result<(), Box<dyn std:
 async fn seed_binary_diff_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(BINARY_DIFF_SESSION_ID, "gpt-6.1-sol", "main", "Review")
-            .with_title("Binary diff session"),
+        SessionSeed::regular(
+            BINARY_DIFF_SESSION_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Binary diff session"),
     )
     .await?;
 

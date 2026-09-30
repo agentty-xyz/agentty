@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use super::super::{AGENTTY_WT_DIR, App};
@@ -149,7 +150,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
         .upsert_project_setting(
             second_project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gpt61Sol.as_str(),
+            model_fixture::CODEX_MODEL.as_str(),
         )
         .await
         .expect("failed to persist second project smart model");
@@ -190,7 +191,7 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     // Assert
     assert_eq!(
         app.settings.default_smart_selection.model(),
-        AgentModel::Gpt61Sol
+        model_fixture::CODEX_MODEL
     );
     assert_eq!(app.settings.launch_configuration, "cargo test");
     assert!(!app.settings_presentation.is_selector_dropdown_open());

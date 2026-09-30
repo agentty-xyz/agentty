@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +21,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
         .expect_run_turn()
         .times(1)
         .returning(|request, _| {
-            assert_eq!(request.model, AgentModel::Gpt61Sol.as_str());
+            assert_eq!(request.model, model_fixture::CODEX_MODEL.as_str());
             assert!(matches!(
                 request.request_kind,
                 AgentRequestKind::UtilityPrompt
@@ -55,7 +55,7 @@ async fn test_submit_one_shot_with_app_server_client_returns_protocol_response()
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::ReadOnly,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -109,7 +109,7 @@ async fn test_submit_one_shot_with_app_server_client_clears_pid_after_turn_failu
             harness: (AgentKind::Codex).to_string(),
             child_pid: Some(Arc::clone(&child_pid)),
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -203,7 +203,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
         .expect_run_turn()
         .times(2)
         .returning(|request, _| {
-            assert_eq!(request.model, AgentModel::Gpt61Sol.as_str());
+            assert_eq!(request.model, model_fixture::CODEX_MODEL.as_str());
             assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
             assert_eq!(request.speed_mode, SpeedMode::Fast);
 
@@ -232,7 +232,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_utility_
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::ReadOnly,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -293,7 +293,7 @@ async fn test_submit_one_shot_with_app_server_client_rejects_plain_text_non_util
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::SessionStart,

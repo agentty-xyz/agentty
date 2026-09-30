@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
+use ag_session::test_support as model_fixture;
 use tracing::instrument::WithSubscriber;
 
 use super::{
@@ -134,12 +135,9 @@ async fn incompatible_prompt_model_switch_disables_fast_mode() {
             .await
             .expect("session should be created"),
     );
-    app.set_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("initial model should update");
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("initial model should update");
     app.update_prompt_session_speed_mode(&session_id, SpeedMode::Fast)
         .await;
 
@@ -179,7 +177,7 @@ async fn incompatible_prompt_model_switch_keeps_model_when_disabling_fast_mode_f
             .await
             .expect("session should be created"),
     );
-    let fast_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    let fast_agent = model_fixture::codex_selection();
     app.set_session_model(&session_id, fast_agent)
         .await
         .expect("initial model should update");

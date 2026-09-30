@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use ag_session::test_support as model_fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
@@ -297,7 +298,7 @@ async fn test_question_scroll_metrics_uses_default_review_model_for_loading_fall
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
             .id(session_id)
-            .model(AgentModel::Gpt61Sol)
+            .model(model_fixture::CODEX_MODEL)
             .status(Status::AgentReview)
             .build(),
     );

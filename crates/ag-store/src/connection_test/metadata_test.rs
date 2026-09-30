@@ -1,4 +1,4 @@
-use ag_session::{AgentModel, SessionDiffState, SessionStats};
+use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
 
 use super::support::insert_session_fixture;
 use crate::SessionTurnMetadata;
@@ -346,7 +346,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: Some("instruction-thread".to_string()),
-                model: AgentModel::Gpt61Sol.as_str().to_string(),
+                model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: Some("thread-123".to_string()),
                 questions_json: r#"[{"text":"Need tests?"}]"#.to_string(),
                 review_comment_resolutions: Vec::new(),

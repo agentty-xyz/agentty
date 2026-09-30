@@ -1,5 +1,6 @@
 //! Prompt editing, focus, paste, and file lookup.
 
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -31,15 +32,20 @@ async fn seed_nested_stacked_at_lookup_session(
     let child_session_id = "atchildx-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(ancestor_session_id, "gpt-6.1-sol", "main", "Review")
-            .with_title("Ancestor with lookup file"),
+        SessionSeed::regular(
+            ancestor_session_id,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Ancestor with lookup file"),
     )
     .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             parent_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/atparent",
             "Draft",
             ancestor_session_id,
@@ -51,7 +57,7 @@ async fn seed_nested_stacked_at_lookup_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/atmiddle",
             "Draft",
             parent_session_id,

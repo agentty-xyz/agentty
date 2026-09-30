@@ -11,6 +11,7 @@ use ag_git::{MockGitClient, RebaseStepResult};
 use ag_protocol::{
     AgentResponse, ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment,
 };
+use ag_session::test_support as model_fixture;
 use ag_worker::{MockRunClient, RunClient, SessionRunClient};
 use mockall::Sequence;
 use tempfile::tempdir;
@@ -1241,7 +1242,7 @@ pub(super) async fn seed_existing_session_rebase_metadata(
         db.sessions()
             .insert_session(
                 parent_session_id,
-                "gpt-6.1-sol",
+                model_fixture::CODEX_MODEL_ID,
                 "main",
                 "Review",
                 project_id,
@@ -1251,7 +1252,7 @@ pub(super) async fn seed_existing_session_rebase_metadata(
         db.sessions()
             .insert_stacked_draft_session(
                 "sess1",
-                "gpt-6.1-sol",
+                model_fixture::CODEX_MODEL_ID,
                 "main",
                 "Rebasing",
                 parent_session_id,
@@ -1261,7 +1262,13 @@ pub(super) async fn seed_existing_session_rebase_metadata(
             .expect("failed to insert stacked session");
     } else {
         db.sessions()
-            .insert_session("sess1", "gpt-6.1-sol", "main", "Rebasing", project_id)
+            .insert_session(
+                "sess1",
+                model_fixture::CODEX_MODEL_ID,
+                "main",
+                "Rebasing",
+                project_id,
+            )
             .await
             .expect("failed to insert session");
     }
@@ -1490,10 +1497,7 @@ pub(super) fn rebase_assist_worker_harness(
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
         session_id: "sess1".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt61Sol,
-        ),
+        session_agent: model_fixture::codex_selection(),
         status: Arc::clone(&status),
     };
 

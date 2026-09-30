@@ -1,11 +1,12 @@
 //! Queued session messages and actions.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
@@ -28,8 +29,13 @@ const QUEUED_SYNC_QUESTION_TEXT: &str = "Should I continue before syncing?";
 async fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(REBASING_QUEUE_SESSION_ID, "gpt-6.1-sol", "main", "Rebasing")
-            .with_title("Rebasing message queue"),
+        SessionSeed::regular(
+            REBASING_QUEUE_SESSION_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Rebasing",
+        )
+        .with_title("Rebasing message queue"),
     )
     .await?;
 

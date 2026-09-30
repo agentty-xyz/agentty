@@ -1,3 +1,4 @@
+use ag_session::test_support as model_fixture;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::{Table, TableState};
@@ -247,7 +248,7 @@ fn test_settings_selector_dropdown_renders_stage_title() {
     // Arrange
     let selector_dropdown = SettingsSelectorDropdown {
         options: vec![SettingsSelectorDropdownOption {
-            label: "codex/gpt-6.1-sol".to_string(),
+            label: format!("codex/{}", model_fixture::CODEX_MODEL_ID),
         }],
         row_index: 2,
         selected_index: 0,
@@ -280,7 +281,7 @@ fn test_settings_selector_dropdown_renders_stage_title() {
 
     // Assert
     assert!(rendered_text.contains("Select model"));
-    assert!(rendered_text.contains("codex/gpt-6.1-sol"));
+    assert!(rendered_text.contains(&format!("codex/{}", model_fixture::CODEX_MODEL_ID)));
 }
 
 #[test]

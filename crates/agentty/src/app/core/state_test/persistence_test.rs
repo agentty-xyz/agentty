@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 
+use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use super::super::App;
@@ -35,7 +36,13 @@ async fn test_continue_terminal_session_falls_back_to_persisted_context_without_
     app.services
         .db()
         .sessions()
-        .insert_session("done-source", "gpt-6.1-sol", "main", "Done", project_id)
+        .insert_session(
+            "done-source",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Done",
+            project_id,
+        )
         .await
         .expect("failed to insert source session row");
     let source_session = crate::test_support::SessionFixtureBuilder::new()
@@ -117,7 +124,7 @@ async fn test_continue_terminal_session_uses_persisted_context_for_canceled_sour
         .sessions()
         .insert_session(
             "canceled-source",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             "Canceled",
             project_id,

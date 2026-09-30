@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use ag_session::AgentSelectionMetadata;
+use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
@@ -70,7 +70,7 @@ fn test_validate_generated_commit_message_rejects_agentty_trailer() {
 async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")
@@ -100,7 +100,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     let smart_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        model_fixture::codex_selection(),
     )
     .await;
 
@@ -121,15 +121,12 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
     let session_fallback_agent = SessionTaskService::load_auto_commit_agent_setting(
         &database,
         "session-id",
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        model_fixture::codex_selection(),
     )
     .await;
 
     // Assert
-    assert_eq!(
-        session_fallback_agent,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
-    );
+    assert_eq!(session_fallback_agent, model_fixture::codex_selection());
 }
 
 #[tokio::test]
@@ -202,7 +199,7 @@ async fn test_run_agent_assist_task_unwraps_one_shot_answer_without_raw_json() {
 async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
 
     // Act
     let include_coauthored_by_agentty =
@@ -219,7 +216,7 @@ async fn test_load_include_coauthored_by_agentty_setting_defaults_to_false() {
 async fn test_load_include_coauthored_by_agentty_setting_defaults_invalid_value_to_false() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let project_id = database
         .sessions()
         .load_session_project_id("session-id")

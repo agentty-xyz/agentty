@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ag_session::test_support as model_fixture;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::session::SessionStats;
 use agentty::domain::session_message::SessionMessageKind;
@@ -84,7 +85,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0002",
         input_tokens: 12_000,
-        model: "gpt-6.1-sol",
+        model: model_fixture::CODEX_MODEL_ID,
         output_tokens: 3_900,
         size: "L",
         status: "InProgress",
@@ -129,7 +130,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0007",
         input_tokens: 0,
-        model: "gpt-6.1-sol",
+        model: model_fixture::CODEX_MODEL_ID,
         output_tokens: 0,
         size: "L",
         status: "Queued",
@@ -437,7 +438,7 @@ async fn seed_dashboard_activity(
                 .sessions()
                 .insert_session(
                     &session_id,
-                    "gpt-6.1-sol",
+                    model_fixture::CODEX_MODEL_ID,
                     "main",
                     "Done",
                     activity_project_id,

@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use ag_contracts::OneShotError;
 use ag_git::{GitError, MockGitClient};
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
@@ -24,7 +25,7 @@ use crate::infra::fs;
 async fn test_append_workflow_notice_updates_live_and_durable_workflow_transcript() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let session_update_versions = Arc::default();
@@ -110,7 +111,7 @@ async fn test_handle_auto_commit_updates_session_title() {
         .times(1)
         .returning(|_| Box::pin(async { Ok::<_, GitError>("abc1234".to_string()) }));
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let mut run_client = MockRunClient::new();
@@ -129,7 +130,7 @@ async fn test_handle_auto_commit_updates_session_title() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        session_agent: model_fixture::codex_selection(),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };
@@ -168,7 +169,7 @@ async fn test_handle_auto_commit_updates_session_title() {
 async fn test_status_transition_from_services_updates_handle_and_persistence() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, "gpt-6.1-sol").await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL_ID).await;
     let handles = SessionHandles::new(Status::Review);
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let services = AppServices::new_with_agent_clis(
@@ -223,7 +224,7 @@ async fn test_status_transition_from_services_updates_handle_and_persistence() {
 async fn test_append_session_transcript_message_updates_live_and_durable_typed_transcript() {
     // Arrange
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let session_update_versions = Arc::default();
@@ -346,7 +347,7 @@ async fn test_update_status_accumulates_repeated_in_progress_intervals() {
         .sessions()
         .insert_session(
             "session-id",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             &Status::Draft.to_string(),
             project_id,

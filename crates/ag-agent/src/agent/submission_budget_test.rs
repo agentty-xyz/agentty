@@ -8,7 +8,7 @@ use ag_contracts::{
     ReasoningLevel, SpeedMode,
 };
 use ag_protocol::ProtocolSchemaInstructionMode;
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, test_support as model_fixture};
 
 use super::submit_one_shot_with_backend;
 use crate::app_server::{AppServerSessionRegistry, RuntimeInspector, run_turn_with_restart_retry};
@@ -22,7 +22,7 @@ fn request(limit: usize) -> OneShotRequest {
         harness: (AgentKind::Codex).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
-        model: AgentModel::Gpt61Sol.as_str().to_string(),
+        model: model_fixture::CODEX_MODEL.as_str().to_string(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: "Summarize changes".into(),
         provider_call_budget: Some(ProviderCallBudget::new(limit)),

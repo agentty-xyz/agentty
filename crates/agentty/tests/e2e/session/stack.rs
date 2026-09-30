@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 
@@ -21,15 +22,20 @@ async fn seed_review_ready_parent_with_review_child(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("stack-parent-0001", "gpt-6.1-sol", "main", "Review")
-            .with_title("Parent stack review"),
+        SessionSeed::regular(
+            "stack-parent-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Parent stack review"),
     )
     .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             "stack-child-0001",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/stack-pa",
             "Review",
             "stack-parent-0001",
@@ -48,8 +54,13 @@ async fn seed_review_ready_parent_with_review_child(
 async fn seed_four_level_review_stack(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("stackl00-0001", "gpt-6.1-sol", "main", "Review")
-            .with_title("Stack root"),
+        SessionSeed::regular(
+            "stackl00-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Stack root"),
     )
     .await?;
     for level in 1..=4 {
@@ -62,7 +73,7 @@ async fn seed_four_level_review_stack(env: &BuilderEnv) -> Result<(), Box<dyn st
             env,
             SessionSeed::stacked_draft(
                 &session_id,
-                "gpt-6.1-sol",
+                model_fixture::CODEX_MODEL_ID,
                 &parent_branch,
                 "Review",
                 &parent_session_id,
@@ -96,6 +107,7 @@ async fn seed_four_level_review_stack(env: &BuilderEnv) -> Result<(), Box<dyn st
 
 /// Seeds two independent review branches that can be combined into one stack.
 async fn seed_appendable_review_sessions(env: &BuilderEnv) -> E2eResult {
+    let model_id = model_fixture::CODEX_MODEL_ID;
     let parent_session_id = "append-p-0001";
     let child_session_id = "append-c-0001";
     let parent_worktree = env.agentty_root.join("wt").join("append-p");
@@ -134,13 +146,13 @@ async fn seed_appendable_review_sessions(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-6.1-sol", "main", "Review")
+        SessionSeed::regular(parent_session_id, model_id, "main", "Review")
             .with_title("Append parent session"),
     )
     .await?;
     common::seed_session(
         env,
-        SessionSeed::regular(child_session_id, "gpt-6.1-sol", "main", "Review")
+        SessionSeed::regular(child_session_id, model_id, "main", "Review")
             .with_title("Append child session"),
     )
     .await?;
@@ -153,7 +165,7 @@ async fn seed_appendable_review_sessions(env: &BuilderEnv) -> E2eResult {
         ))?;
         common::seed_session(
             env,
-            SessionSeed::regular(overflow_parent_id.as_str(), "gpt-6.1-sol", "main", "Review")
+            SessionSeed::regular(overflow_parent_id.as_str(), model_id, "main", "Review")
                 .with_title(overflow_parent_title.as_str()),
         )
         .await?;
@@ -196,8 +208,13 @@ async fn seed_pending_post_merge_restack_child(
     let parent_tip = seed_child_worktree_for_onto_rebase(&env.workdir, &child_worktree)?;
     common::seed_session(
         env,
-        SessionSeed::regular("stack-restack-child-0001", "gpt-6.1-sol", "main", "Review")
-            .with_title("Pending post-merge child sync"),
+        SessionSeed::regular(
+            "stack-restack-child-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Pending post-merge child sync"),
     )
     .await?;
 
@@ -224,7 +241,7 @@ async fn seed_failing_pending_post_merge_restack_child(
         env,
         SessionSeed::regular(
             "stack-restack-failure-0001",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             "Review",
         )

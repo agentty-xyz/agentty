@@ -6,6 +6,7 @@ use ag_forge as forge;
 use ag_forge::{MockReviewRequestClient, ReviewCommentAnchorSide, ReviewCommentThread};
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
+use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
 
 use super::{
@@ -13,7 +14,6 @@ use super::{
     ReviewRequestMetadataSyncInput, resolve_review_comments_after_push, review_comment_reply_body,
     sync_linked_review_request_metadata_after_push,
 };
-use crate::domain::agent::AgentSelection;
 use crate::domain::session::{ReviewRequest, ReviewRequestState};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
@@ -95,10 +95,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
         commit_message: Some("Generated title\n\nNew body.".to_string()),
         evaluation: ReviewRequestMetadataEvaluationInput {
             run_client: Arc::new(run_client),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Codex,
-                crate::domain::agent::AgentModel::Gpt61Sol,
-            ),
+            session_agent: model_fixture::codex_selection(),
         },
         review_request_client: Arc::new(review_request_client),
     };
@@ -1094,10 +1091,7 @@ fn metadata_sync_input(
         commit_message: commit_message.map(str::to_string),
         evaluation: ReviewRequestMetadataEvaluationInput {
             run_client: Arc::new(ag_worker::MockRunClient::new()),
-            session_agent: AgentSelection::new(
-                crate::domain::agent::AgentKind::Codex,
-                crate::domain::agent::AgentModel::Gpt61Sol,
-            ),
+            session_agent: model_fixture::codex_selection(),
         },
         review_request_client: Arc::new(review_request_client),
     }

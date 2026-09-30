@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ag_forge as forge;
 use ag_git as git;
+use ag_session::test_support as model_fixture;
 
 use super::support::{
     database_with_session, session_manager_with_one_session, test_services,
@@ -39,11 +40,7 @@ async fn set_session_model_persists_new_model_and_clears_conversation_state() {
 
     // Act
     session_manager
-        .set_session_model(
-            &services,
-            "session-id",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        )
+        .set_session_model(&services, "session-id", model_fixture::codex_selection())
         .await
         .expect("set session model should succeed");
     let persisted_model = database
@@ -68,14 +65,14 @@ async fn set_session_model_persists_new_model_and_clears_conversation_state() {
     let emitted_event = event_rx.try_recv().expect("model event expected");
 
     // Assert
-    assert_eq!(persisted_model, AgentModel::Gpt61Sol.as_str());
+    assert_eq!(persisted_model, model_fixture::CODEX_MODEL.as_str());
     assert!(cleared_provider.is_none());
     assert!(cleared_instruction.is_none());
     assert_eq!(
         emitted_event,
         AppEvent::SessionModelUpdated {
             session_id: "session-id".into(),
-            session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            session_agent: model_fixture::codex_selection(),
         }
     );
     assert!(session_manager.should_replay_history("session-id"));
@@ -141,11 +138,7 @@ async fn set_session_model_returns_error_for_missing_session() {
 
     // Act
     let result = session_manager
-        .set_session_model(
-            &services,
-            "missing",
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        )
+        .set_session_model(&services, "missing", model_fixture::codex_selection())
         .await;
 
     // Assert

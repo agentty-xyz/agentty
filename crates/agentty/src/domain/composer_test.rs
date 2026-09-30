@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use ag_protocol::render_prompt_text_for_agent;
+use ag_session::test_support as model_fixture;
 
 use super::{
     PromptAttachment, PromptAttachmentState, PromptComposerState, PromptHistoryState,
@@ -594,7 +595,7 @@ fn test_model_stage_suggestion_list_prefers_available_session_agent_when_unset()
         labels,
         vec![
             "gpt-6-astra".to_string(),
-            "gpt-6.1-sol".to_string(),
+            model_fixture::CODEX_MODEL_ID.to_string(),
             "gpt-6-luna".to_string(),
             "gpt-5.6-terra".to_string(),
             "gpt-5.3-codex-spark".to_string(),

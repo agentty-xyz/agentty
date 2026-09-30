@@ -47,14 +47,25 @@ fn auto_compact_input_token_threshold_uses_1050k_limit_for_codex_models() {
     let spark_threshold = policy::auto_compact_input_token_threshold(spark_model);
 
     // Assert
-    assert_eq!(
-        large_context_thresholds,
-        [policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT; 4]
-    );
-    assert_eq!(
-        spark_threshold,
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT
-    );
+    assert_eq!(large_context_thresholds, [922_000; 4]);
+    assert_eq!(spark_threshold, 120_000);
+}
+
+#[test]
+fn undeclared_and_foreign_models_use_conservative_compaction_budget() {
+    // Arrange
+    let models = [
+        "unknown-model",
+        "claude-opus-5-5",
+        "gemini-3.1-pro-preview",
+        "gpt-6-sol",
+    ];
+
+    // Act
+    let budgets = models.map(policy::auto_compact_input_token_threshold);
+
+    // Assert
+    assert_eq!(budgets, [120_000; 4]);
 }
 
 #[tokio::test]
@@ -124,10 +135,7 @@ async fn send_compact_request_resets_latest_input_tokens_on_success() {
 #[tokio::test]
 async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
     // Arrange
-    let mut state = build_runtime_state(
-        "thread-1",
-        policy::AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT,
-    );
+    let mut state = build_runtime_state("thread-1", 922_000);
     let compact_id = Arc::new(Mutex::new(None));
     let turn_id = Arc::new(Mutex::new(None));
     let mut transport = MockCodexRuntimeTransport::new();

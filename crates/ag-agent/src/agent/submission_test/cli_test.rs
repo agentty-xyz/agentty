@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
 
 use super::support::{mock_shell_command, stdin_capture_shell_command};
@@ -85,7 +85,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,

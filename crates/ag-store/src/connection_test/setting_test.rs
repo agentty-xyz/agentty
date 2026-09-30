@@ -1,4 +1,6 @@
-use ag_session::{AgentModel, ReasoningLevel, SettingName, SpeedMode};
+use ag_session::{
+    AgentModel, ReasoningLevel, SettingName, SpeedMode, test_support as model_fixture,
+};
 
 use crate::connection::Database;
 
@@ -19,7 +21,10 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
         .expect("failed to persist default smart model");
     database
         .settings()
-        .upsert_setting(SettingName::DefaultFastModel, AgentModel::Gpt61Sol.as_str())
+        .upsert_setting(
+            SettingName::DefaultFastModel,
+            model_fixture::CODEX_MODEL.as_str(),
+        )
         .await
         .expect("failed to persist default fast model");
     database
@@ -55,7 +60,7 @@ async fn test_setting_round_trip_supports_default_smart_fast_and_review_models()
     );
     assert_eq!(
         default_fast_model,
-        Some(AgentModel::Gpt61Sol.as_str().to_string())
+        Some(model_fixture::CODEX_MODEL.as_str().to_string())
     );
     assert_eq!(
         default_review_model,

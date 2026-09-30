@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use ag_forge as forge;
 use ag_git as git;
+use ag_session::test_support as model_fixture;
 
 use super::super::session;
 use super::{
@@ -51,7 +52,13 @@ async fn push_session_branch_to_remote_with_mock(
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
 
@@ -132,7 +139,13 @@ async fn push_session_branch_to_remote_persists_upstream_reference() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -334,7 +347,13 @@ async fn push_blocks_when_custom_remote_branch_already_exists() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -374,7 +393,13 @@ async fn push_uses_tracked_lease_when_upstream_ref_is_already_set() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -415,7 +440,13 @@ async fn push_uses_tracked_lease_for_default_session_branch_name() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -463,7 +494,13 @@ async fn push_blocks_while_session_branch_rebase_is_in_progress() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -576,7 +613,13 @@ async fn push_blocks_when_worktree_is_not_on_session_branch() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -652,7 +695,13 @@ async fn push_shows_auth_guidance_when_ls_remote_returns_auth_error() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");
@@ -703,7 +752,13 @@ async fn push_shows_auth_guidance_when_push_returns_auth_error() {
         .expect("failed to insert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let session_folder = PathBuf::from("/tmp/session-worktree");

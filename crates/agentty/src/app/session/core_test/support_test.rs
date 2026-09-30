@@ -10,13 +10,14 @@ use ag_forge::{
 };
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use ag_worker::test_support::{AgentBackend, AppServerClient, MockAgentBackend};
 
 use super::super::{SessionDefaults, SessionManager, session_folder};
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, ReviewCacheEntry, SessionState};
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
     SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionRole, SessionSize, SessionStats,
@@ -38,7 +39,7 @@ pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
         progress: None,
         diff_hash,
         review_agent: (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            model_fixture::codex_selection(),
             ReasoningLevel::High,
             SpeedMode::Normal,
         ),
@@ -761,10 +762,7 @@ pub(super) fn test_session_manager_with_clock(
             controller_session_id: None,
             orchestration_progress: None,
             role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt61Sol,
-            ),
+            agent: model_fixture::codex_selection(),
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
             personality_id: None,
@@ -793,7 +791,7 @@ pub(super) fn test_session_manager_with_clock(
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,

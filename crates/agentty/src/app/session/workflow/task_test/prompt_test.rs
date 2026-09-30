@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::OneShotError;
 use ag_git::MockGitClient;
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 
@@ -15,7 +16,6 @@ use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::session::SessionError;
 use crate::db::AppRepositories;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         ))
     });
     let database = AppRepositories::in_memory().await.expect("db should open");
-    insert_review_session(&database, AgentModel::Gpt61Sol.as_str()).await;
+    insert_review_session(&database, model_fixture::CODEX_MODEL.as_str()).await;
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
@@ -66,7 +66,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
         git_client: Arc::new(mock_git_client),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        session_agent: model_fixture::codex_selection(),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };

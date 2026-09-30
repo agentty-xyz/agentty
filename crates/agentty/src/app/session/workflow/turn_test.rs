@@ -1,3 +1,5 @@
+use ag_session::test_support as model_fixture;
+
 use super::{
     READ_ONLY_CHAT_PROMPT, load_session_permission_mode, load_session_response_style,
     load_title_reasoning_level,
@@ -28,14 +30,20 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-6.1-sol", "main", "InProgress", project_id)
+        .insert_session(
+            "worker",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
         .await
         .expect("failed to insert worker session");
     repositories
         .sessions()
         .insert_session(
             "read-only-worker",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             "InProgress",
             project_id,
@@ -54,7 +62,7 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
             base_branch: "main",
             id: "researcher",
             is_draft: false,
-            model: "gpt-6.1-sol",
+            model: model_fixture::CODEX_MODEL_ID,
             orchestration_task_id: None,
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
@@ -119,7 +127,13 @@ async fn response_style_load_returns_persisted_value_and_defaults_missing_sessio
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-6.1-sol", "main", "InProgress", project_id)
+        .insert_session(
+            "worker",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
         .await
         .expect("failed to insert worker session");
     repositories
@@ -150,7 +164,13 @@ async fn permission_mode_load_rejects_invalid_persisted_values() {
         .expect("failed to upsert project");
     repositories
         .sessions()
-        .insert_session("worker", "gpt-6.1-sol", "main", "InProgress", project_id)
+        .insert_session(
+            "worker",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
         .await
         .expect("failed to insert worker session");
     sqlx::query("UPDATE session SET permission_mode = 'invalid' WHERE id = 'worker'")

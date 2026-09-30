@@ -1,8 +1,9 @@
 use std::fs;
 
+use ag_session::test_support as model_fixture;
+
 use super::support::{test_app_viewing_reconcile_session, test_prompt_mode_snapshot};
 use crate::app::core::event::{AppEvent, AppEventBatch};
-use crate::domain::agent::AgentModel;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -17,7 +18,7 @@ async fn session_chat_history_loads_persisted_transcript_for_unloaded_session() 
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gpt61Sol.as_str(),
+            model_fixture::CODEX_MODEL.as_str(),
             "main",
             "Review",
             app.active_project_id(),

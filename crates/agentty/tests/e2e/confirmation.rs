@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -16,8 +17,13 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 async fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     common::seed_session(
         env,
-        SessionSeed::draft("draft-cancel-0001", "gpt-6.1-sol", "main", "Draft")
-            .with_title("Cancel staged draft from list"),
+        SessionSeed::draft(
+            "draft-cancel-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Draft",
+        )
+        .with_title("Cancel staged draft from list"),
     )
     .await
 }
@@ -28,7 +34,7 @@ async fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-6.1-sol", "main", "Draft")
+        SessionSeed::regular(session_id, model_fixture::CODEX_MODEL_ID, "main", "Draft")
             .with_title("Cancel draft orchestrator"),
     )
     .await?;
@@ -60,8 +66,13 @@ async fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-6.1-sol", "main", "InProgress")
-            .with_title("Cancel running session"),
+        SessionSeed::regular(
+            session_id,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+        )
+        .with_title("Cancel running session"),
     )
     .await?;
 
@@ -80,15 +91,20 @@ async fn seed_cancelable_stacked_child_session(env: &BuilderEnv) -> E2eResult {
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-6.1-sol", "main", "Review")
-            .with_title("Parent for child cancel"),
+        SessionSeed::regular(
+            parent_session_id,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Parent for child cancel"),
     )
     .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/parentca",
             "Draft",
             parent_session_id,
@@ -111,15 +127,20 @@ async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv)
 
     common::seed_session(
         env,
-        SessionSeed::regular(parent_session_id, "gpt-6.1-sol", "main", "Review")
-            .with_title("Cancel cascade parent"),
+        SessionSeed::regular(
+            parent_session_id,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Cancel cascade parent"),
     )
     .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             child_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/cascadep",
             "Review",
             parent_session_id,
@@ -131,7 +152,7 @@ async fn seed_cancelable_parent_with_active_stacked_descendant(env: &BuilderEnv)
         env,
         SessionSeed::stacked_draft(
             grandchild_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/cascadec",
             "Question",
             child_session_id,

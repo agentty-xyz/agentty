@@ -6,6 +6,7 @@ use ag_contracts::OneShotError;
 use ag_forge as forge;
 use ag_git::{GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 use tracing::instrument::WithSubscriber;
@@ -359,7 +360,7 @@ async fn ordinary_commit_failures_do_not_emit_review_comment_warnings() {
         .once()
         .returning(|_| Err(OneShotError::new("commit failed")));
     context.run_client = Arc::new(run_client);
-    let session_agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    let session_agent = model_fixture::codex_selection();
 
     // Act
     let result = run_auto_commit(&context, session_agent, false, &[])

@@ -40,12 +40,19 @@ through the correct modules without crossing layer boundaries.
 
 ## Add a New Agent Backend or Model
 
-1. Update provider model declarations in `crates/ag-session/src/agent.rs`.
-1. Add backend behavior in `crates/ag-agent/src/agent/` and register it in
-   `crates/ag-agent/src/agent/provider.rs`.
+1. Declare model ids, descriptions, provider order, speed support, and known context
+   budgets together in the catalog in `crates/ag-session/src/agent.rs`. Keep provider
+   defaults and retired-id mappings explicit; removing a public enum variant is a Rust
+   API change even when saved ids remain compatible.
+1. For a new backend, add behavior in `crates/ag-agent/src/agent/` and register it in
+   `crates/ag-agent/src/agent/provider.rs`. Existing backends consume catalog
+   capabilities instead of maintaining their own model lists.
 1. Keep transport selection, parsing, streaming, and provider setup in the provider
    registry; application workflows continue through worker clients.
 1. Update `docs/site/content/docs/agents/backends.md` with backend/model documentation.
+1. Keep explicit expectations in model, default, and retirement tests. Use the
+   `ag-session` `test-utils` fixtures for unrelated workflows so model replacements do
+   not require editing each test.
 
 ## Add a Built-in `ag-router` Model
 

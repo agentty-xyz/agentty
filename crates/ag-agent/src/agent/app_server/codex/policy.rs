@@ -3,7 +3,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use ag_contracts::{PermissionMode, ReasoningLevel};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, ModelContextLimits};
 use serde_json::Value;
 
 use crate::model::reasoning;
@@ -94,37 +94,15 @@ impl PreActionApprovalKind {
     }
 }
 
-/// Proactive compaction threshold for Codex models with a 1.05M context window.
+/// Returns the declared input-token budget for a Codex model.
 ///
-/// GPT-6 and GPT-5.6 models reserve up to 128k tokens for output,
-/// leaving a maximum input size of 922k tokens before compaction is required.
-pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT: u64 = 1_050_000 - 128_000;
-
-/// Proactive compaction threshold for Codex Spark models with a 128k context
-/// window.
-pub(super) const AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT: u64 = 120_000;
-
-/// Returns the proactive compaction threshold for one Codex model name.
-///
-/// This parses through [`AgentModel`] via [`AgentKind::Codex`] so model
-/// mapping remains centralized in the domain enum instead of local string
-/// checks. It keeps larger-window Codex models from compacting too early
-/// while preserving the tighter threshold required by Spark models.
+/// Context capacity and output/overhead reserves come from the selection
+/// catalog. Unknown and non-Codex ids retain the conservative 120k fallback.
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
-    let is_1050k_context_model = matches!(
-        AgentKind::Codex.parse_model(model),
-        Some(
-            AgentModel::Gpt6Astra
-                | AgentModel::Gpt61Sol
-                | AgentModel::Gpt6Luna
-                | AgentModel::Gpt56Terra
-        )
-    );
-    if is_1050k_context_model {
-        return AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_1050K_CONTEXT;
-    }
-
-    AUTO_COMPACT_INPUT_TOKEN_THRESHOLD_128K_CONTEXT
+    AgentKind::Codex
+        .parse_model(model)
+        .and_then(AgentModel::context_limits)
+        .map_or(120_000, ModelContextLimits::input_token_budget)
 }
 
 /// Returns the app-server approval policy used for one permission mode.

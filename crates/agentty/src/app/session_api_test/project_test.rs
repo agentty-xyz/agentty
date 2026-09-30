@@ -1,6 +1,6 @@
 use ag_session::{
     AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest,
-    SessionError as ApiSessionError, SessionId,
+    SessionError as ApiSessionError, SessionId, test_support as model_fixture,
 };
 
 use super::support::{request_session, request_session_creation};
@@ -72,7 +72,7 @@ async fn runtime_backend_rejects_cross_project_inheritance() {
         .sessions()
         .insert_session(
             &source_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "develop",
             "Draft",
             inactive_project_id,
@@ -120,7 +120,7 @@ async fn runtime_backend_rejects_stacked_parent_from_another_project() {
         .sessions()
         .insert_session(
             &parent_session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "develop",
             "Review",
             inactive_project_id,

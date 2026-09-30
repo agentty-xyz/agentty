@@ -1,6 +1,6 @@
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_forge::ForgeKind;
-use ag_session::{AgentKind, AgentModel};
+use ag_session::test_support as model_fixture;
 
 use super::super::build_api_session;
 use super::support::session_row;
@@ -37,10 +37,7 @@ fn build_api_session_returns_complete_settings_and_messages() {
     assert_eq!(session.settings.parent_session_id, Some("parent-1".into()));
     assert_eq!(session.settings.permission_mode, PermissionMode::ReadOnly);
     assert_eq!(session.settings.personality_id.as_deref(), Some("reviewer"));
-    assert_eq!(
-        session.settings.agent,
-        ag_session::AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
-    );
+    assert_eq!(session.settings.agent, model_fixture::codex_selection());
     assert_eq!(session.settings.reasoning_level, ReasoningLevel::XHigh);
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
     assert_eq!(

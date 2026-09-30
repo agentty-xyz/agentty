@@ -3,8 +3,8 @@ use std::sync::Arc;
 use ag_contracts::AgentRequestKind;
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, CreateSessionMode, CreateSessionRequest,
-    SessionError as ApiSessionError, SessionStatus,
+    CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionStatus,
+    test_support as model_fixture,
 };
 
 use super::support::{
@@ -33,12 +33,9 @@ async fn runtime_backend_queues_one_question_resume_behind_turn_entering_questio
     )
     .await
     .expect("draft session should be created");
-    app.set_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("session model should update");
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("session model should update");
     request_message(&mut app, session_id.clone(), "initial prompt")
         .await
         .expect("initial turn should start");

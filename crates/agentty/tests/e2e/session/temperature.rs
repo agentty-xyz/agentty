@@ -1,9 +1,10 @@
 //! Host temperature scenarios.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 
@@ -26,7 +27,7 @@ async fn test_session_host_cpu_temperature() -> E2eResult {
                         ("DefaultSmartAgent", "claude"),
                         ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
                         ("DefaultFastAgent", "codex"),
-                        ("DefaultFastModel", "gpt-6.1-sol"),
+                        ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
                     ],
                 ).await?;
                 let scripts = [

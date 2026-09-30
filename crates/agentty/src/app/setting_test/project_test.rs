@@ -1,3 +1,5 @@
+use ag_session::test_support as model_fixture;
+
 use super::super::{load_default_smart_model_setting, load_project_speed_mode_setting};
 use super::support::{new_settings_manager, settings_manager, test_services};
 use crate::db::AppRepositories;
@@ -56,7 +58,7 @@ async fn settings_manager_new_loads_project_scoped_values() {
             vec![
                 (
                     SettingName::DefaultSmartModel,
-                    AgentModel::Gpt61Sol.as_str().to_string(),
+                    model_fixture::CODEX_MODEL.as_str().to_string(),
                 ),
                 (
                     SettingName::DefaultFastModel,
@@ -123,11 +125,11 @@ async fn settings_manager_new_loads_project_scoped_values() {
     // Assert
     assert_eq!(
         settings.default_smart_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
+        model_fixture::codex_selection()
     );
     assert_eq!(
         settings.default_fast_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
+        model_fixture::codex_selection()
     );
     assert_eq!(
         settings.default_review_selection,
@@ -160,7 +162,7 @@ async fn load_default_smart_model_setting_prefers_project_override() {
         .upsert_project_setting(
             project_id,
             SettingName::DefaultSmartModel,
-            AgentModel::Gpt61Sol.as_str(),
+            model_fixture::CODEX_MODEL.as_str(),
         )
         .await
         .expect("failed to persist smart model");
@@ -174,5 +176,5 @@ async fn load_default_smart_model_setting_prefers_project_override() {
     .await;
 
     // Assert
-    assert_eq!(loaded_model, AgentModel::Gpt61Sol);
+    assert_eq!(loaded_model, model_fixture::CODEX_MODEL);
 }

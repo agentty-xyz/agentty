@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 
 use ag_agent::{BuildCommandRequest, create_backend};
 use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
-use ag_session::AgentKind;
+use ag_session::{AgentKind, test_support as model_fixture};
 use tempfile::tempdir;
 
 #[test]
@@ -19,7 +19,7 @@ fn native_subagent_limits_apply_to_new_resumed_and_utility_sessions() {
     ];
 
     for (kind, model) in [
-        (AgentKind::Codex, "gpt-6.1-sol"),
+        (AgentKind::Codex, model_fixture::CODEX_MODEL_ID),
         (AgentKind::Claude, "claude-sonnet-5"),
     ] {
         let backend = create_backend(kind);

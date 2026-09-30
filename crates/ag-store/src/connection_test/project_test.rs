@@ -1,4 +1,4 @@
-use ag_session::{AgentModel, SessionDiffState, SessionStats};
+use ag_session::{SessionDiffState, SessionStats, test_support as model_fixture};
 
 use crate::SessionTurnMetadata;
 use crate::connection::Database;
@@ -27,7 +27,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
-                model: AgentModel::Gpt61Sol.as_str().to_string(),
+                model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),
@@ -55,7 +55,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
                 instruction_conversation_id: None,
-                model: AgentModel::Gpt61Sol.as_str().to_string(),
+                model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: None,
                 questions_json: "[]".to_string(),
                 review_comment_resolutions: Vec::new(),

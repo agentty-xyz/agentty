@@ -21,6 +21,10 @@ installed harness and its supported controls.
 Unit tests live in sibling `*_test.rs` modules. Shared fixtures remain test-only; public
 integration tests exercise supported APIs without exposing private implementation.
 
+The `ag-session` `test-utils` feature supplies pinned model selections for unrelated
+workflow tests and demos. Model catalog, default, and retirement tests keep independent,
+explicit expectations so fixture reuse does not hide changes to those contracts.
+
 <a id="architecture-testability-boundaries"></a> Major injectable contracts:
 
 | Boundary                         | Contract                        |

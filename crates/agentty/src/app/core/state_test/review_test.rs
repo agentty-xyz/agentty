@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_forge as forge;
+use ag_session::test_support as model_fixture;
 use app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskFailure, BranchPublishTaskSession,
     push_session_branch, run_branch_publish_action,
@@ -221,7 +222,7 @@ async fn test_switch_project_recovers_persisted_deferred_review_after_restart() 
         .sessions()
         .insert_session(
             session_id,
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             "Review",
             second_project_id,
