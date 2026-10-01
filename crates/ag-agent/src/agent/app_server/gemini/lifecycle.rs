@@ -329,6 +329,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
     transport.write_json_line(session_prompt_payload).await?;
 
     let mut assistant_message = String::new();
+    let mut operation_trace = agent::trace::OperationTrace::new();
     tokio::time::timeout(app_server_transport::TURN_TIMEOUT, async {
         loop {
             let stdout_line = transport.next_stdout().await?.ok_or_else(|| {
@@ -378,6 +379,7 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             if let Some(progress) =
                 stream_parser::extract_progress_update(&response_value, session_id)
             {
+                operation_trace.observe(AgentKind::Gemini, &response_value);
                 let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(progress));
             }
 

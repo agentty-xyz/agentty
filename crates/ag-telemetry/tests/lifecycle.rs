@@ -2,6 +2,7 @@
 
 use std::future;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use ag_telemetry::{
     Context, FutureExt as _, KeyValue, Outcome, QueuedTrace, Span, current_attribute, milestone,
@@ -36,6 +37,9 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
     let root_context = root.context();
     let root_id = root_context.span().span_context().span_id();
     root.scope(async {
+        Span::child_at("reported.interval", SystemTime::UNIX_EPOCH)
+            .scope(async {})
+            .await;
         current_attribute("agentty.turn.id", "turn-1");
         Span::root("child.session", Vec::new())
             .scope(async {})
@@ -84,7 +88,6 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
             .find(|span| span.name == name)
             .expect("named span")
     };
-    assert_eq!(find("utility.run").parent_span_id, root_id);
     assert_eq!(
         find("child.session").links.links[0].span_context.span_id(),
         root_id
@@ -101,7 +104,6 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
         find("agent.attempt").parent_span_id,
         find("utility.run").span_context.span_id()
     );
-    assert_eq!(find("queue.wait").parent_span_id, root_id);
     assert!(matches!(find("failed").status, Status::Error { .. }));
     assert!(matches!(find("canceled").status, Status::Unset));
     for name in ["dropped", "abandoned", "canceled"] {
@@ -244,6 +246,22 @@ async fn interleave_operations() {
 }
 
 fn assert_context_ownership(spans: &[SpanData]) {
+    let root_id = spans
+        .iter()
+        .find(|span| span.name == "session.turn")
+        .map(|span| span.span_context.span_id());
+    assert!(root_id.is_some());
+    for name in ["utility.run", "reported.interval", "queue.wait"] {
+        let child = spans.iter().find(|span| span.name == name);
+        assert!(child.is_some());
+        assert_eq!(child.map(|span| span.parent_span_id), root_id);
+        if name == "reported.interval" {
+            assert_eq!(
+                child.map(|span| span.start_time),
+                Some(SystemTime::UNIX_EPOCH)
+            );
+        }
+    }
     assert!(spans.iter().any(|span| {
         span.name == "session.turn"
             && span

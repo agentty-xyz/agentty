@@ -451,63 +451,75 @@ pub(super) async fn send_compact_request<Transport: AppServerRuntimeTransport>(
     .await
 }
 
-/// Sends `thread/compact/start` and waits for compaction to complete within
-/// one caller-provided timeout window.
+/// Records the full `thread/compact/start` request and completion wait.
+/// The completion wait uses the caller-provided timeout.
 pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntimeTransport>(
     transport: &mut Transport,
     thread_id: &str,
     latest_input_tokens: &mut u64,
     turn_timeout: Duration,
 ) -> Result<(), AppServerError> {
-    let compact_id = format!("compact-{}", uuid::Uuid::new_v4());
-    let compact_payload = serde_json::json!({
-        "method": "thread/compact/start",
-        "id": compact_id,
-        "params": {
-            "threadId": thread_id
-        }
-    });
-
-    transport.write_json_line(compact_payload).await?;
-    transport.wait_for_response_line(compact_id).await?;
-
-    tokio::time::timeout(turn_timeout, async {
-        loop {
-            let stdout_line = read_required_stdout_line(transport, " during compaction").await?;
-            if stdout_line.trim().is_empty() {
-                continue;
-            }
-
-            let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) else {
-                continue;
-            };
-
-            if response_value.get("method").and_then(Value::as_str) == Some("turn/completed") {
-                let status = response_value
-                    .get("params")
-                    .and_then(|params| params.get("turn"))
-                    .and_then(|turn| turn.get("status"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-
-                if status == "completed" {
-                    *latest_input_tokens = 0;
-
-                    return Ok(());
+    let span = ag_telemetry::Span::child("agent.compaction");
+    span.attribute("agentty.provider.operation.type", "compaction");
+    span.attribute("agentty.timing.source", "lifecycle");
+    span.run(
+        async {
+            let compact_id = format!("compact-{}", uuid::Uuid::new_v4());
+            let compact_payload = serde_json::json!({
+                "method": "thread/compact/start",
+                "id": compact_id,
+                "params": {
+                    "threadId": thread_id
                 }
+            });
 
-                let error_message =
-                    stream_parser::extract_turn_completed_error_message(&response_value)
-                        .unwrap_or_else(|| "Compaction failed".to_string());
+            transport.write_json_line(compact_payload).await?;
+            transport.wait_for_response_line(compact_id).await?;
 
-                return Err(AppServerError::Provider(format!(
-                    "Codex context compaction failed: {error_message}"
-                )));
-            }
-        }
-    })
+            tokio::time::timeout(turn_timeout, async {
+                loop {
+                    let stdout_line =
+                        read_required_stdout_line(transport, " during compaction").await?;
+                    if stdout_line.trim().is_empty() {
+                        continue;
+                    }
+
+                    let Ok(response_value) = serde_json::from_str::<Value>(&stdout_line) else {
+                        continue;
+                    };
+
+                    if response_value.get("method").and_then(Value::as_str)
+                        == Some("turn/completed")
+                    {
+                        let status = response_value
+                            .get("params")
+                            .and_then(|params| params.get("turn"))
+                            .and_then(|turn| turn.get("status"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+
+                        if status == "completed" {
+                            *latest_input_tokens = 0;
+
+                            return Ok(());
+                        }
+
+                        let error_message =
+                            stream_parser::extract_turn_completed_error_message(&response_value)
+                                .unwrap_or_else(|| "Compaction failed".to_string());
+
+                        return Err(AppServerError::Provider(format!(
+                            "Codex context compaction failed: {error_message}"
+                        )));
+                    }
+                }
+            })
+            .await
+            .map_err(|_| compaction_timeout_error(turn_timeout))?
+        },
+        |_| ag_telemetry::Outcome::Failed,
+    )
     .await
-    .map_err(|_| compaction_timeout_error(turn_timeout))?
 }
 
 /// Borrowed inputs used to start and monitor one Codex app-server turn.
@@ -544,7 +556,8 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
     let folder = input.folder;
     let permission_mode = input.permission_mode;
     let turn_timeout = input.turn_timeout;
-    let mut state = CodexTurnEventLoopState::new(input.stream_tx, input.protocol_profile);
+    let mut state =
+        CodexTurnEventLoopState::new(input.stream_tx, input.protocol_profile, input.thread_id);
 
     tokio::time::timeout(turn_timeout, async {
         loop {
@@ -577,8 +590,10 @@ struct CodexTurnEventLoopState {
     assistant_messages: Vec<String>,
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
+    operation_trace: agent::trace::OperationTrace,
     protocol_profile: ProtocolRequestProfile,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
+    thread_id: String,
     waiting_for_handoff_turn_completion: bool,
 }
 
@@ -587,6 +602,7 @@ impl CodexTurnEventLoopState {
     fn new(
         stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
         protocol_profile: ProtocolRequestProfile,
+        thread_id: &str,
     ) -> Self {
         Self {
             active_phase: None,
@@ -594,8 +610,10 @@ impl CodexTurnEventLoopState {
             assistant_messages: Vec::new(),
             completed_turn_usage: None,
             latest_stream_usage: None,
+            operation_trace: agent::trace::OperationTrace::new(),
             protocol_profile,
             stream_tx,
+            thread_id: thread_id.to_string(),
             waiting_for_handoff_turn_completion: false,
         }
     }
@@ -662,6 +680,20 @@ impl CodexTurnEventLoopState {
             &mut self.active_turn_id,
             &mut self.waiting_for_handoff_turn_completion,
         );
+        let event_turn_id = response_value
+            .get("params")
+            .and_then(|params| params.get("turnId"))
+            .and_then(Value::as_str);
+        let event_thread_id = response_value
+            .get("params")
+            .and_then(|params| params.get("threadId"))
+            .and_then(Value::as_str);
+        if (event_thread_id.is_none() || event_thread_id == Some(self.thread_id.as_str()))
+            && (event_turn_id.is_none() || event_turn_id == self.active_turn_id.as_deref())
+        {
+            self.operation_trace
+                .observe(AgentKind::Codex, response_value);
+        }
         stream_turn_content_from_response(
             response_value,
             &self.stream_tx,
@@ -700,7 +732,7 @@ impl CodexTurnEventLoopState {
 
     /// Builds the final turn result when the runtime reports completion.
     fn completed_turn(
-        &self,
+        &mut self,
         response_value: &Value,
     ) -> Result<Option<(String, u64, u64)>, AppServerError> {
         let Some(turn_result) =
@@ -708,6 +740,16 @@ impl CodexTurnEventLoopState {
         else {
             return Ok(None);
         };
+        let event_thread_id = response_value
+            .get("params")
+            .and_then(|params| params.get("threadId"))
+            .and_then(Value::as_str);
+        if turn_result.is_ok()
+            && (event_thread_id.is_none() || event_thread_id == Some(self.thread_id.as_str()))
+        {
+            self.operation_trace
+                .observe_codex_completed_turn(response_value);
+        }
         let completed_assistant_message = stream_parser::extract_turn_completed_agent_message(
             response_value,
             self.active_turn_id.as_deref(),

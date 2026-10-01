@@ -172,7 +172,7 @@ pub(crate) async fn execute_cli_command(
 
                 child.wait().await.map_err(CliExecutionError::Wait)
             };
-            let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer);
+            let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer, kind);
             let stderr_capture = capture_stderr(stderr);
             let (exit_status, stdout, stderr) =
                 tokio::try_join!(wait, stdout_capture, stderr_capture)?;
@@ -329,12 +329,14 @@ fn require_pipe<Pipe>(
 async fn capture_stdout<Reader>(
     mut reader: Reader,
     observer: &dyn CliExecutionObserver,
+    kind: AgentKind,
 ) -> Result<String, CliExecutionError>
 where
     Reader: AsyncBufRead + Unpin,
 {
     let mut output = Vec::new();
     let mut line = Vec::new();
+    let mut operation_trace = agent::trace::OperationTrace::new();
 
     let mut first_activity = true;
     loop {
@@ -352,6 +354,7 @@ where
             first_activity = false;
         }
         output.extend_from_slice(&line);
+        operation_trace.observe_line(kind, &line);
         let line_text = String::from_utf8_lossy(&line);
         observer.stdout_line(line_text.trim_end_matches(['\r', '\n']));
     }

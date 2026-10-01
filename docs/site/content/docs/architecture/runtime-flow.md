@@ -361,6 +361,11 @@ See [Execution](@/docs/core-components/execution.md) for the shared contract.
 The application owns optional OTLP export. Queue entries retain turn trace ownership
 until worker selection; spawned utilities explicitly capture the initiating trace
 context alongside run ownership. The turn span includes ordered post-processing and
-operation settlement. Span guards close canceled or abandoned work when its owner drops.
+operation settlement. Provider adapters observe raw structured operations inside each
+`agent.attempt` before reducing them to UI progress. Attempt-owned trackers retain
+bounded operation identities internally and export only allowlisted categories and
+numeric metadata. Span guards close canceled or abandoned work when its owner drops.
+Explicit Codex context compaction records its request and completion wait as
+`agent.compaction`, covering proactive compaction and recovery from context overflow.
 Exporter shutdown follows worker cleanup and terminal restoration. See
 [Session Traces](@/docs/usage/workflow.md#session-traces) for enablement and data scope.
