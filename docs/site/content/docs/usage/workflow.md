@@ -106,7 +106,9 @@ flowchart TD
 
 Press `Enter` during **InProgress** or **Rebasing** to queue a message. Messages,
 session sync (`r`), and publishing (`p`) run in submission order after the active work.
-Repeated `r` presses queue only one sync. Publishing is also available during rebase.
+Queued actions appear below the active status in execution order. Each item has a
+single-line preview; long messages are shortened to fit the panel. Repeated `r` presses
+queue only one sync. Publishing is also available during rebase.
 
 During **InProgress**, `Ctrl+C` removes the newest queued message. With no messages
 left, it stops the active turn and cancels queued branch actions. Rebase cannot be

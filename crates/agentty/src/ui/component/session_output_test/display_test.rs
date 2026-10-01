@@ -103,6 +103,7 @@ fn test_progress_updates_share_body_and_discard_superseded_layouts() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::InProgress;
+    session.queued_messages = vec![queued_message(0, "Follow up")];
     set_assistant_transcript(
         &mut session,
         &"```mermaid\ngraph TD\nA --> B\n```\n".repeat(100),
@@ -127,6 +128,7 @@ fn test_progress_updates_share_body_and_discard_superseded_layouts() {
 
         // Assert
         assert!(Arc::ptr_eq(&initial.lines.body, &updated.lines.body));
+        assert!(Arc::ptr_eq(&initial.lines.queued, &updated.lines.queued));
         assert!(!Arc::ptr_eq(&initial.lines, &updated.lines));
         assert_eq!(cache.entries.borrow().len(), 1);
         assert_eq!(cache.body_entries.borrow().len(), 1);
@@ -493,6 +495,7 @@ fn test_segmented_layout_matches_assembled_status_rows() {
     // Arrange
     let mut session = session_fixture();
     set_assistant_transcript(&mut session, "Body\n\n");
+    session.queued_messages = vec![queued_message(0, "Follow up\nwith details")];
     let area = Rect::new(0, 0, 80, 24);
 
     // Act

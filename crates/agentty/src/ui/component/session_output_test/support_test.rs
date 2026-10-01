@@ -106,5 +106,6 @@ impl SessionOutputLayoutLines {
         self.body[..self.body_line_count]
             .iter()
             .chain(self.tail.iter())
+            .chain(self.queued.iter())
     }
 }

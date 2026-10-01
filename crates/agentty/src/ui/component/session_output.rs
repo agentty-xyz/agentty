@@ -186,36 +186,39 @@ pub(crate) struct SessionOutputLayout {
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
-/// Shared body plus a small status tail. Status updates allocate only the tail.
+/// Shared transcript and queue around a small status tail.
+/// Status updates allocate only the tail and queue indicator indices.
 /// `body_line_count` excludes trailing blank body rows when a status separator
 /// replaces them, without copying or changing the cached body.
 pub(crate) struct SessionOutputLayoutLines {
     body: Arc<[Line<'static>]>,
     body_line_count: usize,
+    queued: Arc<[Line<'static>]>,
     tail: Vec<Line<'static>>,
 }
 
 impl SessionOutputLayoutLines {
     fn len(&self) -> usize {
-        self.body_line_count + self.tail.len()
+        self.body_line_count + self.tail.len() + self.queued.len()
     }
 
-    /// Borrows only the visible slices on either side of the body/tail
-    /// boundary.
+    /// Borrows only visible rows across the transcript, status and queue.
     fn paint_lines(&self, first: usize, height: usize) -> Vec<Line<'_>> {
-        let body_start = first.min(self.body_line_count);
-        let body_end = first.saturating_add(height).min(self.body_line_count);
-        let tail_start = first
-            .saturating_sub(self.body_line_count)
-            .min(self.tail.len());
-        let tail_end = first
-            .saturating_add(height)
-            .saturating_sub(self.body_line_count)
-            .min(self.tail.len());
-        let mut lines = text_util::borrowed_paint_lines(&self.body[body_start..body_end]);
-        lines.extend(text_util::borrowed_paint_lines(
-            &self.tail[tail_start..tail_end],
-        ));
+        let mut lines = Vec::new();
+        let mut segment_offset = 0;
+        for segment in [
+            &self.body[..self.body_line_count],
+            self.tail.as_slice(),
+            self.queued.as_ref(),
+        ] {
+            let start = first.saturating_sub(segment_offset).min(segment.len());
+            let end = first
+                .saturating_add(height)
+                .saturating_sub(segment_offset)
+                .min(segment.len());
+            lines.extend(text_util::borrowed_paint_lines(&segment[start..end]));
+            segment_offset += segment.len();
+        }
 
         lines
     }
@@ -696,14 +699,22 @@ impl<'a> SessionOutput<'a> {
         Self::layout_from_body(session, context.active_progress, &body)
     }
 
-    /// Shares the stable body and allocates only the dynamic tail.
+    /// Shares the transcript and queue, placing queued work after the status.
     fn layout_from_body(
         session: &Session,
         active_progress: Option<&str>,
         body: &SessionOutputBody,
     ) -> SessionOutputLayout {
-        let tail = session_output_assembly::output_tail(session, active_progress);
-        let body_line_count = if tail.trim_body {
+        let mut tail = session_output_assembly::output_tail(session, active_progress);
+        if !body.queued_lines.is_empty() {
+            let tail_line_count = tail
+                .lines
+                .iter()
+                .rposition(|line| line.width() > 0)
+                .map_or(0, |index| index + 1);
+            tail.lines.truncate(tail_line_count);
+        }
+        let body_line_count = if tail.trim_body || !body.queued_lines.is_empty() {
             body.lines
                 .iter()
                 .rposition(|line| line.width() > 0)
@@ -711,7 +722,8 @@ impl<'a> SessionOutput<'a> {
         } else {
             body.lines.len()
         };
-        let line_count = u16::try_from(body_line_count + tail.lines.len()).unwrap_or(u16::MAX);
+        let queue_offset = body_line_count + tail.lines.len();
+        let line_count = u16::try_from(queue_offset + body.queued_lines.len()).unwrap_or(u16::MAX);
 
         SessionOutputLayout {
             active_loader_line_index: tail
@@ -721,9 +733,14 @@ impl<'a> SessionOutput<'a> {
             lines: Arc::new(SessionOutputLayoutLines {
                 body: Arc::clone(&body.lines),
                 body_line_count,
+                queued: Arc::clone(&body.queued_lines),
                 tail: tail.lines,
             }),
-            queued_line_indices: Arc::clone(&body.queued_line_indices),
+            queued_line_indices: body
+                .queued_line_indices
+                .iter()
+                .map(|index| queue_offset + index)
+                .collect(),
             transient_loader_line_index: body.transient_loader_line_index,
         }
     }

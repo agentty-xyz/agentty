@@ -44,6 +44,7 @@ const USER_PROMPT_TAB_WIDTH: usize = 4;
 pub(crate) struct SessionOutputBody {
     pub(crate) lines: Arc<[Line<'static>]>,
     pub(crate) queued_line_indices: Arc<[usize]>,
+    pub(crate) queued_lines: Arc<[Line<'static>]>,
     pub(crate) transient_loader_line_index: Option<usize>,
 }
 
@@ -110,9 +111,9 @@ const SESSION_OUTPUT_BLOCK_ORDER: [SessionOutputBlock; 9] = [
     SessionOutputBlock::ActiveTurn,
     SessionOutputBlock::Transient(TransientMessageAnchor::AfterActiveTurn),
     SessionOutputBlock::TrailingTranscriptNotice(TrailingTranscriptNoticePlacement::AfterReview),
-    SessionOutputBlock::QueuedMessage,
     SessionOutputBlock::Transient(TransientMessageAnchor::Tail),
     SessionOutputBlock::SessionTail,
+    SessionOutputBlock::QueuedMessage,
 ];
 
 struct SessionOutputTextSections<'a> {
@@ -158,14 +159,25 @@ struct SessionOutputAssembly<'a> {
 impl SessionOutputAssembly<'_> {
     fn into_output_body(mut self) -> SessionOutputBody {
         for block in SESSION_OUTPUT_BLOCK_ORDER {
-            if !matches!(block, SessionOutputBlock::SessionTail) {
+            if !matches!(
+                block,
+                SessionOutputBlock::SessionTail | SessionOutputBlock::QueuedMessage
+            ) {
                 self.append_block(block);
             }
         }
+        let mut queued_lines = Vec::new();
+        let queued_line_indices = append_queued_entries(
+            &mut queued_lines,
+            self.session.transient_messages.messages(),
+            &self.session.queued_messages,
+            self.inner_width,
+        );
 
         SessionOutputBody {
             lines: Arc::from(self.lines),
-            queued_line_indices: Arc::from(self.queued_line_indices),
+            queued_line_indices: Arc::from(queued_line_indices),
+            queued_lines: Arc::from(queued_lines),
             transient_loader_line_index: self.transient_loader_line_index,
         }
     }
@@ -241,6 +253,7 @@ impl SessionOutputAssembly<'_> {
             &mut self.lines,
             self.session.transient_messages.messages(),
             &self.session.queued_messages,
+            self.inner_width,
         );
     }
 
@@ -607,6 +620,7 @@ fn append_queued_entries(
     lines: &mut Vec<Line<'static>>,
     transient_messages: &[TransientMessage],
     queued_messages: &[QueuedMessage],
+    inner_width: usize,
 ) -> Vec<usize> {
     let mut queued_line_indices = Vec::new();
     let mut has_rendered_message = false;
@@ -634,6 +648,7 @@ fn append_queued_entries(
             &mut has_rendered_message,
             queued_text,
             first_line_prefix,
+            inner_width,
         );
     }
 
@@ -650,8 +665,10 @@ fn append_queued_entry(
     has_rendered_message: &mut bool,
     message: &str,
     first_line_prefix: &str,
+    inner_width: usize,
 ) {
-    let queued_lines = session_format::session_output_queued_lines(message, first_line_prefix);
+    let queued_lines =
+        session_format::session_output_queued_lines(message, first_line_prefix, inner_width);
     if queued_lines.is_empty() {
         return;
     }
