@@ -1118,7 +1118,7 @@ async fn shift_tab_auto_address_mode() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
-                    .wait_for_text("] · Normal · Auto Edit", 5000)
+                    .wait_for_text("] · Balanced · Normal · Auto Edit", 5000)
                     .write_text("Keep this draft")
                     .press_key("BackTab")
                     .wait_for_text("Auto Edit + Auto Address Comments", 5000)
@@ -1128,7 +1128,7 @@ async fn shift_tab_auto_address_mode() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "] · Normal · Auto Edit + Auto Address Comments",
+                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
                         &full,
                     );
                     assertion::assert_text_in_region(frame, "Keep this draft", &full);
@@ -1197,7 +1197,7 @@ async fn auto_address_review_mode() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "] · Normal · Auto Edit + Auto Address Comments",
+                        "] · Balanced · Normal · Auto Edit + Auto Address Comments",
                         &full,
                     );
                 })

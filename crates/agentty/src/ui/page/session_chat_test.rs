@@ -413,11 +413,11 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
 
     // Assert
     assert!(text.contains(&format!(
-        "[{}] · Normal · Auto Edit",
+        "[{}] · Balanced · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains(&format!(
-        "[{}]  · Normal · Auto Edit",
+        "[{}]  · Balanced · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
 }
