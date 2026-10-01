@@ -17,7 +17,7 @@ mod utility;
 pub use lifecycle::{Clock, HeartbeatClock, execute, recover};
 #[cfg(any(test, feature = "test-utils"))]
 pub use mailbox::test_session_worker_handle;
-pub use mailbox::{SessionWorkerHandle, SessionWorkerPause};
+pub use mailbox::{SessionWorkerHandle, SessionWorkerPause, SessionWorkerTask};
 pub use provider::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
     uses_persistent_session,

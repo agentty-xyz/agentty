@@ -9,7 +9,7 @@ use std::time::Duration;
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
 use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
-use ag_worker::{RunClient, RunWorker, RuntimeConfig, SessionRunClient};
+use ag_worker::{RunClient, RunWorker, RuntimeConfig, SessionRunClient, SessionWorkerTask};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
@@ -46,6 +46,7 @@ pub struct AppServices {
     run_worker: Arc<RunWorker>,
     session_run_factory: Arc<dyn SessionRunFactory>,
     session_update_versions: SessionUpdateVersionMap,
+    session_worker_tasks: Arc<Mutex<Vec<SessionWorkerTask>>>,
     telemetry_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -106,6 +107,7 @@ impl AppServices {
             repositories,
             review_request_client,
             session_update_versions: Arc::default(),
+            session_worker_tasks: Arc::default(),
             telemetry_task_handles: Arc::default(),
         }
     }
@@ -285,6 +287,16 @@ impl AppServices {
         }
     }
 
+    /// Retains shutdown ownership even after a session mailbox is removed.
+    pub(crate) fn track_session_worker(&self, task: SessionWorkerTask) {
+        let mut tasks = self
+            .session_worker_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+
     /// Settles worker execution, worktree creation, cleanup, and telemetry
     /// tasks within one deadline. Escalates worker shutdown when grace expires.
     /// When supplied, pending app events are drained for turn telemetry after
@@ -301,6 +313,24 @@ impl AppServices {
         pending_events: Option<&mut mpsc::UnboundedReceiver<AppEvent>>,
     ) {
         let deadline = Instant::from_std(self.clock.now_instant()) + CLEANUP_TASK_SHUTDOWN_TIMEOUT;
+        let session_tasks = std::mem::take(
+            &mut *self
+                .session_worker_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        for task in &session_tasks {
+            task.request_shutdown();
+        }
+        for task in session_tasks {
+            if time::timeout_at(deadline, task.clone().shutdown())
+                .await
+                .is_err()
+            {
+                task.force_shutdown().await;
+                warn!("session worker exceeded the shutdown deadline; dropping stuck execution");
+            }
+        }
         if time::timeout_at(deadline, self.run_worker.shutdown())
             .await
             .is_err()

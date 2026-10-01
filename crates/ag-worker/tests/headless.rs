@@ -127,11 +127,13 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
             cancellation: canceled,
         })
         .expect("submit canceled");
+    let task = sender.task();
     drop(sender);
     let completed = observed.recv().await.expect("first result");
     let canceled = observed.recv().await.expect("second result");
     // Recovery begins only after the previous worker has released its runtime.
     assert!(observed.recv().await.is_none());
+    task.clone().shutdown().await;
     let store = RecoveryStore(AtomicBool::new(false), Mutex::new(None));
     let recovery: Result<(), String> =
         ag_worker::recover(&store, "restart", |operations| async move {
@@ -147,6 +149,47 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
     assert!(matches!(canceled, Err(AgentError::InterruptedByUser(_))));
     assert!(recovery.is_ok());
     assert!(store.0.load(Ordering::SeqCst));
+    assert!(task.is_finished());
+}
+
+#[tokio::test]
+async fn shutdown_owner_releases_stuck_runtime_cleanup_without_retaining_admission() {
+    // Arrange
+    let entered = CancellationToken::new();
+    let released = CancellationToken::new();
+    let mut runtime = MockAgentChannel::new();
+    runtime.expect_shutdown_session().once().returning({
+        let entered = entered.clone();
+        let released = released.clone();
+        move |_| {
+            let entered = entered.clone();
+            let released = released.clone().drop_guard();
+            Box::pin(async move {
+                let _released = released;
+                entered.cancel();
+                std::future::pending().await
+            })
+        }
+    });
+    let (results, mut observed) = mpsc::unbounded_channel();
+    let worker = SessionWorkerHandle::spawn(
+        Host {
+            runtime: SessionRunClient::from_channel("stuck-cleanup".into(), Arc::new(runtime)),
+            results,
+        },
+        Arc::default(),
+    );
+    let task = worker.task();
+    drop(worker);
+    entered.cancelled().await;
+
+    // Act
+    task.clone().force_shutdown().await;
+
+    // Assert
+    assert!(task.is_finished());
+    assert!(released.is_cancelled());
+    assert!(observed.recv().await.is_none());
 }
 
 #[tokio::test]

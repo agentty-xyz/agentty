@@ -140,6 +140,8 @@ async fn closing_the_mailbox_abandons_paused_work_before_shutdown() {
         },
         Arc::default(),
     );
+    let task = worker.task();
+    assert!(!task.is_finished());
 
     // Act
     assert!(worker.submit(Command(1)).is_ok());
@@ -150,6 +152,44 @@ async fn closing_the_mailbox_abandons_paused_work_before_shutdown() {
     assert_eq!(observed.recv().await.as_deref(), Some("abandon 0"));
     assert_eq!(observed.recv().await.as_deref(), Some("shutdown"));
     assert!(observed.recv().await.is_none());
+    task.shutdown().await;
+}
+
+#[tokio::test]
+async fn task_owner_forces_stuck_execution_or_cleanup_and_observes_resource_release() {
+    for stuck_execution in [true, false] {
+        // Arrange
+        let gate = Arc::new(Notify::new());
+        let (results, mut observed) = mpsc::unbounded_channel();
+        let worker = SessionWorkerHandle::spawn(
+            Host {
+                execution_gate: stuck_execution.then(|| Arc::clone(&gate)),
+                messages: Mutex::default(),
+                paused: Arc::new(AtomicBool::new(false)),
+                results,
+                shutdown_gate: (!stuck_execution).then(|| Arc::clone(&gate)),
+            },
+            Arc::default(),
+        );
+        let task = worker.task();
+        if stuck_execution {
+            assert!(worker.submit(Command(1)).is_ok());
+            assert_eq!(observed.recv().await.as_deref(), Some("start 1"));
+        } else {
+            task.request_shutdown();
+            assert_eq!(observed.recv().await.as_deref(), Some("shutdown"));
+        }
+        assert!(!task.is_finished());
+
+        // Act
+        task.clone().force_shutdown().await;
+
+        // Assert
+        assert!(task.is_finished());
+        assert!(worker.submit(Command(2)).is_err());
+        assert!(observed.recv().await.is_none());
+        task.shutdown().await;
+    }
 }
 
 #[test]

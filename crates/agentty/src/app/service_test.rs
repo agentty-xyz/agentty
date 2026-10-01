@@ -24,6 +24,9 @@ use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats}
 use crate::infra::clock::Clock;
 use crate::test_support::{FixedClock, TestSubscriber};
 
+#[path = "service_shutdown_test.rs"]
+mod shutdown;
+
 /// Exercises failure while cancellation drops a task-owned resource.
 struct CleanupResource {
     should_succeed: bool,

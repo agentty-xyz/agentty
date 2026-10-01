@@ -15,6 +15,7 @@ pub struct SessionWorkerHandle<C> {
     admission: Arc<AdmissionMutex<()>>,
     completion: watch::Receiver<()>,
     execution: Arc<Mutex<()>>,
+    force_stop: CancellationToken,
     queued_work_sequence: Arc<AtomicU64>,
     sender: mpsc::UnboundedSender<C>,
     stop: CancellationToken,
@@ -30,14 +31,20 @@ impl<C: Send + 'static> SessionWorkerHandle<C> {
         let (sender, receiver) = mpsc::unbounded_channel();
         let wakeup = Arc::new(Notify::new());
         let stop = CancellationToken::new();
+        let force_stop = CancellationToken::new();
         let execution = Arc::new(Mutex::new(()));
         let (completed, completion) = watch::channel(());
         tokio::spawn({
             let wakeup = Arc::clone(&wakeup);
             let stop = stop.clone();
             let execution = Arc::clone(&execution);
+            let force_stop = force_stop.clone();
             async move {
-                scheduler::run_until_stopped(host, wakeup, receiver, stop, execution).await;
+                tokio::select! {
+                    biased;
+                    () = force_stop.cancelled() => {}
+                    () = scheduler::run_until_stopped(host, wakeup, receiver, stop, execution) => {}
+                }
                 drop(completed);
             }
         });
@@ -46,6 +53,7 @@ impl<C: Send + 'static> SessionWorkerHandle<C> {
             admission: Arc::default(),
             completion,
             execution,
+            force_stop,
             queued_work_sequence,
             sender,
             stop,
@@ -94,15 +102,19 @@ impl<C: Send + 'static> SessionWorkerHandle<C> {
     /// Stops scheduling, lets the in-flight workflow finish, and abandons all
     /// pending work. Returns only after host cleanup finishes. Other handle
     /// clones cannot keep the worker alive or resume its queue.
-    pub async fn shutdown(mut self) {
-        {
-            let _admission = self
-                .admission
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.stop.cancel();
+    pub async fn shutdown(self) {
+        self.task().shutdown().await;
+    }
+
+    /// Returns task ownership without retaining mailbox admission. Hosts can
+    /// keep this observer after removing the final submission handle.
+    pub fn task(&self) -> SessionWorkerTask {
+        SessionWorkerTask {
+            admission: Arc::clone(&self.admission),
+            completion: self.completion.clone(),
+            force_stop: self.force_stop.clone(),
+            stop: self.stop.clone(),
         }
-        let _ = self.completion.changed().await;
     }
 }
 
@@ -112,11 +124,51 @@ impl<C> Clone for SessionWorkerHandle<C> {
             admission: Arc::clone(&self.admission),
             completion: self.completion.clone(),
             execution: Arc::clone(&self.execution),
+            force_stop: self.force_stop.clone(),
             queued_work_sequence: Arc::clone(&self.queued_work_sequence),
             sender: self.sender.clone(),
             stop: self.stop.clone(),
             wakeup: Arc::clone(&self.wakeup),
         }
+    }
+}
+
+/// Shutdown ownership independent of a session's mailbox senders.
+#[derive(Clone)]
+pub struct SessionWorkerTask {
+    admission: Arc<AdmissionMutex<()>>,
+    completion: watch::Receiver<()>,
+    force_stop: CancellationToken,
+    stop: CancellationToken,
+}
+
+impl SessionWorkerTask {
+    /// Reports whether execution and host cleanup have stopped.
+    pub fn is_finished(&self) -> bool {
+        self.completion.has_changed().is_err()
+    }
+
+    /// Closes admission and stops scheduling after the current workflow.
+    pub fn request_shutdown(&self) {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.stop.cancel();
+    }
+
+    /// Stops scheduling and waits for active effects and host cleanup.
+    pub async fn shutdown(mut self) {
+        self.request_shutdown();
+        let _ = self.completion.changed().await;
+    }
+
+    /// Drops stuck execution and cleanup, then waits for task-owned resources
+    /// to be released. Unsettled persistence must be recovered by the host.
+    pub async fn force_shutdown(mut self) {
+        self.request_shutdown();
+        self.force_stop.cancel();
+        let _ = self.completion.changed().await;
     }
 }
 

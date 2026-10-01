@@ -1,22 +1,168 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::MockAgentChannel;
+use ag_contracts::{AgentError, MockAgentChannel};
 use ag_telemetry::{KeyValue, QueuedTrace};
 use ag_worker::WorkerHost as _;
 use opentelemetry::global;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
 
-use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerHost};
+use super::super::{
+    ScheduledSessionCommand, SessionCommand, SessionWorkerHandle, SessionWorkerHost,
+};
 use super::support::{
     auto_commit_run_client, insert_in_progress_test_session, queue_test_context, queued_message,
-    queued_review_request_command,
+    queued_review_request_command, resume_command,
 };
 use crate::app::AppEvent;
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let (app, _app_directory) = crate::test_support::new_test_app().await;
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let channel = interrupted_channel(Arc::clone(&started), Arc::clone(&release));
+    let (context, db, queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let command = resume_command("shutdown-active-operation");
+    db.operations()
+        .insert_session_operation(command.operation_id(), "sess1", command.kind())
+        .await
+        .expect("active operation");
+    let message_traces = Arc::new(Mutex::new(HashMap::from([(
+        (context.session_id.clone(), 1),
+        QueuedTrace::new("shutdown.queued.message", Vec::new()),
+    )])));
+    let worker = SessionWorkerHandle::spawn(
+        SessionWorkerHost {
+            context,
+            message_traces: Arc::clone(&message_traces),
+            run_client: auto_commit_run_client(),
+        },
+        Arc::default(),
+    );
+    let task = worker.task();
+    app.services.track_session_worker(task.clone());
+    assert!(
+        worker
+            .submit(ScheduledSessionCommand::immediate(command))
+            .is_ok()
+    );
+    started.notified().await;
+    queue
+        .lock()
+        .expect("queue")
+        .push_back(queued_message(1, "waiting prompt"));
+    let queued_command = resume_command("shutdown-queued-operation");
+    db.operations()
+        .insert_session_operation(
+            queued_command.operation_id(),
+            "sess1",
+            queued_command.kind(),
+        )
+        .await
+        .expect("queued operation");
+    assert!(
+        worker
+            .submit(ScheduledSessionCommand::queued(queued_command, 2))
+            .is_ok()
+    );
+
+    // Act
+    let mut cleanup = Box::pin(app.services.wait_for_cleanup_tasks(None));
+    tokio::select! {
+        () = &mut cleanup => panic!("cleanup returned before the active turn"),
+        () = tokio::task::yield_now() => {}
+    }
+    release.notify_one();
+    cleanup.await;
+
+    // Assert
+    assert!(task.is_finished());
+    assert!(message_traces.lock().expect("traces").is_empty());
+    let spans = exporter.get_finished_spans().expect("spans");
+    for operation_id in ["shutdown-active-operation", "shutdown-queued-operation"] {
+        let span = spans
+            .iter()
+            .find(|span| {
+                span.name == "session.turn"
+                    && span
+                        .attributes
+                        .contains(&KeyValue::new("agentty.operation.id", operation_id))
+            })
+            .expect("settled operation root");
+        assert!(
+            span.attributes
+                .contains(&KeyValue::new("agentty.outcome", "canceled"))
+        );
+    }
+    let queued_message = spans
+        .iter()
+        .find(|span| span.name == "shutdown.queued.message")
+        .expect("settled queued message");
+    assert!(
+        queued_message
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "canceled"))
+    );
+    assert!(
+        db.operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("operations")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn forcing_a_paused_worker_releases_its_shared_message_traces() {
+    // Arrange
+    let (context, _db, _queue, _directory) = queue_test_context(
+        MockAgentChannel::new(),
+        VecDeque::from([queued_message(1, "paused")]),
+        Status::Question,
+    )
+    .await;
+    let key = (context.session_id.clone(), 1);
+    let message_traces = Arc::new(Mutex::new(HashMap::from([
+        (
+            key.clone(),
+            QueuedTrace::new("test.forced.paused", Vec::new()),
+        ),
+        (
+            ("other".into(), 2),
+            QueuedTrace::new("test.other.paused", Vec::new()),
+        ),
+    ])));
+    let worker = SessionWorkerHandle::spawn(
+        SessionWorkerHost {
+            context,
+            message_traces: Arc::clone(&message_traces),
+            run_client: auto_commit_run_client(),
+        },
+        Arc::default(),
+    );
+
+    // Act
+    worker.task().force_shutdown().await;
+
+    // Assert
+    let traces = message_traces.lock().expect("traces");
+    assert!(!traces.contains_key(&key));
+    assert_eq!(traces.len(), 1);
+}
 
 #[tokio::test]
 async fn shutdown_releases_only_the_stopped_sessions_queued_traces() {
@@ -165,4 +311,23 @@ async fn closed_worker_settles_paused_operations_and_notifies_callers() {
             ]
         ));
     }
+}
+
+fn interrupted_channel(started: Arc<Notify>, release: Arc<Notify>) -> MockAgentChannel {
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(move |_, _, _| {
+        let started = Arc::clone(&started);
+        let release = Arc::clone(&release);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            Err(AgentError::InterruptedByUser("exit".into()))
+        })
+    });
+    channel
+        .expect_shutdown_session()
+        .times(1..)
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    channel
 }
