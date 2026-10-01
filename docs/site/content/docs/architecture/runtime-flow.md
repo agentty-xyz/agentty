@@ -333,3 +333,12 @@ Pending turn telemetry is flushed after background work settles, within the same
 deadline. Unfinished records remain available for startup recovery.
 
 See [Execution](@/docs/core-components/execution.md) for the shared contract.
+
+## Execution Traces
+
+The application owns optional OTLP export. Queue entries retain turn trace ownership
+until worker selection; spawned utilities explicitly capture the initiating trace
+context alongside run ownership. The turn span includes ordered post-processing and
+operation settlement. Span guards close canceled or abandoned work when its owner drops.
+Exporter shutdown follows worker cleanup and terminal restoration. See
+[Session Traces](@/docs/usage/workflow.md#session-traces) for enablement and data scope.

@@ -11,6 +11,7 @@ use ag_contracts::{
 };
 use ag_protocol::{AgentResponse, ProtocolRequestProfile, build_protocol_repair_prompt};
 use ag_session::AgentKind;
+use ag_telemetry::{Context, FutureExt as _};
 use tokio::sync::mpsc;
 
 use crate::agent;
@@ -42,41 +43,52 @@ impl AppServerAgentChannel {
         mut stream_rx: mpsc::UnboundedReceiver<AppServerStreamEvent>,
         events: mpsc::UnboundedSender<TurnEvent>,
     ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            while let Some(event) = stream_rx.recv().await {
-                match event {
-                    AppServerStreamEvent::PidUpdate(pid) => {
-                        let _ = events.send(TurnEvent::PidUpdate(pid));
+        let trace = Context::current();
+        tokio::spawn(
+            async move {
+                let mut first_activity = true;
+                while let Some(event) = stream_rx.recv().await {
+                    if first_activity && !matches!(&event, AppServerStreamEvent::PidUpdate(_)) {
+                        ag_telemetry::milestone("first_activity");
+                        first_activity = false;
                     }
-                    AppServerStreamEvent::AssistantMessage {
-                        message,
-                        phase,
-                        is_delta,
-                    } => {
-                        let trimmed = message.trim_end();
-                        if trimmed.trim().is_empty() {
-                            continue;
+                    match event {
+                        AppServerStreamEvent::PidUpdate(pid) => {
+                            let _ = events.send(TurnEvent::PidUpdate(pid));
                         }
+                        AppServerStreamEvent::AssistantMessage {
+                            message,
+                            phase,
+                            is_delta,
+                        } => {
+                            let trimmed = message.trim_end();
+                            if trimmed.trim().is_empty() {
+                                continue;
+                            }
 
-                        if agent::is_app_server_thought_chunk(kind, is_delta, phase.as_deref()) {
+                            if agent::is_app_server_thought_chunk(kind, is_delta, phase.as_deref())
+                            {
+                                // Fire-and-forget: receiver may be dropped
+                                // during
+                                // shutdown.
+                                let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
+                            }
+                        }
+                        AppServerStreamEvent::ProgressUpdate(progress) => {
+                            let trimmed = progress.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+
                             // Fire-and-forget: receiver may be dropped during
                             // shutdown.
                             let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
                         }
                     }
-                    AppServerStreamEvent::ProgressUpdate(progress) => {
-                        let trimmed = progress.trim();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-
-                        // Fire-and-forget: receiver may be dropped during
-                        // shutdown.
-                        let _ = events.send(TurnEvent::ThoughtDelta(trimmed.to_string()));
-                    }
                 }
             }
-        })
+            .with_context(trace),
+        )
     }
 }
 
@@ -238,86 +250,101 @@ async fn parse_or_repair_app_server_response(
     client: &Arc<dyn AppServerClient>,
     events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<AppServerParsedTurnResult, AgentError> {
-    let parse_error =
-        match agent::parse_turn_response(kind, &response.assistant_message, protocol_profile) {
-            Ok(parsed) => {
-                return Ok(AppServerParsedTurnResult {
-                    assistant_message: parsed,
-                    provider_conversation_id: response.provider_conversation_id.clone(),
-                    repair_input_tokens: 0,
-                    repair_output_tokens: 0,
-                });
-            }
-            Err(error) => error,
-        };
-
-    let _ = events.send(TurnEvent::ThoughtDelta(format!(
-        "Protocol parse error; retrying schema repair for {kind}."
-    )));
-
-    let repair_prompt = build_protocol_repair_prompt(&parse_error, &response.assistant_message)
-        .map_err(AgentError::Backend)?;
-
-    let repair_provider_conversation_id = response
-        .provider_conversation_id
-        .clone()
-        .or_else(|| repair_request.provider_conversation_id.clone());
-
-    let repair_turn_request = AppServerTurnRequest {
-        execution_policy: repair_request.execution_policy,
-        provider_call_budget: repair_request.provider_call_budget,
-        folder: repair_request.folder,
-        live_transcript: None,
-        main_checkout_root: repair_request.main_checkout_root,
-        model: repair_request.model,
-        permission_mode: repair_request.permission_mode,
-        personality: ag_contracts::PersonalityPrompt::default(),
-        prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
-        request_kind: repair_request.request_kind,
-        replay_transcript: None,
-        provider_conversation_id: repair_provider_conversation_id,
-        persisted_instruction_conversation_id: None,
-        reasoning_level: repair_request.reasoning_level,
-        session_id: repair_request.session_id,
-        speed_mode: repair_request.speed_mode,
-    };
-    let (repair_stream_tx, mut repair_stream_rx) = mpsc::unbounded_channel();
-    let repair_bridge = {
-        let events = events.clone();
-
-        tokio::spawn(async move {
-            while let Some(event) = repair_stream_rx.recv().await {
-                if let AppServerStreamEvent::PidUpdate(pid) = event {
-                    let _ = events.send(TurnEvent::PidUpdate(pid));
+    let span = ag_telemetry::Span::child("response.validate");
+    span.run(
+        async {
+            let parse_error = match agent::parse_turn_response(
+                kind,
+                &response.assistant_message,
+                protocol_profile,
+            ) {
+                Ok(parsed) => {
+                    return Ok(AppServerParsedTurnResult {
+                        assistant_message: parsed,
+                        provider_conversation_id: response.provider_conversation_id.clone(),
+                        repair_input_tokens: 0,
+                        repair_output_tokens: 0,
+                    });
                 }
-            }
-        })
-    };
-    let repair_result = client.run_turn(repair_turn_request, repair_stream_tx).await;
-    let _ = repair_bridge.await;
-    let repair_result = repair_result.map_err(|error| {
-        AgentError::Backend(format!(
-            "{parse_error}\nprotocol repair transport failed: {error}"
-        ))
-    })?;
-    let _ = events.send(TurnEvent::PidUpdate(repair_result.pid));
+                Err(error) => error,
+            };
 
-    let parsed =
-        agent::parse_turn_response(kind, &repair_result.assistant_message, protocol_profile)
+            let _ = events.send(TurnEvent::ThoughtDelta(format!(
+                "Protocol parse error; retrying schema repair for {kind}."
+            )));
+
+            let repair_prompt =
+                build_protocol_repair_prompt(&parse_error, &response.assistant_message)
+                    .map_err(AgentError::Backend)?;
+
+            let repair_provider_conversation_id = response
+                .provider_conversation_id
+                .clone()
+                .or_else(|| repair_request.provider_conversation_id.clone());
+
+            let repair_turn_request = AppServerTurnRequest {
+                execution_policy: repair_request.execution_policy,
+                provider_call_budget: repair_request.provider_call_budget,
+                folder: repair_request.folder,
+                live_transcript: None,
+                main_checkout_root: repair_request.main_checkout_root,
+                model: repair_request.model,
+                permission_mode: repair_request.permission_mode,
+                personality: ag_contracts::PersonalityPrompt::default(),
+                prompt: ag_protocol::TurnPrompt::from_agent_data(repair_prompt),
+                request_kind: repair_request.request_kind,
+                replay_transcript: None,
+                provider_conversation_id: repair_provider_conversation_id,
+                persisted_instruction_conversation_id: None,
+                reasoning_level: repair_request.reasoning_level,
+                session_id: repair_request.session_id,
+                speed_mode: repair_request.speed_mode,
+            };
+            let (repair_stream_tx, mut repair_stream_rx) = mpsc::unbounded_channel();
+            let repair_bridge = {
+                let events = events.clone();
+
+                tokio::spawn(async move {
+                    while let Some(event) = repair_stream_rx.recv().await {
+                        if let AppServerStreamEvent::PidUpdate(pid) = event {
+                            let _ = events.send(TurnEvent::PidUpdate(pid));
+                        }
+                    }
+                })
+            };
+            ag_telemetry::milestone("schema_repair");
+            let repair_result = client.run_turn(repair_turn_request, repair_stream_tx).await;
+            let _ = repair_bridge.await;
+            let repair_result = repair_result.map_err(|error| {
+                AgentError::Backend(format!(
+                    "{parse_error}\nprotocol repair transport failed: {error}"
+                ))
+            })?;
+            let _ = events.send(TurnEvent::PidUpdate(repair_result.pid));
+
+            let parsed = agent::parse_turn_response(
+                kind,
+                &repair_result.assistant_message,
+                protocol_profile,
+            )
             .map_err(|error| {
                 AgentError::Backend(format!(
                     "{parse_error}\nprotocol repair retry also failed: {error}"
                 ))
             })?;
 
-    Ok(AppServerParsedTurnResult {
-        assistant_message: parsed,
-        provider_conversation_id: repair_result
-            .provider_conversation_id
-            .or(response.provider_conversation_id.clone()),
-        repair_input_tokens: repair_result.input_tokens,
-        repair_output_tokens: repair_result.output_tokens,
-    })
+            Ok(AppServerParsedTurnResult {
+                assistant_message: parsed,
+                provider_conversation_id: repair_result
+                    .provider_conversation_id
+                    .or(response.provider_conversation_id.clone()),
+                repair_input_tokens: repair_result.input_tokens,
+                repair_output_tokens: repair_result.output_tokens,
+            })
+        },
+        |_| ag_telemetry::Outcome::Failed,
+    )
+    .await
 }
 
 #[cfg(test)]

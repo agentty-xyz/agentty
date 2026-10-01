@@ -8,8 +8,9 @@ use agentty::app::{App, AppError, agentty_home};
 use agentty::infra::db::{DB_DIR, DB_FILE, acquire_instance_lock};
 use clap::Parser;
 use clap::error::ErrorKind;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{Cli, map_runtime_result, run, run_application, run_with_analytics};
+use super::{Cli, map_runtime_result, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
 const OWNED_ROOT_CHILD_ENV: &str = "AGENTTY_OWNED_ROOT_CHILD";
@@ -18,6 +19,14 @@ const TELEMETRY_STARTUP_CHILD_ENV: &str = "AGENTTY_TELEMETRY_STARTUP_CHILD";
 
 async fn closed_runtime(_app: &mut App) -> std::io::Result<()> {
     Err(std::io::Error::other("terminal closed"))
+}
+
+async fn traced_closed_runtime(app: &mut App) -> std::io::Result<()> {
+    ag_telemetry::Span::root("startup-test", Vec::new())
+        .scope(async {})
+        .await;
+
+    closed_runtime(app).await
 }
 
 #[test]
@@ -36,6 +45,27 @@ fn cli_parses_no_update_flag() {
 
     // Assert
     assert!(cli.no_update);
+}
+
+#[test]
+fn cli_requires_an_explicit_otlp_endpoint() {
+    // Arrange / Act
+    let disabled = Cli::try_parse_from(["agentty"]).expect("default arguments");
+    let enabled = Cli::try_parse_from([
+        "agentty",
+        "--otlp-endpoint",
+        "http://localhost:4318/v1/traces",
+    ])
+    .expect("OTLP arguments");
+    let missing = Cli::try_parse_from(["agentty", "--otlp-endpoint"]);
+
+    // Assert
+    assert!(disabled.otlp_endpoint.is_none());
+    assert_eq!(
+        enabled.otlp_endpoint.as_deref(),
+        Some("http://localhost:4318/v1/traces")
+    );
+    assert!(missing.is_err());
 }
 
 #[test]
@@ -115,10 +145,13 @@ async fn startup_failure_does_not_wait_for_unresponsive_telemetry_host() {
 async fn run_reports_instance_lock_parent_creation_failure() {
     if env::var_os(LOCK_FAILURE_CHILD_ENV).is_some() {
         // Arrange
-        let cli = Cli { no_update: false };
+        let cli = Cli {
+            no_update: false,
+            otlp_endpoint: None,
+        };
 
         // Act
-        let error = run(cli)
+        let error = run(cli, closed_runtime)
             .await
             .expect_err("startup should reject a file-backed root");
 
@@ -159,9 +192,15 @@ async fn run_reports_instance_lock_parent_creation_failure() {
 async fn run_rejects_an_owned_root_before_opening_the_database() {
     if env::var_os(OWNED_ROOT_CHILD_ENV).is_some() {
         // Arrange / Act
-        let error = run(Cli { no_update: true })
-            .await
-            .expect_err("root is owned");
+        let error = run(
+            Cli {
+                no_update: true,
+                otlp_endpoint: None,
+            },
+            closed_runtime,
+        )
+        .await
+        .expect_err("root is owned");
 
         // Assert
         assert!(
@@ -203,9 +242,15 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
 async fn run_releases_instance_lock_after_database_open_failure() {
     if env::var_os(DATABASE_FAILURE_CHILD_ENV).is_some() {
         // Arrange / Act
-        let error = run(Cli { no_update: true })
-            .await
-            .expect_err("database path is a directory");
+        let error = run(
+            Cli {
+                no_update: true,
+                otlp_endpoint: None,
+            },
+            closed_runtime,
+        )
+        .await
+        .expect_err("database path is a directory");
 
         // Assert
         assert!(matches!(error, AppError::Db(_)));
@@ -240,9 +285,15 @@ async fn run_releases_instance_lock_after_database_open_failure() {
 async fn startup_runs_application_through_telemetry_wrapper() {
     if env::var_os(TELEMETRY_STARTUP_CHILD_ENV).is_some() {
         // Arrange / Act
-        let error = run_application(Cli { no_update: true }, closed_runtime)
-            .await
-            .expect_err("injected runtime failure");
+        let error = run(
+            Cli {
+                no_update: true,
+                otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
+            },
+            traced_closed_runtime,
+        )
+        .await
+        .expect_err("injected runtime failure");
 
         // Assert
         assert!(
@@ -264,18 +315,46 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         .expect("executable codex stub");
     let child_path = format!("{}:/usr/bin:/bin", stub_bin.display());
 
-    // Act
-    let status = tokio::process::Command::new(env::current_exe().expect("test binary"))
-        .arg("--exact")
-        .arg("tests::startup_runs_application_through_telemetry_wrapper")
-        .env(TELEMETRY_STARTUP_CHILD_ENV, "1")
-        .env("AGENTTY_ROOT", root.path())
-        .env("HOME", root.path())
-        .env("PATH", child_path)
-        .status()
-        .await
-        .expect("startup process");
+    for response_status in [None, Some(200), Some(503)] {
+        let server = MockServer::start().await;
+        let mut child = tokio::process::Command::new(env::current_exe().expect("test binary"));
+        child
+            .args([
+                "--exact",
+                "tests::startup_runs_application_through_telemetry_wrapper",
+            ])
+            .env(TELEMETRY_STARTUP_CHILD_ENV, "1")
+            .env("AGENTTY_ROOT", root.path())
+            .env("HOME", root.path())
+            .env("PATH", &child_path);
+        if let Some(status) = response_status {
+            Mock::given(wiremock::matchers::method("POST"))
+                .respond_with(ResponseTemplate::new(status))
+                .mount(&server)
+                .await;
+            child.env(
+                "AGENTTY_TEST_OTLP_ENDPOINT",
+                format!("{}/v1/traces", server.uri()),
+            );
+        }
 
-    // Assert
-    assert!(status.success());
+        // Act
+        let output = child.output().await.expect("startup process");
+
+        // Assert
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr.contains("OTLP export reported"),
+            response_status == Some(503)
+        );
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .expect("requests")
+                .is_empty(),
+            response_status.is_none()
+        );
+    }
 }

@@ -923,6 +923,8 @@ impl ZolaFeaturePage {
 /// }
 /// ```
 pub(crate) struct FeatureTest {
+    /// Extra launch arguments for the PTY proof run.
+    child_args: Vec<String>,
     /// Extra child-process environment variables applied to PTY and VHS runs.
     child_env: Vec<(String, String)>,
     /// Whether PTY and VHS runs inherit the ambient system `PATH`.
@@ -953,6 +955,7 @@ impl FeatureTest {
     /// The name is used as the GIF filename stem and Zola page filename.
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
+            child_args: Vec::new(),
             child_env: vec![
                 (
                     PINNED_CLOCK_ENV_VAR.to_string(),
@@ -992,6 +995,13 @@ impl FeatureTest {
     /// Add an environment variable for the PTY session and VHS recording.
     pub(crate) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.child_env.push((key.into(), value.into()));
+
+        self
+    }
+
+    /// Adds launch arguments to a PTY-only scenario.
+    pub(crate) fn args(mut self, args: impl IntoIterator<Item = String>) -> Self {
+        self.child_args.extend(args);
 
         self
     }
@@ -1091,6 +1101,7 @@ impl FeatureTest {
             builder = builder.env(key.clone(), value.clone());
             owned_pairs.push((key.clone(), value.clone()));
         }
+        builder = builder.args(&self.child_args);
 
         // Without an output directory testty reports `NoOutputDir` and skips
         // VHS altogether, so an opt-out run costs nothing and cannot dirty

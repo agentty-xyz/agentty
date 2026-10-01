@@ -17,6 +17,7 @@ mod review_request;
 mod setting;
 mod stack;
 mod sync;
+mod telemetry;
 mod worktree;
 
 // Host temperature scenarios supplement the shared resource suite.

@@ -6,6 +6,7 @@ use std::process::ExitStatus;
 use std::time::Duration;
 
 use ag_session::AgentKind;
+use ag_telemetry::FutureExt as _;
 use rustix::process::{self, Pid, Signal, WaitId, WaitIdOptions};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncRead, AsyncReadExt as _};
 
@@ -102,88 +103,113 @@ pub(crate) async fn execute_cli_command(
     observer: &dyn CliExecutionObserver,
     timeout: Option<Duration>,
 ) -> Result<CliExecutionOutput, CliExecutionError> {
-    let command = backend
-        .build_command(build_request)
-        .map_err(CliExecutionError::CommandBuild)?;
-    let stdin_payload = agent::build_command_stdin_payload(kind, build_request)
-        .map_err(CliExecutionError::StdinBuild)?;
-    let mut tokio_command = tokio::process::Command::from(command);
-    // Agent tools must not refresh Git's index during read-only inspection.
-    tokio_command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(if stdin_payload.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .process_group(0)
-        .kill_on_drop(true);
+    let span = ag_telemetry::Span::child("agent.attempt");
+    span.attribute("agentty.transport", "cli");
+    span.attribute("agentty.harness", kind.to_string());
+    let result = async {
+        let command = backend
+            .build_command(build_request)
+            .map_err(CliExecutionError::CommandBuild)?;
+        let stdin_payload = agent::build_command_stdin_payload(kind, build_request)
+            .map_err(CliExecutionError::StdinBuild)?;
+        let mut tokio_command = tokio::process::Command::from(command);
+        // Agent tools must not refresh Git's index during read-only
+        // inspection.
+        tokio_command
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .stdin(if stdin_payload.is_some() {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            })
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .process_group(0)
+            .kill_on_drop(true);
 
-    let mut child = tokio_command.spawn().map_err(CliExecutionError::Spawn)?;
-    let mut process_group = ProcessGroupGuard(
-        child
-            .id()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(Pid::from_raw),
-    );
-    let _pid_guard = ChildPidObserverGuard::new(observer, child.id());
-    let stdout = require_pipe(child.stdout.take(), "stdout")?;
-    let stderr = require_pipe(child.stderr.take(), "stderr")?;
-    let mut stdin_write_task = stdin::spawn_optional_stdin_write(
-        child.stdin.take(),
-        stdin_payload,
-        "stdin pipe unavailable after spawn",
-        CliExecutionError::StdinWrite,
-    );
+        let startup = ag_telemetry::Span::child("agent.startup");
+        let mut child = startup
+            .run(
+                async { tokio_command.spawn().map_err(CliExecutionError::Spawn) },
+                |_| ag_telemetry::Outcome::Failed,
+            )
+            .await?;
+        let mut process_group = ProcessGroupGuard(
+            child
+                .id()
+                .and_then(|pid| i32::try_from(pid).ok())
+                .and_then(Pid::from_raw),
+        );
+        let _pid_guard = ChildPidObserverGuard::new(observer, child.id());
+        let stdout = require_pipe(child.stdout.take(), "stdout")?;
+        let stderr = require_pipe(child.stderr.take(), "stderr")?;
+        let mut stdin_write_task = stdin::spawn_optional_stdin_write(
+            child.stdin.take(),
+            stdin_payload,
+            "stdin pipe unavailable after spawn",
+            CliExecutionError::StdinWrite,
+        );
 
-    let _stdin_guard = StdinAbortGuard(
-        stdin_write_task
-            .as_ref()
-            .map(tokio::task::JoinHandle::abort_handle),
-    );
+        let _stdin_guard = StdinAbortGuard(
+            stdin_write_task
+                .as_ref()
+                .map(tokio::task::JoinHandle::abort_handle),
+        );
 
-    let execution = async {
-        let wait = async {
-            process_group
-                .wait_for_exit()
-                .await
-                .map_err(CliExecutionError::Wait)?;
-            // Descendants can keep stdout/stderr open after the parent exits.
-            // Terminate them before waiting for stream EOFs, then drain the
-            // pipes. Keep the leader unreaped until group cleanup so its
-            // numeric PID/PGID cannot be reused by an unrelated process.
-            drop(process_group);
+        let execution = async {
+            let wait = async {
+                process_group
+                    .wait_for_exit()
+                    .await
+                    .map_err(CliExecutionError::Wait)?;
+                // Descendants can keep stdout/stderr open after the parent
+                // exits. Terminate them before waiting
+                // for stream EOFs, then drain the
+                // pipes. Keep the leader unreaped until group cleanup so
+                // its numeric PID/PGID cannot be reused
+                // by an unrelated process.
+                drop(process_group);
 
-            child.wait().await.map_err(CliExecutionError::Wait)
-        };
-        let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer);
-        let stderr_capture = capture_stderr(stderr);
-        let (exit_status, stdout, stderr) = tokio::try_join!(wait, stdout_capture, stderr_capture)?;
-
-        Ok((exit_status, stdout, stderr))
-    };
-    let execution_result = match timeout {
-        Some(timeout) => {
-            let Ok(execution_result) = tokio::time::timeout(timeout, execution).await else {
-                abort_stdin_write_task(&mut stdin_write_task).await;
-
-                return Err(CliExecutionError::Timeout(timeout));
+                child.wait().await.map_err(CliExecutionError::Wait)
             };
+            let stdout_capture = capture_stdout(tokio::io::BufReader::new(stdout), observer);
+            let stderr_capture = capture_stderr(stderr);
+            let (exit_status, stdout, stderr) =
+                tokio::try_join!(wait, stdout_capture, stderr_capture)?;
 
-            execution_result
+            Ok((exit_status, stdout, stderr))
+        };
+        let execution_result = match timeout {
+            Some(timeout) => {
+                let Ok(execution_result) = tokio::time::timeout(timeout, execution).await else {
+                    abort_stdin_write_task(&mut stdin_write_task).await;
+
+                    return Err(CliExecutionError::Timeout(timeout));
+                };
+
+                execution_result
+            }
+            None => execution.await,
+        };
+        let (exit_status, stdout, stderr) =
+            finish_cli_execution(stdin_write_task, execution_result).await?;
+
+        Ok(CliExecutionOutput {
+            exit_status: classify_exit_status(exit_status),
+            stderr,
+            stdout,
+        })
+    }
+    .with_context(span.context())
+    .await;
+    span.finish(match &result {
+        Ok(output) if output.exit_status == CliExitStatus::Success => {
+            ag_telemetry::Outcome::Completed
         }
-        None => execution.await,
-    };
-    let (exit_status, stdout, stderr) =
-        finish_cli_execution(stdin_write_task, execution_result).await?;
+        Ok(_) | Err(_) => ag_telemetry::Outcome::Failed,
+    });
 
-    Ok(CliExecutionOutput {
-        exit_status: classify_exit_status(exit_status),
-        stderr,
-        stdout,
-    })
+    result
 }
 
 /// Owns the isolated process group, including tool descendants after parent
@@ -310,6 +336,7 @@ where
     let mut output = Vec::new();
     let mut line = Vec::new();
 
+    let mut first_activity = true;
     loop {
         line.clear();
         let bytes_read = reader
@@ -320,6 +347,10 @@ where
             break;
         }
 
+        if first_activity {
+            ag_telemetry::milestone("first_activity");
+            first_activity = false;
+        }
         output.extend_from_slice(&line);
         let line_text = String::from_utf8_lossy(&line);
         observer.stdout_line(line_text.trim_end_matches(['\r', '\n']));

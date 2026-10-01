@@ -1,4 +1,7 @@
+use ag_telemetry::KeyValue;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
 use super::super::end_in_progress_turn;
 use super::support::{handle, new_test_app_with_session, queued_message};
@@ -9,6 +12,53 @@ use crate::domain::transient_message::{
 };
 use crate::presentation::app_mode::{AppMode, DiffCommentTarget, DiffLineComments};
 use crate::runtime::EventResult;
+use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn repeated_enqueue_and_retract_ends_each_trace_without_stopping_the_active_turn() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider);
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    app.sessions.sessions_mut()[0].status = Status::InProgress;
+    let handles = crate::domain::session::SessionHandles::new(Status::InProgress);
+    let cancellation = handles.cancel_token.clone();
+    app.sessions
+        .session_handles_mut()
+        .insert(session_id.clone().into(), handles);
+
+    for count in 1..=16 {
+        // Act
+        app.sessions
+            .enqueue_message(&app.services, &session_id, "retract this prompt")
+            .expect("enqueue message");
+        end_in_progress_turn(&mut app, &session_id).await;
+
+        // Assert
+        let spans = exporter.get_finished_spans().expect("finished spans");
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.name == "session.turn")
+                .count(),
+            count
+        );
+        for span in spans {
+            if matches!(span.name.as_ref(), "session.turn" | "queue.wait") {
+                assert!(
+                    span.attributes
+                        .contains(&KeyValue::new("agentty.outcome", "canceled"))
+                );
+            }
+        }
+        assert_eq!(app.sessions.sessions()[0].queued_messages, Vec::new());
+        assert!(!cancellation.lock().expect("turn token").is_cancelled());
+    }
+}
 
 #[tokio::test]
 async fn test_handle_launch_follow_up_task_key_opens_linked_sibling_session() {

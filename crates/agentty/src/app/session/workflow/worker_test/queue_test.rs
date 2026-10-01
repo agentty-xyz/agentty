@@ -6,14 +6,17 @@ use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, OneShotError,
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
-use ag_worker::{MockRunClient, RunClient, SessionRunClient};
-use tempfile::tempdir;
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use ag_worker::{MockRunClient, RunClient, SessionRunClient, WorkerHost as _};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+use tempfile::{TempDir, tempdir};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::super::{
     ScheduledSessionCommand, ScheduledSessionWork, SessionCommand, SessionWorkerContext,
-    SessionWorkerService, TurnMetadata,
+    SessionWorkerHost, SessionWorkerService, TurnMetadata,
 };
 use super::support::{
     apply_worker_turn_result, auto_commit_run_client, empty_transcript,
@@ -28,6 +31,7 @@ use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::infra::personality::RealPersonalityCatalogClient;
+use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
 
 #[tokio::test]
 /// Verifies that the scheduler clears every queued prompt once the
@@ -570,43 +574,9 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
 #[tokio::test]
 async fn turn_telemetry_reports_interruption_during_auto_commit() {
     // Arrange
-    let mut channel = MockAgentChannel::new();
-    channel.expect_run_turn().once().returning(|_, _, _| {
-        Box::pin(async { Ok(successful_turn_result("Completed provider work.")) })
-    });
-    let (mut context, db, _queue, _directory) =
-        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let (mut context, db, _directory, run_client) = auto_commit_cancellation_context().await;
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     context.app_event_tx = event_tx;
-    let mut git = MockGitClient::new();
-    git.expect_detect_git_info()
-        .once()
-        .returning(|_| Box::pin(async { Some("wt/sess1".into()) }));
-    git.expect_main_checkout_working_tree()
-        .once()
-        .returning(|_| Box::pin(async { Ok(None) }));
-    git.expect_is_worktree_clean()
-        .once()
-        .returning(|_| Box::pin(async { Ok(false) }));
-    git.expect_diff()
-        .times(2)
-        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".into()) }));
-    git.expect_has_commits_since()
-        .once()
-        .returning(|_, _| Box::pin(async { Ok(false) }));
-    git.expect_commit_all_preserving_single_commit().never();
-    context.git_client = Arc::new(git);
-    let cancellation = Arc::clone(&context.cancel_token);
-    let mut run_client = MockRunClient::new();
-    run_client.expect_submit().times(2).returning(move |_| {
-        cancellation
-            .lock()
-            .expect("turn cancellation token")
-            .cancel();
-
-        Err(OneShotError::new("[Stopped] Agent run canceled"))
-    });
-    let run_client: Arc<dyn RunClient> = Arc::new(run_client);
     let command = resume_command("auto-commit-cancellation");
     let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
     db.operations()
@@ -641,4 +611,171 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
             .is_cancelled()
     );
     assert_eq!(ends, vec![(expected_agent, TurnOutcome::Interrupted)]);
+}
+
+#[tokio::test]
+async fn root_span_reports_cancellation_during_successful_post_processing() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider);
+    let (context, db, _directory, run_client) = auto_commit_cancellation_context().await;
+    let command = resume_command("root-auto-commit-cancellation");
+    db.operations()
+        .insert_session_operation(command.operation_id(), &context.session_id, command.kind())
+        .await
+        .expect("operation");
+    let host = SessionWorkerHost {
+        context,
+        message_traces: Arc::default(),
+        run_client,
+    };
+
+    // Act
+    host.execute(ScheduledSessionWork::Command(
+        ScheduledSessionCommand::immediate(command),
+    ))
+    .await;
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("finished spans");
+    let turn = spans
+        .iter()
+        .find(|span| span.name == "session.turn")
+        .expect("turn root");
+    assert!(
+        turn.attributes
+            .contains(&KeyValue::new("agentty.outcome", "canceled"))
+    );
+    let postprocess = spans
+        .iter()
+        .find(|span| span.name == "postprocess")
+        .expect("post-processing");
+    assert!(
+        postprocess
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed"))
+    );
+}
+
+#[tokio::test]
+async fn untracked_queued_message_gets_a_completed_turn_trace() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, _| {
+        Box::pin(async { Ok(successful_turn_result("finished queued work")) })
+    });
+    let (context, db, _queue, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let host = SessionWorkerHost {
+        context,
+        message_traces: Arc::default(),
+        run_client: auto_commit_run_client(),
+    };
+    let initiator = Span::root("test.untracked.message", Vec::new());
+    let initiating_trace_id = initiator.context().span().span_context().trace_id();
+
+    // Act
+    initiator
+        .scope(host.execute(ScheduledSessionWork::Message(queued_message(
+            0,
+            "queued prompt",
+        ))))
+        .await;
+
+    // Assert
+    assert!(
+        db.operations()
+            .load_unfinished_session_operations()
+            .await
+            .expect("operations")
+            .is_empty()
+    );
+    assert!(
+        host.message_traces
+            .lock()
+            .expect("message traces")
+            .is_empty()
+    );
+    let spans = exporter.get_finished_spans().expect("spans");
+    let turn = spans
+        .iter()
+        .find(|span| {
+            span.name == "session.turn"
+                && span
+                    .links
+                    .links
+                    .iter()
+                    .any(|link| link.span_context.trace_id() == initiating_trace_id)
+        })
+        .expect("fallback turn linked to its initiator");
+    assert!(
+        turn.attributes
+            .contains(&KeyValue::new("agentty.session.id", "sess1"))
+    );
+    assert!(
+        turn.attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed"))
+    );
+    assert!(
+        spans
+            .iter()
+            .any(|span| span.name == "agent.run"
+                && span.parent_span_id == turn.span_context.span_id())
+    );
+}
+
+async fn auto_commit_cancellation_context() -> (
+    SessionWorkerContext,
+    AppRepositories,
+    TempDir,
+    Arc<dyn RunClient>,
+) {
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, _| {
+        Box::pin(async { Ok(successful_turn_result("Completed provider work.")) })
+    });
+    let (mut context, db, _queue, directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/sess1".into()) }));
+    git.expect_main_checkout_working_tree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git.expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git.expect_diff()
+        .times(2)
+        .returning(|_, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".into()) }));
+    git.expect_has_commits_since()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    git.expect_commit_all_preserving_single_commit().never();
+    context.git_client = Arc::new(git);
+    let cancellation = Arc::clone(&context.cancel_token);
+    let mut run_client = MockRunClient::new();
+    run_client.expect_submit().times(2).returning(move |_| {
+        cancellation
+            .lock()
+            .expect("turn cancellation token")
+            .cancel();
+
+        Err(OneShotError::new("[Stopped] Agent run canceled"))
+    });
+    let run_client: Arc<dyn RunClient> = Arc::new(run_client);
+
+    (context, db, directory, run_client)
 }

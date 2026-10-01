@@ -1644,6 +1644,7 @@ pub(super) fn spawn_session_worker(
 ) {
     tokio::spawn(ag_worker::run(
         super::super::SessionWorkerHost {
+            message_traces: Arc::default(),
             context,
             run_client,
         },

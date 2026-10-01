@@ -9,6 +9,10 @@ use serde_json::Value;
 
 use crate::analytics::Analytics;
 
+/// Serializes tests that replace the process-global trace provider across
+/// awaits.
+pub(crate) static TRACER_PROVIDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Configures a local sender and captures exactly the expected event count.
 pub(crate) fn capture_events(count: usize) -> (Analytics, JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("telemetry listener");

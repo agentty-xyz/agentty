@@ -15,6 +15,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+ag-telemetry.workspace = true
 ag-clipboard.workspace = true
 ag-forge.workspace = true
 ag-git.workspace = true
@@ -32,6 +33,11 @@ crossterm.workspace = true
 ignore.workspace = true
 image.workspace = true
 ratatui.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
 reqwest.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
@@ -52,6 +58,7 @@ unicode-width.workspace = true
 libproc.workspace = true
 
 [dev-dependencies]
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 ag-contracts = { workspace = true, features = ["test-utils"] }
 ag-session = { workspace = true, features = ["test-utils"] }
 ag-worker = { workspace = true, features = ["test-utils"] }
@@ -61,4 +68,7 @@ ag-store = { workspace = true, features = ["test-utils"] }
 assert_cmd.workspace = true
 testty.workspace = true
 mockall.workspace = true
+opentelemetry-proto.workspace = true
+prost.workspace = true
+wiremock.workspace = true
 tempfile.workspace = true

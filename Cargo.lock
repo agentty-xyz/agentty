@@ -15,11 +15,14 @@ dependencies = [
  "ag-contracts",
  "ag-protocol",
  "ag-session",
+ "ag-telemetry",
  "agent-client-protocol",
  "askama",
  "async-trait",
  "base64 0.23.1",
  "mockall",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rustix",
  "semver",
  "serde",
@@ -219,6 +222,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ag-telemetry"
+version = "0.16.4"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "tokio",
+]
+
+[[package]]
 name = "ag-tui-text"
 version = "0.16.4"
 dependencies = [
@@ -236,8 +248,11 @@ dependencies = [
  "ag-runtime",
  "ag-scheduler",
  "ag-session",
+ "ag-telemetry",
  "async-trait",
  "mockall",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -324,6 +339,7 @@ dependencies = [
  "ag-protocol",
  "ag-session",
  "ag-store",
+ "ag-telemetry",
  "ag-tui-text",
  "ag-worker",
  "askama",
@@ -335,6 +351,11 @@ dependencies = [
  "image",
  "libproc",
  "mockall",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
  "ratatui",
  "reqwest",
  "rustc-hash",
@@ -351,8 +372,11 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "unicode-width",
+ "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -3049,6 +3073,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

@@ -11,6 +11,9 @@ mod app_server;
 pub(crate) mod app_server_transport;
 mod channel;
 mod model;
+#[cfg(test)]
+#[path = "telemetry_test.rs"]
+mod telemetry;
 
 pub(crate) use ag_contracts::is_input_size_error;
 #[cfg(any(test, feature = "test-utils"))]

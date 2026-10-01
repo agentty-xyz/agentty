@@ -2,7 +2,9 @@
 //! execution.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -12,6 +14,7 @@ use ag_contracts::{
 use ag_forge as forge;
 use ag_git::GitClient;
 use ag_protocol::AgentResponse;
+use ag_telemetry::{FutureExt as _, KeyValue, Outcome, QueuedTrace};
 use ag_worker::{RunClient, SessionRunClient};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -170,6 +173,7 @@ impl SessionCommand {
 /// behind active work.
 pub(super) struct ScheduledSessionCommand {
     command: SessionCommand,
+    trace: QueuedTrace,
     /// Reserves stack branch work until this command is dropped or finishes.
     preparation_reservation: Option<Arc<()>>,
     queued_order: Option<u64>,
@@ -179,6 +183,27 @@ pub(super) struct ScheduledSessionCommand {
 }
 
 impl ScheduledSessionCommand {
+    fn trace(command: &SessionCommand) -> QueuedTrace {
+        let name = match command {
+            SessionCommand::Run { .. } => "session.turn",
+            SessionCommand::Rebase { .. } => "session.sync",
+            SessionCommand::CreateReviewRequest { .. } => "session.publish",
+        };
+
+        let trace = QueuedTrace::new(
+            name,
+            vec![
+                KeyValue::new("agentty.operation.id", command.operation_id().to_string()),
+                KeyValue::new("agentty.purpose", command.kind()),
+            ],
+        );
+        if matches!(command, SessionCommand::Run { .. }) {
+            trace.attribute("agentty.turn.id", command.operation_id().to_string());
+        }
+
+        trace
+    }
+
     /// Returns whether this command can make a questioned session runnable.
     fn can_run_while_question(&self) -> bool {
         self.queued_order.is_none() || matches!(self.command, SessionCommand::Run { .. })
@@ -187,6 +212,7 @@ impl ScheduledSessionCommand {
     /// Wraps a command that is ready to run without joining the visible queue.
     fn immediate(command: SessionCommand) -> Self {
         Self {
+            trace: Self::trace(&command),
             command,
             preparation_reservation: None,
             queued_order: None,
@@ -197,6 +223,7 @@ impl ScheduledSessionCommand {
     /// Wraps a command queued at the supplied shared submission order.
     fn queued(command: SessionCommand, queued_order: u64) -> Self {
         Self {
+            trace: Self::trace(&command),
             command,
             preparation_reservation: None,
             queued_order: Some(queued_order),
@@ -246,8 +273,12 @@ pub(super) fn has_unfinished_branch_operation(
     })
 }
 
+type SessionWorkFuture<'a> =
+    Pin<Box<dyn Future<Output = Option<Result<(), SessionError>>> + Send + 'a>>;
+
 struct SessionWorkerHost {
     context: SessionWorkerContext,
+    message_traces: Arc<Mutex<HashMap<(SessionId, u64), QueuedTrace>>>,
     run_client: Arc<dyn RunClient>,
 }
 
@@ -271,31 +302,83 @@ impl ag_worker::WorkQueue for SessionWorkerHost {
 #[async_trait::async_trait]
 impl ag_worker::WorkerHost for SessionWorkerHost {
     async fn execute(&self, work: ScheduledSessionWork) {
-        let result = match work {
+        let is_turn = matches!(
+            &work,
+            ScheduledSessionWork::Message(_)
+                | ScheduledSessionWork::Command(ScheduledSessionCommand {
+                    command: SessionCommand::Run { .. },
+                    ..
+                })
+        );
+        let (trace, operation, _reservation): (
+            QueuedTrace,
+            SessionWorkFuture<'_>,
+            Option<Arc<()>>,
+        ) = match work {
             ScheduledSessionWork::Command(mut command) => {
-                let _reservation = command.preparation_reservation.take();
+                let reservation = command.preparation_reservation.take();
                 if let Some(ready_rx) = command.ready_rx.take()
                     && ready_rx.await.is_err()
                 {
                     return;
                 }
-                SessionWorkerService::process_session_command(
-                    &self.context,
-                    &self.run_client,
-                    command.command,
+                (
+                    command.trace,
+                    Box::pin(SessionWorkerService::process_session_command(
+                        &self.context,
+                        &self.run_client,
+                        command.command,
+                    )),
+                    reservation,
                 )
-                .await
             }
             ScheduledSessionWork::Message(message) => {
-                SessionWorkerService::process_queued_message(
-                    &self.context,
-                    &self.run_client,
-                    message,
+                let trace = self
+                    .message_traces
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(self.context.session_id.clone(), message.order()))
+                    .unwrap_or_else(|| QueuedTrace::new("session.turn", Vec::new()));
+                (
+                    trace,
+                    Box::pin(SessionWorkerService::process_queued_message(
+                        &self.context,
+                        &self.run_client,
+                        message,
+                    )),
+                    None,
                 )
-                .await
             }
         };
+        trace.attribute("agentty.session.id", self.context.session_id.to_string());
+        let span = trace.selected();
+        let result = operation.with_context(span.context()).await;
+        let interrupted = is_turn
+            && self
+                .context
+                .cancel_token
+                .lock()
+                .is_ok_and(|token| token.is_cancelled());
+        let outcome = match &result {
+            _ if interrupted => Outcome::Canceled,
+            Some(Ok(())) => Outcome::Completed,
+            Some(Err(SessionError::StoppedByUser(_))) | None => Outcome::Canceled,
+            Some(Err(_)) => Outcome::Failed,
+        };
+        span.finish(outcome);
         SessionWorkerService::clear_queued_messages_after_stop(&self.context, result.as_ref());
+        let queued_messages = self
+            .context
+            .queued_messages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let orders: HashSet<_> = queued_messages.iter().map(QueuedMessage::order).collect();
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(session_id, order), _| {
+                session_id != &self.context.session_id || orders.contains(order)
+            });
     }
 
     async fn abandon(&self, work: ScheduledSessionWork) {
@@ -318,13 +401,21 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
                     &command.command,
                 );
             }
-            ScheduledSessionWork::Message(_) => {
+            ScheduledSessionWork::Message(message) => {
+                self.message_traces
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&(self.context.session_id.clone(), message.order()));
                 SessionWorkerService::emit_queue_session_updated(&self.context);
             }
         }
     }
 
     async fn shutdown(&self) {
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(session_id, _), _| session_id != &self.context.session_id);
         let _ = self.context.session_run.shutdown().await;
         if let Ok(mut guard) = self.context.child_pid.lock() {
             *guard = None;
@@ -696,6 +787,7 @@ pub(super) struct SessionWorkerRuntime {
 
 /// Owns per-session worker queue senders and preparation reservations.
 pub(crate) struct SessionWorkerService {
+    message_traces: Arc<Mutex<HashMap<(SessionId, u64), QueuedTrace>>>,
     preparation_reservations: HashMap<SessionId, Weak<()>>,
     workers: HashMap<SessionId, SessionWorkerHandle>,
 }
@@ -704,9 +796,29 @@ impl SessionWorkerService {
     /// Creates an empty worker service with no active session workers.
     pub(in crate::app::session) fn new() -> Self {
         Self {
+            message_traces: Arc::new(Mutex::new(HashMap::new())),
             preparation_reservations: HashMap::new(),
             workers: HashMap::new(),
         }
+    }
+
+    pub(super) fn trace_queued_message(&self, session_id: &str, order: u64) {
+        let trace = QueuedTrace::new(
+            "session.turn",
+            vec![KeyValue::new("agentty.session.id", session_id.to_string())],
+        );
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((SessionId::from(session_id), order), trace);
+    }
+
+    /// Ends a retracted message's waiting interval and canceled workflow now.
+    pub(super) fn discard_message_trace(&self, session_id: &str, order: u64) {
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(SessionId::from(session_id), order));
     }
 
     /// Returns whether a saved first turn still owns queued or running work.
@@ -974,6 +1086,9 @@ impl SessionWorkerService {
         let worker = self.ensure_session_worker(services, &runtime);
         let (ready_tx, ready_rx) = oneshot::channel();
         let mut scheduled_command = ScheduledSessionCommand::immediate(command);
+        scheduled_command
+            .trace
+            .attribute("agentty.session.id", runtime.session_id.to_string());
         scheduled_command.ready_rx = Some(ready_rx);
         self.reserve_preparation_command(&runtime.session_id, &mut scheduled_command);
         if worker.submit(scheduled_command).is_err() {
@@ -1027,6 +1142,7 @@ impl SessionWorkerService {
         let worker = SessionWorkerHandle::spawn(
             SessionWorkerHost {
                 context,
+                message_traces: Arc::clone(&self.message_traces),
                 run_client: services.session_run_client(&runtime.session_id),
             },
             Arc::clone(&runtime.queued_work_sequence),
@@ -1069,6 +1185,10 @@ impl SessionWorkerService {
         worker: SessionWorkerHandle,
         scheduled_command: ScheduledSessionCommand,
     ) -> Result<(), SessionError> {
+        scheduled_command
+            .trace
+            .attribute("agentty.session.id", session_id.to_string());
+
         let operation_id = scheduled_command.command.operation_id().to_string();
         if worker.submit(scheduled_command).is_err() {
             self.workers.remove(session_id);
@@ -1106,6 +1226,15 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
+        ag_telemetry::current_attribute("agentty.operation.id", operation_id.clone());
+        ag_telemetry::current_attribute("agentty.purpose", command.kind());
+        if let SessionCommand::Run { turn_metadata, .. } = &command {
+            ag_telemetry::current_attribute("agentty.turn.id", operation_id.clone());
+            ag_telemetry::current_attribute(
+                "agentty.harness",
+                turn_metadata.session_agent.kind().to_string(),
+            );
+        }
         let should_skip = if Self::should_skip_worker_command(context, &operation_id).await {
             true
         } else if command.is_preparation_prompt(&context.session_id)

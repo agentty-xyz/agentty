@@ -4,6 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel};
 use ag_protocol::{ProtocolSchemaInstructionMode, TurnPrompt};
+use ag_telemetry::{KeyValue, Span, TraceContextExt as _};
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 
 use super::support::{
     TestRuntime, live_transcript, session_resume_request_kind, session_start_request_kind,
@@ -15,6 +18,103 @@ use crate::app_server::registry::AppServerSessionRegistry;
 use crate::app_server::retry::{
     RuntimeInspector, build_attempt_prompt, finish_prompt_preparation, run_turn_with_restart_retry,
 };
+use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn cancellation_during_startup_stops_the_runtime_before_the_first_attempt() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let sessions = AppServerSessionRegistry::new("Test");
+    let folder = tempfile::tempdir().expect("workspace");
+    let request = AppServerTurnRequest {
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
+        provider_call_budget: None,
+        folder: folder.path().to_owned(),
+        live_transcript: None,
+        main_checkout_root: None,
+        model: "model-a".into(),
+        permission_mode: ag_contracts::PermissionMode::ReadOnly,
+        personality: ag_contracts::PersonalityPrompt::default(),
+        prompt: "Do work".into(),
+        request_kind: session_start_request_kind(),
+        replay_transcript: None,
+        provider_conversation_id: None,
+        persisted_instruction_conversation_id: None,
+        reasoning_level: ReasoningLevel::default(),
+        session_id: "startup-cancellation".into(),
+        speed_mode: ag_contracts::SpeedMode::default(),
+    };
+    let shutdown_count = Arc::new(AtomicUsize::new(0));
+    let root = Span::root("test.startup.cancellation", Vec::new());
+    let trace_id = root.context().span().span_context().trace_id();
+
+    // Act
+    let result = root
+        .scope(run_turn_with_restart_retry(
+            &sessions,
+            request,
+            RuntimeInspector {
+                matches_request: |runtime: &TestRuntime, request| runtime.model == request.model,
+                pid: |_| None,
+                provider_conversation_id: |_| None,
+                retain_runtime_after_turn: true,
+                restored_context: |_| false,
+            },
+            ProtocolSchemaInstructionMode::TransportSchema,
+            |request| {
+                assert!(
+                    sessions
+                        .cancel_active_turn(&request.session_id)
+                        .expect("cancel")
+                );
+                let model = request.model.clone();
+
+                Box::pin(async move { Ok(TestRuntime { model }) })
+            },
+            |_, _| std::panic::resume_unwind(Box::new("canceled turn must not call the provider")),
+            {
+                let shutdown_count = Arc::clone(&shutdown_count);
+                move |runtime| {
+                    shutdown_count.fetch_add(1, Ordering::SeqCst);
+
+                    runtime.shutdown()
+                }
+            },
+        ))
+        .await;
+
+    // Assert
+    assert!(matches!(result, Err(AppServerError::InterruptedByUser(_))));
+    assert_eq!(shutdown_count.load(Ordering::SeqCst), 1);
+    assert!(
+        sessions
+            .take_session("startup-cancellation")
+            .expect("registry")
+            .is_none()
+    );
+    assert!(
+        !sessions
+            .cancel_active_turn("startup-cancellation")
+            .expect("active turn removed")
+    );
+    let spans = exporter.get_finished_spans().expect("spans");
+    let attempts: Vec<_> = spans
+        .iter()
+        .filter(|span| span.span_context.trace_id() == trace_id && span.name == "agent.attempt")
+        .collect();
+    assert_eq!(attempts.len(), 1);
+    assert!(
+        attempts[0]
+            .attributes
+            .contains(&KeyValue::new("agentty.outcome", "canceled"))
+    );
+}
 
 #[tokio::test]
 async fn replay_attempt_owns_archive_and_stops_runtime_on_archive_error() {

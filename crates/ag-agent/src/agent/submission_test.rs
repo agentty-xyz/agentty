@@ -9,5 +9,8 @@ mod repair;
 #[path = "submission_test/support_test.rs"]
 mod support;
 
+#[path = "submission_test/telemetry_test.rs"]
+mod telemetry;
+
 #[path = "submission_test/cancellation_test.rs"]
 mod cancellation;
