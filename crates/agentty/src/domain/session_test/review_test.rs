@@ -502,9 +502,15 @@ fn test_can_reply_to_session_in_stack_allows_parent_with_review_child() {
 }
 
 #[test]
-fn test_allows_review_comment_reply_accepts_review_or_question_sessions() {
+fn test_allows_review_comment_reply_accepts_review_question_and_busy_sessions() {
     // Arrange
-    let statuses = [Status::Review, Status::AgentReview, Status::Question];
+    let statuses = [
+        Status::Review,
+        Status::AgentReview,
+        Status::Question,
+        Status::InProgress,
+        Status::Rebasing,
+    ];
 
     // Act
     let reply_permissions = statuses.map(|status| {
@@ -515,15 +521,13 @@ fn test_allows_review_comment_reply_accepts_review_or_question_sessions() {
     });
 
     // Assert
-    assert_eq!(reply_permissions, [true, true, true]);
+    assert_eq!(reply_permissions, [true, true, true, true, true]);
 }
 
 #[test]
 fn test_allows_review_comment_reply_rejects_non_reply_or_managed_session() {
     // Arrange
-    let session = SessionFixtureBuilder::new()
-        .status(Status::InProgress)
-        .build();
+    let session = SessionFixtureBuilder::new().status(Status::Merging).build();
     let managed_session = SessionFixtureBuilder::new()
         .role(SessionRole::OrchestrationWorker)
         .status(Status::Review)
@@ -560,4 +564,72 @@ fn test_allows_worktree_open_action_accepts_managed_worker_only_in_review() {
     // Assert
     assert_eq!(open_permissions, [false, true, false]);
     assert!(!research_permission);
+}
+
+#[test]
+fn test_review_comments_reject_duplicate_queued_batch() {
+    // Arrange
+    let mut session = SessionFixtureBuilder::new()
+        .status(Status::InProgress)
+        .build();
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Queued(QueuedAction::new(1, "resolve comments".to_string())),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::ReviewCommentQueue,
+        turn_position: None,
+    });
+
+    // Act
+    let can_reply = session.allows_review_comment_reply();
+
+    // Assert
+    assert!(!can_reply);
+}
+
+#[test]
+fn review_comment_batches_wait_for_publish_and_queued_actions_in_review() {
+    // Arrange
+    let mut session = SessionFixtureBuilder::new().status(Status::Review).build();
+    let idle_is_queued = session.queues_review_comment_reply();
+    let messages = [
+        (
+            TransientMessageSlot::BranchPublish,
+            TransientMessageBody::Loading("Publishing".to_string()),
+        ),
+        (
+            TransientMessageSlot::SyncQueue,
+            TransientMessageBody::Queued(QueuedAction::new(1, "sync".to_string())),
+        ),
+    ];
+
+    // Act, Assert
+    assert!(!idle_is_queued);
+    for (slot, body) in messages {
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::Tail,
+            body,
+            lifecycle: TransientMessageLifecycle::UntilResolved,
+            slot,
+            turn_position: None,
+        });
+        assert!(session.queues_review_comment_reply());
+        session.transient_messages.retract(slot);
+    }
+}
+
+#[test]
+fn review_comment_batches_queue_while_question_without_earlier_work() {
+    // Arrange
+    let session = SessionFixtureBuilder::new()
+        .status(Status::Question)
+        .build();
+
+    // Act
+    let queues_review = session.queues_review_comment_reply();
+
+    // Assert
+    assert!(queues_review);
+    assert!(session.allows_review_comment_reply());
+    assert_eq!(session.queued_messages.len(), 0);
 }

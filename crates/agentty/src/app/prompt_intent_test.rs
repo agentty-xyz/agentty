@@ -18,6 +18,7 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::personality::Personality;
 use crate::domain::session::{SessionId, SessionRole, Status};
 use crate::domain::setting::SettingName;
+use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::infra::personality::MockPersonalityCatalogClient;
 use crate::presentation::app_mode::ReviewCommentSelection;
@@ -792,4 +793,41 @@ fn review_comment_thread(
         path: path.to_string(),
         start_line: Some(11),
     }
+}
+
+#[tokio::test]
+async fn busy_review_comment_submission_requires_the_existing_worker() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
+    let session_id: SessionId = app.create_session().await.expect("session").into();
+    app.sessions.sessions_mut()[0].prompt = "Existing prompt".to_string();
+    app.sessions.sessions_mut()[0].status = Status::Rebasing;
+    let snapshot = review_comment_snapshot();
+    let selections = vec![review_comment_selection("thread-current")];
+
+    // Act
+    let outcome = app
+        .resolve_session_review_comments(&session_id, &snapshot, &selections)
+        .await;
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("messages");
+
+    // Assert
+    assert_eq!(outcome, ReviewCommentResolutionOutcome::KeepReviewComments);
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("Thread ID:"))
+    );
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentQueue)
+            .is_none()
+    );
 }

@@ -572,3 +572,256 @@ async fn test_review_comment_incomplete_outcomes() -> E2eResult {
 
     Ok(())
 }
+
+/// Queued review work keeps its selected thread and follows earlier chat.
+#[tokio::test]
+async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("review_comments_queue")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(|env| Box::pin(async move {
+            seed_review_comment_agent_resolution(env).await?;
+            let claude_path = env.stub_bin.join("claude");
+            std::fs::write(&claude_path, r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"For this utility request"*)
+    answer='Helper response'
+    response='{ \"answer\": \"Helper response\" }'
+    ;;
+  *"Evaluate the following selected forge review comments"*)
+    sleep 3
+    answer='Queued review comment completed'
+    response='{ \"answer\": \"Queued review comment completed\", \"review_comment_outcomes\": [{ \"reply\": \"Explained the output\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }'
+    ;;
+  *"Earlier queued chat"*)
+    answer='Earlier queued chat completed'
+    response='{ \"answer\": \"Earlier queued chat completed\" }'
+    ;;
+  *"Start slow review work"*)
+    sleep 20
+    answer='Slow review work completed'
+    response='{ \"answer\": \"Slow review work completed\" }'
+    ;;
+  *) answer='Helper response'; response='{ \"answer\": \"Helper response\" }' ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
+"#)?;
+            #[cfg(unix)]
+            std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+            Ok(())
+        }))
+        .run(|scenario| scenario
+            .compose(&common::wait_for_agentty_startup())
+            .compose(&common::switch_to_tab("Sessions"))
+            .compose(&common::open_selected_session_view())
+            .press_key("Enter")
+            .wait_for_text("Type your message", 5000)
+            .write_text("Start slow review work")
+            .wait_for_text("Start slow review work", 3000)
+            .press_key("Enter")
+            .wait_for_text("Ctrl+c: stop", 5000)
+            .press_key("Enter")
+            .wait_for_text("Type your message", 5000)
+            .write_text("Earlier queued chat")
+            .wait_for_text("Earlier queued chat", 3000)
+            .press_key("Enter")
+            .wait_for_text("≡ queued › Earlier queued chat", 5000)
+            .press_key("c")
+            .wait_for_text("Space: select", 5000)
+            .press_key("Space")
+            .wait_for_text("Selected 1", 5000)
+            .press_key("Enter")
+            .wait_for_text("≡ resolve 1 review comment", 5000)
+            .capture_labeled("waiting_review_comments", "Review comments join the visible queue")
+            .wait_for_text("Earlier queued chat completed", 30000)
+            .wait_for_text("Resolving 1 review comment...", 5000)
+            .capture_labeled("running_review_comments", "Review comments start after earlier chat")
+            .wait_for_text("Queued review comment completed", 10000)
+            .wait_for_text("Enter: reply", 10000),
+            |frame, report| Box::pin(async move {
+                let waiting = common::frame_from_capture(&report.captures[0]);
+                let full = Region::full(waiting.cols(), waiting.rows());
+                let waiting_text = waiting.text_in_region(&full);
+                assertion::assert_text_in_region(&waiting, "≡ queued › Earlier queued chat", &full);
+                assertion::assert_text_in_region(&waiting, "≡ resolve 1 review comment", &full);
+                assert!(waiting_text.find("≡ queued › Earlier queued chat") < waiting_text.find("≡ resolve 1 review comment"));
+                assertion::assert_not_visible(&waiting, "Resolving 1 review comment...");
+                let running = common::frame_from_capture(&report.captures[1]);
+                assertion::assert_not_visible(&running, "≡ resolve 1 review comment");
+                let full = Region::full(frame.cols(), frame.rows());
+                assertion::assert_text_in_region(frame, "Queued review comment completed", &full);
+                assertion::assert_not_visible(frame, "Resolving 1 review comment...");
+                assertion::assert_not_visible(frame, "≡ resolve 1 review comment");
+            }))
+        .await?;
+
+    Ok(())
+}
+
+/// A review submitted to an idle question session waits for its explicit
+/// answer.
+#[tokio::test]
+async fn review_comments_wait_for_pending_clarification_without_earlier_work() -> E2eResult {
+    // Arrange, Act, Assert
+    review_comments_question_queue(false, false).await
+}
+
+/// A restored question session can queue review work before creating a worker
+/// for its clarification answer.
+#[tokio::test]
+async fn restored_question_accepts_review_comments_before_answer() -> E2eResult {
+    // Arrange, Act, Assert
+    review_comments_question_queue(true, false).await
+}
+
+/// Recovery of an unstarted review operation must keep clarification visible
+/// and block a newly submitted review until it is answered.
+#[tokio::test]
+async fn question_survives_restart_with_queued_review_comments() -> E2eResult {
+    // Arrange, Act, Assert
+    review_comments_question_queue(true, true).await
+}
+
+/// Exercises the same visible queue contract with live and restored questions.
+async fn review_comments_question_queue(restored: bool, recover_queued_review: bool) -> E2eResult {
+    let name = if recover_queued_review {
+        "review_comments_recovered_question_queue"
+    } else if restored {
+        "review_comments_restored_question_queue"
+    } else {
+        "review_comments_question_queue"
+    };
+    FeatureTest::new(name)
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(move |env| {
+            Box::pin(seed_review_comment_question(
+                env,
+                restored,
+                recover_queued_review,
+            ))
+        })
+        .run(
+            move |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"));
+                let scenario = if restored {
+                    scenario.press_key("Enter")
+                } else {
+                    scenario
+                        .compose(&common::open_selected_session_view())
+                        .press_key("Enter")
+                        .wait_for_text("Type your message", 5000)
+                        .write_text("Ask for review clarification")
+                        .wait_for_text("Ask for review clarification", 3000)
+                        .press_key("Enter")
+                };
+                scenario
+                    .wait_for_text("Question 1/1", 10000)
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
+                    .press_key("d")
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .wait_for_text("Selected 1", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("≡ resolve 1 review comment", 5000)
+                    .wait_for_text("Question 1/1", 5000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "waiting_for_answer",
+                        "Review waits for the pending clarification",
+                    )
+                    .press_key("Enter")
+                    .wait_for_text("Clarification accepted", 10000)
+                    .wait_for_text("Review completed after clarification", 10000)
+                    .wait_for_text("Enter: reply", 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let waiting = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(waiting.cols(), waiting.rows());
+                    assertion::assert_text_in_region(&waiting, "Question 1/1", &full);
+                    assertion::assert_text_in_region(&waiting, "Use existing behavior?", &full);
+                    assertion::assert_text_in_region(&waiting, "≡ resolve 1 review comment", &full);
+                    assertion::assert_not_visible(&waiting, "Resolving 1 review comment...");
+                    assertion::assert_not_visible(&waiting, "Review completed after clarification");
+                    assertion::assert_not_visible(frame, "≡ resolve 1 review comment");
+                    assertion::assert_not_visible(frame, "Question 1/1");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Seeds a live or restored clarification and the deferred review response.
+async fn seed_review_comment_question(
+    env: &BuilderEnv,
+    restored: bool,
+    recover_queued_review: bool,
+) -> E2eResult {
+    seed_review_comment_agent_resolution(env).await?;
+    if restored {
+        let database = common::open_database(env).await?;
+        database
+            .sessions()
+            .update_session_status_with_timing_at("review-shortcut-0001", "Question", 0)
+            .await?;
+        database
+            .sessions()
+            .update_session_questions(
+                "review-shortcut-0001",
+                r#"[{"text":"Use existing behavior?","options":["Yes"]}]"#,
+            )
+            .await?;
+        if recover_queued_review {
+            database
+                .operations()
+                .insert_session_operation(
+                    "queued-review-before-restart",
+                    "review-shortcut-0001",
+                    "reply",
+                )
+                .await?;
+        }
+    }
+    let claude_path = env.stub_bin.join("claude");
+    std::fs::write(
+        &claude_path,
+        r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"For this utility request"*)
+    answer='Helper response'; response='{ \"answer\": \"Helper response\" }' ;;
+  *"Evaluate the following selected forge review comments"*)
+    sleep 2
+    answer='Review completed after clarification'
+    response='{ \"answer\": \"Review completed after clarification\", \"review_comment_outcomes\": [{ \"reply\": \"Explained the output\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }' ;;
+  *"Ask for review clarification"*)
+    answer='Need clarification'
+    response='{ \"answer\": \"Need clarification\", \"questions\": [{ \"text\": \"Use existing behavior?\", \"options\": [\"Yes\"] }] }' ;;
+  *) answer='Clarification accepted'; response='{ \"answer\": \"Clarification accepted\" }' ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
+"#,
+    )?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}

@@ -161,7 +161,7 @@ async fn test_enqueue_reply_command_reports_worker_failure_in_transcript() {
             ReplyEnqueueOptions {
                 idempotent: false,
                 report_failure_in_transcript: true,
-                requires_existing_worker: true,
+                joins_worker_queue: true,
             },
         )
         .await;

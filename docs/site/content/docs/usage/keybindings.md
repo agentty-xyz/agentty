@@ -171,8 +171,9 @@ line context is absent.
 | `Enter`       | Submit all selected threads to the agent |
 
 `[ ]` marks an actionable thread; `[x]` marks a selection. Submission requires a
-reply-capable session and at least one selected thread. Outdated unresolved threads
-remain actionable; resolved threads and standalone comments are read-only. See
+reply-capable session and at least one selected thread. During active work or sync,
+`Enter` queues the batch behind earlier work. Outdated unresolved threads remain
+actionable; resolved threads and standalone comments are read-only. See
 [Addressing Review Comments](@/docs/usage/workflow.md#addressing-review-comments) for
 reply and resolution behavior.
 

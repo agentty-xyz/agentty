@@ -127,6 +127,14 @@ impl SessionCommand {
         self.operation_id() == format!("workspace:{session_id}")
     }
 
+    /// Returns the selected thread count carried through this command's turn.
+    pub(super) fn review_comment_count(&self) -> usize {
+        match self {
+            Self::Run { turn_metadata, .. } => turn_metadata.review_comment_thread_ids.len(),
+            _ => 0,
+        }
+    }
+
     /// Returns the persisted operation identifier for this command.
     fn operation_id(&self) -> &str {
         match self {
@@ -206,7 +214,8 @@ impl ScheduledSessionCommand {
 
     /// Returns whether this command can make a questioned session runnable.
     fn can_run_while_question(&self) -> bool {
-        self.queued_order.is_none() || matches!(self.command, SessionCommand::Run { .. })
+        self.command.review_comment_count() == 0
+            && (self.queued_order.is_none() || matches!(self.command, SessionCommand::Run { .. }))
     }
 
     /// Wraps a command that is ready to run without joining the visible queue.
@@ -860,7 +869,8 @@ impl SessionWorkerService {
     }
 
     /// Marks unfinished operations from previous process runs as failed and
-    /// closes any open active-work timing window at `timestamp_seconds`.
+    /// closes any open active-work timing window at `timestamp_seconds`,
+    /// retaining clarification when only unstarted queued work remains.
     ///
     /// # Errors
     /// Returns an error when loading operations, cleaning interrupted rebases,
@@ -901,7 +911,17 @@ impl SessionWorkerService {
                             .load_session_preparation(session_id)
                             .await?
                             .is_some_and(|preparation| preparation.prompt.is_some());
-                    let recovered_status = if unstarted_first_prompt {
+                    let awaiting_clarification =
+                        unfinished_operations
+                            .iter()
+                            .filter(|operation| operation.session_id == session_id)
+                            .all(|operation| operation.started_at.is_none())
+                            && db.sessions().load_session(session_id).await?.is_some_and(
+                                |session| session.status == Status::Question.to_string(),
+                            );
+                    let recovered_status = if awaiting_clarification {
+                        Status::Question
+                    } else if unstarted_first_prompt {
                         Status::Draft
                     } else {
                         Status::Review
@@ -1284,6 +1304,8 @@ impl SessionWorkerService {
             Self::append_preparation_prompt(context, request_kind, prompt);
         }
 
+        let review_comment_count = Self::begin_review_comment_resolution(context, &command).await;
+
         let turn_agent = if let SessionCommand::Run {
             request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
             turn_metadata,
@@ -1317,6 +1339,10 @@ impl SessionWorkerService {
         )
         .await;
 
+        if review_comment_count > 0 {
+            Self::emit_review_comment_resolution_update(context, None);
+        }
+
         // Auto-commit can swallow cancellation errors during post-processing.
         // The active turn's token still records the user's interruption.
         let interrupted = context
@@ -1336,6 +1362,52 @@ impl SessionWorkerService {
         }
 
         Some(result)
+    }
+
+    /// Persists generated context after skip checks and starts review progress.
+    async fn begin_review_comment_resolution(
+        context: &SessionWorkerContext,
+        command: &SessionCommand,
+    ) -> usize {
+        let comment_count = command.review_comment_count();
+        if comment_count > 0
+            && let SessionCommand::Run { prompt, .. } = command
+        {
+            let prompt_text = prompt.transcript_text();
+            SessionTaskService::append_session_transcript_message(
+                &context.transcript,
+                &context.db,
+                &context.app_event_tx,
+                &context.session_update_versions,
+                &context.session_id,
+                SessionTranscriptMessageAppend {
+                    kind: SessionMessageKind::AgentPrompt,
+                    raw_content: &prompt_text,
+                },
+            )
+            .await;
+            let _ = context
+                .db
+                .sessions()
+                .update_session_focused_review(&context.session_id, None, None, None)
+                .await;
+            Self::emit_review_comment_resolution_update(context, Some(comment_count));
+        }
+
+        comment_count
+    }
+
+    /// Sends one review-comment lifecycle update to the foreground reducer.
+    fn emit_review_comment_resolution_update(
+        context: &SessionWorkerContext,
+        comment_count: Option<usize>,
+    ) {
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::SessionReviewCommentResolutionUpdated {
+                comment_count,
+                session_id: context.session_id.clone(),
+            });
     }
 
     /// Fails closed if the durable start marker cannot take ownership of the
@@ -1412,6 +1484,12 @@ impl SessionWorkerService {
     /// Resolves external observers when a queued command is canceled or
     /// otherwise finishes before worker execution begins.
     fn complete_skipped_session_command(context: &SessionWorkerContext, command: &SessionCommand) {
+        if let SessionCommand::Run { turn_metadata, .. } = command
+            && !turn_metadata.review_comment_thread_ids.is_empty()
+        {
+            Self::emit_review_comment_resolution_update(context, Some(0));
+        }
+
         if matches!(command, SessionCommand::CreateReviewRequest { .. }) {
             let _ = context
                 .app_event_tx
@@ -1524,9 +1602,13 @@ impl SessionWorkerService {
                 request_kind,
                 replay_transcript,
                 prompt,
-                turn_metadata,
+                mut turn_metadata,
                 ..
             } => {
+                if !turn_metadata.review_comment_thread_ids.is_empty() {
+                    turn_metadata.published_upstream_ref =
+                        context.load_published_upstream_ref().await;
+                }
                 turn::run_channel_turn(
                     context,
                     Arc::clone(run_client),
@@ -1751,6 +1833,32 @@ impl SessionManager {
 
         self.worker_service_mut()
             .enqueue_session_command(services, runtime, command)
+            .await
+    }
+
+    /// Persists a reply in the shared queue, creating a paused worker for
+    /// review batches in restored question sessions. Active work must retain
+    /// its existing worker to avoid concurrent execution.
+    ///
+    /// # Errors
+    /// Returns an error when the session runtime is missing, an active worker
+    /// is unavailable, or operation persistence or delivery fails.
+    pub(super) async fn enqueue_queued_session_command(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        command: SessionCommand,
+    ) -> Result<u64, SessionError> {
+        if self.session_or_err(session_id)?.status == Status::Question
+            && command.review_comment_count() > 0
+        {
+            let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+            self.worker_service_mut()
+                .ensure_session_worker(services, &runtime);
+        }
+
+        self.worker_service_mut()
+            .enqueue_existing_session_command(services, &SessionId::from(session_id), command)
             .await
     }
 

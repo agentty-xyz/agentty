@@ -129,13 +129,7 @@ impl App {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         };
 
-        self.clear_review_output(session_id.as_str());
-        let _ = self
-            .services
-            .db()
-            .sessions()
-            .update_session_focused_review(session_id, None, None, None)
-            .await;
+        let is_queued = self.sessions.sessions()[session_index].queues_review_comment_reply();
         let comment_count = thread_ids.len();
         let enqueued = self
             .sessions
@@ -144,6 +138,12 @@ impl App {
         if !enqueued {
             return ReviewCommentResolutionOutcome::KeepReviewComments;
         }
+        if is_queued {
+            return ReviewCommentResolutionOutcome::ShowSession {
+                session_id: session_id.clone(),
+            };
+        }
+        self.clear_review_output(session_id.as_str());
         self.clear_diff_comment_progress(session_id);
 
         // Reply enqueueing cannot reorder the exclusively borrowed session
@@ -683,7 +683,7 @@ impl App {
 }
 
 /// Formats the in-progress label for one accepted review-comment batch.
-fn review_comment_resolution_loading_text(comment_count: usize) -> String {
+pub(crate) fn review_comment_resolution_loading_text(comment_count: usize) -> String {
     let noun = if comment_count == 1 {
         "review comment"
     } else {

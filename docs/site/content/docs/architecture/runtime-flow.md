@@ -115,7 +115,13 @@ only a successful manual target sync archives it as `Done`.
 <a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows contain user
 prompts, final answers, and workflow notices. Typed transient slots hold progress,
 queued actions, and review output with explicit placement and lifetime. Chat messages
-and workflow actions share one submission sequence for both display and execution.
+and workflow actions, including selected review-comment batches, share one submission
+sequence for both display and execution. Review-comment commands retain their thread
+allowlist and replace the queued row with loading progress only when execution starts.
+Queued review batches wait for clarification answers, including after session
+restoration. A restored question session creates a paused worker when accepting the
+batch. Generated prompts enter durable history when the worker starts them, so canceled
+waiting work cannot be replayed.
 
 Completion replaces matching progress with its result in one reducer update. Stale
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
@@ -317,6 +323,8 @@ threads resolve, while `no_change_needed` receives a reply and remains open.
 recovery; live handles and immutable snapshots serve rendering. Operation admission,
 turn completion, review evidence, and cleanup intent must persist before their dependent
 side effects. Recoverable failures remain visible instead of claiming terminal success.
+Startup fails abandoned queued operations without dismissing pending clarification.
+Unstarted queued work does not change a session's `Question` status.
 
 The standalone harness has separate store, lease, and effect-settlement contracts. See
 [`ag-harness` Design](@/docs/architecture/ag-harness-design.md); it is not yet wired

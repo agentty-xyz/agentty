@@ -327,7 +327,11 @@ remote edits before updating, but an edit after that check can still race.
 Open linked comments with `c`. Select actionable threads with `Space`, then press
 `Enter` to have the agent evaluate them in one turn. Resolved threads and standalone
 comments are read-only; outdated unresolved threads remain actionable without current
-line context.
+line context. While the session is working, syncing, or publishing, the batch joins the
+same queue as chat messages, sync, and review-request creation. Its waiting row becomes
+a resolving indicator when the turn starts. If clarification is pending, the batch waits
+for your answers even when no other work is queued. Only one review-comment batch can
+wait at a time.
 
 After a successful commit and push, Agentty replies to each selected thread and resolves
 only those reported as fixed. Threads needing no change receive an explanation and stay

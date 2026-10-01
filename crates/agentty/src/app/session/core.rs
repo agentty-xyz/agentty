@@ -662,6 +662,68 @@ impl SessionManager {
         );
     }
 
+    /// Shows a selected review-comment batch at its shared submission order.
+    pub(crate) fn queue_review_comment_resolution(
+        &mut self,
+        session_id: &str,
+        order: u64,
+        comment_count: usize,
+    ) {
+        self.state.upsert_queued_action(
+            session_id,
+            TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Queued(QueuedAction::new(
+                    order,
+                    format!(
+                        "resolve {comment_count} review comment{}",
+                        if comment_count == 1 { "" } else { "s" }
+                    ),
+                )),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::ReviewCommentQueue,
+                turn_position: None,
+            },
+        );
+    }
+
+    /// Applies worker-owned review-comment queue and loading transitions.
+    pub(crate) fn update_review_comment_resolution(
+        &mut self,
+        session_id: &str,
+        comment_count: Option<usize>,
+    ) {
+        if comment_count.is_some() {
+            self.state
+                .resolve_queued_action(session_id, TransientMessageSlot::ReviewCommentQueue);
+        }
+        let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        if let Some(comment_count) = comment_count.filter(|count| *count > 0) {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::Tail,
+                body: TransientMessageBody::Loading(
+                    crate::app::prompt_intent::review_comment_resolution_loading_text(
+                        comment_count,
+                    ),
+                ),
+                lifecycle: TransientMessageLifecycle::UntilResolved,
+                slot: TransientMessageSlot::ReviewCommentResolution,
+                turn_position: None,
+            });
+        } else {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::ReviewCommentResolution);
+        }
+    }
+
     /// Removes a queued-sync row after its worker command resolves or starts.
     pub(crate) fn resolve_queued_session_sync(&mut self, session_id: &str) {
         self.state

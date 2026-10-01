@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -7,7 +7,7 @@ use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_protocol::AgentResponse;
 use ag_worker::test_support::MockAgentBackend;
 use tempfile::tempdir;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, mpsc};
 
 use super::super::{SESSION_REFRESH_INTERVAL, session_folder};
 use super::support::{
@@ -16,13 +16,14 @@ use super::support::{
     register_session_backend, review_comment_resolution_snapshot, review_message_body,
     session_replay_text, test_session_manager, wait_for_output_contains, wait_for_status,
 };
-use crate::app::ReviewCacheEntry;
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::app::review::{review_failure_message, review_loading_message};
 use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
+use crate::app::{App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
-use crate::domain::session::{SESSION_DATA_DIR, Status};
+use crate::domain::question::QuestionItem;
+use crate::domain::session::{SESSION_DATA_DIR, SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
@@ -509,4 +510,479 @@ fn test_finish_branch_publish_promotes_result_when_project_snapshot_is_unloaded(
         .expect("branch publish result should be promoted to the transcript");
     assert_eq!(notice.kind, SessionMessageKind::WorkflowNotice);
     assert_eq!(notice.content, "**Branch push failed**\n\nRemote rejected");
+}
+
+#[tokio::test]
+async fn review_comment_batch_joins_chat_queue_and_survives_refresh() {
+    // Arrange
+    let dir = tempdir().expect("test directory");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = prepare_review_comment_resolution_session(&mut app).await;
+    let first_turn_release = Arc::new(Notify::new());
+    let resolution_release = Arc::new(Notify::new());
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let channel =
+        review_comment_queue_channel(&first_turn_release, &resolution_release, started_tx);
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, Arc::new(channel));
+    assert!(app.reply(&session_id, "Active turn").await);
+    assert_eq!(started_rx.recv().await.expect("first turn"), "Active turn");
+    app.sessions.sync_from_handles();
+    app.enqueue_message(&session_id, "Earlier queued chat")
+        .expect("queue chat");
+    let snapshot = review_comment_resolution_snapshot();
+    let selections = vec![ReviewCommentSelection {
+        thread_id: "thread-42".to_string(),
+    }];
+
+    // Act
+    let outcome = app
+        .resolve_session_review_comments(&session_id, &snapshot, &selections)
+        .await;
+    app.apply_app_events(AppEvent::RefreshSessions).await;
+    let queued_session = &app.sessions.sessions()[0];
+    let queued = queued_session
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentQueue)
+        .expect("queued row");
+    let action = match &queued.body {
+        TransientMessageBody::Queued(action) => Some(action),
+        _ => None,
+    }
+    .expect("expected waiting row");
+    let action_order = action.order;
+    let chat_order = queued_session.queued_messages[0].order();
+    let label = action.text.clone();
+    assert!(
+        queued_session
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentResolution)
+            .is_none()
+    );
+    let duplicate = app
+        .resolve_session_review_comments(&session_id, &snapshot, &selections)
+        .await;
+    assert_review_prompt_history(&app, &session_id, false).await;
+    first_turn_release.notify_one();
+    let chat = started_rx.recv().await.expect("queued chat");
+    let resolution = started_rx.recv().await.expect("resolution turn");
+    assert_review_prompt_history(&app, &session_id, true).await;
+    app.process_pending_app_events().await;
+    let active = &app.sessions.sessions()[0];
+    let loading = active
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentResolution)
+        .map(|message| message.body.text().to_string());
+    let queue_cleared = active
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentQueue)
+        .is_none();
+    resolution_release.notify_one();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert_eq!(
+        outcome,
+        ReviewCommentResolutionOutcome::ShowSession {
+            session_id: session_id.clone()
+        }
+    );
+    assert_eq!(
+        duplicate,
+        ReviewCommentResolutionOutcome::KeepReviewComments
+    );
+    assert!(chat_order < action_order);
+    assert_eq!(label, "resolve 1 review comment");
+    assert_eq!(chat, "Earlier queued chat");
+    assert!(resolution.contains("Thread ID: thread-42"));
+    assert_eq!(loading.as_deref(), Some("Resolving 1 review comment..."));
+    assert!(queue_cleared);
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentResolution)
+            .is_none()
+    );
+}
+
+/// Checks that generated context is persisted after earlier completed turns.
+async fn assert_review_prompt_history(app: &App, session_id: &str, started: bool) {
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(session_id)
+        .await
+        .expect("persisted history");
+    let review_index = messages
+        .iter()
+        .position(|message| message.content.contains("Thread ID: thread-42"));
+    if started {
+        let review_index = review_index.expect("executing review context");
+        assert_eq!(messages[review_index].kind, "agent_prompt");
+        let chat_index = messages
+            .iter()
+            .position(|message| message.content == "Earlier queued chat")
+            .expect("earlier chat prompt");
+        let first_answer = messages
+            .iter()
+            .position(|message| message.content.contains("Completed queued work"))
+            .expect("active answer");
+        let last_answer = messages
+            .iter()
+            .rposition(|message| message.content.contains("Completed queued work"))
+            .expect("chat answer");
+        assert!(
+            first_answer < chat_index && chat_index < last_answer && last_answer < review_index
+        );
+    } else {
+        assert!(
+            review_index.is_none(),
+            "waiting review must not enter replay history"
+        );
+    }
+}
+
+#[tokio::test]
+async fn review_comment_batch_preserves_pending_question_without_earlier_work() {
+    // Arrange, Act, Assert
+    Box::pin(assert_review_comment_batch_preserves_question(false, false)).await;
+}
+
+#[tokio::test]
+async fn restored_question_accepts_review_comment_batch_without_worker() {
+    // Arrange, Act, Assert
+    Box::pin(assert_review_comment_batch_preserves_question(true, false)).await;
+}
+
+#[tokio::test]
+async fn question_survives_restart_after_queued_review_comments() {
+    // Arrange, Act, Assert
+    Box::pin(assert_review_comment_batch_preserves_question(true, true)).await;
+}
+
+/// Checks question retention, deferred history, and answer-before-review order.
+async fn assert_review_comment_batch_preserves_question(
+    restored: bool,
+    recover_queued_review: bool,
+) {
+    // Arrange
+    let directory = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(directory.path()).await;
+    let session_id = prepare_review_comment_resolution_session(&mut app).await;
+    if restored {
+        app = restore_review_question_app(app, directory.path(), &session_id).await;
+    }
+    if recover_queued_review {
+        app = Box::pin(recover_queued_review_question_app(
+            app,
+            directory.path(),
+            &session_id,
+        ))
+        .await;
+    }
+    let release = Arc::new(Notify::new());
+    let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+    let channel =
+        review_comment_question_channel(&release, started_tx, if restored { 2 } else { 3 });
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, Arc::new(channel));
+    if !restored {
+        assert!(app.reply(&session_id, "Request clarification").await);
+        assert_eq!(
+            started_rx.recv().await.expect("initial turn"),
+            "Request clarification"
+        );
+        wait_for_status(&mut app, &session_id, Status::Question).await;
+    }
+    let selections = vec![ReviewCommentSelection {
+        thread_id: "thread-42".to_string(),
+    }];
+
+    // Act
+    let outcome = app
+        .resolve_session_review_comments(
+            &session_id,
+            &review_comment_resolution_snapshot(),
+            &selections,
+        )
+        .await;
+    app.process_pending_app_events().await;
+    let session = &app.sessions.sessions()[0];
+    let persisted = app
+        .services
+        .db()
+        .sessions()
+        .load_session(&session_id)
+        .await
+        .expect("persisted session")
+        .expect("session row");
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("persisted history");
+
+    // Assert: accepting the batch preserves the clarification and defers its
+    // prompt.
+    assert_eq!(
+        outcome,
+        ReviewCommentResolutionOutcome::ShowSession {
+            session_id: session_id.clone()
+        }
+    );
+    assert_eq!(session.status, Status::Question);
+    assert_eq!(session.queued_messages.len(), 0);
+    assert!(
+        session
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentQueue)
+            .is_some()
+    );
+    assert!(
+        session
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentResolution)
+            .is_none()
+    );
+    assert!(
+        persisted
+            .questions
+            .as_deref()
+            .is_some_and(|text| text.contains("Use existing behavior?"))
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|message| message.content.contains("Thread ID: thread-42"))
+    );
+    assert!(started_rx.try_recv().is_err());
+
+    // Act: only the explicit answer resumes execution, followed by the review.
+    assert!(
+        app.sessions
+            .reply_to_question_answers(&app.services, &session_id, "Use existing behavior")
+            .await
+    );
+    let answer = started_rx.recv().await.expect("answer turn");
+    let review = started_rx.recv().await.expect("review turn");
+    release.notify_one();
+    wait_for_status(&mut app, &session_id, Status::Review).await;
+
+    // Assert
+    assert_eq!(answer, "Use existing behavior");
+    assert!(review.contains("Thread ID: thread-42"));
+}
+
+/// Reloads a persisted clarification into a fresh app with no live workers.
+async fn restore_review_question_app(app: App, path: &Path, session_id: &SessionId) -> App {
+    let db = app.services.db().clone();
+    db.sessions()
+        .update_session_status_with_timing_at(session_id, "Question", 0)
+        .await
+        .expect("persist question status");
+    db.sessions()
+        .update_session_questions(
+            session_id,
+            r#"[{"text":"Use existing behavior?","options":[]}]"#,
+        )
+        .await
+        .expect("persist clarification");
+    drop(app);
+
+    new_test_app_with_git_and_db(path, db).await
+}
+
+/// Queues real review work, recovers its durable operation, and reopens the
+/// session without executing or persisting the abandoned review prompt.
+async fn recover_queued_review_question_app(
+    mut app: App,
+    path: &Path,
+    session_id: &SessionId,
+) -> App {
+    let (started_tx, _started_rx) = mpsc::unbounded_channel();
+    let channel = review_comment_question_channel(&Arc::new(Notify::new()), started_tx, 0);
+    TestSessionRunFactory::install(&mut app.services).register(session_id, Arc::new(channel));
+    let outcome = app
+        .resolve_session_review_comments(
+            session_id,
+            &review_comment_resolution_snapshot(),
+            &[ReviewCommentSelection {
+                thread_id: "thread-42".to_string(),
+            }],
+        )
+        .await;
+    assert_eq!(
+        outcome,
+        ReviewCommentResolutionOutcome::ShowSession {
+            session_id: session_id.clone()
+        }
+    );
+    let db = app.services.db().clone();
+    let operations = db
+        .operations()
+        .load_unfinished_session_operations()
+        .await
+        .expect("queued review operation");
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].session_id, session_id.as_str());
+    assert_eq!(operations[0].kind, "reply");
+    assert_eq!(operations[0].status, "queued");
+    assert_eq!(operations[0].started_at, None);
+
+    SessionManager::fail_unfinished_operations_from_previous_run(
+        db.clone(),
+        app.services.base_path().to_path_buf(),
+        app.services.git_client(),
+        app.services.clock(),
+    )
+    .await
+    .expect("recover queued review");
+    assert!(
+        !db.operations()
+            .is_session_operation_unfinished(&operations[0].id)
+            .await
+            .expect("interrupted operation")
+    );
+    let row = db
+        .sessions()
+        .load_session(session_id)
+        .await
+        .expect("recovered session")
+        .expect("session row");
+    assert_eq!(row.status, "Question");
+    assert!(
+        row.questions
+            .as_deref()
+            .is_some_and(|questions| questions.contains("Use existing behavior?"))
+    );
+    drop(app);
+
+    new_test_app_with_git_and_db(path, db).await
+}
+
+/// Provides clarification, its explicit answer, and a deferred review turn.
+fn review_comment_question_channel(
+    release: &Arc<Notify>,
+    started_tx: mpsc::UnboundedSender<String>,
+    turn_count: usize,
+) -> MockAgentChannel {
+    let mut channel = MockAgentChannel::new();
+    let release = Arc::clone(release);
+    channel
+        .expect_run_turn()
+        .times(turn_count)
+        .returning(move |_, request, _| {
+            let prompt = request.prompt.text;
+            let release = Arc::clone(&release);
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                started_tx
+                    .send(prompt.clone())
+                    .expect("report started turn");
+                let mut response = AgentResponse::plain("Completed turn");
+                if prompt == "Request clarification" {
+                    response.questions = vec![QuestionItem::new("Use existing behavior?")];
+                } else if prompt.contains("Thread ID: thread-42") {
+                    release.notified().await;
+                }
+                Ok(TurnResult {
+                    assistant_message: response,
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    channel
+}
+
+/// Builds three deferred turns for the mixed chat/comment queue scenario.
+fn review_comment_queue_channel(
+    first_turn_release: &Arc<Notify>,
+    resolution_release: &Arc<Notify>,
+    started_tx: mpsc::UnboundedSender<String>,
+) -> MockAgentChannel {
+    let mut channel = MockAgentChannel::new();
+    let first_release = Arc::clone(first_turn_release);
+    let last_release = Arc::clone(resolution_release);
+    channel
+        .expect_run_turn()
+        .times(3)
+        .returning(move |_, request, _| {
+            let prompt = request.prompt.text;
+            let first_release = Arc::clone(&first_release);
+            let last_release = Arc::clone(&last_release);
+            let started_tx = started_tx.clone();
+            Box::pin(async move {
+                started_tx
+                    .send(prompt.clone())
+                    .expect("report started turn");
+                if prompt == "Active turn" {
+                    first_release.notified().await;
+                }
+                if prompt.contains("Thread ID: thread-42") {
+                    last_release.notified().await;
+                }
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("Completed queued work"),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    channel
+        .expect_shutdown_session()
+        .returning(|_| Box::pin(async { Ok(()) }));
+
+    channel
+}
+
+#[tokio::test]
+async fn review_comment_resolution_projection_handles_skips_missing_sessions_and_coalesced_events()
+{
+    // Arrange
+    let dir = tempdir().expect("test directory");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let session_id = prepare_review_comment_resolution_session(&mut app).await;
+    app.sessions
+        .queue_review_comment_resolution(&session_id, 0, 2);
+
+    // Act
+    app.sessions
+        .update_review_comment_resolution("missing", Some(2));
+    app.sessions
+        .update_review_comment_resolution(&session_id, Some(0));
+    let skipped_row_removed = app.sessions.sessions()[0]
+        .transient_messages
+        .get(TransientMessageSlot::ReviewCommentQueue)
+        .is_none();
+    app.services
+        .emit_app_event(AppEvent::SessionReviewCommentResolutionUpdated {
+            comment_count: Some(2),
+            session_id: session_id.clone(),
+        });
+    app.services
+        .emit_app_event(AppEvent::SessionReviewCommentResolutionUpdated {
+            comment_count: None,
+            session_id: session_id.clone(),
+        });
+    app.process_pending_app_events().await;
+
+    // Assert
+    assert!(skipped_row_removed);
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::ReviewCommentResolution)
+            .is_none()
+    );
 }
