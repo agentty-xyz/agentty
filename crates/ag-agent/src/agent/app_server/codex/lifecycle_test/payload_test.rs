@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use ag_session::AgentModel;
+use ag_session::test_support as model_fixture;
 use serde_json::Value;
 
 use crate::agent::app_server::codex::lifecycle::{
@@ -15,7 +15,7 @@ use crate::agent::app_server::codex::policy;
 fn build_thread_start_payload_carries_method_id_cwd_and_model() {
     // Arrange
     let folder = PathBuf::from("/tmp/agentty-codex-thread-start");
-    let model = AgentModel::Gpt61Sol.as_str();
+    let model = model_fixture::CODEX_MODEL.as_str();
 
     // Act
     let payload = build_thread_start_payload(
@@ -69,7 +69,7 @@ fn build_thread_start_payload_carries_method_id_cwd_and_model() {
 #[test]
 fn build_thread_resume_payload_uses_thread_id_for_resume() {
     // Arrange
-    let model = AgentModel::Gpt61Sol.as_str();
+    let model = model_fixture::CODEX_MODEL.as_str();
 
     // Act
     let payload = build_thread_resume_payload(
@@ -116,7 +116,7 @@ fn build_turn_start_payload_uses_full_access_for_auto_edit() {
     // Act
     let payload = build_turn_start_payload(&CodexTurnStartPayloadInput {
         folder: &folder,
-        model: AgentModel::Gpt61Sol.as_str(),
+        model: model_fixture::CODEX_MODEL.as_str(),
         permission_mode: PermissionMode::AutoEdit,
         prompt: "Update the repository instructions".into(),
         protocol_profile: ProtocolRequestProfile::SessionTurn,
@@ -156,7 +156,7 @@ fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
     // Act
     let thread_payload = build_thread_start_payload(
         &folder,
-        AgentModel::Gpt61Sol.as_str(),
+        model_fixture::CODEX_MODEL.as_str(),
         PermissionMode::ReadOnly,
         ReasoningLevel::Medium,
         SpeedMode::default(),
@@ -164,7 +164,7 @@ fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
     );
     let turn_payload = build_turn_start_payload(&CodexTurnStartPayloadInput {
         folder: &folder,
-        model: AgentModel::Gpt61Sol.as_str(),
+        model: model_fixture::CODEX_MODEL.as_str(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: "Inspect the architecture".into(),
         protocol_profile: ProtocolRequestProfile::SessionTurn,

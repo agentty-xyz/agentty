@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use ag_session::AgentModel;
+use ag_session::test_support as model_fixture;
 use mockall::Sequence;
 use serde_json::Value;
 
@@ -18,7 +18,7 @@ pub(super) fn build_runtime_state(thread_id: &str, latest_input_tokens: u64) -> 
     ));
     let mut state = CodexRuntimeState::new(
         folder,
-        AgentModel::Gpt61Sol.as_str().to_string(),
+        model_fixture::CODEX_MODEL.as_str().to_string(),
         ag_contracts::PermissionMode::AutoEdit,
     );
     state.thread_id = thread_id.to_string();

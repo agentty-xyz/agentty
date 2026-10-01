@@ -30,6 +30,12 @@ new session topic.
 
 ### 2. Write the test using `FeatureTest`
 
+For scenarios unrelated to model selection, seed explicit sessions and settings using
+`ag_session::test_support` from the `test-utils` feature. Its named model fixture is
+pinned independently of provider defaults, keeping recordings stable when a default
+changes. Tests and demos of model pickers, defaults, and retirement behavior retain
+explicit model-id expectations and refresh their recordings when that behavior changes.
+
 Use the `FeatureTest` builder from `crates/agentty/tests/e2e/common.rs`. This is the
 preferred pattern — it handles `TempDir` and `BuilderEnv` creation, scenario execution,
 optional GIF generation with content-hash caching, and optional Zola page creation in a

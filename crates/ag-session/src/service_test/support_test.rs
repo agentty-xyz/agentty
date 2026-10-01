@@ -12,7 +12,7 @@ use crate::model::{
 use crate::service::{
     AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, SessionBackend,
 };
-use crate::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::{ReasoningLevel, ResponseStyle, SpeedMode, test_support as model_fixture};
 
 #[derive(Default)]
 pub(super) struct FakeBackend {
@@ -183,7 +183,7 @@ pub(super) fn session_fixture() -> Session {
         queued_messages: Vec::new(),
         review_request: None,
         settings: SessionSettings {
-            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            agent: model_fixture::codex_selection(),
             base_branch: "main".to_string(),
             is_draft: false,
             parent_session_id: None,

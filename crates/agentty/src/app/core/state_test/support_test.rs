@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_session::AgentAvailabilityProbe;
+use ag_session::{AgentAvailabilityProbe, test_support as model_fixture};
 use ag_worker::test_support::AppServerClient;
 use app::review::ReviewCacheEntry;
 use app::service::{RealSessionRunFactory, SessionRunFactory};
@@ -18,7 +18,7 @@ use crate::app;
 use crate::app::branch_publish::BranchPublishTaskSuccess;
 use crate::app::core::event::{AppEvent, ReviewRequestStatusUpdate};
 use crate::app::session;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{ReasoningLevel, SpeedMode};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
@@ -113,7 +113,7 @@ pub(super) async fn seed_materialized_session(
         .sessions()
         .insert_session(
             session_id,
-            AgentModel::Gpt61Sol.as_str(),
+            model_fixture::CODEX_MODEL.as_str(),
             "main",
             &status.to_string(),
             project_id,
@@ -168,7 +168,7 @@ pub(super) fn test_loading_review(diff_hash: u64) -> ReviewCacheEntry {
         progress: None,
         diff_hash,
         review_agent: (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            model_fixture::codex_selection(),
             ReasoningLevel::High,
             SpeedMode::Normal,
         ),
@@ -226,7 +226,13 @@ pub(super) async fn persist_selected_session(app: &App) {
     app.services
         .db()
         .sessions()
-        .insert_session("session-1", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-1",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
 }

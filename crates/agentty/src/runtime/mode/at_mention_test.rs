@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_git as git;
+use ag_session::test_support as model_fixture;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
@@ -14,7 +15,6 @@ use super::{
 use crate::app::at_mention_task::clear_pending_load;
 use crate::app::session::{SessionDefaults, SessionManager};
 use crate::app::{AppEvent, SessionState};
-use crate::domain::agent::AgentModel;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::selection::SelectionState;
@@ -256,10 +256,7 @@ fn test_session_manager(session_id: &str) -> SessionManager {
             controller_session_id: None,
             orchestration_progress: None,
             role: SessionRole::default(),
-            agent: crate::domain::agent::AgentSelection::new(
-                crate::domain::agent::AgentKind::Codex,
-                AgentModel::Gpt61Sol,
-            ),
+            agent: model_fixture::codex_selection(),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
             personality_id: None,
@@ -288,7 +285,7 @@ fn test_session_manager(session_id: &str) -> SessionManager {
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,

@@ -7,6 +7,7 @@ use std::time::Duration;
 use ag_contracts::{AgentRequestKind, MockAgentChannel, OneShotSubmission, TurnResult};
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use ag_worker::test_support::{
     AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAppServerClient,
@@ -539,12 +540,9 @@ async fn test_cancel_session_triggers_app_server_shutdown() {
         .create_session()
         .await
         .expect("failed to create session");
-    app.set_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("failed to set app-server model");
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("failed to set app-server model");
 
     // Act
     app.sessions
@@ -702,7 +700,7 @@ async fn test_clear_title_generation_task_if_matches_ignores_stale_generation() 
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -1101,7 +1099,7 @@ async fn test_replace_title_generation_task_aborts_superseded_task() {
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,

@@ -1,8 +1,9 @@
 //! Focused review persistence and automatic review.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
@@ -195,7 +196,7 @@ done
         env,
         &[
             ("DefaultReviewAgent", "codex"),
-            ("DefaultReviewModel", "gpt-6.1-sol"),
+            ("DefaultReviewModel", model_fixture::CODEX_MODEL_ID),
         ],
     )
     .await
@@ -378,7 +379,7 @@ async fn seed_agent_review_session(env: &BuilderEnv) -> Result<(), Box<dyn std::
             .sessions()
             .insert_session(
                 "agent-review-sync-0001",
-                "gpt-6.1-sol",
+                model_fixture::CODEX_MODEL_ID,
                 "main",
                 "AgentReview",
                 project_id,
@@ -502,8 +503,13 @@ async fn seed_sessions_with_persisted_focused_reviews(
     // Seeding in the other order makes row 0 depend on that boundary.
     common::seed_session(
         env,
-        SessionSeed::regular("second-review-0001", "gpt-6.1-sol", "main", "Review")
-            .with_title("Second persisted review"),
+        SessionSeed::regular(
+            "second-review-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Second persisted review"),
     )
     .await?;
 

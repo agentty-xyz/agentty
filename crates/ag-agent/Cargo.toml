@@ -28,6 +28,7 @@ mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 ag-contracts = { workspace = true, features = ["test-utils"] }
+ag-session = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 
 [features]

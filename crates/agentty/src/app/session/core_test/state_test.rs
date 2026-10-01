@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+use ag_session::test_support as model_fixture;
 use ag_worker::test_support::{
     AppServerClient, AppServerTurnResponse, MockAgentBackend, MockAppServerClient,
 };
@@ -15,9 +16,7 @@ use super::support::{
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
 use crate::app::test_support::TestSessionRunFactory;
-use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
-};
+use crate::domain::agent::{ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SESSION_DATA_DIR, SessionSize, Status};
 use crate::domain::transient_message::{TransientMessageAnchor, TransientMessageSlot};
@@ -71,12 +70,9 @@ async fn test_done_status_triggers_app_server_shutdown() {
         .create_session()
         .await
         .expect("failed to create session");
-    app.set_session_model(
-        &session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("failed to set app-server model");
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("failed to set app-server model");
 
     // Act
     app.sessions

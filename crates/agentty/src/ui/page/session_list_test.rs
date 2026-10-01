@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ag_session::test_support as model_fixture;
 use ratatui::layout::Constraint;
 use ratatui::widgets::TableState;
 
@@ -331,10 +332,7 @@ fn test_render_archive_rows_use_muted_text_across_columns() {
     let mut active_session =
         crate::test_support::titled_session_fixture("active-1", Status::Review);
     active_session.title = Some("Active session title".to_string());
-    active_session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    active_session.agent = model_fixture::codex_selection();
     active_session.reasoning_level_override = Some(ReasoningLevel::Low);
     let mut archived_session =
         crate::test_support::titled_session_fixture("archive-1", Status::Done);
@@ -490,10 +488,7 @@ fn test_model_column_width_uses_longest_model_value() {
     default_session.reasoning_level_override = Some(ReasoningLevel::Low);
     let mut medium_session =
         crate::test_support::titled_session_fixture("active-2", Status::Review);
-    medium_session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    medium_session.agent = model_fixture::codex_selection();
     medium_session.reasoning_level_override = Some(ReasoningLevel::Medium);
     let sessions = vec![default_session, medium_session];
     let rows = prepared_session_rows(&sessions, ReasoningLevel::Low, None, 0);
@@ -531,10 +526,7 @@ fn test_render_session_row_colors_reasoning_level_within_model_column() {
     let mut table_state = TableState::default();
     table_state.select(Some(0));
     let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.reasoning_level_override = Some(ReasoningLevel::High);
     let sessions = vec![session];
     let expected_reasoning_color = reasoning_level_color(ReasoningLevel::High);
@@ -550,7 +542,8 @@ fn test_render_session_row_colors_reasoning_level_within_model_column() {
     // Assert
     let buffer = terminal.backend().buffer();
     let fallback_cell = &buffer.content()[0];
-    let model_cell = find_text_start_cell(buffer, "gpt-6.1-sol").unwrap_or(fallback_cell);
+    let model_cell =
+        find_text_start_cell(buffer, model_fixture::CODEX_MODEL_ID).unwrap_or(fallback_cell);
     let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
 
     assert_eq!(model_cell.fg, style::palette::text());
@@ -566,10 +559,7 @@ fn test_render_selected_session_model_uses_selection_surface() {
     let mut table_state = TableState::default();
     table_state.select(Some(0));
     let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     let sessions = vec![session];
 
     // Act
@@ -583,7 +573,8 @@ fn test_render_selected_session_model_uses_selection_surface() {
     // Assert
     let buffer = terminal.backend().buffer();
     let fallback_cell = &buffer.content()[0];
-    let model_cell = find_text_start_cell(buffer, "gpt-6.1-sol").unwrap_or(fallback_cell);
+    let model_cell =
+        find_text_start_cell(buffer, model_fixture::CODEX_MODEL_ID).unwrap_or(fallback_cell);
 
     assert_eq!(model_cell.bg, style::palette::surface_selection());
 }
@@ -596,10 +587,7 @@ fn test_render_session_row_shows_model_with_persisted_reasoning_level() {
     let mut table_state = TableState::default();
     table_state.select(Some(0));
     let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.reasoning_level_override = Some(ReasoningLevel::Medium);
     let sessions = vec![session];
 
@@ -613,7 +601,7 @@ fn test_render_session_row_shows_model_with_persisted_reasoning_level() {
 
     // Assert
     let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("gpt-6.1-sol [medium]"));
+    assert!(text.contains(&format!("{} [medium]", model_fixture::CODEX_MODEL_ID)));
 }
 
 #[test]
@@ -719,10 +707,7 @@ fn test_render_session_row_shows_model_with_override_reasoning_level() {
     let mut table_state = TableState::default();
     table_state.select(Some(0));
     let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.reasoning_level_override = Some(ReasoningLevel::High);
     let sessions = vec![session];
 
@@ -736,7 +721,7 @@ fn test_render_session_row_shows_model_with_override_reasoning_level() {
 
     // Assert
     let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("gpt-6.1-sol [high]"));
+    assert!(text.contains(&format!("{} [high]", model_fixture::CODEX_MODEL_ID)));
 }
 
 #[test]

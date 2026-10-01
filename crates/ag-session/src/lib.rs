@@ -19,9 +19,14 @@ mod service;
 mod setting;
 mod transcript_notice;
 
+/// Shared explicit model selections for deterministic tests and demos.
+#[cfg(any(test, feature = "test-utils"))]
+#[path = "test_support_test.rs"]
+pub mod test_support;
+
 pub use ag_contracts::{ReasoningLevel, SessionDiffState, SessionStats};
 pub use agent::{
-    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ModelContextLimits,
     parse_persisted_session_agent_model, resolve_agent_kind_for_model,
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,

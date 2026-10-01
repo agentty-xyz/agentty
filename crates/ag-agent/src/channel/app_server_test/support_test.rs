@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use ag_contracts::{AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
+use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
 
 use crate::app_server::AppServerTurnResponse;
@@ -11,7 +12,7 @@ pub(super) fn make_turn_request() -> TurnRequest {
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
-        model: "gpt-6.1-sol".to_string(),
+        model: model_fixture::CODEX_MODEL_ID.to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Do something".into(),

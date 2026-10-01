@@ -5,6 +5,7 @@ use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnResult};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
+use ag_session::test_support as model_fixture;
 use ag_worker::SessionRunClient;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -237,7 +238,13 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("sess1", "gpt-6.1-sol", "main", "InProgress", project_id)
+        .insert_session(
+            "sess1",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
 
@@ -291,10 +298,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
     let turn_metadata = TurnMetadata {
         published_upstream_ref: None,
         review_comment_thread_ids: Vec::new(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Codex,
-            AgentModel::Gpt61Sol,
-        ),
+        session_agent: model_fixture::codex_selection(),
     };
     let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
         .await

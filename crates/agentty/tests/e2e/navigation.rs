@@ -1,5 +1,6 @@
 //! Navigation E2E tests: tab cycling, reverse tab cycling, and help overlay.
 
+use ag_session::test_support as model_fixture;
 use agentty::infra::db::{
     DB_DIR, DB_FILE, Database, SessionPreparationState, acquire_instance_lock,
 };
@@ -24,7 +25,13 @@ async fn second_instance_preserves_live_operations() -> E2eResult {
         .await?;
     database
         .sessions()
-        .insert_session("live", "gpt-6.1-sol", "main", "InProgress", project_id)
+        .insert_session(
+            "live",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
         .await?;
     database
         .sessions()

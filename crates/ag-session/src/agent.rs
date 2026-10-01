@@ -16,37 +16,183 @@ pub enum AgentKind {
     Codex,
 }
 
-/// Supported agent model names across all providers.
-///
-/// Gemini model ids are shared by the direct Gemini and Antigravity providers,
-/// so provider ownership lives on [`AgentSelection`] rather than on these
-/// variants.
+// Generate typed identities, exhaustive metadata, and ordered provider lists
+// from the same declaration so adding a model cannot omit one of those
+// surfaces.
+macro_rules! define_model_catalog {
+    ($($provider:ident { $(
+        $(#[$attribute:meta])*
+        $model:ident = $discriminant:literal => {
+            id: $id:literal,
+            description: $description:literal,
+            fast: $fast:literal,
+            context: $context:expr,
+        },
+    )* })*) => {
+        /// Supported agent model names across all providers.
+        ///
+        /// Gemini ids are shared by Gemini and Antigravity; provider ownership
+        /// lives on [`AgentSelection`]. Removing a variant is a Rust source API
+        /// change even when [`AgentModel::retired_replacement`] preserves saved ids.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum AgentModel {
+            $($( $(#[$attribute])* $model = $discriminant, )*)*
+        }
+
+        impl AgentModel {
+            /// All selectable models, grouped in catalog provider order.
+            pub const ALL: &[Self] = &[$($(Self::$model,)*)*];
+
+            const fn descriptor(self) -> ModelDescriptor {
+                match self {
+                    $($(Self::$model => ModelDescriptor {
+                        context_limits: $context,
+                        description: $description,
+                        id: $id,
+                        supports_fast_mode: $fast,
+                    },)*)*
+                }
+            }
+        }
+
+        impl AgentKind {
+            /// Returns this provider's models in their catalog display order.
+            pub fn models(self) -> &'static [AgentModel] {
+                match self {
+                    Self::Antigravity => Self::Gemini.models(),
+                    $(Self::$provider => &[$(AgentModel::$model,)*],)*
+                }
+            }
+        }
+    };
+}
+
+define_model_catalog! {
+    Gemini {
+        /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
+        Gemini31Pro = 6 => {
+            id: "gemini-3.1-pro-preview",
+            description: "Higher-quality Gemini model for deeper reasoning.",
+            fast: false,
+            context: None,
+        },
+        /// Fast Gemini model backed by `gemini-3.8-flash`.
+        Gemini38Flash = 4 => {
+            id: "gemini-3.8-flash",
+            description: "Fast Gemini model for agentic and multimodal tasks.",
+            fast: false,
+            context: None,
+        },
+        /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
+        Gemini35FlashLite = 5 => {
+            id: "gemini-3.5-flash-lite",
+            description: "Lightweight Gemini model for fast, cost-conscious workloads.",
+            fast: false,
+            context: None,
+        },
+    }
+    Claude {
+        /// Claude Fable model backed by `claude-fable-5`.
+        ClaudeFable5 = 10 => {
+            id: "claude-fable-5",
+            description: "Claude Fable model for creative, narrative-heavy tasks.",
+            fast: false,
+            context: None,
+        },
+        /// Claude Opus model backed by `claude-opus-5-5`.
+        ClaudeOpus55 = 8 => {
+            id: "claude-opus-5-5",
+            description: "Latest Claude Opus model for complex agentic tasks.",
+            fast: true,
+            context: None,
+        },
+        /// Claude Sonnet model backed by `claude-sonnet-5`.
+        ClaudeSonnet5 = 9 => {
+            id: "claude-sonnet-5",
+            description: "Balanced Claude model for quality and latency.",
+            fast: false,
+            context: None,
+        },
+        /// Claude Haiku model backed by `claude-haiku-4-5-20251001`.
+        ClaudeHaiku4520251001 = 11 => {
+            id: "claude-haiku-4-5-20251001",
+            description: "Fast Claude model for lighter tasks.",
+            fast: false,
+            context: None,
+        },
+    }
+    Codex {
+        /// Codex Astra model backed by `gpt-6-astra`.
+        Gpt6Astra = 0 => {
+            id: "gpt-6-astra",
+            description: "Most capable Codex model for the hardest end-to-end work.",
+            fast: true,
+            context: Some(ModelContextLimits::CODEX_LARGE),
+        },
+        /// Codex Sol model backed by `gpt-6.1-sol`.
+        Gpt61Sol = 1 => {
+            id: "gpt-6.1-sol",
+            description: "Near-Astra Codex model for complex work at a lower cost.",
+            fast: true,
+            context: Some(ModelContextLimits::CODEX_LARGE),
+        },
+        /// Codex Luna model backed by `gpt-6-luna`.
+        Gpt6Luna = 2 => {
+            id: "gpt-6-luna",
+            description: "Efficient Codex model for focused, high-volume tasks.",
+            fast: true,
+            context: Some(ModelContextLimits::CODEX_LARGE),
+        },
+        /// Codex Terra model backed by `gpt-5.6-terra`.
+        Gpt56Terra = 3 => {
+            id: "gpt-5.6-terra",
+            description: "Current Codex model for balanced coding performance.",
+            fast: true,
+            context: Some(ModelContextLimits::CODEX_LARGE),
+        },
+        /// Codex spark model backed by `gpt-5.3-codex-spark`.
+        Gpt53CodexSpark = 7 => {
+            id: "gpt-5.3-codex-spark",
+            description: "Codex spark model for quick coding iterations.",
+            fast: false,
+            context: Some(ModelContextLimits::CODEX_SPARK),
+        },
+    }
+}
+
+/// Declared context capacity and Agentty's proactive input-budget reserve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentModel {
-    /// Codex Astra model backed by `gpt-6-astra`.
-    Gpt6Astra,
-    /// Codex Sol model backed by `gpt-6.1-sol`.
-    Gpt61Sol,
-    /// Codex Luna model backed by `gpt-6-luna`.
-    Gpt6Luna,
-    /// Codex Terra model backed by `gpt-5.6-terra`.
-    Gpt56Terra,
-    /// Fast Gemini model backed by `gemini-3.8-flash`.
-    Gemini38Flash,
-    /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
-    Gemini35FlashLite,
-    /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
-    Gemini31Pro,
-    /// Codex spark model backed by `gpt-5.3-codex-spark`.
-    Gpt53CodexSpark,
-    /// Claude Opus model backed by `claude-opus-5-5`.
-    ClaudeOpus55,
-    /// Claude Sonnet model backed by `claude-sonnet-5`.
-    ClaudeSonnet5,
-    /// Claude Fable model backed by `claude-fable-5`.
-    ClaudeFable5,
-    /// Claude Haiku model backed by `claude-haiku-4-5-20251001`.
-    ClaudeHaiku4520251001,
+pub struct ModelContextLimits {
+    /// Total context capacity in tokens.
+    pub context_window_tokens: u64,
+    /// Tokens reserved for output and provider overhead before compaction.
+    /// This is an input-budget policy, not a model's maximum output limit.
+    pub input_headroom_tokens: u64,
+}
+
+impl ModelContextLimits {
+    const CODEX_LARGE: Self = Self {
+        context_window_tokens: 1_050_000,
+        input_headroom_tokens: 128_000,
+    };
+    const CODEX_SPARK: Self = Self {
+        context_window_tokens: 128_000,
+        input_headroom_tokens: 8_000,
+    };
+
+    /// Returns the input-token budget after reserving output and overhead.
+    #[must_use]
+    pub const fn input_token_budget(self) -> u64 {
+        self.context_window_tokens
+            .saturating_sub(self.input_headroom_tokens)
+    }
+}
+
+struct ModelDescriptor {
+    context_limits: Option<ModelContextLimits>,
+    description: &'static str,
+    id: &'static str,
+    supports_fast_mode: bool,
 }
 
 /// Session-level agent selection that keeps provider kind and model together.
@@ -87,23 +233,13 @@ impl AgentSelection {
     /// Returns whether this exact provider/model pair supports Fast mode.
     #[must_use]
     pub fn supports_fast_mode(self) -> bool {
-        matches!(
-            (self.kind, self.model),
-            (AgentKind::Claude, AgentModel::ClaudeOpus55)
-                | (
-                    AgentKind::Codex,
-                    AgentModel::Gpt6Astra
-                        | AgentModel::Gpt61Sol
-                        | AgentModel::Gpt6Luna
-                        | AgentModel::Gpt56Terra
-                )
-        )
+        self.model.descriptor().supports_fast_mode
     }
 
     /// Returns the compatible provider/model pair for one speed preference.
     ///
-    /// Fast Claude requests require Opus, while Codex Spark requests move to
-    /// the provider's default model. Providers without a speed control and
+    /// Fast Claude requests require Opus, while incompatible Codex models move
+    /// to the provider's default model. Providers without a speed control and
     /// already compatible selections remain unchanged.
     #[must_use]
     pub fn compatible_with_speed_mode(self, speed_mode: SpeedMode) -> Self {
@@ -113,10 +249,8 @@ impl AgentSelection {
 
         match self.kind {
             AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
-            AgentKind::Codex if self.model == AgentModel::Gpt53CodexSpark => {
-                Self::new(AgentKind::Codex, AgentModel::Gpt61Sol)
-            }
-            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Codex => self,
+            AgentKind::Codex => Self::new(AgentKind::Codex, AgentKind::Codex.default_model()),
+            AgentKind::Antigravity | AgentKind::Gemini => self,
         }
     }
 }
@@ -133,21 +267,14 @@ pub trait AgentSelectionMetadata {
 impl AgentModel {
     /// Returns the stable wire/model identifier used in persistence and CLI
     /// invocations.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Gpt6Astra => "gpt-6-astra",
-            Self::Gpt61Sol => "gpt-6.1-sol",
-            Self::Gpt6Luna => "gpt-6-luna",
-            Self::Gpt56Terra => "gpt-5.6-terra",
-            Self::Gemini38Flash => "gemini-3.8-flash",
-            Self::Gemini35FlashLite => "gemini-3.5-flash-lite",
-            Self::Gemini31Pro => "gemini-3.1-pro-preview",
-            Self::Gpt53CodexSpark => "gpt-5.3-codex-spark",
-            Self::ClaudeOpus55 => "claude-opus-5-5",
-            Self::ClaudeSonnet5 => "claude-sonnet-5",
-            Self::ClaudeFable5 => "claude-fable-5",
-            Self::ClaudeHaiku4520251001 => "claude-haiku-4-5-20251001",
-        }
+    pub const fn as_str(self) -> &'static str {
+        self.descriptor().id
+    }
+
+    /// Returns declared proactive compaction limits, if known for this model.
+    #[must_use]
+    pub const fn context_limits(self) -> Option<ModelContextLimits> {
+        self.descriptor().context_limits
     }
 
     /// Returns the model identifier passed to provider transports.
@@ -398,21 +525,11 @@ impl FromStr for AgentModel {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "gemini-3.8-flash" => Ok(Self::Gemini38Flash),
-            "gemini-3.5-flash-lite" => Ok(Self::Gemini35FlashLite),
-            "gemini-3.1-pro-preview" => Ok(Self::Gemini31Pro),
-            "gpt-6-astra" => Ok(Self::Gpt6Astra),
-            "gpt-6.1-sol" => Ok(Self::Gpt61Sol),
-            "gpt-6-luna" => Ok(Self::Gpt6Luna),
-            "gpt-5.6-terra" => Ok(Self::Gpt56Terra),
-            "gpt-5.3-codex-spark" => Ok(Self::Gpt53CodexSpark),
-            "claude-opus-5-5" => Ok(Self::ClaudeOpus55),
-            "claude-sonnet-5" => Ok(Self::ClaudeSonnet5),
-            "claude-fable-5" => Ok(Self::ClaudeFable5),
-            "claude-haiku-4-5-20251001" => Ok(Self::ClaudeHaiku4520251001),
-            other => Err(format!("unknown model: {other}")),
-        }
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|model| model.as_str() == value)
+            .ok_or_else(|| format!("unknown model: {value}"))
     }
 }
 
@@ -422,22 +539,7 @@ impl AgentSelectionMetadata for AgentModel {
     }
 
     fn description(&self) -> &'static str {
-        match self {
-            Self::Gemini31Pro => "Higher-quality Gemini model for deeper reasoning.",
-            Self::Gemini38Flash => "Fast Gemini model for agentic and multimodal tasks.",
-            Self::Gemini35FlashLite => {
-                "Lightweight Gemini model for fast, cost-conscious workloads."
-            }
-            Self::Gpt6Astra => "Most capable Codex model for the hardest end-to-end work.",
-            Self::Gpt61Sol => "Near-Astra Codex model for complex work at a lower cost.",
-            Self::Gpt6Luna => "Efficient Codex model for focused, high-volume tasks.",
-            Self::Gpt56Terra => "Current Codex model for balanced coding performance.",
-            Self::Gpt53CodexSpark => "Codex spark model for quick coding iterations.",
-            Self::ClaudeOpus55 => "Latest Claude Opus model for complex agentic tasks.",
-            Self::ClaudeSonnet5 => "Balanced Claude model for quality and latency.",
-            Self::ClaudeFable5 => "Claude Fable model for creative, narrative-heavy tasks.",
-            Self::ClaudeHaiku4520251001 => "Fast Claude model for lighter tasks.",
-        }
+        self.descriptor().description
     }
 }
 
@@ -476,40 +578,6 @@ impl AgentKind {
         }
 
         Some(model.as_str())
-    }
-
-    /// Returns the curated model list for this agent kind.
-    pub fn models(self) -> &'static [AgentModel] {
-        const ANTIGRAVITY_MODELS: &[AgentModel] = &[
-            AgentModel::Gemini31Pro,
-            AgentModel::Gemini38Flash,
-            AgentModel::Gemini35FlashLite,
-        ];
-        const GEMINI_MODELS: &[AgentModel] = &[
-            AgentModel::Gemini31Pro,
-            AgentModel::Gemini38Flash,
-            AgentModel::Gemini35FlashLite,
-        ];
-        const CLAUDE_MODELS: &[AgentModel] = &[
-            AgentModel::ClaudeFable5,
-            AgentModel::ClaudeOpus55,
-            AgentModel::ClaudeSonnet5,
-            AgentModel::ClaudeHaiku4520251001,
-        ];
-        const CODEX_MODELS: &[AgentModel] = &[
-            AgentModel::Gpt6Astra,
-            AgentModel::Gpt61Sol,
-            AgentModel::Gpt6Luna,
-            AgentModel::Gpt56Terra,
-            AgentModel::Gpt53CodexSpark,
-        ];
-
-        match self {
-            Self::Antigravity => ANTIGRAVITY_MODELS,
-            Self::Gemini => GEMINI_MODELS,
-            Self::Claude => CLAUDE_MODELS,
-            Self::Codex => CODEX_MODELS,
-        }
     }
 
     /// Parses a provider-specific model string for this agent kind.

@@ -10,6 +10,7 @@ use ag_forge::{
 };
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
+use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
 
 use super::{
@@ -97,7 +98,13 @@ async fn archived_diff_repositories(
         .expect("project fixture should persist");
     repositories
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Merging", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Merging",
+            project_id,
+        )
         .await
         .expect("session fixture should persist");
     repositories

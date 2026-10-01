@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ag_session::test_support as model_fixture;
+
 use super::{
     FocusedReviewPersistence, FocusedReviewPersistenceRetry, ReviewAgent, ReviewCacheEntry,
     ReviewProgress, ReviewUpdate, apply_review_updates, hydrate_review_transient,
@@ -38,7 +40,7 @@ fn empty_session_state() -> SessionState {
 /// text is not under test.
 fn test_review_agent() -> ReviewAgent {
     (
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        model_fixture::codex_selection(),
         ReasoningLevel::High,
         SpeedMode::Normal,
     )
@@ -171,7 +173,10 @@ fn review_loading_message_uses_normalized_agent_profile() {
     // Assert
     assert_eq!(
         message,
-        "Reviewing changes\nCodex · gpt-6.1-sol · Extra-high reasoning · Fast"
+        format!(
+            "Reviewing changes\nCodex · {} · Extra-high reasoning · Fast",
+            model_fixture::CODEX_MODEL_ID
+        )
     );
 }
 
@@ -238,7 +243,7 @@ fn review_agent_speed_normalization_preserves_only_supported_speed() {
     assert_eq!(
         supported,
         (
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            model_fixture::codex_selection(),
             ReasoningLevel::XHigh,
             SpeedMode::Fast,
         )

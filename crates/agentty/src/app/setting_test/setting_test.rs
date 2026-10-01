@@ -1,4 +1,4 @@
-use ag_session::AgentSelectionMetadata;
+use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::{
     ModelSelectorOption, SettingsManager, load_default_fast_agent_setting,
@@ -148,14 +148,16 @@ fn settings_rows_show_default_smart_model_with_real_gemini_agent() {
 fn settings_rows_show_default_fast_model_value() {
     // Arrange
     let mut manager = new_settings_manager();
-    manager.fixture_view_mut().default_fast_selection =
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    manager.fixture_view_mut().default_fast_selection = model_fixture::codex_selection();
 
     // Act
     let rows = manager.settings_rows();
 
     // Assert
-    assert_eq!(rows[4].1, "codex/gpt-6.1-sol [low, Normal]");
+    assert_eq!(
+        rows[4].1,
+        format!("codex/{} [low, Normal]", model_fixture::CODEX_MODEL_ID)
+    );
 }
 
 #[test]
@@ -302,7 +304,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     );
     assert_eq!(
         persisted_model.as_deref(),
-        Some(AgentModel::Gpt61Sol.as_str())
+        Some(model_fixture::CODEX_MODEL.as_str())
     );
     assert_eq!(persisted_agent.as_deref(), Some(AgentKind::Codex.name()));
 
@@ -317,7 +319,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     // Assert
     assert_eq!(
         available_manager.default_smart_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
+        model_fixture::codex_selection()
     );
 }
 
@@ -580,7 +582,7 @@ async fn apply_operation_persists_role_model_reasoning_and_speed_settings() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    let fast_selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    let fast_selection = model_fixture::codex_selection();
     let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
 
     // Act
@@ -853,7 +855,7 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
         .upsert_project_setting(
             project_id,
             SettingName::DefaultFastModel,
-            AgentModel::Gpt61Sol.as_str(),
+            model_fixture::CODEX_MODEL.as_str(),
         )
         .await
         .expect("failed to persist fast model");
@@ -867,10 +869,7 @@ async fn load_default_fast_agent_setting_migrates_retired_claude_opus_46_setting
     .await;
 
     // Assert
-    assert_eq!(
-        explicit_fast_selection,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol)
-    );
+    assert_eq!(explicit_fast_selection, model_fixture::codex_selection());
 }
 
 #[tokio::test]

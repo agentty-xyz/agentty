@@ -1,4 +1,4 @@
-use ag_session::AgentSelectionMetadata;
+use ag_session::{AgentSelectionMetadata, test_support as model_fixture};
 
 use super::super::load_default_review_agent_setting;
 use super::support::{new_settings_manager, test_services};
@@ -63,7 +63,7 @@ async fn load_default_review_agent_setting_uses_inactive_project_baseline() {
                 ),
                 (
                     SettingName::DefaultSmartModel,
-                    AgentModel::Gpt61Sol.as_str().to_string(),
+                    model_fixture::CODEX_MODEL.as_str().to_string(),
                 ),
             ],
         )

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use ag_session::test_support as model_fixture;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::Borders;
@@ -9,7 +10,7 @@ use super::{
     question_at_mention_max_visible, question_options_height, question_panel_areas,
     question_panel_layout, question_panel_reserved_height, session_chat_areas, tab_page_areas,
 };
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionDiffState, Status};
@@ -168,10 +169,7 @@ fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
     let mut session = session_fixture();
     session.status = Status::InProgress;
     session.title = Some("This is a very long timer-aware session header title".to_string());
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.in_progress_started_at = Some(0);
 
     // Act
@@ -205,10 +203,7 @@ fn test_session_header_lines_use_theme_status_color() {
 fn test_session_metadata_text_ticks_live_in_progress_timer() {
     // Arrange
     let mut session = session_fixture();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.stats.added_lines = 9;
     session.stats.deleted_lines = 3;
     session.status = Status::InProgress;
@@ -221,9 +216,10 @@ fn test_session_metadata_text_ticks_live_in_progress_timer() {
     // Assert
     assert!(early_metadata.contains("Lines: +9 / -3"));
     assert!(early_metadata.contains("Timer: 30s"));
-    assert!(early_metadata.contains("Model: gpt-6.1-sol"));
+    assert!(early_metadata.contains(&format!("Model: {}", model_fixture::CODEX_MODEL_ID)));
     assert!(
-        early_metadata.find("Model: gpt-6.1-sol") < early_metadata.find("Reasoning: high"),
+        early_metadata.find(&format!("Model: {}", model_fixture::CODEX_MODEL_ID))
+            < early_metadata.find("Reasoning: high"),
         "model should appear before reasoning in metadata text"
     );
     assert!(later_metadata.contains("Timer: 1h 1m 0s"));
@@ -950,7 +946,13 @@ fn test_session_output_status_lines_for_agent_review_use_two_line_hierarchy() {
     let status_lines = session_output_status_lines(
         Status::AgentReview,
         None,
-        Some("Reviewing changes\nCodex · gpt-6.1-sol · Extra-high reasoning · Fast"),
+        Some(
+            format!(
+                "Reviewing changes\nCodex · {} · Extra-high reasoning · Fast",
+                model_fixture::CODEX_MODEL_ID
+            )
+            .as_str(),
+        ),
         None,
     );
 
@@ -962,7 +964,10 @@ fn test_session_output_status_lines_for_agent_review_use_two_line_hierarchy() {
     );
     assert_eq!(
         status_lines[1].to_string(),
-        "    Codex · gpt-6.1-sol · Extra-high reasoning · Fast"
+        format!(
+            "    Codex · {} · Extra-high reasoning · Fast",
+            model_fixture::CODEX_MODEL_ID
+        )
     );
     assert_eq!(
         status_lines[0].spans[0].style.fg,

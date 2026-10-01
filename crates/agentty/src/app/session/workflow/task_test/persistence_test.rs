@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_git::{GitError, MockGitClient};
+use ag_session::test_support as model_fixture;
 use tokio::sync::oneshot;
 
 use super::super::SessionTaskService;
@@ -22,7 +23,13 @@ async fn refresh_diff_stats_marks_git_failures_unknown_without_erasing_totals() 
         .expect("failed to upsert project");
     database
         .sessions()
-        .insert_session("session-id", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "session-id",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     database

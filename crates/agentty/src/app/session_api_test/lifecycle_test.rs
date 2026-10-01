@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, CoordinatorMessageRequest, CoordinatorMessageVisibility,
+    AgentKind, AgentModel, CoordinatorMessageRequest, CoordinatorMessageVisibility,
     CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionId,
-    SessionMessageKind, SessionRole, SessionStatus,
+    SessionMessageKind, SessionRole, SessionStatus, test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
@@ -287,12 +287,9 @@ async fn runtime_backend_starts_regular_and_staged_draft_messages() {
     .await
     .expect("draft session should be created");
     for session_id in [&regular_session_id, &draft_session_id] {
-        app.set_session_model(
-            session_id,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        )
-        .await
-        .expect("session model should update");
+        app.set_session_model(session_id, model_fixture::codex_selection())
+            .await
+            .expect("session model should update");
     }
 
     // Act
@@ -517,7 +514,7 @@ async fn finishing_api_creation_schedules_registration_retry_after_load_failure(
         .sessions()
         .insert_session(
             "persisted-session",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "main",
             "Draft",
             project_id,

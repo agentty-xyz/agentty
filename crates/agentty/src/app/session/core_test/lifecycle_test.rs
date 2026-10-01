@@ -6,7 +6,7 @@ use std::time::Duration;
 use ag_contracts::MockAgentChannel;
 use ag_git as git;
 use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use ag_session::{AgentSelectionMetadata, session_branch};
+use ag_session::{AgentSelectionMetadata, session_branch, test_support as model_fixture};
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
@@ -20,7 +20,7 @@ use crate::app::SessionState;
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
 use crate::app::test_support::TestSessionRunFactory;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{SESSION_DATA_DIR, SessionHandles, SessionId, SessionRole, Status};
@@ -131,12 +131,9 @@ async fn test_create_session_keeps_default_smart_model_setting_when_session_mode
         .create_session()
         .await
         .expect("failed to create first session");
-    app.set_session_model(
-        &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("failed to set session model");
+    app.set_session_model(&first_session_id, model_fixture::codex_selection())
+        .await
+        .expect("failed to set session model");
     let active_project_id = app.active_project_id();
     let default_smart_model_setting = app
         .services
@@ -214,12 +211,9 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
         .expect("failed to create first session");
 
     // Act
-    app.set_session_model(
-        &first_session_id,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("failed to set session model");
+    app.set_session_model(&first_session_id, model_fixture::codex_selection())
+        .await
+        .expect("failed to set session model");
     let default_smart_model_setting = app
         .services
         .db()
@@ -244,7 +238,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
     // Assert
     assert_eq!(
         default_smart_model_setting,
-        Some(AgentModel::Gpt61Sol.as_str().to_string())
+        Some(model_fixture::CODEX_MODEL.as_str().to_string())
     );
     assert_eq!(
         default_smart_agent_setting,
@@ -257,7 +251,7 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
         .find(|session| session.id == second_session_id)
         .expect("missing second session");
     assert_eq!(second_session.agent.kind(), AgentKind::Codex);
-    assert_eq!(second_session.agent.model(), AgentModel::Gpt61Sol);
+    assert_eq!(second_session.agent.model(), model_fixture::CODEX_MODEL);
 }
 
 #[tokio::test]
@@ -762,7 +756,7 @@ async fn test_clear_title_generation_task_if_matches_removes_matching_generation
     );
     let mut session_manager = SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,

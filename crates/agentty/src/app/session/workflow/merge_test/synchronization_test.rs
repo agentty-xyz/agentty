@@ -5,7 +5,7 @@ use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::{GitClient, GitError};
-use ag_session::SessionRole;
+use ag_session::{SessionRole, test_support as model_fixture};
 use ag_worker::MockRunClient;
 use mockall::Sequence;
 use tempfile::tempdir;
@@ -181,7 +181,13 @@ async fn test_ensure_merge_target_clean_blocks_dirty_main_checkout() {
         .await
         .expect("failed to insert project");
     db.sessions()
-        .insert_session("session-123", "gpt-6.1-sol", "main", "Merging", project_id)
+        .insert_session(
+            "session-123",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Merging",
+            project_id,
+        )
         .await
         .expect("failed to insert merge session row");
     let status = Arc::new(Mutex::new(Status::Merging));
@@ -1282,7 +1288,13 @@ async fn test_resolve_session_rebase_target_keeps_local_base_for_unpublished_ses
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("sess-local", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "sess-local",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     let mut mock_git_client = git::MockGitClient::new();
@@ -1316,7 +1328,13 @@ async fn test_resolve_session_rebase_target_fetches_remote_base_for_published_se
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("sess-remote", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "sess-remote",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     db.sessions()
@@ -1361,7 +1379,13 @@ async fn test_resolve_session_rebase_plan_uses_recorded_stack_base() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("child-session", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "child-session",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     db.sessions()
@@ -1405,7 +1429,13 @@ async fn test_resolve_session_rebase_target_reports_published_fetch_failure() {
         .await
         .expect("failed to upsert project");
     db.sessions()
-        .insert_session("sess-fetch", "gpt-6.1-sol", "main", "Review", project_id)
+        .insert_session(
+            "sess-fetch",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+            project_id,
+        )
         .await
         .expect("failed to insert session");
     db.sessions()
@@ -1534,7 +1564,13 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
     input
         .db
         .sessions()
-        .insert_session("session-123", "gpt-6.1-sol", "main", "Merging", project_id)
+        .insert_session(
+            "session-123",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Merging",
+            project_id,
+        )
         .await
         .expect("failed to insert merge session row");
     let db = input.db.clone();
@@ -1600,7 +1636,13 @@ async fn test_execute_merge_workflow_skips_commit_creation_for_empty_squash_diff
     input
         .db
         .sessions()
-        .insert_session("session-123", "gpt-6.1-sol", "main", "Merging", project_id)
+        .insert_session(
+            "session-123",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Merging",
+            project_id,
+        )
         .await
         .expect("failed to insert merge session row");
     let db = input.db.clone();

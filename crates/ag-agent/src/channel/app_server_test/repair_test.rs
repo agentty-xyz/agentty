@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ag_contracts::{AgentChannel, AgentRequestKind, TurnEvent};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tokio::sync::mpsc;
 
 use super::support::{collect_pid_updates, make_ok_response, make_turn_request};
@@ -176,7 +176,7 @@ async fn test_run_turn_returns_error_for_invalid_structured_output() {
 #[tokio::test]
 async fn repair_preserves_permissions_for_the_next_session_turn() {
     for (kind, model) in [
-        (AgentKind::Codex, AgentModel::Gpt61Sol),
+        (AgentKind::Codex, model_fixture::CODEX_MODEL),
         (AgentKind::Gemini, AgentModel::Gemini31Pro),
         (AgentKind::Antigravity, AgentModel::Gemini31Pro),
     ] {

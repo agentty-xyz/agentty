@@ -3,8 +3,8 @@ use std::sync::Arc;
 use ag_contracts::AgentRequestKind;
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, AnswerQuestionsRequest, CreateSessionMode,
-    CreateSessionRequest, QuestionAnswer, SessionError as ApiSessionError, SessionStatus,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, QuestionAnswer,
+    SessionError as ApiSessionError, SessionStatus, test_support as model_fixture,
 };
 
 use super::super::{question_answer_message, question_restore_error, validate_question_answers};
@@ -194,12 +194,9 @@ async fn controller_question_answers_proxy_to_the_managed_worker() {
         .with_app_server_client_override(Arc::new(app_server));
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
     let fixture = seed_active_orchestration_child(&mut app, true).await;
-    app.set_session_model(
-        &fixture.child,
-        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-    )
-    .await
-    .expect("managed worker model should update");
+    app.set_session_model(&fixture.child, model_fixture::codex_selection())
+        .await
+        .expect("managed worker model should update");
     let coordinator_service = app.coordinator_session_service();
     let child_session_id = fixture.child.clone();
     app.drive_session_request(async move {

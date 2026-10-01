@@ -2,7 +2,7 @@ use std::path::Path;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::ProtocolRequestProfile;
-use ag_session::AgentModel;
+use ag_session::test_support as model_fixture;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -49,7 +49,7 @@ fn build_thread_start_payload_uses_unrestricted_auto_edit_policy() {
     // Act
     let payload = lifecycle::build_thread_start_payload(
         folder.path(),
-        AgentModel::Gpt61Sol.as_str(),
+        model_fixture::CODEX_MODEL.as_str(),
         ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
@@ -212,7 +212,7 @@ fn build_turn_start_payload_sets_structured_output_schema() {
     // Act
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
-        model: AgentModel::Gpt61Sol.as_str(),
+        model: model_fixture::CODEX_MODEL.as_str(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         prompt: "Implement the task".into(),
         protocol_profile: ProtocolRequestProfile::SessionTurn,
@@ -241,7 +241,7 @@ fn build_turn_start_payload_sets_direct_focused_review_schema() {
     // Act
     let payload = lifecycle::build_turn_start_payload(&lifecycle::CodexTurnStartPayloadInput {
         folder: folder.path(),
-        model: AgentModel::Gpt61Sol.as_str(),
+        model: model_fixture::CODEX_MODEL.as_str(),
         permission_mode: ag_contracts::PermissionMode::ReadOnly,
         prompt: "Review the task".into(),
         protocol_profile: ProtocolRequestProfile::FocusedReview,

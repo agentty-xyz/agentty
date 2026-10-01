@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ag_session::test_support as model_fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{
@@ -256,10 +257,7 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
         crate::domain::agent::AgentKind::Claude,
         AgentModel::ClaudeHaiku4520251001,
     );
-    app.sessions.sessions_mut()[0].agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    app.sessions.sessions_mut()[0].agent = model_fixture::codex_selection();
     app.sessions.sessions_mut()[0].status = Status::AgentReview;
     let output_width = 14;
     let viewport_height = 5;

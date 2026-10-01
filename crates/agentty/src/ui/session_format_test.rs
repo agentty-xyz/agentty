@@ -1,3 +1,4 @@
+use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
 
 use super::{
@@ -175,26 +176,23 @@ fn managed_session_header_identifies_its_controller() {
 fn test_session_metadata_text_prints_agent_before_model() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
 
     // Act
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains("Agent: codex  Model: gpt-6.1-sol"));
+    assert!(metadata_text.contains(&format!(
+        "Agent: codex  Model: {}",
+        model_fixture::CODEX_MODEL_ID
+    )));
 }
 
 #[test]
 fn test_session_metadata_text_prints_speed_after_reasoning() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.speed_mode = crate::domain::agent::SpeedMode::Fast;
 
     // Act
@@ -230,10 +228,7 @@ fn test_session_metadata_and_prompt_status_show_non_default_response_style() {
 
     // Act
     let prompt_status_without_speed = prompt_session_status(&session);
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
     let prompt_status = prompt_session_status(&session);
 
@@ -247,10 +242,7 @@ fn test_session_metadata_and_prompt_status_show_non_default_response_style() {
 fn test_session_speed_display_reports_speed_only_for_supported_provider() {
     // Arrange
     let mut codex_session = SessionFixtureBuilder::new().build();
-    codex_session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        AgentModel::Gpt61Sol,
-    );
+    codex_session.agent = model_fixture::codex_selection();
     let mut antigravity_session = SessionFixtureBuilder::new().build();
     antigravity_session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Antigravity,

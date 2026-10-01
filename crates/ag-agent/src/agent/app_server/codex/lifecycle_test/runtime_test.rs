@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
-use ag_session::AgentModel;
+use ag_session::test_support as model_fixture;
 use mockall::Sequence;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -28,7 +28,7 @@ async fn start_runtime_omits_personality_from_the_process_command() {
         folder: runtime_parent.path().join("missing-runtime"),
         live_transcript: None,
         main_checkout_root: None,
-        model: AgentModel::Gpt61Sol.as_str().to_string(),
+        model: model_fixture::CODEX_MODEL.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true),
         prompt: TurnPrompt::from("Run the turn"),
@@ -63,7 +63,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
         folder: folder.path().to_path_buf(),
         live_transcript: None,
         main_checkout_root: None,
-        model: AgentModel::Gpt61Sol.as_str().to_string(),
+        model: model_fixture::CODEX_MODEL.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Run the turn"),
@@ -94,7 +94,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
 fn codex_runtime_state_new_initializes_zero_tokens_and_empty_thread_id() {
     // Arrange
     let folder = PathBuf::from("/tmp/agentty-codex-state");
-    let model = AgentModel::Gpt61Sol.as_str().to_string();
+    let model = model_fixture::CODEX_MODEL.as_str().to_string();
 
     // Act
     let state = CodexRuntimeState::new(folder.clone(), model.clone(), PermissionMode::AutoEdit);

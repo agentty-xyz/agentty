@@ -1,3 +1,5 @@
+use ag_session::test_support as model_fixture;
+
 use super::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorState, SelectorDropdownStage,
     SelectorDropdownState, SettingRow, SettingSelectorOption, SettingSelectorValue, SettingsAction,
@@ -23,12 +25,12 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
     SettingsView {
         available_model_selections: vec![
             smart_selection,
-            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            model_fixture::codex_selection(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         ],
         auto_approve_orchestration_research: true,
         default_fast_reasoning_level: ReasoningLevel::Low,
-        default_fast_selection: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        default_fast_selection: model_fixture::codex_selection(),
         default_fast_speed_mode: SpeedMode::Fast,
         default_review_reasoning_level: ReasoningLevel::XHigh,
         default_review_selection: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
@@ -503,7 +505,7 @@ fn previous_launch_selection_wraps_and_all_row_options_are_available() {
 #[test]
 fn last_used_speed_capable_model_value_includes_speed() {
     // Arrange
-    let selection = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol);
+    let selection = model_fixture::codex_selection();
 
     // Act
     let display_value =

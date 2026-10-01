@@ -1,8 +1,9 @@
 //! Session model, permission, and response settings.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 
@@ -79,7 +80,7 @@ done
         env,
         &[
             ("DefaultSmartAgent", "codex"),
-            ("DefaultSmartModel", "gpt-6.1-sol"),
+            ("DefaultSmartModel", model_fixture::CODEX_MODEL_ID),
         ],
     )
     .await

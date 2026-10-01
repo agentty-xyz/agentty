@@ -1,5 +1,6 @@
 //! Session transcript rendering and scrolling.
 
+use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::frame::TerminalFrame;
@@ -379,7 +380,7 @@ async fn seed_session_with_typed_marker_collision(
     let session_id = "typed-marker-0001";
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-6.1-sol", "main", "Review")
+        SessionSeed::regular(session_id, model_fixture::CODEX_MODEL_ID, "main", "Review")
             .with_title("Typed marker collision"),
     )
     .await?;
@@ -418,8 +419,13 @@ async fn seed_session_with_typed_marker_collision(
 async fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(LOADER_SESSION_ID, "gpt-6.1-sol", "main", "InProgress")
-            .with_title("Loader session"),
+        SessionSeed::regular(
+            LOADER_SESSION_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+        )
+        .with_title("Loader session"),
     )
     .await?;
 
@@ -440,7 +446,7 @@ async fn seed_session_with_scrollable_output(
 
     common::seed_session(
         env,
-        SessionSeed::regular(SESSION_ID, "gpt-6.1-sol", "main", "Review")
+        SessionSeed::regular(SESSION_ID, model_fixture::CODEX_MODEL_ID, "main", "Review")
             .with_title("Scrollable output"),
     )
     .await?;

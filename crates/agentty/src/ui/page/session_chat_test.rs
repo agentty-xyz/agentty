@@ -1,3 +1,4 @@
+use ag_session::test_support as model_fixture;
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
@@ -405,17 +406,20 @@ fn rendered_prompt_mode_text(session: &Session) -> String {
 fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider() {
     // Arrange
     let mut session = session_fixture();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        crate::domain::agent::AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
 
     // Act
     let text = rendered_prompt_mode_text(&session);
 
     // Assert
-    assert!(text.contains("[gpt-6.1-sol] · Normal · Auto Edit"));
-    assert!(!text.contains("[gpt-6.1-sol]  · Normal · Auto Edit"));
+    assert!(text.contains(&format!(
+        "[{}] · Normal · Auto Edit",
+        model_fixture::CODEX_MODEL_ID
+    )));
+    assert!(!text.contains(&format!(
+        "[{}]  · Normal · Auto Edit",
+        model_fixture::CODEX_MODEL_ID
+    )));
 }
 
 #[test]
@@ -434,10 +438,7 @@ fn test_prompt_footer_shows_permission_mode_shortcut() {
 fn test_render_prompt_composer_shows_read_only_after_speed_status() {
     // Arrange
     let mut session = session_fixture();
-    session.agent = crate::domain::agent::AgentSelection::new(
-        crate::domain::agent::AgentKind::Codex,
-        crate::domain::agent::AgentModel::Gpt61Sol,
-    );
+    session.agent = model_fixture::codex_selection();
     session.permission_mode = crate::domain::permission::PermissionMode::ReadOnly;
 
     // Act

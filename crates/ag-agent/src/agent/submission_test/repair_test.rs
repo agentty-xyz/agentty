@@ -2,7 +2,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
-use ag_session::{AgentKind, AgentModel};
+use ag_session::{AgentKind, AgentModel, test_support as model_fixture};
 use tempfile::tempdir;
 
 use super::support::mock_shell_command;
@@ -95,7 +95,7 @@ async fn test_submit_one_shot_with_backend_rejects_plain_text_utility_output() {
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -250,7 +250,7 @@ async fn test_submit_one_shot_with_backend_recovers_via_protocol_repair() {
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -360,7 +360,7 @@ async fn test_submit_one_shot_with_backend_rejects_blank_utility_output() {
             harness: (AgentKind::Codex).to_string(),
             child_pid: None,
             folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::Gpt61Sol.as_str().to_string(),
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
             prompt: "Generate title".to_string(),
             request_kind: AgentRequestKind::UtilityPrompt,

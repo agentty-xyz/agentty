@@ -6,6 +6,7 @@ use ag_contracts::{OneShotError, OneShotSubmission};
 use ag_forge as forge;
 use ag_git as git;
 use ag_protocol::AgentResponse;
+use ag_session::test_support as model_fixture;
 use ag_worker::{MockRunClient, RunClient};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -116,7 +117,7 @@ pub(super) fn session_manager_with_one_session(session: Session) -> SessionManag
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,
@@ -441,7 +442,7 @@ pub(super) fn session_manager_with_sessions(sessions: Vec<Session>) -> SessionMa
 
     SessionManager::new(
         SessionDefaults {
-            model: AgentModel::Gpt61Sol,
+            model: model_fixture::CODEX_MODEL,
         },
         Arc::new(git::MockGitClient::new()),
         state,

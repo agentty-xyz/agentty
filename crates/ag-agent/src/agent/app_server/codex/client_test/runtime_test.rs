@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use ag_contracts::{ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
-use ag_session::AgentModel;
+use ag_session::test_support as model_fixture;
 use mockall::Sequence;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -148,7 +148,7 @@ async fn start_thread_returns_thread_id_from_matching_response() {
     let thread_id = lifecycle::start_thread(
         &mut transport,
         folder.path(),
-        AgentModel::Gpt61Sol.as_str(),
+        model_fixture::CODEX_MODEL.as_str(),
         ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
         SpeedMode::default(),
@@ -239,7 +239,7 @@ async fn start_or_resume_thread_falls_back_to_thread_start_after_resume_failure(
     let thread = lifecycle::start_or_resume_thread(
         &mut transport,
         folder.path(),
-        AgentModel::Gpt61Sol.as_str(),
+        model_fixture::CODEX_MODEL.as_str(),
         Some("thread-existing"),
         ag_contracts::PermissionMode::AutoEdit,
         ReasoningLevel::default(),
@@ -270,7 +270,7 @@ async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
         &mut transport,
         lifecycle::CodexTurnEventLoopInput {
             folder: folder.path(),
-            model: AgentModel::Gpt61Sol.as_str(),
+            model: model_fixture::CODEX_MODEL.as_str(),
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             prompt: "Implement the task".into(),
             protocol_profile: ProtocolRequestProfile::SessionTurn,
@@ -309,7 +309,7 @@ async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary
         &mut transport,
         lifecycle::CodexTurnEventLoopInput {
             folder: folder.path(),
-            model: AgentModel::Gpt61Sol.as_str(),
+            model: model_fixture::CODEX_MODEL.as_str(),
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             prompt: "Review the current diff".into(),
             protocol_profile: ProtocolRequestProfile::SessionTurn,

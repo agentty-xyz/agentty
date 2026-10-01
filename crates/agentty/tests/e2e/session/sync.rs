@@ -1,8 +1,9 @@
 //! Session merge, rebase, and push.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
@@ -20,7 +21,7 @@ const MERGE_CONFLICT_SESSION_ID: &str = "merge-conflict-0001";
 /// Seeds a review-ready worktree whose committed change conflicts with a
 /// newer commit on the stored base branch.
 async fn seed_merge_conflict_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_merge_conflict_session_with_model(env, "gpt-6.1-sol").await
+    seed_merge_conflict_session_with_model(env, model_fixture::CODEX_MODEL_ID).await
 }
 
 /// Seeds the merge-conflict fixture with a specific persisted agent model.

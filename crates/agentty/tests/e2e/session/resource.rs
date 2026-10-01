@@ -1,9 +1,10 @@
 //! Session resource tracking.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use testty::assertion;
 use testty::region::Region;
 
@@ -20,7 +21,7 @@ async fn seed_gemini_resource_runtime(env: &BuilderEnv) -> E2eResult {
             ("DefaultSmartAgent", "gemini"),
             ("DefaultSmartModel", "gemini-3.1-pro-preview"),
             ("DefaultFastAgent", "codex"),
-            ("DefaultFastModel", "gpt-6.1-sol"),
+            ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
         ],
     )
     .await?;
@@ -96,7 +97,7 @@ async fn test_session_resources() -> E2eResult {
                     ("DefaultSmartAgent", "claude"),
                     ("DefaultSmartModel", "claude-haiku-4-5-20251001"),
                     ("DefaultFastAgent", "codex"),
-                    ("DefaultFastModel", "gpt-6.1-sol"),
+                    ("DefaultFastModel", model_fixture::CODEX_MODEL_ID),
                 ],
             ).await?;
             let scripts = [
@@ -176,7 +177,7 @@ async fn seed_retained_resource_runtime(env: &BuilderEnv) -> E2eResult {
         env,
         &[
             ("DefaultSmartAgent", "codex"),
-            ("DefaultSmartModel", "gpt-6.1-sol"),
+            ("DefaultSmartModel", model_fixture::CODEX_MODEL_ID),
             ("DefaultFastAgent", "claude"),
             ("DefaultFastModel", "claude-haiku-4-5-20251001"),
         ],

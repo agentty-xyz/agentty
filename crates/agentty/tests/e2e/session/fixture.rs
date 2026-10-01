@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use ag_session::test_support as model_fixture;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
 use agentty::domain::session::{
@@ -184,8 +185,13 @@ pub(super) async fn seed_review_ready_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("review-shortcut-0001", "gpt-6.1-sol", "main", "Review")
-            .with_title("Review-ready session shortcuts"),
+        SessionSeed::regular(
+            "review-shortcut-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Review",
+        )
+        .with_title("Review-ready session shortcuts"),
     )
     .await?;
 
@@ -332,8 +338,13 @@ pub(super) async fn seed_running_stop_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular(RUNNING_STOP_SESSION_ID, "gpt-6.1-sol", "main", "InProgress")
-            .with_title("Running session stop"),
+        SessionSeed::regular(
+            RUNNING_STOP_SESSION_ID,
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+        )
+        .with_title("Running session stop"),
     )
     .await?;
 

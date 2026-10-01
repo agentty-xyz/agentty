@@ -1,9 +1,10 @@
 //! Review request publication, status, and cleanup.
 
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+#[cfg(unix)]
+use ag_session::test_support as model_fixture;
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
@@ -162,7 +163,7 @@ async fn seed_session_with_published_branch_push_notice(
 
     common::seed_session(
         env,
-        SessionSeed::regular(session_id, "gpt-6.1-sol", "main", "Review")
+        SessionSeed::regular(session_id, model_fixture::CODEX_MODEL_ID, "main", "Review")
             .with_title("Published push notice"),
     )
     .await?;
@@ -255,15 +256,20 @@ async fn seed_merged_stacked_review_requests(
 ) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
-        SessionSeed::regular("stack-parent-0001", "gpt-6.1-sol", "main", "Merged")
-            .with_title("Merged stack parent"),
+        SessionSeed::regular(
+            "stack-parent-0001",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "Merged",
+        )
+        .with_title("Merged stack parent"),
     )
     .await?;
     common::seed_session(
         env,
         SessionSeed::stacked_draft(
             "stack-child-0001",
-            "gpt-6.1-sol",
+            model_fixture::CODEX_MODEL_ID,
             "wt/stack-pa",
             "Merged",
             "stack-parent-0001",
