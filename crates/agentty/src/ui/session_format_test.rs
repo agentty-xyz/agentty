@@ -2,9 +2,9 @@ use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
 
 use super::{
-    prompt_session_status, session_header_lines, session_metadata_text, session_output_status_icon,
-    session_output_status_message, session_output_uses_tachyon_loader, session_resources_line,
-    session_speed_display,
+    prompt_session_status, session_header_lines, session_metadata_text,
+    session_output_queued_lines, session_output_status_icon, session_output_status_message,
+    session_output_uses_tachyon_loader, session_resources_line, session_speed_display,
 };
 use crate::domain::agent::{AgentModel, ReasoningLevel};
 use crate::domain::resource::SessionResources;
@@ -15,6 +15,29 @@ use crate::domain::session::{
 use crate::test_support::SessionFixtureBuilder;
 use crate::ui::icon::Icon;
 use crate::ui::style;
+
+#[test]
+fn queued_preview_compacts_and_truncates_to_terminal_columns() {
+    // Arrange
+    let message = " \n修复\tbuild\n\nwith context \n";
+
+    // Act
+    let full = session_output_queued_lines(message, "queued › ", 80);
+    let narrow = session_output_queued_lines(message, "queued › ", 18);
+    let blank = session_output_queued_lines(" \n\t", "queued › ", 80);
+    let zero_width = session_output_queued_lines(message, "", 0);
+
+    // Assert
+    assert_eq!(full.len(), 1);
+    assert_eq!(full[0].to_string(), "≡ queued › 修复 build with context");
+    assert_eq!(narrow.len(), 1);
+    assert_eq!(narrow[0].to_string(), "≡ queued › 修复...");
+    assert_eq!(narrow[0].width(), 18);
+    assert_eq!(full[0].style.fg, Some(style::palette::text_subtle()));
+    assert!(full[0].style.add_modifier.contains(Modifier::ITALIC));
+    assert_eq!(blank, Vec::<ratatui::text::Line<'_>>::new());
+    assert_eq!(zero_width, Vec::<ratatui::text::Line<'_>>::new());
+}
 
 #[test]
 fn resource_row_formats_values_unavailable_and_narrow_widths() {

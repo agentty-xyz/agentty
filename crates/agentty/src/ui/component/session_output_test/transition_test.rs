@@ -68,6 +68,7 @@ fn test_visible_paint_lines_skip_rows_outside_viewport() {
             Line::from("hidden after viewport"),
         ]),
         body_line_count: 4,
+        queued: Arc::from([]),
         tail: Vec::new(),
     };
 
@@ -88,6 +89,7 @@ fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
     let lines = SessionOutputLayoutLines {
         body: Arc::from([Line::from("one"), Line::from("two"), Line::from("")]),
         body_line_count: 2,
+        queued: Arc::from([Line::from("queued first"), Line::from("queued second")]),
         tail: vec![Line::from("status"), Line::from("done")],
     };
 
@@ -96,6 +98,8 @@ fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
     let tail_only = lines.paint_lines(2, 8);
     let past_end = lines.paint_lines(10, 2);
     let zero_height = lines.paint_lines(0, 0);
+    let queue_crossing = lines.paint_lines(3, 2);
+    let queue_only = lines.paint_lines(4, 1);
 
     // Assert
     assert_eq!(
@@ -107,8 +111,16 @@ fn test_visible_rows_cross_shared_body_and_tail_without_copying_hidden_rows() {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
-        ["status", "done"]
+        ["status", "done", "queued first", "queued second"]
     );
+    assert_eq!(
+        queue_crossing
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["done", "queued first"]
+    );
+    assert_eq!(queue_only[0].to_string(), "queued first");
     assert_eq!(past_end, Vec::<Line<'_>>::new());
     assert_eq!(zero_height, Vec::<Line<'_>>::new());
 }

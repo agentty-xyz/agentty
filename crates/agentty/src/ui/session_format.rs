@@ -400,40 +400,27 @@ pub(crate) fn session_output_transient_loading_lines(message: &str) -> Vec<Line<
     lines
 }
 
-/// Builds calm queued-work rows with one distinct indicator on the first row.
+/// Builds a single calm preview row for queued work, clipped to display width.
 pub(crate) fn session_output_queued_lines(
     message: &str,
     first_line_prefix: &str,
+    inner_width: usize,
 ) -> Vec<Line<'static>> {
     let queued_style = Style::default()
         .fg(style::palette::text_subtle())
         .add_modifier(Modifier::ITALIC);
-    let message_lines = message.trim().lines().collect::<Vec<_>>();
-    let Some(first_content_line_index) = message_lines
-        .iter()
-        .position(|message_line| !message_line.trim().is_empty())
-    else {
+    let preview = message.split_whitespace().collect::<Vec<_>>().join(" ");
+    if preview.is_empty() || inner_width == 0 {
         return Vec::new();
-    };
-    let last_content_line_index = message_lines
-        .iter()
-        .rposition(|message_line| !message_line.trim().is_empty())
-        .unwrap_or(first_content_line_index);
-    let continuation_indent = " ".repeat(2 + first_line_prefix.chars().count());
+    }
 
-    message_lines[first_content_line_index..=last_content_line_index]
-        .iter()
-        .enumerate()
-        .map(|(line_index, message_line)| {
-            let rendered_text = if line_index == 0 {
-                format!("{} {first_line_prefix}{message_line}", Icon::QueuedAction)
-            } else {
-                format!("{continuation_indent}{message_line}")
-            };
-
-            Line::styled(rendered_text, queued_style)
-        })
-        .collect()
+    vec![Line::styled(
+        text_util::truncate_with_ellipsis(
+            &format!("{} {first_line_prefix}{preview}", Icon::QueuedAction),
+            inner_width,
+        ),
+        queued_style,
+    )]
 }
 
 /// Returns the loader label for active session states.

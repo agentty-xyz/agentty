@@ -18,10 +18,9 @@ use crate::ui::icon::Icon;
 use crate::ui::render::Component;
 use crate::ui::{markdown, session_output_assembly, style};
 
-/// Verifies queued-message edge trimming preserves blank lines within a
-/// multiline message.
+/// Verifies multiline messages have one compact queue preview each.
 #[test]
-fn test_append_queued_message_lines_trims_only_outer_empty_lines() {
+fn test_append_queued_message_lines_compacts_whitespace() {
     // Arrange
     let mut lines = vec![Line::from("Previous message.")];
     let queued_messages = vec![
@@ -40,9 +39,7 @@ fn test_append_queued_message_lines_trims_only_outer_empty_lines() {
             "Previous message.",
             "",
             "≡ queued › First queued message.",
-            "≡ queued › Second queued message.",
-            "           ",
-            "           More context.",
+            "≡ queued › Second queued message. More context.",
             "",
         ]
     );
@@ -84,6 +81,80 @@ fn test_output_layout_cache_keys_queued_messages() {
     // Assert
     assert!(!Arc::ptr_eq(&empty_layout.lines, &queued_layout.lines));
     assert!(queued_text.contains("queued › queued reply"));
+}
+
+/// Queue rows follow review-resolution and multiline commit status, keeping
+/// their pulsing indicator positions aligned with the previews.
+#[test]
+fn test_queue_follows_review_resolution_status_and_updates_indicator_positions() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    session.queued_messages = vec![queued_message(1, "follow up\nwith context")];
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Loading("Resolving 1 review comment...".to_string()),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::ReviewCommentResolution,
+        turn_position: None,
+    });
+    session.transient_messages.upsert(TransientMessage {
+        anchor: TransientMessageAnchor::Tail,
+        body: TransientMessageBody::Queued(QueuedAction::new(
+            0,
+            "sync after this turn".to_string(),
+        )),
+        lifecycle: TransientMessageLifecycle::UntilResolved,
+        slot: TransientMessageSlot::SyncQueue,
+        turn_position: None,
+    });
+    let cache = SessionOutputLayoutCache::default();
+    let area = Rect::new(0, 0, 80, 12);
+
+    // Act
+    let initial = cache.layout(&session, area, line_context(), None);
+    session
+        .transient_messages
+        .retract(TransientMessageSlot::ReviewCommentResolution);
+    let updated = cache.layout(
+        &session,
+        area,
+        SessionOutputLineContext {
+            active_progress: Some("Committing...\nGenerating a commit message..."),
+            ..line_context()
+        },
+        None,
+    );
+    let initial_lines = initial
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let updated_lines = updated
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    // Assert
+    let status_index = initial.active_loader_line_index.expect("resolution loader");
+    assert!(initial_lines[status_index].contains("Resolving 1 review comment..."));
+    assert_eq!(
+        initial.queued_line_indices.as_ref(),
+        [status_index + 2, status_index + 3]
+    );
+    assert_eq!(initial_lines[status_index + 2], "≡ sync after this turn");
+    assert_eq!(
+        initial_lines[status_index + 3],
+        "≡ queued › follow up with context"
+    );
+    let status_index = updated.active_loader_line_index.expect("commit loader");
+    assert!(updated_lines[status_index].contains("Committing..."));
+    assert_eq!(
+        updated.queued_line_indices.as_ref(),
+        [status_index + 3, status_index + 4]
+    );
+    assert!(updated_lines[status_index + 3].contains("sync after this turn"));
 }
 
 #[test]
@@ -188,7 +259,11 @@ fn test_output_lines_in_progress_session_shows_queued_messages_after_active_turn
     assert!(!text.contains("Change Summary"));
     assert!(commit_index < prompt_index);
     assert!(prompt_index < queued_index);
-    assert!(text.contains("           with context"));
+    assert!(text.contains("queued › follow up with context"));
+    let status_index = text
+        .find("Working...")
+        .expect("active status should be rendered");
+    assert!(status_index < queued_index);
 }
 
 /// Verifies a queued follow-up remains below workflow notices that were
@@ -233,4 +308,8 @@ fn test_output_lines_rebasing_session_places_queued_message_after_workflow_notic
     // Assert
     assert!(commit_index < sync_assist_index);
     assert!(sync_assist_index < queued_message_index);
+    let status_index = text
+        .find("Rebasing...")
+        .expect("sync status should be rendered");
+    assert!(status_index < queued_message_index);
 }

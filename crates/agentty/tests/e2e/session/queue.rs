@@ -24,6 +24,11 @@ const REBASING_QUEUE_SESSION_ID: &str = "rebasing-queue-0001";
 /// Clarification question emitted after session sync has already been queued.
 const QUEUED_SYNC_QUESTION_TEXT: &str = "Should I continue before syncing?";
 
+/// Long queued prompt that must fit on one preview row in the session view.
+const QUEUED_CHAT_PREVIEW_MESSAGE: &str = "first queued: keep these details available when this \
+                                           message starts, with extra context that must fit on \
+                                           one preview row";
+
 /// Seeds one rebasing session so message queueing can be exercised without a
 /// live git operation or agent backend.
 async fn seed_rebasing_queue_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
@@ -425,7 +430,7 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     .wait_for_text("Ctrl+c: stop", 5000)
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("first queued")
+                    .write_text(QUEUED_CHAT_PREVIEW_MESSAGE)
                     .wait_for_text("first queued", 3000)
                     .press_key("Enter")
                     .wait_for_text("≡ queued ›", 5000)
@@ -438,7 +443,7 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
                     .viewing_pause_ms(1000)
                     .capture_labeled(
                         "two_queued_messages_visible",
-                        "Two queued chat messages rendered inline beneath the running turn",
+                        "Compact queued messages appear below the active status in order",
                     )
                     .press_key("ctrl+c")
                     .wait_for_stable_frame(300, 5000)
@@ -467,10 +472,12 @@ async fn session_queue_chat_messages_during_in_progress_turn() -> E2eResult {
             |frame, report| {
                 Box::pin(async move {
                     let queued_frame = common::frame_from_capture(&report.captures[0]);
-                    let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
-                    assertion::assert_text_in_region(&queued_frame, "≡ queued ›", &queued_full);
-                    assertion::assert_text_in_region(&queued_frame, "first queued", &queued_full);
-                    assertion::assert_text_in_region(&queued_frame, "second queued", &queued_full);
+                    let status_row = queued_frame.find_text("Working...")[0].rect.row;
+                    let first_row = queued_frame.find_text("queued › first queued")[0].rect.row;
+                    let second_row = queued_frame.find_text("queued › second queued")[0].rect.row;
+                    assert_eq!(first_row, status_row + 2);
+                    assert_eq!(second_row, first_row + 1);
+                    assertion::assert_not_visible(&queued_frame, "must fit on one preview row");
 
                     let after_first_frame = common::frame_from_capture(&report.captures[1]);
                     let after_first_full =
@@ -582,7 +589,9 @@ async fn session_queue_chat_message_during_rebase() -> E2eResult {
                         .row;
 
                     assert_eq!(sync_assist_row, commit_row + 2);
-                    assert_eq!(queued_message_row, sync_assist_row + 2);
+                    let status_row = frame.find_text("Rebasing...")[0].rect.row;
+                    assert_eq!(status_row, sync_assist_row + 2);
+                    assert_eq!(queued_message_row, status_row + 2);
                 })
             },
         )
@@ -719,9 +728,9 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                     );
                     assertion::assert_text_in_region(&queued_frame, "Ctrl+c: stop", &queued_full);
                     let active_turn_row = queued_frame
-                        .find_text("Keep the active turn running")
+                        .find_text("Working...")
                         .first()
-                        .expect("missing active turn prompt")
+                        .expect("missing active status")
                         .rect
                         .row;
                     let queued_sync_row = queued_frame
@@ -1370,7 +1379,9 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                         .expect("missing queued review-request action")
                         .rect
                         .row;
-                    assert!(queued_chat_row < queued_publish_row);
+                    let active_status_row = queued_frame.find_text("Working...")[0].rect.row;
+                    assert_eq!(queued_chat_row, active_status_row + 2);
+                    assert_eq!(queued_publish_row, queued_chat_row + 1);
 
                     let chat_execution_frame = common::frame_from_capture(&report.captures[1]);
                     let active_answer_row = chat_execution_frame

@@ -46,7 +46,7 @@ fn test_queued_messages_skip_blank_entries() {
     ];
 
     // Act
-    append_queued_entries(&mut lines, &[], &queued_messages);
+    append_queued_entries(&mut lines, &[], &queued_messages, 80);
 
     // Assert
     assert_eq!(
@@ -201,7 +201,7 @@ fn test_queued_entries_follow_shared_submission_order() {
 
     // Act
     let queued_line_indices =
-        append_queued_entries(&mut lines, &transient_messages, &queued_messages);
+        append_queued_entries(&mut lines, &transient_messages, &queued_messages, 80);
 
     // Assert
     assert_eq!(
@@ -375,7 +375,7 @@ pub(crate) fn append_queued_message_lines(
     lines: &mut Vec<Line<'static>>,
     queued_messages: &[QueuedMessage],
 ) {
-    append_queued_entries(lines, &[], queued_messages);
+    append_queued_entries(lines, &[], queued_messages, 80);
 }
 /// Appends one user prompt block while retaining its prompt marker and shading.
 pub(crate) fn append_user_prompt_markdown_lines(
