@@ -2,6 +2,8 @@
 
 /// Client boundary and production adapter implementations.
 mod client;
+/// Pure inspection of captured unified diffs.
+mod diff;
 /// Typed error types for git infrastructure operations.
 mod error;
 /// Squash-merge workflows.
@@ -20,6 +22,7 @@ mod worktree;
 #[cfg(any(test, feature = "test-utils"))]
 pub use client::MockGitClient;
 pub use client::{GitClient, GitFuture, RealGitClient};
+pub use diff::{DiffFile, hunk_starts};
 /// Re-exported typed error for git infrastructure operations.
 pub use error::GitError;
 pub use merge::SquashMergeOutcome;

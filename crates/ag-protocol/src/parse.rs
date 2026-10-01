@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::model::{
     AgentResponse, AgentResponseParseError, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
 };
-use super::review::{FocusedReview, FocusedReviewSeverity};
+use super::review::FocusedReview;
 
 /// Top-level keys the protocol recognizes in a structured response payload.
 const PROTOCOL_KEYS: &[&str] = &[
@@ -131,7 +131,7 @@ pub fn parse_protocol_response_strict(
             reason: format!("focused review parse failed ({error})"),
         }
     })?;
-    let answer = focused_review_answer(review);
+    let answer = serde_json::json!(review).to_string();
 
     Ok(AgentResponse::plain(answer))
 }
@@ -145,44 +145,6 @@ fn parse_utility_response(raw: &str) -> Result<UtilityResponse, serde_json::Erro
         .or_else(|error| find_last_embedded_json_value(candidate).ok_or(error))?;
 
     serde_json::from_value(value)
-}
-
-/// Serializes a validated focused review through infallible JSON values.
-fn focused_review_answer(review: FocusedReview) -> String {
-    let project_impact = review
-        .project_impact
-        .into_iter()
-        .map(Value::String)
-        .collect();
-    let suggestions = review
-        .suggestions
-        .into_iter()
-        .map(|suggestion| {
-            let severity = match suggestion.severity {
-                FocusedReviewSeverity::High => "high",
-                FocusedReviewSeverity::Medium => "medium",
-            };
-
-            Value::Object(
-                [
-                    ("details".to_string(), Value::String(suggestion.details)),
-                    ("severity".to_string(), Value::String(severity.to_string())),
-                ]
-                .into_iter()
-                .collect(),
-            )
-        })
-        .collect();
-
-    Value::Object(
-        [
-            ("project_impact".to_string(), Value::Array(project_impact)),
-            ("suggestions".to_string(), Value::Array(suggestions)),
-        ]
-        .into_iter()
-        .collect(),
-    )
-    .to_string()
 }
 
 /// Builds one multi-line debug report for a protocol parsing failure.

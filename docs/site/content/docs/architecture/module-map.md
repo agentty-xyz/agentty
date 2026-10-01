@@ -23,7 +23,7 @@ For file-level detail, read the module docstrings directly.
 | `ag-worker`        | Scheduling, cancellation, heartbeats, recovery, execution policy |
 | `ag-agent`         | External CLI and app-server adapters, policy enforcement         |
 | `ag-forge`         | GitHub/GitLab review requests and comments                       |
-| `ag-git`           | Worktrees, diffs, sync, rebase, merge                            |
+| `ag-git`           | Worktrees, captured diff parsing, sync, rebase, merge            |
 | `ag-harness`       | Standalone model loop, tools, durable sessions                   |
 | `ag-harness-cli`   | Companion harness CLI                                            |
 | `ag-orchestration` | Campaign planning, verification, integration                     |

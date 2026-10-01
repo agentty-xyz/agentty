@@ -21,6 +21,7 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
+use crate::infra::fs::FsClient;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationViewMode, DiffFocus, DiffLineComments, DiffPreview, DiffSidebarFocus,
     HelpContext,
@@ -44,6 +45,10 @@ fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
         .returning(|path| {
             Box::pin(async move { tokio::fs::read(path).await.map_err(fs::FsError::from) })
         });
+    mock_fs_client
+        .expect_read_file_prefix()
+        .times(0..)
+        .returning(|path, max_bytes| fs::RealFsClient.read_file_prefix(path, max_bytes));
     mock_fs_client
         .expect_remove_file()
         .times(0..)

@@ -21,6 +21,168 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 /// Focused-review output emitted after Gemini starts without plan-mode flags.
 const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
 
+/// Verifies project criteria, host source anchors, and individual warnings for
+/// unverified citations in the TUI.
+#[tokio::test]
+async fn test_focused_review_evidence_and_project_rules() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_evidence_and_project_rules")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .setup(|env| Box::pin(async move {
+            seed_review_ready_session(env).await?;
+            seed_review_worktree_with_diff(env)?;
+            let worktree = env.agentty_root.join("wt/review-s");
+            std::fs::write(worktree.join("src/main.rs"), "fn main() {\n    run();\n}\n")?;
+            std::fs::create_dir_all(worktree.join(".agentty"))?;
+            std::fs::write(worktree.join(".agentty/review-rules.json"), r#"{"rules":[{"extensions":["rs"],"path_prefix":"src/","instructions":"Check request authorization"}]}"#)?;
+            let candidates = serde_json::json!({"project_impact":[],"suggestions":[{"details":"Unverified candidate","severity":"high"}]});
+            let verified = serde_json::json!({"project_impact":[],"suggestions":[{
+                "details":"src/main.rs:999:12: Verified authorization risk; enclosing function at src/main.rs:1", "severity":"high",
+                "evidence": {"correction":"Restore validation", "end_line":999,
+                    "existing_code":"run();", "impact":"Invalid requests execute",
+                    "path":"src/main.rs", "side":"new", "start_line":999,
+                    "trigger":"An invalid request"}
+            }, {
+                "details":"src/missing.rs:888: No matching source", "severity":"medium", "evidence":null
+            }]});
+            let envelope = |result: serde_json::Value| serde_json::json!({
+                "type":"result", "subtype":"success", "result":result.to_string(),
+                "usage":{"input_tokens":5,"output_tokens":9}
+            }).to_string();
+            let script = format!(r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"Check request authorization"*) ;;
+  *) printf 'project criteria missing\n' >&2; exit 1 ;;
+esac
+printf '%s\n' '{{"type":"system","subtype":"init"}}'
+case "$prompt" in
+  *"Reduce review:"*) printf '%s\n' '{}' ;;
+  *) printf '%s\n' '{}' ;;
+esac
+"#, envelope(verified), envelope(candidates));
+            let path = env.stub_bin.join("claude");
+            std::fs::write(&path, script)?;
+            #[cfg(unix)]
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
+            seed_project_settings(env, &[("DefaultReviewAgent", "claude"), ("DefaultReviewModel", "claude-haiku-4-5-20251001")]).await
+        }))
+        .run(|scenario| scenario
+            .compose(&common::wait_for_agentty_startup())
+            .compose(&common::switch_to_tab("Sessions"))
+            .press_key("Enter")
+            .press_key("f")
+            .wait_for_text("Verified authorization risk", 30000)
+            .press_key("g")
+            .wait_for_text("Processed files: 2/2", 5000)
+            .capture_labeled("verified_review", "Verified source evidence and file coverage"),
+            |frame, _| Box::pin(async move {
+                let full = Region::full(frame.cols(), frame.rows());
+                for text in ["src/main.rs:2", "src/main.rs:1", "Verified authorization risk", "Processed files: 2/2", "Unanchored findings: 1", "[Medium] (unanchored)", "src/missing.rs:888", "Supporting references are unverified."] {
+                    assertion::assert_text_in_region(frame, text, &full);
+                }
+                assertion::assert_not_visible(frame, "Unverified candidate");
+                assertion::assert_not_visible(frame, "Partial review:");
+                assertion::assert_not_visible(frame, "999");
+            }))
+        .await?;
+    Ok(())
+}
+
+/// Surfaces oversized selected criteria before any provider review can run.
+#[tokio::test]
+async fn test_focused_review_criteria_limit() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_criteria_limit")
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_review_worktree_with_diff(env)?;
+                let worktree = env.agentty_root.join("wt/review-s");
+                std::fs::create_dir_all(worktree.join(".agentty"))?;
+                let config = serde_json::json!({"rules":[{"instructions":"a".repeat(62_000)}]});
+                std::fs::write(
+                    worktree.join(".agentty/review-rules.json"),
+                    config.to_string(),
+                )?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Selected review criteria exceed", 30000)
+                    .capture_labeled("criteria_limit", "Review criteria limit is explained")
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Selected review criteria exceed",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "shorten", &full);
+                    assertion::assert_text_in_region(frame, "project instructions", &full);
+                })
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Surfaces the rules-file size limit before review preparation can proceed.
+#[tokio::test]
+async fn test_focused_review_rules_file_limit() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("focused_review_rules_file_limit")
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_review_worktree_with_diff(env)?;
+                let worktree = env.agentty_root.join("wt/review-s");
+                std::fs::create_dir_all(worktree.join(".agentty"))?;
+                std::fs::write(
+                    worktree.join(".agentty/review-rules.json"),
+                    " ".repeat(65_537),
+                )?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Project review rules exceed 65536 bytes", 30000)
+                    .capture_labeled("rules_file_limit", "Review rules file limit is explained")
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Project review rules exceed 65536 bytes",
+                        &full,
+                    );
+                })
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 /// Seeds a large original diff and a provider that fails one batch, then
 /// succeeds when the user retries the partial review.
 async fn seed_large_review_with_partial_retry(env: &BuilderEnv) -> E2eResult {
@@ -299,8 +461,13 @@ prompt=$(cat)
 
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)
-    review_count=$((review_count + 1))
-    printf '%s\n' "$review_count" > "$review_count_file"
+    case "$prompt" in
+      *"Reduce review:"*) ;;
+      *)
+        review_count=$((review_count + 1))
+        printf '%s\n' "$review_count" > "$review_count_file"
+        ;;
+    esac
     case "$review_count" in
       1)
         result='{\"project_impact\":[\"First lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the first lifecycle suggestion.\",\"severity\":\"medium\"}]}'

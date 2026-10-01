@@ -139,12 +139,45 @@ files and history and may browse, but recommend checks rather than run them. Pro
 shows the review profile and completed stages. Results remain visible across navigation
 until the next prompt.
 
-Large reviews run in batches. Each attempt has a 64-call budget and a 15-minute
-deadline. A `Partial` result preserves findings and identifies unfinished checks; an
-empty suggestions list does not mean the review completed. Press `f` and confirm
-regeneration to resume completed calls for unchanged inputs, including after restart.
-Completed reviews regenerate from scratch; changed inputs or an accepted sync require
-fresh evidence. Summarized history is disclosed.
+Every completed review verifies candidate findings against relevant source, including
+single-batch reviews. Findings include source locations when their cited code matches
+the captured diff; deletion findings can cite the source before the change. Findings
+without matched primary evidence are marked unanchored. Supporting references remain
+unverified and are disclosed on each finding with primary evidence. Coverage reports
+processed and unfinished files and discloses unresolved file identities; processing a
+file does not guarantee that every defect was found.
+
+Large reviews batch complete files and hunks where possible. Each attempt has a 64-call
+budget and a 15-minute deadline. A `Partial` result preserves findings and identifies
+unfinished checks; an empty suggestions list does not mean the review completed. Press
+`f` and confirm regeneration to resume completed calls for unchanged inputs, including
+after restart. Completed reviews regenerate from scratch; changed inputs or an accepted
+sync require fresh evidence. Summarized history is disclosed.
+
+Reviews use criteria for the changed file types and test code. Add project criteria in
+`.agentty/review-rules.json` in the session worktree:
+
+```json
+{
+  "rules": [
+    {
+      "path_prefix": "src/api/",
+      "extensions": ["rs"],
+      "instructions": "Check authorization before accessing tenant data."
+    }
+  ]
+}
+```
+
+Both filters must match when supplied; omit either to match all paths or extensions. Use
+relative path prefixes and extensions without dots. Renames match both old and new
+paths. Criteria add to the standard review policy, including for tests and deletions.
+Invalid configuration stops the review with an error. The file is limited to 64 KiB.
+Matching rules are included once with their filters. Selected criteria must fit within
+8,000 rendered bytes, leaving room for source and history; shorten instructions or
+narrow the review scope if they exceed this limit. Final verification uses criteria from
+all original changed files, including when its input is summarized. Regenerate a review
+to use changed criteria.
 
 Use `/apply` to have the agent verify suggestions and apply those that remain valid.
 [Permission modes](@/docs/usage/workflow.md#slash-commands) can automate this for up to

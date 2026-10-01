@@ -52,6 +52,194 @@ fn render(diff: &str, context: &str) -> String {
     format!("{context}\n{fence}diff\n{diff}\n{fence}")
 }
 
+#[tokio::test]
+async fn single_batch_verifies_candidates_and_repairs_captured_source_citations() {
+    // Arrange
+    let diff = "diff --git a/src/x.rs b/src/x.rs\n--- a/src/x.rs\n+++ b/src/x.rs\n@@ -1 +1 \
+                @@\n-old();\n+run();\n";
+    let supported = serde_json::json!({
+        "details": "src/x.rs:999:3: Supported risk", "severity": "high",
+        "evidence": {
+            "correction": "Validate input", "end_line": 999,
+            "existing_code": "run();", "impact": "Invalid input executes",
+            "path": "src/x.rs", "side": "new", "start_line": 999,
+            "trigger": "An invalid request"
+        }
+    });
+    let mut calls = 0;
+    let mut client = MockRunClient::new();
+    client.expect_submit().times(2).returning(move |request| {
+        calls += 1;
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("budget")
+            .consume()?;
+        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+        let mut suggestions = vec![supported.clone()];
+        if calls == 1 {
+            assert!(!request.prompt.starts_with("Reduce review:"));
+            suggestions
+                .push(serde_json::json!({"details":"Unsupported candidate", "severity":"medium"}));
+        } else {
+            assert!(request.prompt.starts_with("Reduce review:"));
+            assert!(request.prompt.contains("Independently verify every"));
+            assert!(request.prompt.contains("Unsupported candidate"));
+            assert!(request.prompt.contains("\"existing_code\":\"run();\""));
+        }
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain(
+                serde_json::json!({"project_impact":[], "suggestions":suggestions}).to_string(),
+            ),
+            stats: SessionStats::default(),
+        })
+    });
+
+    // Act
+    let text = submit(
+        &client,
+        request(),
+        diff,
+        "",
+        |diff, context, _| Ok(render(diff, context)),
+        |_| {},
+    )
+    .await
+    .expect("verified review");
+
+    // Assert
+    assert!(text.contains("`src/x.rs:1`"));
+    assert!(text.contains("Supported risk"));
+    assert!(!text.contains("Unsupported candidate"));
+    assert!(!text.contains("999"));
+    assert!(text.contains("src/x.rs:1: Supported risk"));
+    assert!(!text.contains("Partial review"));
+    assert!(text.contains("Processed files: 1/1. Unfinished files: 0. Unanchored findings: 0."));
+    assert!(
+        ag_session::review_suggestions(&text)
+            .expect("apply contract")
+            .contains("Correction: Validate input")
+    );
+}
+
+#[tokio::test]
+async fn single_batch_verification_failure_preserves_candidates_as_partial() {
+    // Arrange
+    let mut calls = 0;
+    let mut client = MockRunClient::new();
+    client.expect_submit().times(2).returning(move |_| {
+        calls += 1;
+        if calls == 2 {
+            return Err(OneShotError::new("verification unavailable"));
+        }
+        Ok(response())
+    });
+    let diff = "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+new\n";
+
+    // Act
+    let text = submit(
+        &client,
+        request(),
+        diff,
+        "",
+        |diff, context, _| Ok(render(diff, context)),
+        |_| {},
+    )
+    .await
+    .expect("retained candidates");
+
+    // Assert
+    assert!(text.contains("Preserved finding."));
+    assert!(text.contains("Partial review: all 1 batches completed"));
+    assert!(text.contains("verification unavailable"));
+    assert!(text.contains("Processed files: 1/1. Unfinished files: 0. Unanchored findings: 1."));
+}
+
+#[tokio::test]
+async fn coverage_includes_spaced_metadata_paths_and_unresolved_identities() {
+    // Arrange
+    let known = "diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-old\n+new\n";
+    let cases = [
+        (
+            "diff --git a/check script.sh b/check script.sh\nold mode 100644\nnew mode 100755\n",
+            "2/2",
+            None,
+        ),
+        (
+            "diff --git a/image asset.png b/image asset.png\nBinary files a/image asset.png and \
+             b/image asset.png differ\n",
+            "2/2",
+            None,
+        ),
+        ("diff --git malformed\n", "1/2", Some(1)),
+        ("diff --git malformed\ndiff --git invalid\n", "1/3", Some(2)),
+        ("", "1/1", None),
+    ];
+
+    // Act / Assert
+    for (additional, ratio, unresolved) in cases {
+        let mut client = MockRunClient::new();
+        client
+            .expect_submit()
+            .times(2)
+            .returning(|_| Ok(response()));
+        let text = submit(
+            &client,
+            request(),
+            &format!("{known}{additional}"),
+            "",
+            |diff, context, _| Ok(render(diff, context)),
+            |_| {},
+        )
+        .await
+        .expect("review");
+        assert!(text.contains(&format!("Processed files: {ratio}. Unfinished files: 0.")));
+        if let Some(count) = unresolved {
+            assert!(text.contains(&format!("Unresolved file identities: {count}")));
+            assert!(text.contains("file processing coverage is incomplete"));
+        } else {
+            assert!(!text.contains("Unresolved file identities"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn file_coverage_does_not_count_an_unfinished_file_as_processed() {
+    // Arrange
+    let diff = ["first", "later"]
+        .map(|name| {
+            format!(
+                "diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n@@ -0,0 +1,5000 @@\n{}",
+                "+added\n".repeat(5000)
+            )
+        })
+        .join("");
+    let mut client = MockRunClient::new();
+    client.expect_submit().times(2).returning(|request| {
+        if request.prompt.contains("a/later") {
+            return Err(OneShotError::new("batch unavailable"));
+        }
+        Ok(response())
+    });
+
+    // Act
+    let text = submit(
+        &client,
+        request(),
+        &diff,
+        "",
+        |diff, context, _| Ok(render(diff, context)),
+        |_| {},
+    )
+    .await
+    .expect("partial review");
+
+    // Assert
+    assert!(text.contains("Processed files: 1/2. Unfinished files: 1."));
+    assert!(text.contains("Unreviewed diff headers:\ndiff --git a/later b/later"));
+    assert!(text.contains("Preserved finding."));
+}
+
 /// Holds a provider call open until the test explicitly completes it.
 struct PendingReview {
     request: OneShotRequest,
@@ -110,7 +298,7 @@ async fn deadline_keeps_finished_findings_and_reports_unreviewed_fragments() {
         request(),
         &diff,
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     );
     let observe = async {
@@ -149,7 +337,7 @@ async fn reviews_three_batches_concurrently_and_merges_in_input_order() {
         request(),
         &diff,
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     );
     let observe = async {
@@ -249,7 +437,7 @@ async fn failed_batch_drains_running_peers_and_stops_queued_work() {
         request(),
         &diff,
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     );
     let observe = async {
@@ -341,7 +529,7 @@ async fn nested_size_retries_keep_source_order_in_complete_and_partial_reviews()
             request(),
             &diff,
             "",
-            |diff, _| Ok(diff.into()),
+            |diff, _, _| Ok(diff.into()),
             |_| {},
         )
         .await
@@ -392,7 +580,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
         request(),
         &diff,
         "Accepted decision",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -448,7 +636,7 @@ async fn splits_fencing_overhead_and_provider_size_rejections_without_summaries(
         request(),
         &"`".repeat(25_000),
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -483,7 +671,7 @@ async fn failed_later_batch_retains_findings_and_identifies_unreviewed_files() {
         request(),
         &diff,
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -516,7 +704,7 @@ async fn failed_cross_file_pass_preserves_all_batch_findings() {
         request(),
         &"x".repeat(90_000),
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -578,7 +766,7 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
             request(),
             &format!("diff --git a/source b/source\n{}", "x".repeat(90_000)),
             "Accepted decision",
-            |diff, context| Ok(render(diff, context)),
+            |diff, context, _| Ok(render(diff, context)),
             |update| progress.lock().expect("progress").push(update),
         )
         .await
@@ -632,7 +820,7 @@ async fn failed_or_invalid_reduction_keeps_candidates_with_coverage_notice() {
             request(),
             &"x".repeat(90_000),
             "",
-            |diff, context| Ok(render(diff, context)),
+            |diff, context, _| Ok(render(diff, context)),
             |_| {},
         )
         .await
@@ -662,7 +850,7 @@ async fn final_reduction_uses_the_existing_review_deadline() {
         request(),
         &diff,
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     );
     let observe = async {
@@ -730,7 +918,7 @@ async fn reduction_respects_remaining_budget_and_never_summarizes_oversized_cand
             request(),
             &"x".repeat(90_000),
             "",
-            |diff, context| Ok(render(diff, context)),
+            |diff, context, _| Ok(render(diff, context)),
             |_| {},
         )
         .await
@@ -766,7 +954,7 @@ async fn reduction_render_failure_does_not_submit_a_worker_request() {
         &review,
         "original diff",
         &mut String::new(),
-        &|_, _| Err(OneShotError::new("render failed")),
+        &|_, _, _| Err(OneShotError::new("render failed")),
         &ProviderCallBudget::new(1),
     )
     .await
@@ -798,7 +986,7 @@ async fn exhausted_shared_budget_preserves_completed_batches() {
         request(),
         &"x".repeat(4_000_000),
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -826,7 +1014,7 @@ async fn errors_before_any_completed_review_propagate() {
             request(),
             "tiny",
             "",
-            |diff, context| Ok(render(diff, context)),
+            |diff, context, _| Ok(render(diff, context)),
             |_| {},
         )
         .await
@@ -854,7 +1042,7 @@ async fn render_and_invalid_response_errors_propagate() {
         request(),
         "tiny",
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -864,7 +1052,7 @@ async fn render_and_invalid_response_errors_propagate() {
         request(),
         "tiny",
         "",
-        |_, _| Err(OneShotError::new("render")),
+        |_, _, _| Err(OneShotError::new("render")),
         |_| {},
     )
     .await
@@ -879,10 +1067,12 @@ async fn render_and_invalid_response_errors_propagate() {
 fn merge_retains_unique_findings_with_high_severity_first() {
     // Arrange
     let high = FocusedReviewSuggestion {
+        evidence: None,
         details: "High".to_string(),
         severity: FocusedReviewSeverity::High,
     };
     let medium = FocusedReviewSuggestion {
+        evidence: None,
         details: "Medium".to_string(),
         severity: FocusedReviewSeverity::Medium,
     };
@@ -923,7 +1113,7 @@ fn headers_keep_renames_and_deduplicate_continuations() {
 async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
     // Arrange
     let mut client = MockRunClient::new();
-    client.expect_submit().times(3).returning(|request| {
+    client.expect_submit().times(4).returning(|request| {
         request
             .provider_call_budget
             .as_ref()
@@ -939,7 +1129,10 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
         if request.prompt.len() > 2_000 {
             return Err(OneShotError::new("contextWindowExceeded"));
         }
-        assert!(request.prompt.contains("ORIGINAL DIFF"));
+        assert!(
+            request.prompt.contains("ORIGINAL DIFF")
+                || request.prompt.starts_with("Reduce review:")
+        );
         Ok(OneShotSubmission {
             response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
             stats: SessionStats::default(),
@@ -952,7 +1145,7 @@ async fn smaller_provider_limit_reduces_history_without_summarizing_diff() {
         request(),
         "ORIGINAL DIFF",
         &"Accepted decision\n".repeat(200),
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -1010,7 +1203,7 @@ async fn cross_file_overview_is_bounded_without_discarding_batch_findings() {
         request(),
         &"x".repeat(90_000),
         "",
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |_| {},
     )
     .await
@@ -1050,7 +1243,7 @@ async fn large_history_reports_preparation_and_keeps_review_reasoning() {
         request(),
         "original changes",
         &"history ".repeat(10_000),
-        |diff, context| Ok(render(diff, context)),
+        |diff, context, _| Ok(render(diff, context)),
         |update| progress.lock().expect("progress").push(update),
     )
     .await
@@ -1058,13 +1251,7 @@ async fn large_history_reports_preparation_and_keeps_review_reasoning() {
     // Assert
     let progress = progress.lock().expect("progress");
     assert_eq!(progress.first(), Some(&ReviewProgress::SummarizingHistory));
-    assert_eq!(
-        progress.last(),
-        Some(&ReviewProgress::Batches {
-            completed: 1,
-            total: 1
-        })
-    );
+    assert_eq!(progress.last(), Some(&ReviewProgress::Reducing));
     assert!(result.contains("Preserved finding."));
     assert!(result.contains("session history was summarized"));
 }
@@ -1105,7 +1292,7 @@ async fn cross_file_retries_smaller_overviews_after_provider_size_rejection() {
         &review,
         "diff",
         &mut context,
-        &|diff, context| Ok(render(diff, context)),
+        &|diff, context, _| Ok(render(diff, context)),
         &budget,
     )
     .await
@@ -1146,6 +1333,7 @@ async fn hierarchical_reduction_reconciles_all_whole_candidates() {
         project_impact: Vec::new(),
         suggestions: (0..4)
             .map(|id| FocusedReviewSuggestion {
+                evidence: None,
                 severity: FocusedReviewSeverity::High,
                 details: format!("risk-{id} {}", "evidence ".repeat(180)),
             })
@@ -1158,7 +1346,7 @@ async fn hierarchical_reduction_reconciles_all_whole_candidates() {
         &review,
         "diff",
         &mut String::new(),
-        &|diff, context| Ok(render(diff, context)),
+        &|diff, context, _| Ok(render(diff, context)),
         &budget,
     )
     .await
@@ -1178,6 +1366,7 @@ fn candidate_splits_preserve_both_impact_and_finding_boundaries() {
             project_impact: (0..impact_count).map(|id| format!("impact-{id}")).collect(),
             suggestions: vec![
                 FocusedReviewSuggestion {
+                    evidence: None,
                     severity: FocusedReviewSeverity::High,
                     details: "risk".into()
                 };
@@ -1213,6 +1402,7 @@ async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
         project_impact: Vec::new(),
         suggestions: (0..4)
             .map(|id| FocusedReviewSuggestion {
+                evidence: None,
                 severity: FocusedReviewSeverity::High,
                 details: format!("risk-{id} {}", "evidence ".repeat(180)),
             })
@@ -1225,7 +1415,7 @@ async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
         &review,
         "diff",
         &mut String::new(),
-        &|diff, context| Ok(render(diff, context)),
+        &|diff, context, _| Ok(render(diff, context)),
         &budget,
     )
     .await
@@ -1239,7 +1429,7 @@ async fn irreducible_final_passes_stop_without_discarding_distinct_evidence() {
         },
         "diff",
         &mut String::new(),
-        &|diff, context| Ok(render(diff, context)),
+        &|diff, context, _| Ok(render(diff, context)),
         &budget,
     )
     .await
@@ -1290,7 +1480,7 @@ async fn reduction_adapts_shared_context_and_headers_to_provider_limits() {
         &review,
         &diff,
         &mut context,
-        &|diff, context| Ok(render(diff, context)),
+        &|diff, context, _| Ok(render(diff, context)),
         &budget,
     )
     .await

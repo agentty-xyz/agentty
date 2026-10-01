@@ -1,6 +1,7 @@
+use std::fmt::Write as _;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{OneShotError, OneShotSubmission};
@@ -19,9 +20,132 @@ use super::{
     review_comment_anchor_side_order,
 };
 use crate::app::error::AppError;
+use crate::app::review_rules::ReviewRules;
 use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
+use crate::infra::fs::MockFsClient;
+
+async fn project_review_rules(config: serde_json::Value) -> ReviewRules {
+    let mut fs = MockFsClient::new();
+    let bytes = config.to_string().into_bytes();
+    fs.expect_read_file_prefix()
+        .once()
+        .return_once(move |_, _| Box::pin(async move { Ok(bytes) }));
+
+    ReviewRules::load(&fs, Path::new("project"))
+        .await
+        .expect("rules")
+}
+
+#[tokio::test]
+async fn oversized_selected_criteria_fail_before_provider_submission() {
+    // Arrange
+    let rules =
+        project_review_rules(serde_json::json!({"rules":[{"instructions":"a".repeat(62_000)}]}))
+            .await;
+    let mut client = ag_worker::MockRunClient::new();
+    client.expect_submit().never();
+
+    // Act
+    let result = TaskService::review_assist_text_with_client(
+        Path::new("project"),
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Medium,
+            crate::domain::agent::SpeedMode::Normal,
+        ),
+        "diff --git a/src/x.rs b/src/x.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        None,
+        &rules,
+        &client,
+        |_| {},
+    )
+    .await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("criteria budget")
+            .to_string()
+            .contains("Selected review criteria exceed 8000 bytes")
+    );
+}
+
+#[tokio::test]
+async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_paths() {
+    // Arrange
+    let rules = project_review_rules(serde_json::json!({"rules":[
+        {"path_prefix":"src/first.rs", "instructions":"Check first policy"},
+        {"path_prefix":"src/second.py", "instructions":"Check second policy"}
+    ]}))
+    .await;
+    let mut diff = String::new();
+    let body = "+change\n".repeat(5000);
+    for path in ["src/first.rs", "src/second.py"] {
+        write!(
+            diff,
+            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,5000 @@\n{body}"
+        )
+        .expect("diff text");
+    }
+    for index in 0..150 {
+        writeln!(
+            diff,
+            "diff --git a/src/padding-{index}.rs b/src/padding-{index}.rs\nold mode 100644\nnew \
+             mode 100755"
+        )
+        .expect("diff text");
+    }
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&seen);
+    let mut client = ag_worker::MockRunClient::new();
+    client.expect_submit().returning(move |request| {
+        request.provider_call_budget.as_ref().expect("budget").consume()?;
+        let response = if request.request_kind == ag_contracts::AgentRequestKind::UtilityPrompt {
+            // A valid summary can retain one header while omitting every other path.
+            AgentResponse::plain("diff --git a/src/first.rs b/src/first.rs")
+        } else if request.prompt.starts_with("Cross-file review:") || request.prompt.starts_with("Reduce review:") {
+            assert!(request.prompt.contains("Check first policy"));
+            assert!(request.prompt.contains("Check second policy"));
+            assert!(request.prompt.contains("Python:"));
+            captured.lock().expect("phases").push(if request.prompt.starts_with("Cross-file review:") { "cross-file" } else { "reduction" });
+            AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#)
+        } else {
+            if !request.prompt.contains("src/second.py") {
+                assert!(!request.prompt.contains("Check second policy"));
+            }
+            AgentResponse::plain(serde_json::json!({"project_impact":["Impact detail. ".repeat(2000)],"suggestions":[{
+                "details":"Candidate in src/second.py", "severity":"medium", "evidence":{
+                    "path":"src/second.py", "side":"new", "start_line":1, "end_line":1,
+                    "existing_code":"change", "trigger":"An input", "impact":"A consequence", "correction":"Check policy"
+                }
+            }]}).to_string())
+        };
+        Ok(OneShotSubmission { response, stats: ag_contracts::SessionStats::default() })
+    });
+
+    // Act
+    let result = TaskService::review_assist_text_with_client(
+        Path::new("project"),
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            ReasoningLevel::Medium,
+            crate::domain::agent::SpeedMode::Normal,
+        ),
+        &diff,
+        None,
+        &rules,
+        &client,
+        |_| {},
+    )
+    .await
+    .expect("complete review");
+
+    // Assert
+    assert_eq!(*seen.lock().expect("phases"), ["cross-file", "reduction"]);
+    assert!(!result.contains("Partial review"));
+}
 
 #[tokio::test]
 async fn oversized_review_batches_original_diff_and_discloses_summarized_history() {
@@ -59,6 +183,7 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
         ),
         &"+change\n".repeat(160_000),
         Some(&"decision\n".repeat(20_000)),
+        &crate::app::review_rules::ReviewRules::default(),
         &client,
         |_| {},
     )
@@ -762,7 +887,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let request_id = uuid::Uuid::new_v4();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let mut run_client = ag_worker::MockRunClient::new();
-    run_client.expect_submit().times(1).returning(|request| {
+    run_client.expect_submit().times(2).returning(|request| {
         assert_eq!(request.harness, (AgentKind::Gemini).to_string());
         assert_eq!(
             request.permission_mode,
@@ -788,6 +913,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
         })
     });
     let input = ReviewAssistTaskInput {
+        fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id,
         repositories: crate::infra::db::Database::open_in_memory()
             .await
@@ -829,23 +955,24 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
                 ..
             }
         ));
+        let verifying = app_event_rx.recv().await.expect("verification progress");
+        assert!(matches!(
+            verifying,
+            AppEvent::ReviewProgressUpdated {
+                progress: crate::app::review::ReviewProgress::Reducing,
+                ..
+            }
+        ));
         app_event_rx.recv().await.expect("completed review")
     })
     .await
     .expect("timed out waiting for review-assist event");
 
     // Assert
-    assert_eq!(
-        app_event,
-        AppEvent::ReviewPrepared {
-            diff_hash: 42,
-            review_text: "## Review\n\n### Project Impact\n\n- Review completed.\n\n### \
-                          Suggestions\n\n- None"
-                .to_string(),
-            session_id: "session-42".into(),
-            request_id,
-        }
-    );
+    assert!(matches!(app_event, AppEvent::ReviewPrepared {
+        diff_hash, review_text, session_id, request_id: completed_id,
+    } if diff_hash == 42 && session_id.as_str() == "session-42" && completed_id == request_id
+        && review_text.contains("Review completed.") && review_text.contains("Processed files: 1/1.")));
 }
 
 #[test]
@@ -888,6 +1015,7 @@ async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure
         ),
         review_diff,
         None,
+        &crate::app::review_rules::ReviewRules::default(),
         &run_client,
         |_| {},
     )
@@ -939,16 +1067,19 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
         ),
         review_diff,
         None,
+        &crate::app::review_rules::ReviewRules::default(),
         &run_client,
         |_| {},
     )
     .await;
 
     // Assert
-    assert_eq!(
-        result.expect("review output should be returned"),
+    let text = result.expect("review output should be returned");
+    assert!(text.starts_with(
         "## Review\n\n### Project Impact\n\n- Review completed.\n\n### Suggestions\n\n- None"
-    );
+    ));
+    assert!(text.contains("Processed files: 1/1. Unfinished files: 0."));
+    assert!(text.contains("Unanchored findings: 0."));
 }
 
 #[test]
@@ -1009,8 +1140,8 @@ fn review_app_event_maps_failure_output() {
 }
 
 #[test]
-/// Verifies structured review output is formatted before it is stored in
-/// app state.
+/// Verifies structured review output labels findings without evidence before
+/// it is stored in app state.
 fn review_output_text_formats_structured_agent_response() {
     // Arrange
     let agent_response = AgentResponse::plain(
@@ -1030,8 +1161,8 @@ fn review_output_text_formats_structured_agent_response() {
     // Assert
     assert_eq!(
         review_text,
-        "## Review\n\n### Project Impact\n\n- Review looks good.\n\n### Suggestions\n\n- \
-         [Medium]: Fix the stale cache."
+        "## Review\n\n### Project Impact\n\n- Review looks good.\n\n### Suggestions\n\n- [Medium] \
+         (unanchored): Fix the stale cache."
     );
 }
 
@@ -1078,8 +1209,8 @@ fn test_review_assist_prompt_enforces_read_only_constraints() {
     let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
 
     // Act
-    let prompt =
-        TaskService::review_assist_prompt(review_diff, None).expect("review prompt should render");
+    let prompt = TaskService::review_assist_prompt(review_diff, None, "[]")
+        .expect("review prompt should render");
     let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
     // Assert
@@ -1130,7 +1261,7 @@ fn test_review_assist_prompt_includes_session_chat_history() {
     let session_chat_history = Some(" › Add focused review context\n\nDone.\n\n");
 
     // Act
-    let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history)
+    let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history, "[]")
         .expect("review prompt should render");
     let normalized_prompt = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
 
@@ -1172,7 +1303,7 @@ fn test_review_assist_prompt_fences_instruction_shaped_history() {
     ));
 
     // Act
-    let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history)
+    let prompt = TaskService::review_assist_prompt(review_diff, session_chat_history, "[]")
         .expect("review prompt should render");
 
     // Assert
@@ -1200,8 +1331,8 @@ fn test_review_assist_prompt_escapes_triple_backtick_fence_in_diff() {
     );
 
     // Act
-    let prompt =
-        TaskService::review_assist_prompt(review_diff, None).expect("review prompt should render");
+    let prompt = TaskService::review_assist_prompt(review_diff, None, "[]")
+        .expect("review prompt should render");
 
     // Assert
     assert!(
@@ -1330,7 +1461,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         .await
         .expect("session");
     let mut client = ag_worker::MockRunClient::new();
-    client.expect_submit().once().returning(|_| {
+    client.expect_submit().times(2).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Completed review retained"],"suggestions":[]}"#,
@@ -1340,6 +1471,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
     });
     let (app_event_tx, mut events) = mpsc::unbounded_channel();
     let input = ReviewAssistTaskInput {
+        fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id: uuid::Uuid::nil(),
         repositories: database.clone().into(),
         app_event_tx,
@@ -1372,7 +1504,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         .await
         .expect("retained checkpoints");
     assert_eq!(
-        checkpoints, 1,
+        checkpoints, 2,
         "publishing the event must not discard durable evidence"
     );
     database
@@ -1402,6 +1534,7 @@ async fn review_admission_failure_emits_failure_without_submitting_provider_work
     database.pool().close().await;
     let (app_event_tx, mut events) = mpsc::unbounded_channel();
     let input = ReviewAssistTaskInput {
+        fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id,
         repositories: database.into(),
         app_event_tx,
@@ -1429,4 +1562,57 @@ async fn review_admission_failure_emits_failure_without_submitting_provider_work
         matches!(event, AppEvent::ReviewPreparationFailed {diff_hash: 42, request_id: returned_id, session_id, ..}
         if session_id.as_str() == "admission" && returned_id == request_id)
     );
+}
+
+#[tokio::test]
+async fn invalid_project_rules_fail_before_submitting_model_work() {
+    for (bytes, expected_error) in [
+        (b"invalid rules".to_vec(), "Invalid project review rules"),
+        (
+            vec![b' '; 65_537],
+            "Project review rules exceed 65536 bytes",
+        ),
+    ] {
+        // Arrange
+        let (app_event_tx, mut events) = mpsc::unbounded_channel();
+        let mut fs = MockFsClient::new();
+        fs.expect_read_file().never();
+        fs.expect_read_file_prefix()
+            .once()
+            .return_once(move |_, max_bytes| {
+                assert_eq!(max_bytes, 65_537);
+                Box::pin(async move { Ok(bytes) })
+            });
+        let input = ReviewAssistTaskInput {
+            fs_client: Arc::new(fs),
+            request_id: uuid::Uuid::nil(),
+            repositories: crate::infra::db::Database::open_in_memory()
+                .await
+                .expect("database")
+                .into(),
+            app_event_tx,
+            diff_hash: 42,
+            reasoning_level: ReasoningLevel::Low,
+            review_diff: "+change".into(),
+            review_selection: AgentSelection::new(AgentKind::Gemini, AgentModel::Gemini31Pro),
+            session_chat_history: None,
+            session_folder: PathBuf::from("project"),
+            session_id: "invalid-rules".into(),
+            speed_mode: crate::domain::agent::SpeedMode::Normal,
+        };
+        let mut client = ag_worker::MockRunClient::new();
+        client.expect_submit().never();
+
+        // Act
+        TaskService::spawn_review_assist_task_with_client(input, Arc::new(client)).await;
+        let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("failure event")
+            .expect("event channel");
+
+        // Assert
+        assert!(
+            matches!(event, AppEvent::ReviewPreparationFailed { error, session_id, .. } if error.contains(expected_error) && session_id.as_str() == "invalid-rules")
+        );
+    }
 }

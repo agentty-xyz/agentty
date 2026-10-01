@@ -76,6 +76,10 @@ provider qualification remains separate.
 Focused review persistence is checked against its active invocation in SQLite. Store
 tests exercise the write and invalidation boundary with the real adapter.
 
+Project review rules use bounded filesystem reads before parsing. Adapter tests verify
+the read cap and I/O failures; workflow tests verify size-limit rejection before model
+work.
+
 ## Typed Errors Across Layers
 
 <a id="architecture-typed-error-enums"></a> External clients expose typed errors.

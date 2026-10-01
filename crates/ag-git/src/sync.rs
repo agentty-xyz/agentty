@@ -306,7 +306,9 @@ pub(crate) async fn delete_branch(repo_path: PathBuf, branch_name: String) -> Re
 /// fork point. To avoid re-showing squash-merged/cherry-picked session commits
 /// on non-rebased branches, this also checks `git cherry` and, when applicable,
 /// diffs from the last leading commit already applied to `base_branch`.
-/// The real repository index is never modified.
+/// The real repository index is never modified. Text conversion and external
+/// diff helpers are disabled so driver output cannot replace source evidence
+/// or the patch format.
 ///
 /// # Arguments
 /// * `repo_path` - Path to the git repository or worktree
@@ -389,11 +391,24 @@ fn diff_output_after_index_resolution(
             base_branch.to_string()
         };
 
-        let args = if name_only {
-            vec!["diff", "--name-only", diff_target.as_str()]
-        } else {
-            vec!["diff", diff_target.as_str()]
-        };
+        // Machine-parsed patches need source coordinates and Git's built-in
+        // format, independent of presentation settings or diff drivers.
+        let mut args = vec![
+            "-c",
+            "diff.suppressBlankEmpty=false",
+            "-c",
+            "diff.noprefix=false",
+            "diff",
+            "--no-color",
+            "--no-textconv",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+        ];
+        if name_only {
+            args.push("--name-only");
+        }
+        args.push(diff_target.as_str());
 
         run_git_command_with_index_sync(repo_path, &args, &temporary_index, "Git diff failed")
     })();

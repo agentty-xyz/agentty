@@ -4,6 +4,8 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
+use tokio::io::AsyncReadExt;
+
 /// Boxed async result used by [`FsClient`] trait methods.
 pub type FsFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
@@ -59,6 +61,16 @@ pub trait FsClient: Send + Sync {
     /// # Errors
     /// Returns an error when file read fails.
     fn read_file(&self, path: PathBuf) -> FsFuture<Result<Vec<u8>, FsError>>;
+
+    /// Reads at most `max_bytes` bytes from the start of a file.
+    ///
+    /// Longer files yield only their prefix. Callers can read one extra byte
+    /// beyond their size limit to detect oversized input without loading it.
+    ///
+    /// # Errors
+    /// Returns an error when opening or reading the file fails.
+    fn read_file_prefix(&self, path: PathBuf, max_bytes: u64)
+    -> FsFuture<Result<Vec<u8>, FsError>>;
 
     /// Writes one byte buffer to `path`, replacing any existing file.
     ///
@@ -133,6 +145,20 @@ impl FsClient for RealFsClient {
 
     fn read_file(&self, path: PathBuf) -> FsFuture<Result<Vec<u8>, FsError>> {
         Box::pin(async move { tokio::fs::read(path).await.map_err(FsError::from) })
+    }
+
+    fn read_file_prefix(
+        &self,
+        path: PathBuf,
+        max_bytes: u64,
+    ) -> FsFuture<Result<Vec<u8>, FsError>> {
+        Box::pin(async move {
+            let file = tokio::fs::File::open(path).await?;
+            let mut bytes = Vec::new();
+            file.take(max_bytes).read_to_end(&mut bytes).await?;
+
+            Ok(bytes)
+        })
     }
 
     fn write_file(&self, path: PathBuf, contents: Vec<u8>) -> FsFuture<Result<(), FsError>> {
