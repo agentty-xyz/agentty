@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.5] - 2026-09-30
+
+### Added
+
+- `agentty`: track session and turn starts with agent and model metadata, and export
+  optional session execution traces over OTLP with `--otlp-endpoint`.
+- `ag-telemetry`: shared session and worker tracing support.
+
+### Changed
+
+- `agentty`: strengthen focused reviews with captured diffs, verified source citations,
+  project review rules, and coverage reporting for unresolved files.
+- `agentty`: show queued actions below the active status in execution order, with
+  single-line previews shortened to fit the panel.
+- workspace: centralize provider model metadata and shared test fixtures, retain test
+  and build timing reports, and update dependencies and GitHub Actions.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.5`.
+
+### Fixed
+
+- workspace: stabilize cancellation, telemetry, and E2E synchronization in tests.
+
+### Contributors
+
+- @dependabot
+- @minev-dev
+
 ## [v0.16.4] - 2026-09-29
 
 ### Added
