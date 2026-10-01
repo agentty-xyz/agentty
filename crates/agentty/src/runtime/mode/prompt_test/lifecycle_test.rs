@@ -6,7 +6,7 @@ use super::super::{
     take_submitted_turn_prompt,
 };
 use super::support::{
-    PromptTestAppExt, new_test_draft_prompt_app, new_test_prompt_app,
+    PromptTestAppExt, new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode,
     wait_for_at_mention_entries_event,
 };
 use crate::app::prompt_intent::PromptSessionMode;
@@ -40,71 +40,65 @@ async fn test_prompt_undo_restores_deleted_image_attachment() {
     ));
 }
 
-#[tokio::test]
-async fn test_navigate_prompt_history_up_selects_latest_entry_and_saves_draft() {
+#[test]
+fn test_navigate_prompt_history_up_selects_latest_entry_and_saves_draft() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("draft");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.entries = vec!["first".to_string(), "second".to_string()];
     }
 
     // Act
-    navigate_prompt_history_up(&mut app);
+    navigate_prompt_history_up(&mut mode);
 
     // Assert
-    if let AppMode::Prompt {
-        history_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "second");
-        assert_eq!(history_state.selected_index, Some(1));
-        assert_eq!(history_state.draft_text.as_deref(), Some("draft"));
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "second"
+                && history_state.selected_index == Some(1)
+                && history_state.draft_text.as_deref() == Some("draft")
+    ));
 }
 
-#[tokio::test]
-async fn test_navigate_prompt_history_down_restores_draft_after_latest_entry() {
+#[test]
+fn test_navigate_prompt_history_down_restores_draft_after_latest_entry() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("draft");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.entries = vec!["first".to_string(), "second".to_string()];
     }
-    navigate_prompt_history_up(&mut app);
+    navigate_prompt_history_up(&mut mode);
 
     // Act
-    navigate_prompt_history_down(&mut app);
+    navigate_prompt_history_down(&mut mode);
 
     // Assert
-    if let AppMode::Prompt {
-        history_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "draft");
-        assert_eq!(history_state.selected_index, None);
-        assert_eq!(history_state.draft_text, None);
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "draft"
+                && history_state.selected_index.is_none()
+                && history_state.draft_text.is_none()
+    ));
 }
 
-#[tokio::test]
-async fn test_navigate_prompt_history_down_restores_draft_without_attachment_revision() {
+#[test]
+fn test_navigate_prompt_history_down_restores_draft_without_attachment_revision() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("earlier", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("earlier");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.draft_text = Some("draft".to_string());
         history_state.entries = vec!["earlier".to_string()];
         history_state.selected_index = Some(0);
     }
 
     // Act
-    navigate_prompt_history_down(&mut app);
+    navigate_prompt_history_down(&mut mode);
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt {
             attachment_state,
             history_state,
@@ -114,6 +108,38 @@ async fn test_navigate_prompt_history_down_restores_draft_without_attachment_rev
             && history_state.selected_index.is_none()
             && attachment_state.attachments.is_empty()
     ));
+}
+
+#[test]
+fn history_navigation_without_entries_preserves_the_draft() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("draft");
+
+    // Act
+    navigate_prompt_history_up(&mut mode);
+    navigate_prompt_history_down(&mut mode);
+
+    // Assert
+    assert!(matches!(
+        mode,
+        AppMode::Prompt { input, history_state, .. }
+            if input.text() == "draft"
+                && history_state.selected_index.is_none()
+                && history_state.draft_text.is_none()
+    ));
+}
+
+#[test]
+fn history_navigation_ignores_non_prompt_modes() {
+    // Arrange
+    let mut mode = AppMode::List;
+
+    // Act
+    navigate_prompt_history_up(&mut mode);
+    navigate_prompt_history_down(&mut mode);
+
+    // Assert
+    assert!(matches!(mode, AppMode::List));
 }
 
 #[tokio::test]
@@ -146,8 +172,8 @@ async fn test_prompt_history_round_trip_restores_image_draft_attachment() {
     }
 
     // Act
-    navigate_prompt_history_up(&mut app);
-    navigate_prompt_history_down(&mut app);
+    navigate_prompt_history_up(&mut app.mode);
+    navigate_prompt_history_down(&mut app.mode);
     let prompt = app.take_submitted_turn_prompt();
 
     // Assert

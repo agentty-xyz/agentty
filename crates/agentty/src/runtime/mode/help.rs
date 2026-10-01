@@ -1,21 +1,20 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
-use crate::app::App;
 use crate::presentation::app_mode::AppMode;
 use crate::runtime::EventResult;
 
 /// Handles key input while the app is showing the help overlay.
-pub(crate) fn handle(app: &mut App, key: KeyEvent) -> EventResult {
+pub(crate) fn handle(mode: &mut AppMode, key: KeyEvent) -> EventResult {
     if let AppMode::Help {
         scroll_offset,
         context: _,
-    } = &mut app.mode
+    } = mode
     {
         match key.code {
             KeyCode::Char('?' | 'q') | KeyCode::Esc => {
-                let mode = std::mem::replace(&mut app.mode, AppMode::List);
-                if let AppMode::Help { context, .. } = mode {
-                    app.mode = context.restore_mode();
+                let previous_mode = std::mem::replace(mode, AppMode::List);
+                if let AppMode::Help { context, .. } = previous_mode {
+                    *mode = context.restore_mode();
                 }
             }
             KeyCode::Char('j') | KeyCode::Down => {

@@ -117,6 +117,20 @@ pub(super) fn setup_test_git_repo(path: &Path) {
         .expect("git branch failed");
 }
 
+/// Builds prompt state without application startup, persistence, or a worktree.
+pub(super) fn new_test_prompt_mode(input_text: &str) -> AppMode {
+    AppMode::Prompt {
+        at_mention_state: None,
+        attachment_state: PromptAttachmentState::default(),
+        focus: ChatFocus::Input,
+        history_state: PromptHistoryState::new(Vec::new()),
+        slash_state: PromptSlashState::default(),
+        session_id: "prompt-test-session".into(),
+        input: InputState::with_text(input_text.to_string()),
+        scroll_offset: None,
+    }
+}
+
 pub(super) async fn new_test_prompt_app(
     input_text: &str,
     at_mention_state: Option<PromptAtMentionState>,

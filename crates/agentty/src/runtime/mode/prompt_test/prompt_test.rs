@@ -16,8 +16,8 @@ use super::super::{
 };
 use super::support::{
     PromptTestAppExt, apply_next_session_diff, install_mock_clipboard_image_client,
-    install_mock_git_client, new_test_draft_prompt_app, new_test_prompt_app, press_prompt_key,
-    prompt_focus, session_replay_text, test_terminal,
+    install_mock_git_client, new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode,
+    press_prompt_key, prompt_focus, session_replay_text, test_terminal,
 };
 use crate::app::prompt_intent::PromptApplyOutcome;
 use crate::domain::agent::{
@@ -956,15 +956,15 @@ async fn test_backtab_cycles_permission_modes_and_preserves_input() {
     );
 }
 
-#[tokio::test]
-async fn test_navigate_prompt_history_up_stays_on_first_entry() {
+#[test]
+fn test_navigate_prompt_history_up_stays_on_first_entry() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("draft", None).await;
+    let mut mode = new_test_prompt_mode("draft");
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &mut app.mode
+    } = &mut mode
     {
         history_state.entries = vec!["first".to_string(), "second".to_string()];
         history_state.selected_index = Some(0);
@@ -972,26 +972,23 @@ async fn test_navigate_prompt_history_up_stays_on_first_entry() {
     }
 
     // Act
-    navigate_prompt_history_up(&mut app);
+    navigate_prompt_history_up(&mut mode);
 
     // Assert
-    if let AppMode::Prompt {
-        history_state,
-        input,
-        ..
-    } = &app.mode
-    {
-        assert_eq!(input.text(), "first");
-        assert_eq!(history_state.selected_index, Some(0));
-        assert_eq!(history_state.draft_text, None);
-    }
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "first"
+                && history_state.selected_index == Some(0)
+                && history_state.draft_text.is_none()
+    ));
 }
 
-#[tokio::test]
-async fn test_navigate_prompt_history_down_selects_next_entry() {
+#[test]
+fn test_navigate_prompt_history_down_selects_next_entry() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("first", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("first");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.entries = vec![
             "first".to_string(),
             "second".to_string(),
@@ -1001,11 +998,11 @@ async fn test_navigate_prompt_history_down_selects_next_entry() {
     }
 
     // Act
-    navigate_prompt_history_down(&mut app);
+    navigate_prompt_history_down(&mut mode);
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt {
             history_state,
             input,

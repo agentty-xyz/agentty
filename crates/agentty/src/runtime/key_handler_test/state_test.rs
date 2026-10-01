@@ -3,13 +3,113 @@ use std::collections::HashMap;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{handle_key_event, handle_launch_configuration_selector_key};
+use crate::domain::input::InputState;
 use crate::presentation::app_mode::{
-    AppMode, ConfirmationIntent, ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor,
+    AppMode, ChatFocus, ConfirmationIntent, ConfirmationViewMode, DiffFocus, DiffLineCommentAnchor,
     DiffLineCommentTarget, DiffLineComments, DiffLineSide, DiffPreview, DiffRestoreTarget,
-    DiffReviewComments, DiffSidebarFocus, PromptModeSnapshot,
+    DiffReviewComments, DiffSidebarFocus, HelpContext, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::runtime::{EventResult, PresentationState};
+
+#[tokio::test]
+async fn test_handle_key_event_routes_prompt_history_and_restores_draft() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let session = crate::test_support::SessionFixtureBuilder::new()
+        .id("session-id")
+        .folder(base_dir.path().to_path_buf())
+        .build();
+    app.sessions =
+        crate::test_support::session_manager_with_handles(vec![session], HashMap::new()).into();
+    app.mode = AppMode::Prompt {
+        at_mention_state: None,
+        attachment_state: PromptAttachmentState::default(),
+        focus: ChatFocus::Input,
+        history_state: PromptHistoryState::new(vec!["Earlier prompt".to_string()]),
+        input: InputState::with_text("Unfinished draft".to_string()),
+        scroll_offset: None,
+        session_id: "session-id".into(),
+        slash_state: PromptSlashState::default(),
+    };
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let presentation = PresentationState::default();
+    app.clear_redraw();
+
+    // Act
+    let up_result = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(up_result, Ok(EventResult::Continue)));
+    assert!(app.needs_redraw());
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "Earlier prompt"
+                && history_state.selected_index == Some(0)
+                && history_state.draft_text.as_deref() == Some("Unfinished draft")
+    ));
+
+    // Arrange
+    app.clear_redraw();
+
+    // Act
+    let down_result = handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(down_result, Ok(EventResult::Continue)));
+    assert!(app.needs_redraw());
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "Unfinished draft"
+                && history_state.selected_index.is_none()
+                && history_state.draft_text.is_none()
+                && history_state.draft_input_revision.is_none()
+    ));
+}
+
+#[tokio::test]
+async fn test_handle_key_event_routes_help_dismissal_and_requests_redraw() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.mode = AppMode::Help {
+        context: HelpContext::List {
+            keybindings: Vec::new(),
+        },
+        scroll_offset: 3,
+    };
+    let backend = ratatui::backend::TestBackend::new(120, 30);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    app.clear_redraw();
+
+    // Act
+    let result = handle_key_event(
+        &mut app,
+        &PresentationState::default(),
+        &mut terminal,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert!(matches!(app.mode, AppMode::List));
+    assert!(app.needs_redraw());
+}
 
 #[tokio::test]
 async fn test_handle_launch_configuration_selector_key_j_updates_selected_index() {

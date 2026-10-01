@@ -183,13 +183,6 @@ pub(super) fn resume_command(operation_id: &str) -> SessionCommand {
     }
 }
 
-pub(super) fn cancel_token_after_short_delay(cancel_token: Arc<Mutex<CancellationToken>>) {
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        cancel_token.lock().expect("cancel token lock").cancel();
-    });
-}
-
 pub(super) fn expect_clean_main_checkout_snapshot(
     mock_git_client: &mut MockGitClient,
     main_repo_root: PathBuf,

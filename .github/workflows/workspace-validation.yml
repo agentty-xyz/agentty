@@ -77,6 +77,12 @@ jobs:
         if: ${{ inputs['workspace-tests'] }}
         run: prek run test-workspace --all-files --hook-stage manual
 
+      - name: Retain workspace test timings
+        if: ${{ always() && inputs['workspace-tests'] }}
+        uses: $/.github/actions/upload-test-results
+        with:
+          name: workspace-test-results
+
       - name: Upload workspace test results to Trunk
         if: ${{ !cancelled() && inputs['workspace-tests'] && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
         continue-on-error: true

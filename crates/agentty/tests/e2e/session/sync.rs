@@ -1,12 +1,19 @@
 //! Session merge, rebase, and push.
 
+use std::error::Error;
+use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
+use tokio::sync::oneshot;
 
 use super::fixture::{
     E2eResult, run_git, seed_rebase_transcript_session_with_delay,
@@ -220,7 +227,11 @@ async fn seed_published_session_output_chronology(
         r#"#!/bin/sh
 case "$1" in
   push)
-    sleep 8
+    if [ -n "${{AGENTTY_TEST_PUSH_GATE:-}}" ]; then
+      while [ ! -f "$AGENTTY_TEST_PUSH_GATE/release" ]; do sleep 0.01; done
+    else
+      sleep 8
+    fi
     ;;
 esac
 exec '{}' "$@"
@@ -559,17 +570,30 @@ async fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
 /// project is switched out while the push is running and then restored.
 #[tokio::test]
 async fn published_branch_push_survives_project_switching() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("published_branch_push_survives_project_switching")
+    // Arrange
+    let push_gate = tempfile::tempdir()?;
+    let release_path = push_gate.path().join("release");
+    let (database_tx, database_rx) = oneshot::channel();
+    let notice_persisted = Arc::new(AtomicBool::new(false));
+    let scenario_notice_persisted = Arc::clone(&notice_persisted);
+    let push_notice = "[Branch Push] Auto-pushed published branch after completed turn.";
+    let scenario = FeatureTest::new("published_branch_push_survives_project_switching")
         .with_git()
-        .setup(|env| {
+        .env("AGENTTY_TEST_PUSH_GATE", push_gate.path().to_string_lossy())
+        .setup(move |env| {
             Box::pin(async move {
                 seed_published_session_output_chronology(env).await?;
-                common::seed_second_project(env).await
+                common::seed_second_project(env).await?;
+                database_tx
+                    .send(common::open_database(env).await?)
+                    .map_err(|_| io::Error::other("branch-push notice observer was dropped"))?;
+
+                Ok(())
             })
         })
         .run(
-            |scenario| {
+            move |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .press_key("Enter")
@@ -587,7 +611,24 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("Project: zeta-project", 5000)
-                    .sleep_ms(9000)
+                    .eventually(
+                        Duration::from_secs(15),
+                        Duration::from_millis(20),
+                        move |frame| {
+                            std::fs::write(&release_path, "release").expect("release branch push");
+                            let expected = if scenario_notice_persisted.load(Ordering::Acquire) {
+                                "Project: zeta-project"
+                            } else {
+                                "persisted branch-push notice"
+                            };
+
+                            assertion::match_text_in_region(
+                                frame,
+                                expected,
+                                &Region::full(frame.cols(), frame.rows()),
+                            )
+                        },
+                    )
                     .press_key("p")
                     .wait_for_text("Switch project", 5000)
                     .press_key("Enter")
@@ -599,6 +640,7 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
+                    // Assert
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "[Branch Push]", &full);
                     assertion::assert_text_in_region(
@@ -608,8 +650,30 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     );
                 })
             },
-        )
-        .await?;
+        );
+    let observe_persistence = async {
+        let database = database_rx.await?;
+        loop {
+            let messages = database
+                .sessions()
+                .load_session_messages("review-shortcut-0001")
+                .await?;
+            if messages.iter().any(|message| {
+                message.kind == SessionMessageKind::WorkflowNotice.as_str()
+                    && message.content.contains(push_notice)
+            }) {
+                // Wait for Agentty to persist completion while the owning
+                // project remains inactive.
+                notice_persisted.store(true, Ordering::Release);
+
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        Ok::<(), Box<dyn Error>>(())
+    };
+    tokio::try_join!(scenario, observe_persistence)?;
 
     Ok(())
 }
