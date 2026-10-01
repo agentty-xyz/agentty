@@ -110,7 +110,13 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
             assert!(request.prompt.contains("Check second policy"));
             assert!(request.prompt.contains("Python:"));
             captured.lock().expect("phases").push(if request.prompt.starts_with("Cross-file review:") { "cross-file" } else { "reduction" });
-            AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#)
+            let count = crate::app::review_prompt::reduction_candidate_count(&request.prompt).unwrap_or_default();
+            AgentResponse::plain(serde_json::json!({
+                "project_impact":[],"suggestions":[],
+                "candidate_decisions":(0..count).map(|candidate_index| serde_json::json!({
+                    "candidate_index":candidate_index,"suggestion_index":null,"reason":"Fixture source rejects this risk"
+                })).collect::<Vec<_>>()
+            }).to_string())
         } else {
             if !request.prompt.contains("src/second.py") {
                 assert!(!request.prompt.contains("Check second policy"));
@@ -143,7 +149,15 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
     .expect("complete review");
 
     // Assert
-    assert_eq!(*seen.lock().expect("phases"), ["cross-file", "reduction"]);
+    let phases = seen.lock().expect("phases");
+    assert!(
+        phases
+            .iter()
+            .filter(|phase| **phase == "cross-file")
+            .count()
+            > 1
+    );
+    assert_eq!(phases.last(), Some(&"reduction"));
     assert!(!result.contains("Partial review"));
 }
 
@@ -887,7 +901,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let request_id = uuid::Uuid::new_v4();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let mut run_client = ag_worker::MockRunClient::new();
-    run_client.expect_submit().times(2).returning(|request| {
+    run_client.expect_submit().times(3).returning(|request| {
         assert_eq!(request.harness, (AgentKind::Gemini).to_string());
         assert_eq!(
             request.permission_mode,
@@ -952,6 +966,14 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
                     completed: 1,
                     total: 1
                 },
+                ..
+            }
+        ));
+        let boundary = app_event_rx.recv().await.expect("boundary progress");
+        assert!(matches!(
+            boundary,
+            AppEvent::ReviewProgressUpdated {
+                progress: crate::app::review::ReviewProgress::CrossFile,
                 ..
             }
         ));
@@ -1461,7 +1483,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         .await
         .expect("session");
     let mut client = ag_worker::MockRunClient::new();
-    client.expect_submit().times(2).returning(|_| {
+    client.expect_submit().times(3).returning(|_| {
         Ok(OneShotSubmission {
             response: AgentResponse::plain(
                 r#"{"project_impact":["Completed review retained"],"suggestions":[]}"#,
@@ -1504,7 +1526,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
         .await
         .expect("retained checkpoints");
     assert_eq!(
-        checkpoints, 2,
+        checkpoints, 3,
         "publishing the event must not discard durable evidence"
     );
     database

@@ -15,6 +15,18 @@ later cross-file pass can check interactions and a final reduction can reconcile
 findings. When asked to reduce candidate findings, return the complete consolidated
 review rather than treating those candidates as authoritative.
 
+Trace changed behavior through its callers, dispatch, and cleanup paths. Challenge the
+intended behavior with concrete boundary cases: empty versus populated queues, immediate
+versus deferred work, paused versus active states, and bypasses in compound conditions.
+For changed tests, verify that setup actually establishes the asserted precondition;
+check fixture rewrites and mocks for silent no-ops or default success. Distinguish a
+current correctness defect from a future robustness risk, and do not invent findings.
+
+Use an empty `candidate_decisions` array during discovery. During consolidation, account
+for every input suggestion by its zero-based `candidate_index`: set `suggestion_index`
+to the retained output suggestion's zero-based index, or null for rejection. Give a
+source-based `reason` for each decision, including duplicate merges and rejected risks.
+
 For each finding, supply typed `evidence` with a repository-relative `path`, `old` or
 `new` source `side`, exact `existing_code` without diff markers, line range, concrete
 `trigger`, practical `impact`, and actionable `correction`. Use the old side for

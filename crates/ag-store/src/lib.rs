@@ -37,8 +37,8 @@ pub use review::{
 };
 pub use session::{
     ForkSessionSnapshot, PersistedSessionCreation, SessionAgentModelRow, SessionDetailRow,
-    SessionFocusedReviewRow, SessionListRow, SessionMessageRow, SessionRepository, SessionRow,
-    SessionTurnMetadata,
+    SessionFocusedReviewRow, SessionListRow, SessionMessageRow, SessionRepository,
+    SessionReviewAuditRow, SessionRow, SessionTurnMetadata,
 };
 pub use session_preparation::{
     SessionPreparationRepository, SessionPreparationRow, SessionPreparationState,

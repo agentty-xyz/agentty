@@ -1206,6 +1206,10 @@ async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() 
         .insert(session_id.clone(), 2);
     let current_diff = String::new();
     let diff_hash = review::diff_content_hash(&current_diff);
+    let completed_audit = seed_completed_review_audit(&app, &session_id, diff_hash)
+        .await
+        .expect("completed review audit");
+    assert_eq!(completed_audit.len(), 2);
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {
@@ -1263,6 +1267,60 @@ async fn automatic_apply_completion_does_not_count_failed_remediation_enqueue() 
             && review.diff_hash == diff_hash.to_string()
             && review.text.contains("Fix the issue")
     }));
+    assert_eq!(
+        app.services
+            .db()
+            .sessions()
+            .load_completed_review_audit(&session_id)
+            .await
+            .expect("audit after failed enqueue"),
+        completed_audit
+    );
+}
+
+/// Completes discovery and consolidation through the public storage boundary.
+async fn seed_completed_review_audit(
+    app: &App,
+    session_id: &SessionId,
+    diff_hash: u64,
+) -> Result<Vec<ag_store::SessionReviewAuditRow>, DbError> {
+    let sessions = app.services.db().sessions();
+    sessions
+        .begin_review_generation(session_id, "completed-inputs", "completed")
+        .await?;
+    for (request, answer) in [
+        (
+            "discovery",
+            r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"Fix the issue"}]}"#,
+        ),
+        (
+            "consolidation",
+            r#"{"project_impact":[],"suggestions":[],"candidate_decisions":[{"candidate_index":0,"suggestion_index":null,"reason":"The caller already validates input"}]}"#,
+        ),
+    ] {
+        sessions
+            .save_review_fragment(
+                session_id,
+                "completed-inputs",
+                "completed",
+                request,
+                &serde_json::json!({"Answer": answer}).to_string(),
+            )
+            .await?;
+    }
+    assert!(
+        sessions
+            .update_session_focused_review_for_generation(
+                session_id,
+                "completed",
+                FocusedReviewStatus::Ready,
+                Some(diff_hash.to_string()),
+                Some("## Review\n### Suggestions\n- Fix the issue.".into()),
+            )
+            .await?
+    );
+
+    sessions.load_completed_review_audit(session_id).await
 }
 
 #[tokio::test]

@@ -149,8 +149,10 @@ unverified and are disclosed on each finding with primary evidence. Coverage rep
 processed and unfinished files and discloses unresolved file identities; processing a
 file does not guarantee that every defect was found.
 
-Large reviews batch complete files and hunks where possible. Each attempt has a 64-call
-budget and a 15-minute deadline. A `Partial` result preserves findings and identifies
+Large reviews batch complete files and hunks where possible. Independent boundary checks
+receive a shared view of all changes and initial findings alongside the original
+fragments. Condensed cross-file context is disclosed. Each attempt has a 128-call budget
+and a 15-minute deadline. A `Partial` result preserves findings and identifies
 unfinished checks; an empty suggestions list does not mean the review completed. Press
 `f` and confirm regeneration to resume completed calls for unchanged inputs, including
 after restart. Completed reviews regenerate from scratch; changed inputs or an accepted

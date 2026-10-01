@@ -3,7 +3,7 @@
 use std::fmt;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Structured result returned by a focused-review utility prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -15,6 +15,15 @@ use serde::{Deserialize, Serialize};
                    medium-severity findings."
 )]
 pub struct FocusedReview {
+    /// Per-candidate accounting supplied only during consolidation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(
+        description = "Consolidation only: account for every input suggestion by its zero-based \
+                       candidate_index, linking to a retained output suggestion or explaining its \
+                       rejection. Every output suggestion must be referenced by at least one \
+                       decision. Use an empty array for discovery."
+    )]
+    pub candidate_decisions: Vec<FocusedReviewDecision>,
     /// Concise statements describing the overall effect of the reviewed diff.
     #[schemars(
         title = "project_impact",
@@ -33,6 +42,47 @@ pub struct FocusedReview {
 }
 
 impl FocusedReview {
+    /// Rejects incomplete consolidation accounting before callers replace
+    /// their original findings. Indices refer to this call's input and output.
+    ///
+    /// # Errors
+    /// Returns a diagnostic for missing, duplicate, out-of-range, or
+    /// unexplained candidate decisions, or outputs without an input
+    /// disposition.
+    pub fn validate_candidate_decisions(&self, candidate_count: usize) -> Result<(), String> {
+        let mut accounted = vec![false; candidate_count];
+        let mut retained = vec![false; self.suggestions.len()];
+        for decision in &self.candidate_decisions {
+            let Some(seen) = accounted.get_mut(decision.candidate_index) else {
+                return Err("Candidate decision references an unknown input finding".into());
+            };
+            if *seen || decision.reason.trim().is_empty() {
+                return Err(
+                    "Candidate decisions must be unique and explain their reasoning".into(),
+                );
+            }
+            if let Some(index) = decision.suggestion_index {
+                let Some(output) = retained.get_mut(index) else {
+                    return Err("Candidate decision references an unknown output finding".into());
+                };
+                *output = true;
+            }
+            *seen = true;
+        }
+        if accounted.contains(&false) {
+            return Err(format!(
+                "Consolidation must account for all {candidate_count} candidates"
+            ));
+        }
+        if retained.contains(&false) {
+            return Err(
+                "Consolidation must link every output finding to an input candidate".into(),
+            );
+        }
+
+        Ok(())
+    }
+
     /// Formats the structured review for the terminal session transcript.
     #[must_use]
     pub fn to_markdown(&self) -> String {
@@ -51,6 +101,42 @@ impl FocusedReview {
             "## Review\n\n### Project Impact\n\n{project_impact}\n\n### \
              Suggestions\n\n{suggestions}"
         )
+    }
+}
+
+/// Auditable disposition of one input suggestion during consolidation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("required" = ["candidate_index", "reason", "suggestion_index"]))]
+pub struct FocusedReviewDecision {
+    /// Zero-based index in the supplied candidate suggestions array.
+    pub candidate_index: usize,
+    /// Source-based reason for retaining, merging, or rejecting this finding.
+    pub reason: String,
+    /// Zero-based retained output suggestion; null means rejected. Duplicate
+    /// candidates may refer to the same consolidated output suggestion. The
+    /// field must be present even for rejection.
+    pub suggestion_index: Option<usize>,
+}
+
+impl<'de> Deserialize<'de> for FocusedReviewDecision {
+    fn deserialize<DeserializerType>(
+        deserializer: DeserializerType,
+    ) -> Result<Self, DeserializerType::Error>
+    where
+        DeserializerType: Deserializer<'de>,
+    {
+        let input = FocusedReviewDecisionInput::deserialize(deserializer)?;
+        let suggestion_index = match input.suggestion_index {
+            ReviewDisposition::Retained(index) => Some(index),
+            ReviewDisposition::Rejected(()) => None,
+        };
+
+        Ok(Self {
+            candidate_index: input.candidate_index,
+            reason: input.reason,
+            suggestion_index,
+        })
     }
 }
 
@@ -258,6 +344,25 @@ fn markdown_bullets(items: &[String]) -> String {
         .map(|item| format!("- {}", item.trim()))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Wire input keeps a required disposition separate from the nullable public
+/// index so omission cannot silently reject a discovered candidate.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FocusedReviewDecisionInput {
+    candidate_index: usize,
+    reason: String,
+    suggestion_index: ReviewDisposition,
+}
+
+/// Explicit wire values: an output index retains the candidate; null rejects
+/// it. The enum has no implicit missing-field default.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReviewDisposition {
+    Retained(usize),
+    Rejected(()),
 }
 
 #[cfg(test)]

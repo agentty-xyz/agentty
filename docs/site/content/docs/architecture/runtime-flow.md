@@ -275,19 +275,28 @@ All model-backed tasks use `RunClient` or `SessionRunClient`. Subprocesses have 
 execution and cleanup, and background results retain their original session/project
 identity.
 
-Focused review packs captured diffs by file and hunk, checks cross-file interactions for
-multiple batches, then verifies and reconciles candidates even for a single batch.
-Project criteria load through the filesystem boundary and are selected by changed paths
-and file types, with bounded rendered criteria. Cross-file and final verification retain
-the captured file scope even when their input is summarized. Diff capture normalizes Git
-presentation settings so file identities and source coordinates remain stable. Host-side
-citation matching checks typed source evidence against the captured old or new source
-without reading a newer worktree state. Repairs reconcile duplicate primary citations
-while preserving supporting references. Processed-file counts and unanchored findings
-expose coverage limits. Worker-owned runtime reuse preserves isolated conversation
-context. One deadline and provider-call budget cover preparation, retries, and repair.
-Successful calls persist for partial retries; generation checks reject stale evidence.
-Failed coverage remains explicit rather than being presented as a completed review.
+Focused review packs captured diffs by file and hunk, independently checks original
+changes for boundary and cross-file risks even for a single batch, then verifies and
+reconciles candidates. Fragmented boundary calls share bounded context from all captured
+changes and initial findings, with condensation disclosed, while retaining each original
+source fragment. Consolidation accounts for every candidate with a retained finding or a
+rejection reason and links every output to an input; incomplete accounting preserves the
+original findings. Project criteria load through the filesystem boundary and are
+selected by changed paths and file types, with bounded rendered criteria. Discovery
+retains original source; final verification retains the captured file scope when context
+is summarized. Diff capture normalizes Git presentation settings so file identities and
+source coordinates remain stable. Host-side citation matching checks typed source
+evidence against the captured old or new source without reading a newer worktree state.
+Repairs reconcile duplicate primary citations while preserving supporting references.
+Processed-file counts and unanchored findings expose coverage limits. Worker-owned
+runtime reuse preserves isolated conversation context. One deadline and provider-call
+budget cover preparation, retries, and repair. Successful calls preserve discovery
+inputs, candidate findings, and group-scoped consolidation decisions in retry
+checkpoints. Completion atomically archives these call records with the review before
+clearing retry state. The latest completed audit survives invalidation, partial retries,
+and cached review restoration until an active review generation completes or its session
+is deleted; generation checks reject stale evidence. Failed coverage remains explicit
+rather than being presented as a completed review.
 
 Commit-message generation summarizes large diffs and has a bounded fallback using
 changed filenames, conversation, and the existing commit message. It never discards

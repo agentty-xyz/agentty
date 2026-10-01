@@ -93,7 +93,9 @@ impl ReviewRules {
             let language = match extension {
                 "rs" => {
                     "Rust: check ownership and lifetimes, async cancellation, locks held across \
-                     awaits, error propagation, and exhaustive state transitions."
+                     awaits, error propagation, and exhaustive state transitions. Trace compound \
+                     conditions and dispatch through immediate/deferred, paused/active, and \
+                     empty/nonempty paths."
                 }
                 "sql" => {
                     "SQL: check transaction atomicity, parameter binding, constraints, migration \
@@ -133,7 +135,8 @@ impl ReviewRules {
             {
                 criteria.push(
                     "Tests: check that assertions exercise the changed public behavior, failures \
-                     cannot pass silently, and mocks preserve relevant contracts."
+                     cannot pass silently, and mocks preserve relevant contracts. Verify setup \
+                     preconditions, fixture replacements, and no-op/default-success paths."
                         .to_string(),
                 );
             }

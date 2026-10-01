@@ -290,46 +290,18 @@ async fn completed_review_and_checkpoint_cleanup_commit_together() {
         .await
         .expect("save");
 
-    // Act / Assert: failure in either write leaves both pending state and
-    // evidence intact.
+    // Act / Assert: failed writes preserve the pending review and evidence.
     for rejection in [
         "CREATE TRIGGER reject_completion BEFORE UPDATE OF focused_review_text ON session BEGIN \
          SELECT RAISE(ABORT, 'completion failure'); END",
         "CREATE TRIGGER reject_completion BEFORE DELETE ON session_review_generation BEGIN SELECT \
          RAISE(ABORT, 'completion failure'); END",
+        "CREATE TRIGGER reject_completion BEFORE INSERT ON session_review_audit BEGIN SELECT \
+         RAISE(ABORT, 'archive failure'); END",
     ] {
-        sqlx::query(rejection)
-            .execute(database.pool())
+        assert_completion_failure_is_atomic(&database, id, generation, rejection)
             .await
-            .expect("failure fixture");
-        assert!(
-            sessions
-                .update_session_focused_review(
-                    id,
-                    Some(ag_session::FocusedReviewStatus::Ready),
-                    Some("42".into()),
-                    Some("Completed review".into())
-                )
-                .await
-                .is_err()
-        );
-        let state: String =
-            sqlx::query_scalar("SELECT focused_review_status FROM session WHERE id = 'checkpoint'")
-                .fetch_one(database.pool())
-                .await
-                .expect("durable state");
-        assert_eq!(state, "Pending");
-        assert_eq!(
-            sessions
-                .load_review_fragment(id, generation, "request")
-                .await
-                .expect(id),
-            Some("answer".into())
-        );
-        sqlx::query("DROP TRIGGER reject_completion")
-            .execute(database.pool())
-            .await
-            .expect("repair fixture");
+            .expect("atomic failure");
     }
     sessions
         .update_session_focused_review(
@@ -365,6 +337,18 @@ async fn completed_review_and_checkpoint_cleanup_commit_together() {
         .await
         .expect("checkpoint count");
     assert_eq!(count, 0);
+    let audit = sessions
+        .load_completed_review_audit(id)
+        .await
+        .expect("completed audit");
+    assert_eq!(
+        audit,
+        [ag_store::SessionReviewAuditRow {
+            answer: "answer".into(),
+            generation: generation.into(),
+            request: "request".into(),
+        }]
+    );
     let state = sessions
         .load_session_focused_reviews_for_project(project)
         .await
@@ -532,6 +516,351 @@ async fn generated_review_completion_rolls_back_when_checkpoint_cleanup_fails() 
             .expect("checkpoint"),
         Some("evidence".into())
     );
+}
+
+#[tokio::test]
+async fn completed_review_audit_survives_invalidation_partial_work_and_stale_completion() {
+    // Arrange
+    let database = completed_review_audit_database()
+        .await
+        .expect("completed review");
+    let sessions = database.sessions();
+    let old_audit = sessions
+        .load_completed_review_audit("checkpoint")
+        .await
+        .expect("old audit");
+    assert_eq!(old_audit.len(), 1);
+
+    // Act / Assert
+    sessions
+        .update_session_focused_review("checkpoint", None, None, None)
+        .await
+        .expect("invalidation");
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("retained audit"),
+        old_audit
+    );
+    begin_partial_review_replacement(&database)
+        .await
+        .expect("partial replacement");
+    assert!(
+        !sessions
+            .update_session_focused_review_for_generation(
+                "checkpoint",
+                "old",
+                ag_session::FocusedReviewStatus::Ready,
+                Some("41".into()),
+                Some("Stale review".into()),
+            )
+            .await
+            .expect("stale completion")
+    );
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("retained audit"),
+        old_audit
+    );
+}
+
+#[tokio::test]
+async fn restoring_cached_ready_reviews_preserves_the_completed_audit() {
+    // Arrange
+    let database = completed_review_audit_database()
+        .await
+        .expect("completed review");
+    let sessions = database.sessions();
+    let old_audit = sessions
+        .load_completed_review_audit("checkpoint")
+        .await
+        .expect("old audit");
+    assert_eq!(old_audit.len(), 1);
+
+    // Act / Assert: both repeated Ready persistence and invalidation followed
+    // by cache restoration lack a new generation.
+    for invalidate in [false, true] {
+        if invalidate {
+            sessions
+                .update_session_focused_review("checkpoint", None, None, None)
+                .await
+                .expect("invalidation");
+        }
+        sessions
+            .update_session_focused_review(
+                "checkpoint",
+                Some(ag_session::FocusedReviewStatus::Ready),
+                Some("41".into()),
+                Some("Old review".into()),
+            )
+            .await
+            .expect("cache restoration");
+        assert_eq!(
+            sessions
+                .load_completed_review_audit("checkpoint")
+                .await
+                .expect("retained audit"),
+            old_audit
+        );
+    }
+}
+
+#[tokio::test]
+async fn completing_an_active_generation_without_fragments_replaces_the_previous_audit() {
+    // Arrange
+    let database = completed_review_audit_database()
+        .await
+        .expect("completed review");
+    let sessions = database.sessions();
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("old audit")
+            .len(),
+        1
+    );
+    sessions
+        .begin_review_generation("checkpoint", "new-inputs", "current")
+        .await
+        .expect("new generation");
+
+    // Act
+    assert!(
+        sessions
+            .update_session_focused_review_for_generation(
+                "checkpoint",
+                "current",
+                ag_session::FocusedReviewStatus::Ready,
+                Some("42".into()),
+                Some("New review".into()),
+            )
+            .await
+            .expect("new completion")
+    );
+
+    // Assert
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("replaced audit"),
+        []
+    );
+}
+
+#[tokio::test]
+async fn completed_review_audit_replacement_rolls_back_on_archival_or_cleanup_failure() {
+    // Arrange
+    let database = completed_review_audit_database()
+        .await
+        .expect("completed review");
+    let old_audit = database
+        .sessions()
+        .load_completed_review_audit("checkpoint")
+        .await
+        .expect("old audit");
+    begin_partial_review_replacement(&database)
+        .await
+        .expect("partial replacement");
+
+    // Act / Assert
+    for rejection in [
+        "CREATE TRIGGER reject_audit BEFORE DELETE ON session_review_audit BEGIN SELECT \
+         RAISE(ABORT, 'archive failure'); END",
+        "CREATE TRIGGER reject_audit BEFORE INSERT ON session_review_audit BEGIN SELECT \
+         RAISE(ABORT, 'archive failure'); END",
+        "CREATE TRIGGER reject_audit BEFORE DELETE ON session_review_generation BEGIN SELECT \
+         RAISE(ABORT, 'cleanup failure'); END",
+    ] {
+        assert_audit_replacement_failure_is_atomic(&database, &old_audit, rejection)
+            .await
+            .expect("atomic replacement");
+    }
+}
+
+#[tokio::test]
+async fn completed_review_audit_is_replaced_on_completion_and_removed_with_its_session() {
+    // Arrange
+    let database = completed_review_audit_database()
+        .await
+        .expect("completed review");
+    let sessions = database.sessions();
+    begin_partial_review_replacement(&database)
+        .await
+        .expect("partial replacement");
+
+    // Act
+    let completed = sessions
+        .update_session_focused_review_for_generation(
+            "checkpoint",
+            "current",
+            ag_session::FocusedReviewStatus::Ready,
+            Some("42".into()),
+            Some("New review".into()),
+        )
+        .await
+        .expect("new completion");
+
+    // Assert
+    assert!(completed);
+    let audit = sessions
+        .load_completed_review_audit("checkpoint")
+        .await
+        .expect("new audit");
+    assert_eq!(
+        audit,
+        [ag_store::SessionReviewAuditRow {
+            answer: "new candidate".into(),
+            generation: "new-inputs".into(),
+            request: "new discovery".into(),
+        }]
+    );
+    assert_eq!(
+        sessions
+            .load_review_fragment("checkpoint", "new-inputs", "new discovery")
+            .await
+            .expect("closed checkpoint"),
+        None
+    );
+    sessions
+        .save_review_fragment(
+            "checkpoint",
+            "new-inputs",
+            "current",
+            "late",
+            "late evidence",
+        )
+        .await
+        .expect("late save ignored");
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("unchanged audit"),
+        audit
+    );
+    sessions
+        .delete_session("checkpoint")
+        .await
+        .expect("delete session");
+    assert_eq!(
+        sessions
+            .load_completed_review_audit("checkpoint")
+            .await
+            .expect("cascaded audit"),
+        []
+    );
+}
+
+/// Seeds a completed audit through the same public persistence boundary as its
+/// consumer.
+async fn completed_review_audit_database() -> Result<Database, ag_store::DbError> {
+    let (database, _) = pending_review_database().await?;
+    let sessions = database.sessions();
+    sessions
+        .begin_review_generation("checkpoint", "old-inputs", "old")
+        .await?;
+    sessions
+        .save_review_fragment(
+            "checkpoint",
+            "old-inputs",
+            "old",
+            "old discovery",
+            "old candidate",
+        )
+        .await?;
+    assert!(
+        sessions
+            .update_session_focused_review_for_generation(
+                "checkpoint",
+                "old",
+                ag_session::FocusedReviewStatus::Ready,
+                Some("41".into()),
+                Some("Old review".into()),
+            )
+            .await?
+    );
+
+    Ok(database)
+}
+
+/// Stages resumable replacement evidence without overwriting the completed
+/// audit.
+async fn begin_partial_review_replacement(database: &Database) -> Result<(), ag_store::DbError> {
+    let sessions = database.sessions();
+    sessions
+        .begin_review_generation("checkpoint", "new-inputs", "current")
+        .await?;
+    sessions
+        .save_review_fragment(
+            "checkpoint",
+            "new-inputs",
+            "current",
+            "new discovery",
+            "new candidate",
+        )
+        .await?;
+    assert!(
+        sessions
+            .update_session_focused_review_for_generation(
+                "checkpoint",
+                "current",
+                ag_session::FocusedReviewStatus::Partial,
+                Some("42".into()),
+                Some("Partial review".into()),
+            )
+            .await?
+    );
+
+    Ok(())
+}
+
+/// Checks both durable results and retry state after a failed replacement
+/// transaction.
+async fn assert_audit_replacement_failure_is_atomic(
+    database: &Database,
+    old_audit: &[ag_store::SessionReviewAuditRow],
+    rejection: &'static str,
+) -> Result<(), ag_store::DbError> {
+    let sessions = database.sessions();
+    sqlx::query(rejection).execute(database.pool()).await?;
+    assert!(
+        sessions
+            .update_session_focused_review_for_generation(
+                "checkpoint",
+                "current",
+                ag_session::FocusedReviewStatus::Ready,
+                Some("42".into()),
+                Some("New review".into()),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        sessions.load_completed_review_audit("checkpoint").await?,
+        old_audit
+    );
+    assert_eq!(
+        sessions
+            .load_review_fragment("checkpoint", "new-inputs", "new discovery")
+            .await?,
+        Some("new candidate".into())
+    );
+    let state: (String, String) = sqlx::query_as(
+        "SELECT focused_review_status, focused_review_text FROM session WHERE id = 'checkpoint'",
+    )
+    .fetch_one(database.pool())
+    .await?;
+    assert_eq!(state, ("Partial".into(), "Partial review".into()));
+    sqlx::query("DROP TRIGGER reject_audit")
+        .execute(database.pool())
+        .await?;
+
+    Ok(())
 }
 
 #[tokio::test]
@@ -763,4 +1092,48 @@ async fn model_switch_database() -> Result<(Database, i64), ag_store::DbError> {
         .await?;
 
     Ok((database, project))
+}
+
+/// Exercises failed review, archival, and cleanup writes through the public
+/// boundary.
+async fn assert_completion_failure_is_atomic(
+    database: &Database,
+    id: &str,
+    generation: &str,
+    rejection: &'static str,
+) -> Result<(), ag_store::DbError> {
+    let sessions = database.sessions();
+    sqlx::query(rejection).execute(database.pool()).await?;
+    assert!(
+        sessions
+            .update_session_focused_review(
+                id,
+                Some(ag_session::FocusedReviewStatus::Ready),
+                Some("42".into()),
+                Some("Completed review".into()),
+            )
+            .await
+            .is_err()
+    );
+    let state: String =
+        sqlx::query_scalar("SELECT focused_review_status FROM session WHERE id = ?")
+            .bind(id)
+            .fetch_one(database.pool())
+            .await?;
+    assert_eq!(state, "Pending");
+    assert_eq!(
+        sessions.load_completed_review_audit(id).await?,
+        Vec::<ag_store::SessionReviewAuditRow>::new()
+    );
+    assert_eq!(
+        sessions
+            .load_review_fragment(id, generation, "request")
+            .await?,
+        Some("answer".into())
+    );
+    sqlx::query("DROP TRIGGER reject_completion")
+        .execute(database.pool())
+        .await?;
+
+    Ok(())
 }
