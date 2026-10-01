@@ -16,6 +16,7 @@ pub fn test_session_worker_handle<C>(
         admission: Arc::default(),
         completion: watch::channel(()).1,
         execution: Arc::default(),
+        force_stop: CancellationToken::new(),
         queued_work_sequence,
         sender,
         stop: CancellationToken::new(),

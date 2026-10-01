@@ -7,13 +7,18 @@ use ag_telemetry::{
     Context, FutureExt as _, KeyValue, Outcome, QueuedTrace, Span, current_attribute, milestone,
 };
 use opentelemetry::global;
-use opentelemetry::trace::{Status, TraceContextExt};
-use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
-use tokio::sync::Barrier;
+use opentelemetry::trace::{
+    SpanContext, SpanId, Status, TraceContextExt, TraceFlags, TraceId, TraceState, Tracer,
+};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, Sampler, SdkTracerProvider, SpanData};
+use tokio::sync::{Barrier, Mutex};
+
+static PROVIDER_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spans_preserve_context_results_and_terminal_outcomes() {
     // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
@@ -116,6 +121,93 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
     assert!(!format!("{spans:?}").contains("private error"));
     assert!(!format!("{spans:?}").contains("private panic"));
     assert_context_ownership(&spans);
+}
+
+#[tokio::test]
+async fn live_unsampled_parents_preserve_sampling_and_finished_owned_parents_detach() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_sampler(Sampler::ParentBased(Box::new(Sampler::AlwaysOn)))
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let remote = SpanContext::new(
+        TraceId::from(123),
+        SpanId::from(456),
+        TraceFlags::default(),
+        true,
+        TraceState::default(),
+    );
+    let external = Context::new().with_remote_span_context(remote.clone());
+
+    // Act
+    let owned_context = async {
+        let child = Span::child("unsampled.child");
+        let context = child.context();
+        child
+            .scope(async {
+                let nested = Span::child("unsampled.nested");
+                assert_eq!(
+                    nested.context().span().span_context().trace_id(),
+                    remote.trace_id()
+                );
+                assert!(!nested.context().span().is_recording());
+                nested.finish(Outcome::Completed);
+            })
+            .await;
+
+        context
+    }
+    .with_context(external)
+    .await;
+
+    // Assert
+    assert_eq!(
+        owned_context.span().span_context().trace_id(),
+        remote.trace_id()
+    );
+    assert!(!owned_context.span().span_context().is_sampled());
+    assert_eq!(exporter.get_finished_spans().expect("spans"), []);
+
+    // Act
+    async { Span::child("detached.unsampled").scope(async {}).await }
+        .with_context(owned_context.clone())
+        .await;
+    // Replacing the span must not inherit the old owned span's completion.
+    let tracer = global::tracer("host");
+    let host_span = tracer.start("host.live");
+    let host_context = owned_context.with_span(host_span);
+    async { Span::child("host.child").scope(async {}).await }
+        .with_context(host_context.clone())
+        .await;
+    host_context.span().end();
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    let detached = spans
+        .iter()
+        .find(|span| span.name == "detached.unsampled")
+        .expect("detached");
+    assert_ne!(detached.span_context.trace_id(), remote.trace_id());
+    assert_eq!(
+        detached.links.links[0].span_context,
+        *owned_context.span().span_context()
+    );
+    let child = spans
+        .iter()
+        .find(|span| span.name == "host.child")
+        .expect("host child");
+    assert_eq!(
+        child.parent_span_id,
+        host_context.span().span_context().span_id()
+    );
+    assert_eq!(
+        child.span_context.trace_id(),
+        host_context.span().span_context().trace_id()
+    );
 }
 
 async fn abandon_and_unwind_operations() {

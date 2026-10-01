@@ -14,5 +14,5 @@ workspace = true
 opentelemetry.workspace = true
 
 [dev-dependencies]
-opentelemetry_sdk.workspace = true
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 tokio.workspace = true

@@ -644,7 +644,13 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
     let spans = exporter.get_finished_spans().expect("finished spans");
     let turn = spans
         .iter()
-        .find(|span| span.name == "session.turn")
+        .find(|span| {
+            span.name == "session.turn"
+                && span.attributes.contains(&KeyValue::new(
+                    "agentty.operation.id",
+                    "root-auto-commit-cancellation",
+                ))
+        })
         .expect("turn root");
     assert!(
         turn.attributes
@@ -652,7 +658,10 @@ async fn root_span_reports_cancellation_during_successful_post_processing() {
     );
     let postprocess = spans
         .iter()
-        .find(|span| span.name == "postprocess")
+        .find(|span| {
+            span.name == "postprocess"
+                && span.span_context.trace_id() == turn.span_context.trace_id()
+        })
         .expect("post-processing");
     assert!(
         postprocess

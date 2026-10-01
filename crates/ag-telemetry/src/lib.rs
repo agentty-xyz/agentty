@@ -1,10 +1,12 @@
 //! Content-free execution spans. Hosts own provider and exporter configuration.
 
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use opentelemetry::global;
 pub use opentelemetry::trace::{FutureExt, TraceContextExt};
-use opentelemetry::trace::{Link, SpanKind, Status, Tracer};
+use opentelemetry::trace::{Link, SpanId, SpanKind, Status, Tracer};
 pub use opentelemetry::{Context, KeyValue};
 
 /// Records a content-free milestone in the current execution context.
@@ -32,6 +34,7 @@ pub enum Outcome {
 
 /// Owns one span, ending it even when its future is dropped or unwinds.
 pub struct Span {
+    completion: OwnedSpanCompletion,
     context: Context,
     outcome: Outcome,
 }
@@ -51,11 +54,19 @@ impl Span {
         Self::start(name, attributes, &Context::new(), links)
     }
 
-    /// Starts an interval beneath the currently executing operation.
+    /// Starts an interval beneath the currently executing operation. A
+    /// completed owned parent starts a new trace linked to that operation.
     pub fn child(name: &'static str) -> Self {
         let parent = Context::current();
         let span_context = parent.span().span_context().clone();
-        if span_context.is_valid() && !parent.span().is_recording() {
+        if span_context.is_valid()
+            && parent
+                .get::<OwnedSpanCompletion>()
+                .is_some_and(|completion| {
+                    completion.span_id == span_context.span_id()
+                        && completion.ended.load(Ordering::Acquire)
+                })
+        {
             return Self::start(
                 name,
                 Vec::new(),
@@ -127,8 +138,15 @@ impl Span {
             .with_links(links)
             .start_with_context(&tracer, parent);
 
+        let context = parent.with_span(span);
+        let completion = OwnedSpanCompletion {
+            ended: Arc::new(AtomicBool::new(false)),
+            span_id: context.span().span_context().span_id(),
+        };
+
         Self {
-            context: parent.with_span(span),
+            context: context.with_value(completion.clone()),
+            completion,
             outcome: Outcome::Canceled,
         }
     }
@@ -154,7 +172,16 @@ impl Drop for Span {
         };
         span.set_attribute(KeyValue::new("agentty.outcome", outcome));
         span.end();
+        self.completion.ended.store(true, Ordering::Release);
     }
+}
+
+/// Completion belongs to one owned span, even when a host replaces the
+/// context's span.
+#[derive(Clone)]
+struct OwnedSpanCompletion {
+    ended: Arc<AtomicBool>,
+    span_id: SpanId,
 }
 
 /// Carries a root workflow and its waiting interval until worker selection.

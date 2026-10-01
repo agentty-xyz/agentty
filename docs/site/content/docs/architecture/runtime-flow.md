@@ -65,6 +65,12 @@ ordering, and wakeups. Hosts supply command policy and ordered effects. The shar
 `ag-scheduler` admission pool limits concurrent session turns across regular and managed
 sessions without changing their mailbox order.
 
+Application shutdown closes every session worker's admission and waits for active
+effects, queued-work cancellation, and runtime cleanup within the shared five-second
+deadline. Task ownership survives mailbox removal. When grace expires, stuck session
+tasks are dropped and awaited before the tracing exporter shuts down; unfinished
+operations remain available for startup recovery.
+
 Model changes pause scheduling, wait for active work, and atomically save selection and
 conversation reset. Failed saves preserve pending work. Successful switches retire the
 old runtime and discard pending work before a new channel is composed.

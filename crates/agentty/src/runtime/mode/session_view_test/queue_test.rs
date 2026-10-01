@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ag_telemetry::KeyValue;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use opentelemetry::global;
@@ -40,14 +42,21 @@ async fn repeated_enqueue_and_retract_ends_each_trace_without_stopping_the_activ
 
         // Assert
         let spans = exporter.get_finished_spans().expect("finished spans");
-        assert_eq!(
-            spans
-                .iter()
-                .filter(|span| span.name == "session.turn")
-                .count(),
-            count
-        );
-        for span in spans {
+        let trace_ids: HashSet<_> = spans
+            .iter()
+            .filter(|span| {
+                span.name == "session.turn"
+                    && span
+                        .attributes
+                        .contains(&KeyValue::new("agentty.session.id", session_id.clone()))
+            })
+            .map(|span| span.span_context.trace_id())
+            .collect();
+        assert_eq!(trace_ids.len(), count);
+        for span in spans
+            .iter()
+            .filter(|span| trace_ids.contains(&span.span_context.trace_id()))
+        {
             if matches!(span.name.as_ref(), "session.turn" | "queue.wait") {
                 assert!(
                     span.attributes

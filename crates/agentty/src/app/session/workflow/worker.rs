@@ -282,6 +282,15 @@ struct SessionWorkerHost {
     run_client: Arc<dyn RunClient>,
 }
 
+impl Drop for SessionWorkerHost {
+    fn drop(&mut self) {
+        self.message_traces
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(session_id, _), _| session_id != &self.context.session_id);
+    }
+}
+
 impl ag_worker::WorkQueue for SessionWorkerHost {
     type Command = ScheduledSessionCommand;
     type Message = QueuedMessage;
@@ -1147,6 +1156,7 @@ impl SessionWorkerService {
             },
             Arc::clone(&runtime.queued_work_sequence),
         );
+        services.track_session_worker(worker.task());
         self.workers
             .insert(runtime.session_id.clone(), worker.clone());
 
