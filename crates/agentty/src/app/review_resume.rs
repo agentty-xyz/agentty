@@ -63,9 +63,11 @@ impl ReviewResumeClient {
 
     fn cacheable(request: &OneShotRequest, answer: &str) -> bool {
         match request.request_kind {
-            AgentRequestKind::FocusedReview => {
-                serde_json::from_str::<FocusedReview>(answer).is_ok()
-            }
+            AgentRequestKind::FocusedReview => serde_json::from_str::<FocusedReview>(answer)
+                .is_ok_and(|review| {
+                    super::review_prompt::reduction_candidate_count(&request.prompt)
+                        .is_none_or(|count| review.validate_candidate_decisions(count).is_ok())
+                }),
             AgentRequestKind::UtilityPrompt => request
                 .prompt
                 .split_once("Keep answer within ")
@@ -97,15 +99,19 @@ impl RunClient for ReviewResumeClient {
             .await
             .map_err(|error| OneShotError::new(error.to_string()))?
         {
-            return match serde_json::from_str::<CachedReviewCall>(&saved)
+            match serde_json::from_str::<CachedReviewCall>(&saved)
                 .map_err(|error| OneShotError::new(format!("Invalid review checkpoint: {error}")))?
             {
-                CachedReviewCall::Answer(answer) => Ok(OneShotSubmission {
-                    response: AgentResponse::plain(answer),
-                    stats: SessionStats::default(),
-                }),
-                CachedReviewCall::InputLimit(error) => Err(OneShotError::new(error)),
-            };
+                CachedReviewCall::Answer(answer) if Self::cacheable(&request, &answer) => {
+                    return Ok(OneShotSubmission {
+                        response: AgentResponse::plain(answer),
+                        stats: SessionStats::default(),
+                    });
+                }
+                CachedReviewCall::InputLimit(error) => return Err(OneShotError::new(error)),
+                // An earlier protocol contract may have accepted this answer.
+                CachedReviewCall::Answer(_) => {}
+            }
         }
         let response = self.client.submit(request.clone()).await;
         let checkpoint = match &response {

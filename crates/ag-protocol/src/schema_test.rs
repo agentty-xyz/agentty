@@ -286,7 +286,11 @@ fn focused_review_output_schema_is_transport_compatible() {
     assert_eq!(schema.get("$schema"), None);
     assert_eq!(
         schema.get("required"),
-        Some(&serde_json::json!(["project_impact", "suggestions"]))
+        Some(&serde_json::json!([
+            "project_impact",
+            "suggestions",
+            "candidate_decisions"
+        ]))
     );
     assert_eq!(schema["additionalProperties"], Value::Bool(false));
     assert_eq!(schema["properties"].get("answer"), None);

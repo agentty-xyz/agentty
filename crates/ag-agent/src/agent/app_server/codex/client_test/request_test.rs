@@ -261,6 +261,10 @@ fn build_turn_start_payload_sets_direct_focused_review_schema() {
     assert!(!properties.contains_key("answer"));
     assert_eq!(
         payload.pointer("/params/outputSchema/required"),
-        Some(&serde_json::json!(["project_impact", "suggestions"]))
+        Some(&serde_json::json!([
+            "project_impact",
+            "suggestions",
+            "candidate_decisions"
+        ]))
     );
 }

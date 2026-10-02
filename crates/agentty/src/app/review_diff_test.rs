@@ -8,6 +8,7 @@ use crate::app::review_diff::{anchor, chunks, paths, split_hunk, unresolved_file
 
 fn finding(path: &str, side: FocusedReviewSide, snippet: &str, start: u32) -> FocusedReview {
     FocusedReview {
+        candidate_decisions: Vec::new(),
         project_impact: Vec::new(),
         suggestions: vec![FocusedReviewSuggestion {
             details: "Concrete risk".into(),

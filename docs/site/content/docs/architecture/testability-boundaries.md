@@ -74,7 +74,8 @@ public adapter into the router, including tool-call translation and telemetry; l
 provider qualification remains separate.
 
 Focused review persistence is checked against its active invocation in SQLite. Store
-tests exercise the write and invalidation boundary with the real adapter.
+tests exercise the write and invalidation boundary with the real adapter, including
+atomic archival and retrieval of completed discovery and consolidation call records.
 
 Project review rules use bounded filesystem reads before parsing. Adapter tests verify
 the read cap and I/O failures; workflow tests verify size-limit rejection before model

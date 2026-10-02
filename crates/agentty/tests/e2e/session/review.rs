@@ -22,7 +22,8 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
 
 /// Verifies project criteria, host source anchors, and individual warnings for
-/// unverified citations in the TUI.
+/// unverified citations in the TUI. The independent single-batch pass finds
+/// a supported risk omitted by the first pass.
 #[tokio::test]
 async fn test_focused_review_evidence_and_project_rules() -> E2eResult {
     // Arrange, Act, Assert
@@ -37,7 +38,7 @@ async fn test_focused_review_evidence_and_project_rules() -> E2eResult {
             std::fs::create_dir_all(worktree.join(".agentty"))?;
             std::fs::write(worktree.join(".agentty/review-rules.json"), r#"{"rules":[{"extensions":["rs"],"path_prefix":"src/","instructions":"Check request authorization"}]}"#)?;
             let candidates = serde_json::json!({"project_impact":[],"suggestions":[{"details":"Unverified candidate","severity":"high"}]});
-            let verified = serde_json::json!({"project_impact":[],"suggestions":[{
+            let mut verified = serde_json::json!({"project_impact":[],"suggestions":[{
                 "details":"src/main.rs:999:12: Verified authorization risk; enclosing function at src/main.rs:1", "severity":"high",
                 "evidence": {"correction":"Restore validation", "end_line":999,
                     "existing_code":"run();", "impact":"Invalid requests execute",
@@ -46,6 +47,12 @@ async fn test_focused_review_evidence_and_project_rules() -> E2eResult {
             }, {
                 "details":"src/missing.rs:888: No matching source", "severity":"medium", "evidence":null
             }]});
+            let boundary = verified.clone();
+            verified["candidate_decisions"] = serde_json::json!([
+                {"candidate_index":0,"suggestion_index":null,"reason":"The original candidate has no source support"},
+                {"candidate_index":1,"suggestion_index":0,"reason":"Verified request authorization path"},
+                {"candidate_index":2,"suggestion_index":1,"reason":"Concrete risk with unavailable source anchor"}
+            ]);
             let envelope = |result: serde_json::Value| serde_json::json!({
                 "type":"result", "subtype":"success", "result":result.to_string(),
                 "usage":{"input_tokens":5,"output_tokens":9}
@@ -61,9 +68,16 @@ esac
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 case "$prompt" in
   *"Reduce review:"*) printf '%s\n' '{}' ;;
+  *"Cross-file review:"*)
+    case "$prompt" in
+      *"+    run();"*) ;;
+      *) printf 'original source missing from boundary pass\n' >&2; exit 1 ;;
+    esac
+    printf '%s\n' '{}'
+    ;;
   *) printf '%s\n' '{}' ;;
 esac
-"#, envelope(verified), envelope(candidates));
+"#, envelope(verified), envelope(boundary), envelope(candidates));
             let path = env.stub_bin.join("claude");
             std::fs::write(&path, script)?;
             #[cfg(unix)]
@@ -207,8 +221,15 @@ count=$((count + 1))
 printf '%s\n' "$count" > "$count_file"
 rmdir "$count_file.lock"
 prompt=$(cat)
+case "$prompt" in
+  *"Keep answer within "*)
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"All changed fragments affect the same workflow.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
+esac
 if [ "$count" -eq 2 ]; then printf 'batch temporarily unavailable\n' >&2; exit 1; fi
 case "$prompt" in
+  *"Cross-file review:"*) ;;
   *"+fn main()"*)
     if [ -f "$state_dir/first-batch-reviewed" ]; then
       printf 'completed batch was repeated instead of resumed\n' >&2
@@ -222,7 +243,7 @@ case "$prompt" in
   *"Cross-file review:"*) impact='Cross-file check completed.' ;;
   *) impact='Original batch reviewed.' ;;
 esac
-result='{\"project_impact\":[\"'"$impact"'\"],\"suggestions\":[{\"details\":\"Preserved batch finding.\",\"severity\":\"high\"}]}'
+result='{\"project_impact\":[\"'"$impact"'\"],\"suggestions\":[{\"details\":\"Preserved batch finding.\",\"severity\":\"high\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}'
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
 "#;
@@ -287,6 +308,211 @@ async fn test_large_review_partial_retry() -> E2eResult {
                         "Cross-file check completed.",
                         &Region::full(frame.cols(), frame.rows()),
                     );
+                    assertion::assert_not_visible(frame, "Partial review:");
+                    assertion::assert_not_visible(frame, "Review assist unavailable");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Fails a boundary fragment after retaining the first, and rejects any
+/// repeated successful original or boundary call on retry.
+async fn seed_boundary_review_with_partial_retry(env: &BuilderEnv) -> E2eResult {
+    seed_large_review_with_partial_retry(env).await?;
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+state_dir=${0%/*}
+prompt=$(cat)
+case "$prompt" in
+  *"Keep answer within "*)
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"All changed fragments affect the same workflow.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
+esac
+case "$prompt" in
+  *"Cross-file review:"*)
+    case "$prompt" in
+      *"+fn main()"*)
+        if [ -f "$state_dir/first-boundary-reviewed" ]; then
+          printf 'completed boundary fragment was repeated\n' >&2
+          exit 1
+        fi
+        touch "$state_dir/first-boundary-reviewed"
+        ;;
+      *)
+        if [ ! -f "$state_dir/boundary-failed" ]; then
+          touch "$state_dir/boundary-failed"
+          printf 'boundary temporarily unavailable\n' >&2
+          exit 1
+        fi
+        ;;
+    esac
+    ;;
+  *"Reduce review:"*) ;;
+  *"+fn main()"*)
+    if [ -f "$state_dir/first-batch-reviewed" ]; then
+      printf 'completed original fragment was repeated\n' >&2
+      exit 1
+    fi
+    touch "$state_dir/first-batch-reviewed"
+    ;;
+esac
+case "$prompt" in
+  *"Reduce review:"*) impact='Consolidation completed.' ;;
+  *"Cross-file review:"*) impact='Cross-file check completed.' ;;
+  *) impact='Original batch reviewed.' ;;
+esac
+result='{\"project_impact\":[\"'"$impact"'\"],\"suggestions\":[{\"details\":\"Preserved batch finding.\",\"severity\":\"high\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}'
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
+"#;
+    std::fs::write(env.stub_bin.join("claude"), script)?;
+
+    Ok(())
+}
+
+/// A partial independent pass remains retryable without replaying completed
+/// discovery calls, and becomes Ready only after consolidation finishes.
+#[tokio::test]
+async fn test_boundary_review_partial_retry() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("boundary_review_partial_retry")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .setup(|env| Box::pin(async move { seed_boundary_review_with_partial_retry(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Partial review: independent boundary pass;", 30000)
+                    .press_key("g")
+                    .wait_for_text("Preserved batch finding.", 5000)
+                    .capture_labeled(
+                        "partial_boundary_review",
+                        "Completed discovery survives a partial boundary pass",
+                    )
+                    .press_key("f")
+                    .wait_for_text("Regenerate focused review?", 5000)
+                    .press_key("y")
+                    .wait_for_text("Consolidation completed.", 30000)
+                    .capture_labeled(
+                        "retried_boundary_review",
+                        "Retry reuses completed discovery and finishes consolidation",
+                    )
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let partial = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_text_in_region(
+                        &partial,
+                        "Preserved batch finding.",
+                        &Region::full(partial.cols(), partial.rows()),
+                    );
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Consolidation completed.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "Partial review:");
+                    assertion::assert_not_visible(frame, "Review assist unavailable");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+async fn seed_many_fragment_review_with_shared_context(env: &BuilderEnv) -> E2eResult {
+    seed_large_review_with_partial_retry(env).await?;
+    let source = env.agentty_root.join("wt/review-s/src");
+    for index in 0..40 {
+        let name = if index == 0 {
+            "main.rs".to_string()
+        } else {
+            format!("module_{index}.rs")
+        };
+        let marker = if index == 0 {
+            "CALLER_CONTRACT"
+        } else {
+            "CALLEE_CONTRACT"
+        };
+        std::fs::write(
+            source.join(name),
+            format!("// {marker}\n{}", "// original changed line\n".repeat(1500)),
+        )?;
+    }
+    let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"Keep answer within "*)
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"CALLER_CONTRACT and CALLEE_CONTRACT change a shared workflow across modules.\"}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
+  *"Cross-file review:"*)
+    for required in "Shared cross-file context from the captured changes" "CALLER_CONTRACT" "CALLEE_CONTRACT"; do
+      case "$prompt" in
+        *"$required"*) ;;
+        *) printf 'missing shared interaction context\n' >&2; exit 1 ;;
+      esac
+    done
+    ;;
+esac
+case "$prompt" in
+  *"Reduce review:"*) impact='Review completed within budget.' ;;
+  *) impact='Original source inspected.' ;;
+esac
+result='{\"project_impact\":[\"'"$impact"'\"],\"suggestions\":[{\"details\":\"Shared caller and callee contract mismatch.\",\"severity\":\"high\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports the interaction\"}]}'
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
+"#;
+    std::fs::write(env.stub_bin.join("claude"), script)?;
+
+    Ok(())
+}
+
+/// A large review can complete both source passes with shared interaction
+/// context instead of exhausting its budget partway through the second pass.
+#[tokio::test]
+async fn test_large_review_budget_and_shared_context() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("large_review_budget_and_shared_context")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .setup(|env| {
+            Box::pin(async move { seed_many_fragment_review_with_shared_context(env).await })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("Review completed within budget.", 60000)
+                    .capture_labeled(
+                        "complete_large_review",
+                        "Shared context survives a complete large review",
+                    )
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Shared caller and callee contract mismatch.",
+                        &full,
+                    );
+                    assertion::assert_text_in_region(frame, "Processed files: 40/40", &full);
                     assertion::assert_not_visible(frame, "Partial review:");
                     assertion::assert_not_visible(frame, "Review assist unavailable");
                 })
@@ -462,7 +688,7 @@ prompt=$(cat)
 case "$prompt" in
   *"Review the Git diff for display in a terminal UI."*)
     case "$prompt" in
-      *"Reduce review:"*) ;;
+      *"Reduce review:"*|*"Cross-file review:"*) ;;
       *)
         review_count=$((review_count + 1))
         printf '%s\n' "$review_count" > "$review_count_file"
@@ -470,16 +696,16 @@ case "$prompt" in
     esac
     case "$review_count" in
       1)
-        result='{\"project_impact\":[\"First lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the first lifecycle suggestion.\",\"severity\":\"medium\"}]}'
+        result='{\"project_impact\":[\"First lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the first lifecycle suggestion.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}'
         ;;
       2)
         result='{\"project_impact\":[\"No suggestions remain after one automatic remediation.\"],\"suggestions\":[]}'
         ;;
       3|4|5)
-        result='{\"project_impact\":[\"Iteration-limit lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the next bounded lifecycle suggestion.\",\"severity\":\"medium\"}]}'
+        result='{\"project_impact\":[\"Iteration-limit lifecycle review completed.\"],\"suggestions\":[{\"details\":\"Apply the next bounded lifecycle suggestion.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}'
         ;;
       6)
-        result='{\"project_impact\":[\"Three automatic remediation iterations completed.\"],\"suggestions\":[{\"details\":\"Fourth suggestion remains unapplied at the iteration limit.\",\"severity\":\"medium\"}]}'
+        result='{\"project_impact\":[\"Three automatic remediation iterations completed.\"],\"suggestions\":[{\"details\":\"Fourth suggestion remains unapplied at the iteration limit.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}'
         ;;
       *)
         result='{\"project_impact\":[\"Automatic remediation exceeded the iteration limit.\"],\"suggestions\":[]}'
@@ -1363,7 +1589,7 @@ async fn test_focused_review_reduction() -> E2eResult {
             let script = std::fs::read_to_string(&path)?.replace(
                 "printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\"}'",
                 r#"case "$prompt" in
-  *"Reduce review:"*) result='{\"project_impact\":[\"Consolidated review completed.\"],\"suggestions\":[{\"details\":\"Reconciled final finding.\",\"severity\":\"medium\"}]}' ;;
+  *"Reduce review:"*) result='{\"project_impact\":[\"Consolidated review completed.\"],\"suggestions\":[{\"details\":\"Reconciled final finding.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"Fixture source supports this finding\"}]}' ;;
 esac
 printf '%s\n' '{"type":"system","subtype":"init"}'"#,
             );

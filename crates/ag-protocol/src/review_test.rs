@@ -1,12 +1,39 @@
 use crate::review::{
-    FocusedReview, FocusedReviewEvidence, FocusedReviewSeverity, FocusedReviewSide,
-    FocusedReviewSuggestion,
+    FocusedReview, FocusedReviewDecision, FocusedReviewEvidence, FocusedReviewSeverity,
+    FocusedReviewSide, FocusedReviewSuggestion,
 };
+
+#[test]
+fn decision_deserialization_preserves_explicit_rejection_and_retention() {
+    // Arrange
+    for suggestion_index in [None, Some(0), Some(7), Some(usize::MAX)] {
+        let expected = FocusedReviewDecision {
+            candidate_index: 3,
+            reason: "Source verifies the disposition".into(),
+            suggestion_index,
+        };
+        let raw = serde_json::json!({
+            "candidate_index": 3,
+            "reason": "Source verifies the disposition",
+            "suggestion_index": suggestion_index,
+        });
+
+        // Act
+        let decision: FocusedReviewDecision =
+            serde_json::from_value(raw.clone()).expect("explicit disposition");
+        let serialized = serde_json::to_value(&decision).expect("serialized decision");
+
+        // Assert
+        assert_eq!(decision, expected);
+        assert_eq!(serialized, raw);
+    }
+}
 
 #[test]
 fn focused_review_formats_structured_fields_as_markdown() {
     // Arrange
     let review = FocusedReview {
+        candidate_decisions: Vec::new(),
         project_impact: vec!["Improves review reliability.".to_string()],
         suggestions: vec![
             FocusedReviewSuggestion {
@@ -38,6 +65,7 @@ fn focused_review_formats_structured_fields_as_markdown() {
 fn focused_review_formats_empty_arrays_with_none_sentinels() {
     // Arrange
     let review = FocusedReview {
+        candidate_decisions: Vec::new(),
         project_impact: Vec::new(),
         suggestions: Vec::new(),
     };
@@ -76,6 +104,7 @@ fn typed_evidence_round_trips_and_renders_resolved_or_unanchored_locations() {
         (FocusedReviewSide::New, 0, "`src/main.rs` (unanchored)"),
     ] {
         let mut review = FocusedReview {
+            candidate_decisions: Vec::new(),
             project_impact: Vec::new(),
             suggestions: vec![FocusedReviewSuggestion {
                 details: "src/main.rs:999:12: Validation is bypassed.".into(),
@@ -231,4 +260,87 @@ fn suggestion_with_evidence(
         }),
         severity: FocusedReviewSeverity::High,
     }
+}
+
+#[test]
+fn consolidation_requires_every_output_to_reference_an_input_candidate() {
+    // Arrange
+    let mut review: FocusedReview = serde_json::from_value(serde_json::json!({
+        "project_impact": [],
+        "suggestions": [
+            {"details": "Retained risk", "severity": "high"},
+            {"details": "Unlinked risk", "severity": "medium"}
+        ],
+        "candidate_decisions": [
+            {"candidate_index":0, "suggestion_index":null, "reason":"Rejected input"}
+        ]
+    }))
+    .expect("review");
+
+    // Act / Assert: rejecting inputs or retaining only one output is
+    // incomplete.
+    assert!(review.validate_candidate_decisions(1).is_err());
+    review.candidate_decisions[0].suggestion_index = Some(0);
+    assert!(review.validate_candidate_decisions(1).is_err());
+    review.candidate_decisions.push(FocusedReviewDecision {
+        candidate_index: 1,
+        reason: "Second candidate supports the second output".into(),
+        suggestion_index: Some(1),
+    });
+    review
+        .validate_candidate_decisions(2)
+        .expect("linked outputs");
+
+    // Act / Assert: no inputs cannot account for a new output.
+    review.candidate_decisions.clear();
+    assert!(review.validate_candidate_decisions(0).is_err());
+}
+
+#[test]
+fn consolidation_rejects_incomplete_or_invalid_candidate_accounting() {
+    // Arrange
+    let decisions = [
+        serde_json::json!([]),
+        serde_json::json!([{"candidate_index":1,"suggestion_index":null,"reason":"Unknown input"}]),
+        serde_json::json!([{"candidate_index":0,"suggestion_index":null,"reason":" "}]),
+        serde_json::json!([{"candidate_index":0,"suggestion_index":1,"reason":"Unknown output"}]),
+        serde_json::json!([
+            {"candidate_index":0,"suggestion_index":null,"reason":"One rejection"},
+            {"candidate_index":0,"suggestion_index":null,"reason":"Repeated decision"}
+        ]),
+    ];
+
+    // Act / Assert
+    for candidate_decisions in decisions {
+        let review: FocusedReview = serde_json::from_value(serde_json::json!({"project_impact":[],"suggestions":[],"candidate_decisions":candidate_decisions})).expect("typed response");
+        assert!(review.validate_candidate_decisions(1).is_err());
+    }
+    let legacy: FocusedReview =
+        serde_json::from_str(r#"{"project_impact":[],"suggestions":[]}"#).expect("legacy review");
+    assert_eq!(
+        legacy.candidate_decisions,
+        Vec::<FocusedReviewDecision>::new()
+    );
+    legacy
+        .validate_candidate_decisions(0)
+        .expect("no input candidates");
+}
+
+#[test]
+fn consolidation_accounts_for_retained_and_merged_candidates() {
+    // Arrange
+    let review: FocusedReview = serde_json::from_value(serde_json::json!({
+        "project_impact":[], "suggestions":[{"details":"Supported risk", "severity":"high"}],
+        "candidate_decisions":[
+            {"candidate_index":0,"suggestion_index":0,"reason":"Verified source"},
+            {"candidate_index":1,"suggestion_index":0,"reason":"Duplicate trigger"},
+            {"candidate_index":2,"suggestion_index":null,"reason":"Existing validation"}
+        ]
+    }))
+    .expect("review");
+
+    // Act / Assert
+    review
+        .validate_candidate_decisions(3)
+        .expect("complete decisions");
 }

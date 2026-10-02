@@ -94,6 +94,19 @@ pub struct ForkSessionSnapshot<'a> {
     pub status: &'a str,
 }
 
+/// One saved call from the latest completed focused review. Requests retain
+/// discovery input and consolidation groups; answers retain discovered
+/// candidates and group-local disposition indices and reasons.
+#[derive(Debug, PartialEq, Eq, sqlx::FromRow)]
+pub struct SessionReviewAuditRow {
+    /// Opaque saved call result, using the same encoding as retry checkpoints.
+    pub answer: String,
+    /// Input identity binding the review to its captured diff and history.
+    pub generation: String,
+    /// Full request key, including provider configuration and prompt input.
+    pub request: String,
+}
+
 /// Row returned when loading a session from the `session` table.
 ///
 /// Includes optional normalized forge review-request linkage metadata loaded
@@ -688,9 +701,11 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     ) -> Result<(), DbError>;
 
     /// Updates or clears the persisted focused-review cache for a session.
-    /// A `Ready` result or explicit clear (`None`) atomically discards
-    /// checkpoints and closes their generation. Failed persistence leaves the
-    /// prior result and resumable evidence intact.
+    /// A `Ready` result with an active generation atomically archives call
+    /// records before discarding checkpoints and closing that generation.
+    /// Restoring cached `Ready` state without a generation and explicit clear
+    /// (`None`) retain the latest completed audit. Failed persistence leaves
+    /// the prior result, audit, and evidence intact.
     async fn update_session_focused_review(
         &self,
         id: &str,
@@ -730,6 +745,15 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         generation: &str,
         request: &str,
     ) -> Result<Option<String>, DbError>;
+
+    /// Loads the latest completed review's discovery and consolidation call
+    /// records, ordered by request key. Partial retries, invalidation, and
+    /// cache restoration leave them intact; completing the next active
+    /// generation replaces them atomically.
+    async fn load_completed_review_audit(
+        &self,
+        id: &str,
+    ) -> Result<Vec<SessionReviewAuditRow>, DbError>;
 
     /// Saves evidence only while both its input generation and invocation
     /// remain active, including after an identical generation is restarted.
@@ -891,6 +915,36 @@ impl SqliteSessionRepository {
         .bind(timestamp_seconds)
         .bind(timestamp_seconds)
         .execute(executor)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Replaces the completed audit only when completing an active generation.
+    /// Restoring a cached Ready review preserves the previous audit.
+    /// Keep whole call records so reduction indices remain scoped to the
+    /// exact candidate group rather than a later merged suggestion list.
+    async fn archive_review_fragments(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        id: &str,
+    ) -> Result<(), DbError> {
+        sqlx::query(
+            "DELETE FROM session_review_audit WHERE session_id = ? AND EXISTS (SELECT 1 FROM \
+             session_review_generation WHERE session_id = ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .execute(&mut **transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO session_review_audit (session_id, generation, request, answer) SELECT \
+             fragment.session_id, fragment.generation, fragment.request, fragment.answer FROM \
+             session_review_fragment AS fragment JOIN session_review_generation AS active ON \
+             active.session_id = fragment.session_id AND active.generation = fragment.generation \
+             WHERE fragment.session_id = ?",
+        )
+        .bind(id)
+        .execute(&mut **transaction)
         .await?;
 
         Ok(())
@@ -2545,6 +2599,9 @@ WHERE id = ?
         .execute(&mut *transaction)
         .await?;
 
+        if status == Some(FocusedReviewStatus::Ready) {
+            Self::archive_review_fragments(&mut transaction, id).await?;
+        }
         if status.is_none() || status == Some(FocusedReviewStatus::Ready) {
             sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ?")
                 .bind(id)
@@ -2590,6 +2647,7 @@ WHERE id = ?
         }
 
         if status == FocusedReviewStatus::Ready {
+            Self::archive_review_fragments(&mut transaction, id).await?;
             sqlx::query("DELETE FROM session_review_fragment WHERE session_id = ?")
                 .bind(id)
                 .execute(&mut *transaction)
@@ -2645,6 +2703,19 @@ WHERE id = ?
         .bind(generation)
         .bind(request)
         .fetch_optional(&self.0)
+        .await?)
+    }
+
+    async fn load_completed_review_audit(
+        &self,
+        id: &str,
+    ) -> Result<Vec<SessionReviewAuditRow>, DbError> {
+        Ok(sqlx::query_as::<_, SessionReviewAuditRow>(
+            "SELECT answer, generation, request FROM session_review_audit WHERE session_id = ? \
+             ORDER BY request",
+        )
+        .bind(id)
+        .fetch_all(&self.0)
         .await?)
     }
 

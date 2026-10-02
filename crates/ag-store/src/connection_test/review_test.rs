@@ -4,7 +4,7 @@ use tempfile::tempdir;
 use super::support::assert_review_request_row;
 use crate::connection::Database;
 use crate::test_support::review_request_fixture;
-use crate::{PersistedSessionCreation, SessionFocusedReviewRow};
+use crate::{PersistedSessionCreation, SessionFocusedReviewRow, SessionReviewAuditRow};
 
 #[tokio::test]
 async fn session_archived_diff_round_trips_empty_and_nonempty_values() {
@@ -523,46 +523,18 @@ async fn completed_review_and_checkpoint_cleanup_commit_together() {
         .await
         .expect("save");
 
-    // Act / Assert: failure in either write leaves both pending state and
-    // evidence intact.
+    // Act / Assert: failed writes preserve the pending review and evidence.
     for rejection in [
         "CREATE TRIGGER reject_completion BEFORE UPDATE OF focused_review_text ON session BEGIN \
          SELECT RAISE(ABORT, 'completion failure'); END",
         "CREATE TRIGGER reject_completion BEFORE DELETE ON session_review_generation BEGIN SELECT \
          RAISE(ABORT, 'completion failure'); END",
+        "CREATE TRIGGER reject_completion BEFORE INSERT ON session_review_audit BEGIN SELECT \
+         RAISE(ABORT, 'archive failure'); END",
     ] {
-        sqlx::query(rejection)
-            .execute(database.pool())
+        assert_completion_failure_is_atomic(&database, id, generation, rejection)
             .await
-            .expect("failure fixture");
-        assert!(
-            sessions
-                .update_session_focused_review(
-                    id,
-                    Some(ag_session::FocusedReviewStatus::Ready),
-                    Some("42".into()),
-                    Some("Completed review".into())
-                )
-                .await
-                .is_err()
-        );
-        let state: String =
-            sqlx::query_scalar("SELECT focused_review_status FROM session WHERE id = 'checkpoint'")
-                .fetch_one(database.pool())
-                .await
-                .expect("durable state");
-        assert_eq!(state, "Pending");
-        assert_eq!(
-            sessions
-                .load_review_fragment(id, generation, "request")
-                .await
-                .expect(id),
-            Some("answer".into())
-        );
-        sqlx::query("DROP TRIGGER reject_completion")
-            .execute(database.pool())
-            .await
-            .expect("repair fixture");
+            .expect("atomic failure");
     }
     sessions
         .update_session_focused_review(
@@ -598,6 +570,18 @@ async fn completed_review_and_checkpoint_cleanup_commit_together() {
         .await
         .expect("checkpoint count");
     assert_eq!(count, 0);
+    let audit = sessions
+        .load_completed_review_audit(id)
+        .await
+        .expect("completed audit");
+    assert_eq!(
+        audit,
+        [SessionReviewAuditRow {
+            answer: "answer".into(),
+            generation: generation.into(),
+            request: "request".into(),
+        }]
+    );
     let state = sessions
         .load_session_focused_reviews_for_project(project)
         .await
@@ -701,4 +685,48 @@ async fn pending_review_database() -> Result<(Database, i64), crate::DbError> {
         .await?;
 
     Ok((database, project))
+}
+
+/// Exercises failed review, archival, and cleanup writes through the public
+/// boundary.
+async fn assert_completion_failure_is_atomic(
+    database: &Database,
+    id: &str,
+    generation: &str,
+    rejection: &'static str,
+) -> Result<(), crate::DbError> {
+    let sessions = database.sessions();
+    sqlx::query(rejection).execute(database.pool()).await?;
+    assert!(
+        sessions
+            .update_session_focused_review(
+                id,
+                Some(ag_session::FocusedReviewStatus::Ready),
+                Some("42".into()),
+                Some("Completed review".into()),
+            )
+            .await
+            .is_err()
+    );
+    let state: String =
+        sqlx::query_scalar("SELECT focused_review_status FROM session WHERE id = ?")
+            .bind(id)
+            .fetch_one(database.pool())
+            .await?;
+    assert_eq!(state, "Pending");
+    assert_eq!(
+        sessions.load_completed_review_audit(id).await?,
+        Vec::<SessionReviewAuditRow>::new()
+    );
+    assert_eq!(
+        sessions
+            .load_review_fragment(id, generation, "request")
+            .await?,
+        Some("answer".into())
+    );
+    sqlx::query("DROP TRIGGER reject_completion")
+        .execute(database.pool())
+        .await?;
+
+    Ok(())
 }
