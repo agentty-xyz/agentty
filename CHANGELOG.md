@@ -7,6 +7,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.6] - 2026-10-01
+
+### Added
+
+- `agentty`: trace provider operations and tool metadata, with opt-in bounded tool
+  content capture through `--otlp-capture-content`.
+
+### Changed
+
+- `agentty`: queue review-comment resolution with other session work and show the
+  selected response style and token usage throughout the session.
+- `agentty`: strengthen focused review accounting, checkpoint validation, and retained
+  audit evidence.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.6`.
+
+### Fixed
+
+- `agentty`: retain ownership of session workers through shutdown and stop stuck
+  execution or cleanup before telemetry exporters close.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.16.5] - 2026-09-30
 
 ### Added
