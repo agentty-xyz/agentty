@@ -1,4 +1,4 @@
-//! Content-free execution spans. Hosts own provider and exporter configuration.
+//! Execution spans. Hosts own provider, exporter and content-capture policy.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -9,6 +9,12 @@ use opentelemetry::global;
 pub use opentelemetry::trace::{FutureExt, TraceContextExt};
 use opentelemetry::trace::{Link, SpanId, SpanKind, Status, Tracer};
 pub use opentelemetry::{Context, KeyValue};
+
+/// Explicit host policy for bounded, sanitized tool-content capture.
+/// Attach this value to the execution context; absence disables capture.
+/// This does not enable prompt, transcript or reasoning capture.
+#[derive(Clone, Copy, Default)]
+pub struct CaptureToolContent(pub bool);
 
 /// Records a content-free milestone in the current execution context.
 pub fn milestone(name: &'static str) {
@@ -52,7 +58,12 @@ impl Span {
             .into_iter()
             .collect();
 
-        Self::start(name, attributes, &Context::new(), links)
+        let policy = current
+            .get::<CaptureToolContent>()
+            .copied()
+            .unwrap_or_default();
+
+        Self::start(name, attributes, &Context::new().with_value(policy), links)
     }
 
     /// Starts an interval beneath the currently executing operation. A
@@ -77,7 +88,12 @@ impl Span {
             return Self::start_at(
                 name,
                 Vec::new(),
-                &Context::new(),
+                &Context::new().with_value(
+                    parent
+                        .get::<CaptureToolContent>()
+                        .copied()
+                        .unwrap_or_default(),
+                ),
                 vec![Link::new(span_context, Vec::new(), 0)],
                 start_time,
             );
@@ -91,7 +107,8 @@ impl Span {
         self.context.clone()
     }
 
-    /// Records an allowlisted attribute; never pass prompt or output content.
+    /// Records an allowlisted attribute. Tool content requires explicit host
+    /// opt-in, sanitization and bounds; never pass prompts or reasoning.
     pub fn attribute(&self, key: &'static str, value: impl Into<opentelemetry::Value>) {
         self.context.span().set_attribute(KeyValue::new(key, value));
     }

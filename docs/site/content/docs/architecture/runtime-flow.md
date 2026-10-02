@@ -139,6 +139,14 @@ frontend-neutral lifecycle API. Agentty's bounded session-runtime mailbox execut
 requests against the foreground session manager without sharing `App` behind a mutex.
 User and coordinator handles have distinct managed-session permissions.
 
+The host's opt-in tool-content capture policy travels with the execution trace context,
+including independent roots, queued work, and linked operations. Scoped utility clients
+retain an explicit capture policy across background task spawns, even when captured
+outside a span; span inheritance does not replace that policy. Background project sync
+carries the host context into conflict assistance. Provider adapters own field
+selection, credential suppression, and preview bounds; prompt and reasoning content
+never enter this capture path.
+
 `ag-worker::RuntimeConfig` captures each harness's subagent, tool, and MCP policy.
 Workers resolve that policy for session turns and utilities before runtime dispatch;
 adapters preserve it across retries and repairs, reject unsupported explicit controls,

@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ag_git::{GitClient, RealGitClient};
+use ag_telemetry::{CaptureToolContent, Context, FutureExt as _};
 use agentty::analytics::Analytics;
 #[cfg(not(debug_assertions))]
 use agentty::analytics::TELEMETRY_ENABLED_ENV;
@@ -27,6 +28,10 @@ struct Cli {
     /// Disables automatic application updates.
     #[arg(long)]
     no_update: bool,
+    /// Includes bounded tool commands and results, with common credentials
+    /// redacted.
+    #[arg(long, requires = "otlp_endpoint")]
+    otlp_capture_content: bool,
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
@@ -64,7 +69,8 @@ async fn run(
         if let Some(telemetry) = &telemetry {
             telemetry.install().map_err(AppError::Workflow)?;
         }
-        run_application(cli, runtime).await
+        let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
+        run_application(cli, runtime).with_context(context).await
     }
     .await;
     if let Some(telemetry) = telemetry {

@@ -173,7 +173,8 @@ async fn captured_diff_disables_attribute_and_global_external_drivers() -> Resul
 fn changed_source_repository() -> Result<TempDir, Box<dyn Error>> {
     let directory = tempdir()?;
     let repository = directory.path();
-    run_git(repository, &["init", "-b", "main"])?;
+    run_git(repository, &["init", "--template=", "-b", "main"])?;
+    fs::create_dir_all(repository.join(".git/info"))?;
     fs::create_dir(repository.join("src"))?;
     let source = repository.join("src/source file.rs");
     fs::write(&source, "context\n\nold();\n\ntail\n")?;

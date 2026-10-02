@@ -19,6 +19,7 @@ pub(crate) mod replay;
 mod response_parser;
 mod submission;
 mod submission_pool;
+mod tool_trace;
 pub(crate) mod trace;
 
 pub use availability::{

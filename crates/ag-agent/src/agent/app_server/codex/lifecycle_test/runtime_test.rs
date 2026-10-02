@@ -47,7 +47,7 @@ async fn codex_turn_processing_traces_only_operations_from_the_active_turn_and_t
         ] {
             state.process_stream_response(&serde_json::json!({"method": method, "params": {
                 "threadId": thread, "turnId": turn,
-                "item": {"id": id, "type": "commandExecution", "exitCode": 0, "command": "private command", "durationMs": 30},
+                "item": {"id": id, "type": "commandExecution", "exitCode": 0, "command": "cargo test private command", "durationMs": 30},
             }})).expect("stream event");
         }
         state.process_stream_response(&serde_json::json!({"method": "turn/completed", "params": {
@@ -93,7 +93,7 @@ async fn codex_terminal_items_complete_responses_and_deduplicate_item_notificati
         {"id": "completion-only", "type": "agentMessage", "text": "private final response"},
         {"id": "started", "type": "agentMessage", "text": "private final response"},
         {"id": "already-completed", "type": "agentMessage", "text": "private final response"},
-        {"id": "command", "type": "commandExecution", "command": "private command", "exitCode": 17, "durationMs": 30},
+        {"id": "command", "type": "commandExecution", "command": "cargo test private command", "exitCode": 17, "durationMs": 30},
     ]);
 
     // Act

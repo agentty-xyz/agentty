@@ -22,6 +22,13 @@ async fn closed_runtime(_app: &mut App) -> std::io::Result<()> {
 }
 
 async fn traced_closed_runtime(app: &mut App) -> std::io::Result<()> {
+    assert_eq!(
+        ag_telemetry::Context::current()
+            .get::<ag_telemetry::CaptureToolContent>()
+            .expect("startup capture policy")
+            .0,
+        env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some()
+    );
     ag_telemetry::Span::root("startup-test", Vec::new())
         .scope(async {})
         .await;
@@ -36,6 +43,7 @@ fn cli_defaults_to_automatic_updates() {
 
     // Assert
     assert!(!cli.no_update);
+    assert!(!cli.otlp_capture_content);
 }
 
 #[test]
@@ -76,6 +84,24 @@ fn cli_rejects_unknown_arguments() {
 
     // Assert
     assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn content_capture_requires_an_explicit_export_destination() {
+    // Arrange / Act
+    let missing = Cli::try_parse_from(["agentty", "--otlp-capture-content"])
+        .expect_err("capture requires an endpoint");
+    let enabled = Cli::try_parse_from([
+        "agentty",
+        "--otlp-endpoint",
+        "http://localhost:4318/v1/traces",
+        "--otlp-capture-content",
+    ])
+    .expect("explicit content capture");
+
+    // Assert
+    assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(enabled.otlp_capture_content);
 }
 
 #[test]
@@ -147,6 +173,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
         // Arrange
         let cli = Cli {
             no_update: false,
+            otlp_capture_content: false,
             otlp_endpoint: None,
         };
 
@@ -195,6 +222,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
         let error = run(
             Cli {
                 no_update: true,
+                otlp_capture_content: false,
                 otlp_endpoint: None,
             },
             closed_runtime,
@@ -245,6 +273,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
         let error = run(
             Cli {
                 no_update: true,
+                otlp_capture_content: false,
                 otlp_endpoint: None,
             },
             closed_runtime,
@@ -288,6 +317,7 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         let error = run(
             Cli {
                 no_update: true,
+                otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
                 otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
             },
             traced_closed_runtime,
@@ -315,7 +345,12 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         .expect("executable codex stub");
     let child_path = format!("{}:/usr/bin:/bin", stub_bin.display());
 
-    for response_status in [None, Some(200), Some(503)] {
+    for (response_status, capture) in [
+        (None, false),
+        (Some(200), false),
+        (Some(200), true),
+        (Some(503), false),
+    ] {
         let server = MockServer::start().await;
         let mut child = tokio::process::Command::new(env::current_exe().expect("test binary"));
         child
@@ -327,6 +362,9 @@ async fn startup_runs_application_through_telemetry_wrapper() {
             .env("AGENTTY_ROOT", root.path())
             .env("HOME", root.path())
             .env("PATH", &child_path);
+        if capture {
+            child.env("AGENTTY_TEST_CAPTURE_CONTENT", "1");
+        }
         if let Some(status) = response_status {
             Mock::given(wiremock::matchers::method("POST"))
                 .respond_with(ResponseTemplate::new(status))

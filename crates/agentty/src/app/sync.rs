@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
+use ag_telemetry::{Context, FutureExt as _};
 use tokio::sync::{mpsc, watch};
 use tokio::time::MissedTickBehavior;
 
@@ -421,7 +422,8 @@ impl SyncOrchestrator {
     /// Spawns the orchestrator loop on the runtime.
     ///
     /// The task exits when the command channel closes, which happens when the
-    /// app drops its [`SyncHandle`] at shutdown.
+    /// app drops its [`SyncHandle`] at shutdown. The host execution context
+    /// follows the task so conflict assistance retains its capture policy.
     pub(crate) fn spawn(
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         command_rx: mpsc::UnboundedReceiver<SyncCommand>,
@@ -436,7 +438,7 @@ impl SyncOrchestrator {
             tick_index: 0,
         };
 
-        tokio::spawn(orchestrator.run());
+        tokio::spawn(orchestrator.run().with_context(Context::current()));
     }
 
     /// Runs the command/tick loop until the command channel closes.
