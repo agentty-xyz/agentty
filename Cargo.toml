@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.16.5"
+version = "0.16.6"
 authors = [
   "Vladimir Minev <minev.dev@gmail.com>",
   "Andrei Agaev <andagaev@gmail.com>",
@@ -14,23 +14,23 @@ description = "Agentty is an ADE (Agentic Development Environment) for structure
 repository = "https://github.com/agentty-xyz/agentty"
 
 [workspace.dependencies]
-ag-agent = { path = "crates/ag-agent", version = "0.16.5" }
-ag-contracts = { path = "crates/ag-contracts", version = "0.16.5" }
-ag-clipboard = { path = "crates/ag-clipboard", version = "0.16.5" }
-ag-forge = { path = "crates/ag-forge", version = "0.16.5" }
-ag-git = { path = "crates/ag-git", version = "0.16.5" }
-ag-harness = { path = "crates/ag-harness", version = "0.16.5" }
-ag-orchestration = { path = "crates/ag-orchestration", version = "0.16.5" }
-ag-protocol = { path = "crates/ag-protocol", version = "0.16.5" }
-ag-runtime = { path = "crates/ag-runtime", version = "0.16.5" }
-ag-router = { path = "crates/ag-router", version = "0.16.5" }
-ag-scheduler = { path = "crates/ag-scheduler", version = "0.16.5" }
-ag-session = { path = "crates/ag-session", version = "0.16.5" }
-ag-store = { path = "crates/ag-store", version = "0.16.5" }
-ag-telemetry = { path = "crates/ag-telemetry", version = "0.16.5" }
-ag-tui-text = { path = "crates/ag-tui-text", version = "0.16.5" }
-ag-worker = { path = "crates/ag-worker", version = "0.16.5" }
-testty = { path = "crates/testty", version = "0.16.5" }
+ag-agent = { path = "crates/ag-agent", version = "0.16.6" }
+ag-contracts = { path = "crates/ag-contracts", version = "0.16.6" }
+ag-clipboard = { path = "crates/ag-clipboard", version = "0.16.6" }
+ag-forge = { path = "crates/ag-forge", version = "0.16.6" }
+ag-git = { path = "crates/ag-git", version = "0.16.6" }
+ag-harness = { path = "crates/ag-harness", version = "0.16.6" }
+ag-orchestration = { path = "crates/ag-orchestration", version = "0.16.6" }
+ag-protocol = { path = "crates/ag-protocol", version = "0.16.6" }
+ag-runtime = { path = "crates/ag-runtime", version = "0.16.6" }
+ag-router = { path = "crates/ag-router", version = "0.16.6" }
+ag-scheduler = { path = "crates/ag-scheduler", version = "0.16.6" }
+ag-session = { path = "crates/ag-session", version = "0.16.6" }
+ag-store = { path = "crates/ag-store", version = "0.16.6" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.16.6" }
+ag-tui-text = { path = "crates/ag-tui-text", version = "0.16.6" }
+ag-worker = { path = "crates/ag-worker", version = "0.16.6" }
+testty = { path = "crates/testty", version = "0.16.6" }
 async-trait = "0.1"
 agent-client-protocol = "2.1.0"
 assert_cmd = "2"
