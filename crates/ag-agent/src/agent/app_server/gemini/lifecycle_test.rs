@@ -4,11 +4,14 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::AgentModel;
+use ag_telemetry::Span;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     AGENT_METHOD_NAMES, CLIENT_METHOD_NAMES, InitializeResponse, NewSessionResponse,
 };
 use mockall::Sequence;
+use opentelemetry::{KeyValue, global};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -21,6 +24,80 @@ use crate::agent::app_server::gemini::lifecycle::{
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
 use crate::app_server::AppServerTurnRequest;
 use crate::app_server_transport;
+use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn gemini_transport_traces_tool_lifecycle_for_the_current_session() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let prompt_id = Arc::new(Mutex::new(String::new()));
+    let mut transport = MockAppServerRuntimeTransport::new();
+    let written_id = Arc::clone(&prompt_id);
+    transport
+        .expect_write_json_line()
+        .once()
+        .returning(move |payload| {
+            *written_id.lock().expect("id") =
+                payload["id"].as_str().expect("prompt id").to_string();
+
+            Box::pin(async { Ok(()) })
+        });
+    let updates = Arc::new(Mutex::new(vec![
+        ("session-1", "completed"),
+        ("session-1", "in_progress"),
+        ("other-session", "in_progress"),
+    ]));
+    transport.expect_next_stdout().times(4).returning(move || {
+        let line = if let Some((session, status)) = updates.lock().expect("updates").pop() {
+            serde_json::json!({"method": "session/update", "params": {"sessionId": session, "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": status, "kind": "execute", "title": "private title",
+            }}})
+        } else {
+            serde_json::json!({"id": prompt_id.lock().expect("id").clone(), "result": {"response": "done"}})
+        }.to_string();
+
+        Box::pin(async move { Ok(Some(line)) })
+    });
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let result = Span::root("agent.attempt", Vec::new())
+        .scope(run_turn_with_runtime(
+            &mut transport,
+            "session-1",
+            PermissionMode::ReadOnly,
+            "prompt",
+            ProtocolRequestProfile::SessionTurn,
+            stream_tx,
+        ))
+        .await
+        .expect("turn");
+
+    // Assert
+    assert_eq!(result.0, "done");
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), 2);
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "agent.tool")
+        .expect("tool");
+    assert_eq!(tool.parent_span_id, attempt.span_context.span_id());
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed"))
+    );
+    assert!(!format!("{spans:?}").contains("private"));
+}
 
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {
     AppServerTurnRequest {

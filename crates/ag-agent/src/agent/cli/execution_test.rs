@@ -104,6 +104,72 @@ fn shell_command(script: &str) -> Command {
 }
 
 #[tokio::test]
+async fn claude_stdout_operations_are_children_of_the_attempt_and_preserve_raw_output() {
+    // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let folder = tempdir().expect("temporary folder");
+    let request_kind = AgentRequestKind::UtilityPrompt;
+    let raw = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"private command"}}]}}"#,
+        "\n",
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}}"#,
+        "\n",
+        r#"{"type":"message","role":"assistant","content":[{"type":"text","text":"private explanation"},{"type":"tool_use","id":"call-2","name":"Read","input":{"file_path":"private path"}}]}"#,
+        "\n",
+        r#"{"type":"message","role":"user","content":[{"type":"tool_result","tool_use_id":"call-2","content":"private result"}]}"#,
+        "\n"
+    );
+    let mut backend = MockAgentBackend::new();
+    backend
+        .expect_build_command()
+        .once()
+        .returning(move |_| Ok(shell_command(&format!("cat <<'EVENTS'\n{raw}EVENTS\n"))));
+
+    // Act
+    let output = Span::root("test.cli", Vec::new())
+        .scope(execute_cli_command(
+            &backend,
+            AgentKind::Claude,
+            build_request(&[], folder.path(), "prompt", &request_kind),
+            &CollectingCliObserver,
+            None,
+        ))
+        .await
+        .expect("execution");
+
+    // Assert
+    assert_eq!(output.stdout, raw);
+    let spans = exporter.get_finished_spans().expect("spans");
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    let tools = spans
+        .iter()
+        .filter(|span| span.name == "agent.tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tools.len(), 2);
+    for tool in tools {
+        assert_eq!(tool.parent_span_id, attempt.span_context.span_id());
+        assert!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.timing.source", "lifecycle"))
+        );
+        assert!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.outcome", "completed"))
+        );
+    }
+    assert!(!format!("{spans:?}").contains("private"));
+}
+
+#[tokio::test]
 async fn cli_attempt_spans_classify_unsuccessful_exits_without_changing_raw_output() {
     // Arrange
     let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
@@ -500,9 +566,13 @@ async fn test_capture_stdout_returns_read_error() {
     let observer = CollectingCliObserver;
 
     // Act
-    let error = capture_stdout(tokio::io::BufReader::new(FailingReader), &observer)
-        .await
-        .expect_err("stdout read should fail");
+    let error = capture_stdout(
+        tokio::io::BufReader::new(FailingReader),
+        &observer,
+        AgentKind::Claude,
+    )
+    .await
+    .expect_err("stdout read should fail");
 
     // Assert
     assert!(matches!(error, CliExecutionError::StdoutRead(_)));

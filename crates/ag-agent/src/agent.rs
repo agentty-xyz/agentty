@@ -19,6 +19,7 @@ pub(crate) mod replay;
 mod response_parser;
 mod submission;
 mod submission_pool;
+pub(crate) mod trace;
 
 pub use availability::{
     AgentAvailabilityProbe, RealAgentAvailabilityProbe, StaticAgentAvailabilityProbe,

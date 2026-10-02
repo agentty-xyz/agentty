@@ -529,7 +529,22 @@ Each turn has a separate trace correlated by session and operation identifiers. 
 measure queue and capacity waits, workspace and context preparation, agent startup and
 attempts, response validation, persistence, and post-processing. Utility calls inherit
 their initiating context; work started after its parent finishes uses a linked trace.
-External agents do not always expose internal model or tool timings; first activity is
+Provider operations appear beneath `agent.attempt`, including tool calls and supported
+response, reasoning, compaction, checkpoint, and subagent phases:
+
+| Provider    | Operations exposed                                              |
+| ----------- | --------------------------------------------------------------- |
+| Codex       | Tools, responses, reasoning, compaction, subagents              |
+| Claude      | Tools, subagents                                                |
+| Gemini      | Tools                                                           |
+| Antigravity | Tools, responses, reasoning, compaction, checkpoints, subagents |
+
+Operation categories and outcomes are exported without their content. Timing comes from
+observed lifecycle events; when only a completion arrives, a reported duration can
+reconstruct an interval within the attempt. `agentty.timing.source` is `lifecycle` for
+paired events, `provider` for reconstructed intervals, and `completion` for observations
+without a start or duration. Available operations depend on the provider and CLI
+version; they do not necessarily represent individual model requests. First activity is
 not a time-to-first-token measurement.
 
 Traces contain execution identifiers, provider/model selections, token counts, and

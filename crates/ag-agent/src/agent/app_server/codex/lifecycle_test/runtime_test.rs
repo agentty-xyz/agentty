@@ -5,18 +5,228 @@ use std::time::Duration;
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
 use ag_session::test_support as model_fixture;
+use ag_telemetry::Span;
 use mockall::Sequence;
+use opentelemetry::{KeyValue, global};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
 use super::support::remember_request_id;
 use crate::agent::app_server::codex::lifecycle::{
-    CodexRuntimeState, compaction_timeout_error, finalize_turn_completion, initialize_runtime,
-    start_runtime, start_runtime_with_built_command, turn_completed_timeout_error,
+    CodexRuntimeState, CodexTurnEventLoopState, compaction_timeout_error, finalize_turn_completion,
+    initialize_runtime, start_runtime, start_runtime_with_built_command,
+    turn_completed_timeout_error,
 };
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport as MockCodexRuntimeTransport;
 use crate::app_server::{AppServerError, AppServerTurnRequest};
+use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn codex_turn_processing_traces_only_operations_from_the_active_turn_and_thread() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+
+    // Act
+    Span::root("agent.attempt", Vec::new()).scope(async {
+        let mut state = CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+        state.process_turn_start_response(&serde_json::json!({"result": {"turn": {"id": "turn-1"}}})).expect("turn start");
+        for (method, thread, turn, id) in [
+            ("item/started", "thread-1", "turn-1", "call-1"),
+            ("item/completed", "thread-2", "turn-1", "call-1"),
+            ("item/started", "thread-1", "turn-2", "other-call"),
+            ("item/completed", "thread-1", "turn-1", "call-1"),
+        ] {
+            state.process_stream_response(&serde_json::json!({"method": method, "params": {
+                "threadId": thread, "turnId": turn,
+                "item": {"id": id, "type": "commandExecution", "exitCode": 0, "command": "private command", "durationMs": 30},
+            }})).expect("stream event");
+        }
+        state.process_stream_response(&serde_json::json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-1", "status": "completed"},
+        }})).expect("turn completion without a snapshot");
+    }).await;
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), 2);
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "agent.tool")
+        .expect("tool");
+    assert_eq!(tool.parent_span_id, attempt.span_context.span_id());
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.timing.source", "lifecycle"))
+    );
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.outcome", "completed"))
+    );
+    assert!(!format!("{spans:?}").contains("private"));
+}
+
+#[tokio::test]
+async fn codex_terminal_items_complete_responses_and_deduplicate_item_notifications() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let items = serde_json::json!([
+        {"id": "completion-only", "type": "agentMessage", "text": "private final response"},
+        {"id": "started", "type": "agentMessage", "text": "private final response"},
+        {"id": "already-completed", "type": "agentMessage", "text": "private final response"},
+        {"id": "command", "type": "commandExecution", "command": "private command", "exitCode": 17, "durationMs": 30},
+    ]);
+
+    // Act
+    Span::root("agent.attempt", Vec::new()).scope(async {
+        let mut state = CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+        state.process_turn_start_response(&serde_json::json!({"result": {"turn": {"id": "turn-1"}}})).expect("turn start");
+        for item in items.as_array().expect("items").iter().skip(1) {
+            state.process_stream_response(&serde_json::json!({"method": "item/started", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "item": item,
+            }})).expect("item start");
+        }
+        state.process_stream_response(&serde_json::json!({"method": "item/completed", "params": {
+            "threadId": "thread-1", "turnId": "turn-1", "item": items[2],
+        }})).expect("standalone completion");
+        let result = state.process_stream_response(&serde_json::json!({"method": "turn/completed", "params": {
+            "threadId": "thread-1", "turn": {"id": "turn-1", "status": "completed", "items": items},
+        }})).expect("turn completion");
+        assert_eq!(result, Some(("private final response".to_string(), 0, 0)));
+    }).await;
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    assert_eq!(spans.len(), 5);
+    let responses = spans
+        .iter()
+        .filter(|span| span.name == "agent.response")
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 3);
+    for response in &responses {
+        assert_eq!(response.parent_span_id, attempt.span_context.span_id());
+        assert_eq!(
+            response.span_context.trace_id(),
+            attempt.span_context.trace_id()
+        );
+        assert!(
+            response
+                .attributes
+                .contains(&KeyValue::new("agentty.outcome", "completed"))
+        );
+    }
+    assert_eq!(
+        responses
+            .iter()
+            .filter(|span| span
+                .attributes
+                .contains(&KeyValue::new("agentty.timing.source", "lifecycle")))
+            .count(),
+        2
+    );
+    assert_eq!(
+        responses
+            .iter()
+            .filter(|span| span
+                .attributes
+                .contains(&KeyValue::new("agentty.timing.source", "completion")))
+            .count(),
+        1
+    );
+    let tool = spans
+        .iter()
+        .find(|span| span.name == "agent.tool")
+        .expect("command");
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.outcome", "failed"))
+    );
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.provider.exit_code", 17_i64))
+    );
+    assert!(
+        tool.attributes
+            .contains(&KeyValue::new("agentty.provider.duration_ms", 30.0))
+    );
+    assert!(!format!("{spans:?}").contains("private"));
+}
+
+#[tokio::test]
+async fn codex_terminal_items_require_a_matching_successful_turn_and_thread() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let ignored_completions = [
+        serde_json::json!({"threadId": "thread-1", "turnId": "turn-1", "turn": {"id": "other-turn", "status": "completed"}}),
+        serde_json::json!({"threadId": "thread-1", "turn": {"status": "completed"}}),
+        serde_json::json!({"threadId": "other-thread", "turn": {"id": "turn-1", "status": "completed"}}),
+        serde_json::json!({"threadId": "thread-1", "turn": {"id": "turn-1", "status": "failed"}}),
+        serde_json::json!({"threadId": "thread-1", "turn": {"id": "turn-1", "status": "interrupted"}}),
+    ];
+
+    // Act
+    Span::root("agent.attempt", Vec::new()).scope(async {
+        for mut params in ignored_completions.clone() {
+            let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+            let mut state = CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+            state.process_turn_start_response(&serde_json::json!({"result": {"turn": {"id": "turn-1"}}})).expect("turn start");
+            state.process_stream_response(&serde_json::json!({"method": "item/started", "params": {
+                "threadId": "thread-1", "turnId": "turn-1", "item": {"id": "started", "type": "agentMessage"},
+            }})).expect("item start");
+            params["turn"]["items"] = serde_json::json!([
+                {"id": "started", "type": "agentMessage", "text": "private ignored response"},
+                {"id": "completion-only", "type": "agentMessage", "text": "private ignored response"},
+            ]);
+            let _ = state.process_stream_response(&serde_json::json!({"method": "turn/completed", "params": params}));
+        }
+    }).await;
+
+    // Assert
+    let spans = exporter.get_finished_spans().expect("spans");
+    assert_eq!(spans.len(), ignored_completions.len() + 1);
+    for response in spans.iter().filter(|span| span.name == "agent.response") {
+        assert!(
+            response
+                .attributes
+                .contains(&KeyValue::new("agentty.timing.source", "lifecycle"))
+        );
+        assert!(
+            response
+                .attributes
+                .contains(&KeyValue::new("agentty.outcome", "canceled"))
+        );
+    }
+    assert!(!format!("{spans:?}").contains("private"));
+}
 
 #[tokio::test]
 async fn start_runtime_omits_personality_from_the_process_command() {

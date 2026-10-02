@@ -3,6 +3,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::SystemTime;
 
 use opentelemetry::global;
 pub use opentelemetry::trace::{FutureExt, TraceContextExt};
@@ -57,6 +58,12 @@ impl Span {
     /// Starts an interval beneath the currently executing operation. A
     /// completed owned parent starts a new trace linked to that operation.
     pub fn child(name: &'static str) -> Self {
+        Self::child_at(name, SystemTime::now())
+    }
+
+    /// Starts a child interval at an observed or provider-reported time.
+    /// Hosts should bound reconstructed times to the owning operation.
+    pub fn child_at(name: &'static str, start_time: SystemTime) -> Self {
         let parent = Context::current();
         let span_context = parent.span().span_context().clone();
         if span_context.is_valid()
@@ -67,15 +74,16 @@ impl Span {
                         && completion.ended.load(Ordering::Acquire)
                 })
         {
-            return Self::start(
+            return Self::start_at(
                 name,
                 Vec::new(),
                 &Context::new(),
                 vec![Link::new(span_context, Vec::new(), 0)],
+                start_time,
             );
         }
 
-        Self::start(name, Vec::new(), &parent, Vec::new())
+        Self::start_at(name, Vec::new(), &parent, Vec::new(), start_time)
     }
 
     /// Returns a context that can be carried across a queue or task spawn.
@@ -130,12 +138,23 @@ impl Span {
         parent: &Context,
         links: Vec<Link>,
     ) -> Self {
+        Self::start_at(name, attributes, parent, links, SystemTime::now())
+    }
+
+    fn start_at(
+        name: &'static str,
+        attributes: Vec<KeyValue>,
+        parent: &Context,
+        links: Vec<Link>,
+        start_time: SystemTime,
+    ) -> Self {
         let tracer = global::tracer("ag-telemetry");
         let span = tracer
             .span_builder(name)
             .with_kind(SpanKind::Internal)
             .with_attributes(attributes)
             .with_links(links)
+            .with_start_time(start_time)
             .start_with_context(&tracer, parent);
 
         let context = parent.with_span(span);

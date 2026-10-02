@@ -10,7 +10,10 @@ use std::time::Duration;
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentModel;
+use ag_telemetry::Span;
 use mockall::Sequence;
+use opentelemetry::{KeyValue, global};
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
 
@@ -22,6 +25,7 @@ use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
 use crate::agent::backend::{AgentBackendError, MockAgentBackend};
 use crate::app_server::{AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport;
+use crate::telemetry::TRACER_PROVIDER_LOCK;
 
 fn request(folder: PathBuf) -> AppServerTurnRequest {
     AppServerTurnRequest {
@@ -175,6 +179,13 @@ fn backend_runtime_wraps_command_build_errors() {
 #[tokio::test]
 async fn turn_writes_user_event_and_returns_step_usage() {
     // Arrange
+    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
     let folder = tempdir().expect("create runtime folder");
     let request = request(folder.path().to_path_buf());
     let mut state = AntigravityRuntimeState::new(&request);
@@ -210,6 +221,7 @@ async fn turn_writes_user_event_and_returns_step_usage() {
                 "state": "DONE",
                 "step_type": "agent_response",
                 "text_delta": "partial",
+                "duration_seconds": 0.25,
                 "usage": {"input_tokens": 10, "output_tokens": 2},
             },
         })
@@ -225,12 +237,33 @@ async fn turn_writes_user_event_and_returns_step_usage() {
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
     // Act
-    let output = run_turn_with_runtime(&mut transport, &mut state, &request.prompt, stream_tx)
+    let output = Span::root("agent.attempt", Vec::new())
+        .scope(run_turn_with_runtime(
+            &mut transport,
+            &mut state,
+            &request.prompt,
+            stream_tx,
+        ))
         .await
         .expect("turn should succeed");
 
     // Assert
     assert_eq!(output, ("{\"answer\":\"done\"}".to_string(), 10, 2));
+    let spans = exporter.get_finished_spans().expect("spans");
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    let response = spans
+        .iter()
+        .find(|span| span.name == "agent.response")
+        .expect("response step");
+    assert_eq!(response.parent_span_id, attempt.span_context.span_id());
+    assert!(
+        response
+            .attributes
+            .contains(&KeyValue::new("agentty.provider.duration_ms", 250.0))
+    );
     assert_eq!(state.conversation_id(), Some("conversation-1"));
     let payload = written_payload
         .lock()
