@@ -107,6 +107,8 @@ enum ReplyEligibility {
     /// Accept a structured question answer during turn finalization or while
     /// the session is already waiting in `Question`.
     QuestionAnswer,
+    /// Accept review-comment batches during active turns and syncs.
+    ReviewComments,
 }
 
 /// Capability used to authorize and stop one terminal cancellation.
@@ -149,6 +151,13 @@ impl ReplyEligibility {
                     || (is_first_message && status == Status::Draft)
             }
             Self::QuestionAnswer => matches!(status, Status::InProgress | Status::Question),
+            Self::ReviewComments => {
+                status.allows_review_actions()
+                    || matches!(
+                        status,
+                        Status::Question | Status::InProgress | Status::Rebasing
+                    )
+            }
         }
     }
 }
@@ -181,10 +190,10 @@ impl ReplyPromptPresentation {
 struct ReplyOptions {
     defer_prompt_until_enqueued: bool,
     eligibility: ReplyEligibility,
+    joins_worker_queue: bool,
     operation_id: Option<String>,
     persist_prompt: bool,
     prompt_presentation: ReplyPromptPresentation,
-    requires_existing_worker: bool,
     review_comment_thread_ids: Vec<String>,
 }
 
@@ -197,21 +206,21 @@ impl ReplyOptions {
             operation_id: None,
             persist_prompt: true,
             prompt_presentation: ReplyPromptPresentation::Visible,
-            requires_existing_worker: false,
+            joins_worker_queue: false,
             review_comment_thread_ids,
         }
     }
 
     /// Builds structured question-answer behavior for the current worker
     /// state.
-    fn question_answer(requires_existing_worker: bool) -> Self {
+    fn question_answer(joins_worker_queue: bool) -> Self {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::QuestionAnswer,
             operation_id: None,
             persist_prompt: true,
             prompt_presentation: ReplyPromptPresentation::Visible,
-            requires_existing_worker,
+            joins_worker_queue,
             review_comment_thread_ids: Vec::new(),
         }
     }
@@ -224,20 +233,21 @@ impl ReplyOptions {
             operation_id: Some(operation_id),
             persist_prompt,
             prompt_presentation: ReplyPromptPresentation::Visible,
-            requires_existing_worker: false,
+            joins_worker_queue: false,
             review_comment_thread_ids: Vec::new(),
         }
     }
 
     /// Builds hidden generated-prompt behavior for forge review comments.
-    fn review_comments(review_comment_thread_ids: Vec<String>) -> Self {
+    fn review_comments(review_comment_thread_ids: Vec<String>, joins_worker_queue: bool) -> Self {
         Self {
-            defer_prompt_until_enqueued: false,
-            eligibility: ReplyEligibility::Standard,
+            defer_prompt_until_enqueued: true,
+            eligibility: ReplyEligibility::ReviewComments,
             operation_id: None,
-            persist_prompt: true,
+            // The worker persists generated context only when execution starts.
+            persist_prompt: false,
             prompt_presentation: ReplyPromptPresentation::HiddenAgent,
-            requires_existing_worker: false,
+            joins_worker_queue,
             review_comment_thread_ids,
         }
     }
@@ -257,8 +267,8 @@ enum ReplyEnqueueOutcome {
 /// Worker-queue behavior selected after reply preparation.
 struct ReplyEnqueueOptions {
     idempotent: bool,
+    joins_worker_queue: bool,
     report_failure_in_transcript: bool,
-    requires_existing_worker: bool,
 }
 
 /// Cleanup payload for a deleted session's git and filesystem resources.
@@ -1835,7 +1845,7 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return false;
         };
-        let requires_existing_worker = session.status == Status::InProgress;
+        let joins_worker_queue = session.status == Status::InProgress;
         let session_agent = session.agent;
 
         self.reply_impl(
@@ -1843,7 +1853,7 @@ impl SessionManager {
             session_id,
             prompt,
             session_agent,
-            ReplyOptions::question_answer(requires_existing_worker),
+            ReplyOptions::question_answer(joins_worker_queue),
         )
         .await
     }
@@ -1892,9 +1902,10 @@ impl SessionManager {
         let Ok(session) = self.session_or_err(session_id) else {
             return false;
         };
-        if session.status.is_read_only() {
+        if !session.allows_review_comment_reply() {
             return false;
         }
+        let joins_worker_queue = session.queues_review_comment_reply();
         let session_agent = session.agent;
 
         self.reply_impl(
@@ -1902,7 +1913,7 @@ impl SessionManager {
             session_id,
             prompt,
             session_agent,
-            ReplyOptions::review_comments(review_comment_thread_ids),
+            ReplyOptions::review_comments(review_comment_thread_ids, joins_worker_queue),
         )
         .await
     }
@@ -2524,7 +2535,7 @@ impl SessionManager {
             operation_id,
             persist_prompt,
             prompt_presentation,
-            requires_existing_worker,
+            joins_worker_queue,
             review_comment_thread_ids,
         } = options;
         // A saved fork prompt still needs the copied history if its worker
@@ -2600,7 +2611,7 @@ impl SessionManager {
                 ReplyEnqueueOptions {
                     idempotent,
                     report_failure_in_transcript: !defer_prompt_until_enqueued,
-                    requires_existing_worker,
+                    joins_worker_queue,
                 },
             )
             .await;
@@ -2958,15 +2969,25 @@ impl SessionManager {
         options: ReplyEnqueueOptions,
     ) -> ReplyEnqueueOutcome {
         let preparation_owned = command.is_preparation_prompt(persisted_session_id);
+        let review_comment_count = command.review_comment_count();
         let enqueue_result = if options.idempotent {
             self.enqueue_session_command_idempotently(services, persisted_session_id, command)
                 .await
-        } else if options.requires_existing_worker {
+        } else if options.joins_worker_queue {
             let persisted_session_id = SessionId::from(persisted_session_id);
-            self.worker_service_mut()
-                .enqueue_existing_session_command(services, &persisted_session_id, command)
+            self.enqueue_queued_session_command(services, &persisted_session_id, command)
                 .await
-                .map(|_| true)
+                .map(|order| {
+                    if review_comment_count > 0 {
+                        self.queue_review_comment_resolution(
+                            persisted_session_id.as_str(),
+                            order,
+                            review_comment_count,
+                        );
+                    }
+
+                    true
+                })
         } else {
             self.enqueue_session_command(services, persisted_session_id, command)
                 .await

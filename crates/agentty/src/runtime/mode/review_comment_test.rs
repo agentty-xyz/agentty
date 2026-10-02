@@ -446,3 +446,30 @@ fn test_selection_helpers_wrap_clamp_and_preserve_empty_selection() {
     assert_eq!(previous_selected_index(0, 2), 1);
     assert_eq!(previous_selected_index(usize::MAX, 2), 0);
 }
+
+#[tokio::test]
+async fn busy_session_can_select_review_comment_for_queueing() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id("session-id")
+            .status(Status::Rebasing)
+            .build(),
+    );
+    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
+
+    // Act
+    handle_with_cache(
+        &mut app,
+        &RenderCacheStore::default(),
+        Rect::new(0, 0, 80, 24),
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+    )
+    .await;
+
+    // Assert
+    assert!(
+        matches!(app.mode, AppMode::Diff { review_comments: Some(DiffReviewComments { ref selected_comments, .. }), .. } if selected_comments.len() == 1)
+    );
+}

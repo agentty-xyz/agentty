@@ -422,7 +422,29 @@ impl Session {
     pub fn allows_review_comment_reply(&self) -> bool {
         self.accepts_user_turns()
             && self.role.owns_branch_changes()
-            && (self.status.allows_review_actions() || self.status == Status::Question)
+            && (self.status.allows_review_actions()
+                || matches!(
+                    self.status,
+                    Status::Question | Status::InProgress | Status::Rebasing
+                ))
+            && self
+                .transient_messages
+                .get(TransientMessageSlot::ReviewCommentQueue)
+                .is_none()
+    }
+
+    /// Returns whether selected comments must wait for clarification or join
+    /// existing ordered worker work.
+    pub(crate) fn queues_review_comment_reply(&self) -> bool {
+        matches!(
+            self.status,
+            Status::Question | Status::InProgress | Status::Rebasing
+        ) || !self.queued_messages.is_empty()
+            || self.transient_messages.messages().iter().any(|message| {
+                matches!(message.body, TransientMessageBody::Queued(_))
+                    || (message.slot == TransientMessageSlot::BranchPublish
+                        && message.body.is_pending_indicator())
+            })
     }
 
     /// Returns whether the session lifecycle and ownership role permit opening

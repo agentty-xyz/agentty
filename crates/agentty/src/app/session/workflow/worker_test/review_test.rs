@@ -22,15 +22,15 @@ use super::support::{
     auto_commit_git_client_with_push_failure, auto_commit_run_client, dirty_auto_commit_git_client,
     empty_transcript, expect_safe_auto_push_state, fixed_review_turn_result,
     insert_in_progress_session_with_review_request, push_descendant_that_reverted_fix,
-    queue_test_context, queued_message, review_resolution_client, review_resolution_git_client,
-    successful_turn_result,
+    queue_test_context, queued_message, resume_command, review_resolution_client,
+    review_resolution_git_client, successful_turn_result,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
-use crate::infra::db::{AppRepositories, SessionOperationRow};
+use crate::infra::db::{AppRepositories, SessionMessageRow, SessionOperationRow};
 use crate::infra::fs;
 use crate::infra::personality::RealPersonalityCatalogClient;
 
@@ -921,4 +921,60 @@ async fn test_create_review_request_command_waits_for_live_review_status() {
         AppEvent::BranchPublishActionCompleted { result, session_id }
             if result.is_err() && session_id == "sess1"
     ));
+}
+
+#[tokio::test]
+async fn skipped_review_comment_command_resolves_its_waiting_row() {
+    // Arrange
+    let (context, database, _queue, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Review).await;
+    let mut command = resume_command("skipped-review-comments");
+    if let SessionCommand::Run { turn_metadata, .. } = &mut command {
+        turn_metadata.review_comment_thread_ids = vec!["thread-42".to_string()];
+    }
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let context = SessionWorkerContext {
+        app_event_tx: event_tx,
+        ..context
+    };
+    database
+        .operations()
+        .insert_session_operation("skipped-review-comments", &context.session_id, "reply")
+        .await
+        .expect("queued review operation");
+    database
+        .operations()
+        .request_cancel_for_session_operations(&context.session_id)
+        .await
+        .expect("cancel waiting review operation");
+
+    // Act
+    let result =
+        SessionWorkerService::process_session_command(&context, &auto_commit_run_client(), command)
+            .await;
+    let messages = database
+        .sessions()
+        .load_session_messages(&context.session_id)
+        .await
+        .expect("persisted messages");
+
+    // Assert
+    assert!(result.is_none());
+    assert_eq!(messages, [] as [SessionMessageRow; 0]);
+    assert_eq!(
+        context
+            .transcript
+            .lock()
+            .expect("transcript lock")
+            .messages(),
+        []
+    );
+    assert_eq!(
+        event_rx.try_recv().expect("resolution event"),
+        AppEvent::SessionReviewCommentResolutionUpdated {
+            comment_count: Some(0),
+            session_id: context.session_id
+        }
+    );
+    assert!(event_rx.try_recv().is_err());
 }

@@ -193,6 +193,11 @@ pub(crate) enum AppEvent {
     BranchPublishActionStarted { session_id: SessionId },
     /// Indicates a queued session sync has either started or failed visibly.
     SessionQueuedSyncResolved { session_id: SessionId },
+    /// Review-comment work started, finished, or was skipped (zero count).
+    SessionReviewCommentResolutionUpdated {
+        comment_count: Option<usize>,
+        session_id: SessionId,
+    },
     /// A rebase conflict invalidated the focused review before assistance.
     SessionRebaseReviewInvalidated { session_id: SessionId },
     /// Indicates a session start or resume command began its turn.
@@ -395,6 +400,7 @@ pub(super) struct AppEventBatch {
         HashMap<SessionId, crate::domain::agent::ReasoningLevel>,
     pub(super) session_response_style_updates:
         HashMap<SessionId, crate::domain::agent::ResponseStyle>,
+    pub(super) session_review_comment_resolution_updates: Vec<(SessionId, Option<usize>)>,
     pub(super) session_review_comment_snapshots: Vec<SessionReviewCommentSnapshotUpdate>,
     pub(super) session_speed_mode_updates: HashMap<SessionId, crate::domain::agent::SpeedMode>,
     pub(super) session_title_generation_finished: HashMap<SessionId, u64>,
@@ -466,6 +472,7 @@ impl AppEventBatch {
             || !self.session_personality_updates.is_empty()
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
+            || !self.session_review_comment_resolution_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_rebase_review_invalidated_ids.is_empty()
             || !self.session_turn_started_ids.is_empty()
@@ -511,6 +518,14 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::SessionReviewCommentResolutionUpdated {
+                comment_count,
+                session_id,
+            } => {
+                self.session_ids.insert(session_id.clone());
+                self.session_review_comment_resolution_updates
+                    .push((session_id, comment_count));
+            }
             AppEvent::SessionTurnStarted { agent, session_id } => {
                 self.session_turn_starts.push(agent);
                 self.session_turn_started_ids.insert(session_id);
@@ -694,6 +709,7 @@ impl AppEventBatch {
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
+            | AppEvent::SessionReviewCommentResolutionUpdated { .. }
             | AppEvent::SessionTurnStarted { .. }
             | AppEvent::SessionTurnEnded { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
@@ -811,6 +827,7 @@ impl AppEventBatch {
             | AppEvent::SessionDiffStatsUpdated { .. }
             | AppEvent::SessionRebaseReviewInvalidated { .. }
             | AppEvent::SessionTitleGenerationFinished { .. }
+            | AppEvent::SessionReviewCommentResolutionUpdated { .. }
             | AppEvent::SessionTurnStarted { .. }
             | AppEvent::SessionTurnEnded { .. } => {
                 unreachable!("top-level app event should be collected before runtime events")
@@ -1127,19 +1144,11 @@ impl App {
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
-        for (session_id, progress) in
-            std::mem::take(&mut event_batch.session_orchestration_progress_updates)
-        {
-            self.sessions
-                .update_orchestration_progress(&session_id, progress);
-        }
-        for (session_id, notices) in
-            std::mem::take(&mut event_batch.session_workflow_notice_updates)
-        {
-            for notice in notices {
-                self.sessions.append_workflow_notice(&session_id, notice);
-            }
-        }
+        self.apply_session_transient_updates(
+            std::mem::take(&mut event_batch.session_review_comment_resolution_updates),
+            std::mem::take(&mut event_batch.session_orchestration_progress_updates),
+            std::mem::take(&mut event_batch.session_workflow_notice_updates),
+        );
         self.start_stacked_child_rebases_after_parent_merge(std::mem::take(
             &mut event_batch.stacked_parent_merge_child_rebases,
         ))
@@ -1171,6 +1180,32 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Applies transient updates after completed-turn snapshots are
+    /// synchronized.
+    fn apply_session_transient_updates(
+        &mut self,
+        review_comment_updates: Vec<(SessionId, Option<usize>)>,
+        orchestration_updates: HashMap<SessionId, Option<String>>,
+        workflow_notices: HashMap<SessionId, Vec<String>>,
+    ) {
+        for (session_id, comment_count) in review_comment_updates {
+            if comment_count.is_some_and(|count| count > 0) {
+                self.clear_review_output(&session_id);
+            }
+            self.sessions
+                .update_review_comment_resolution(&session_id, comment_count);
+        }
+        for (session_id, progress) in orchestration_updates {
+            self.sessions
+                .update_orchestration_progress(&session_id, progress);
+        }
+        for (session_id, notices) in workflow_notices {
+            for notice in notices {
+                self.sessions.append_workflow_notice(&session_id, notice);
+            }
         }
     }
 

@@ -923,3 +923,18 @@ fn app_event_label_names_turn_ends() {
     // Assert
     assert_eq!(label, "SessionTurnEnded");
 }
+
+#[test]
+fn app_event_label_names_review_comment_resolution_updates() {
+    // Arrange
+    let event = AppEvent::SessionReviewCommentResolutionUpdated {
+        comment_count: Some(2),
+        session_id: "session-id".into(),
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "SessionReviewCommentResolutionUpdated");
+}

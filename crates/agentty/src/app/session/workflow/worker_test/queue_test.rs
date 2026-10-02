@@ -344,12 +344,17 @@ async fn test_next_scheduled_work_pauses_queued_work_for_question() {
         },
         0,
     )]);
+    let mut review_command = resume_command("queued-review-comments");
+    if let SessionCommand::Run { turn_metadata, .. } = &mut review_command {
+        turn_metadata.review_comment_thread_ids = vec!["thread-42".to_string()];
+    }
+    pending_commands.push_back(ScheduledSessionCommand::queued(review_command, 2));
 
     // Act
     let paused_work = ag_worker::next_work(&context, &mut pending_commands);
     pending_commands.push_back(ScheduledSessionCommand::queued(
         resume_command("question-answer"),
-        2,
+        3,
     ));
     let answer_work = ag_worker::next_work(&context, &mut pending_commands);
 
@@ -358,15 +363,74 @@ async fn test_next_scheduled_work_pauses_queued_work_for_question() {
     assert!(matches!(
         answer_work,
         Some(ScheduledSessionWork::Command(command))
-            if command.queued_order == Some(2)
+            if command.queued_order == Some(3)
                 && matches!(
                     &command.command,
                     SessionCommand::Run { operation_id, .. }
                         if operation_id == "question-answer"
                 )
     ));
-    assert_eq!(pending_commands.len(), 1);
+    assert_eq!(pending_commands.len(), 2);
     assert_eq!(queue_handle.lock().expect("queue lock").len(), 1);
+
+    // Act: answering clarification resumes the original submission order.
+    *context.status.lock().expect("status lock") = Status::Review;
+    let sync = ag_worker::next_work(&context, &mut pending_commands);
+    let chat = ag_worker::next_work(&context, &mut pending_commands);
+    let review = ag_worker::next_work(&context, &mut pending_commands);
+
+    // Assert
+    assert!(
+        matches!(sync, Some(ScheduledSessionWork::Command(command)) if command.queued_order == Some(0))
+    );
+    assert!(
+        matches!(chat, Some(ScheduledSessionWork::Message(message)) if message.transcript_text() == "queued reply")
+    );
+    assert!(
+        matches!(review, Some(ScheduledSessionWork::Command(command)) if command.queued_order == Some(2))
+    );
+}
+
+#[tokio::test]
+async fn review_commands_wait_for_question_answers_even_when_immediate() {
+    for queued in [false, true] {
+        // Arrange
+        let (context, _db, _queue, _directory) =
+            queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Question).await;
+        let mut review = resume_command("review-comments");
+        if let SessionCommand::Run { turn_metadata, .. } = &mut review {
+            turn_metadata.review_comment_thread_ids = vec!["thread-42".to_string()];
+        }
+        let scheduled = if queued {
+            ScheduledSessionCommand::queued(review, 0)
+        } else {
+            ScheduledSessionCommand::immediate(review)
+        };
+        let mut commands = VecDeque::from([scheduled]);
+
+        // Act
+        let paused = ag_worker::next_work(&context, &mut commands);
+        commands.push_back(ScheduledSessionCommand::immediate(resume_command("answer")));
+        let answer = ag_worker::next_work(&context, &mut commands);
+
+        // Assert
+        assert!(paused.is_none());
+        assert!(
+            matches!(answer, Some(ScheduledSessionWork::Command(command))
+            if command.command.operation_id() == "answer")
+        );
+        assert_eq!(commands.len(), 1);
+
+        // Act: completing the answer releases the pending review batch.
+        *context.status.lock().expect("status lock") = Status::Review;
+        let review = ag_worker::next_work(&context, &mut commands);
+
+        // Assert
+        assert!(
+            matches!(review, Some(ScheduledSessionWork::Command(command))
+            if command.command.operation_id() == "review-comments")
+        );
+    }
 }
 
 #[tokio::test]
