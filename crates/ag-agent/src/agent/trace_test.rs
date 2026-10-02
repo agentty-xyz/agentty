@@ -3,7 +3,7 @@ use std::future;
 use std::time::{Duration, SystemTime};
 
 use ag_session::AgentKind;
-use ag_telemetry::{Context, Outcome, Span};
+use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, Outcome, Span};
 use opentelemetry::{KeyValue, global};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::{Value, json};
@@ -11,6 +11,241 @@ use tokio::sync::oneshot;
 
 use crate::agent::trace::{MAX_OPERATIONS, OperationTrace};
 use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+#[tokio::test]
+async fn provider_tool_metadata_and_content_follow_the_host_policy() {
+    // Arrange
+    let fixtures = [
+        (
+            AgentKind::Codex,
+            vec![
+                json!({"method": "item/started", "params": {"item": {"id": "call-1", "type": "commandExecution", "command": "cargo test"}}}),
+                json!({"method": "item/completed", "params": {"item": {"id": "call-1", "type": "commandExecution", "aggregatedOutput": "test failed", "exitCode": 1}}}),
+            ],
+            None,
+        ),
+        (
+            AgentKind::Claude,
+            vec![
+                json!({"type": "message", "content": [{"type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "cargo test"}}]}),
+                json!({"type": "message", "content": [{"type": "tool_result", "tool_use_id": "call-1", "content": "test failed", "is_error": true}]}),
+            ],
+            Some("Bash"),
+        ),
+        (
+            AgentKind::Gemini,
+            vec![
+                gemini(
+                    &json!({"sessionUpdate": "tool_call", "toolCallId": "call-1", "kind": "execute", "name": "run_shell_command", "rawInput": {"command": "cargo test"}, "title": "Private tool title"}),
+                ),
+                gemini(
+                    &json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed", "rawOutput": "test failed"}),
+                ),
+            ],
+            Some("run_shell_command"),
+        ),
+    ];
+
+    // Act / Assert
+    for (kind, events, name) in fixtures {
+        for capture in [false, true] {
+            let spans = capture_with_policy(kind, events.clone(), capture).await;
+            assert_children(&spans, 1);
+            let tool = spans
+                .iter()
+                .find(|span| span.name == "agent.tool")
+                .expect("tool");
+            for attribute in [
+                KeyValue::new("gen_ai.tool.call.id", "call-1"),
+                KeyValue::new("process.executable.name", "cargo"),
+                KeyValue::new("agentty.tool.output.bytes", 11_i64),
+                KeyValue::new("agentty.outcome", "failed"),
+            ] {
+                assert!(
+                    tool.attributes.contains(&attribute),
+                    "{kind:?}: {attribute:?}"
+                );
+            }
+            if let Some(name) = name {
+                assert!(
+                    tool.attributes
+                        .contains(&KeyValue::new("gen_ai.tool.name", name))
+                );
+            } else {
+                assert!(
+                    !tool
+                        .attributes
+                        .iter()
+                        .any(|attribute| attribute.key.as_str() == "gen_ai.tool.name")
+                );
+            }
+            assert_eq!(
+                tool.attributes
+                    .contains(&KeyValue::new("agentty.tool.command", "cargo test")),
+                capture
+            );
+            assert_eq!(
+                tool.attributes
+                    .contains(&KeyValue::new("gen_ai.tool.call.result", "test failed")),
+                capture
+            );
+            if kind != AgentKind::Codex {
+                assert_eq!(
+                    tool.attributes.contains(&KeyValue::new(
+                        "gen_ai.tool.call.arguments",
+                        r#"{"command":"cargo test"}"#
+                    )),
+                    capture
+                );
+            }
+            assert!(!format!("{spans:?}").contains("Private tool title"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_dynamic_results_and_mcp_errors_use_the_wire_fields() {
+    // Arrange
+    let dynamic_output = json!([{"type": "inputText", "text": "ok"}]);
+    let mcp_error = json!({"message": "Tool disconnected"});
+    let events = vec![
+        json!({"method": "item/completed", "params": {"item": {"id": "dynamic", "type": "dynamicToolCall", "tool": "lookup", "arguments": {"query": "example"}, "contentItems": dynamic_output, "success": true}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "mcp-error", "type": "mcpToolCall", "tool": "lookup", "arguments": {}, "result": null, "error": mcp_error, "status": "failed"}}}),
+    ];
+
+    // Act / Assert
+    for capture in [false, true] {
+        let spans = capture_with_policy(AgentKind::Codex, events.clone(), capture).await;
+        for (id, output) in [("dynamic", &dynamic_output), ("mcp-error", &mcp_error)] {
+            let tool = spans
+                .iter()
+                .find(|span| {
+                    span.attributes
+                        .contains(&KeyValue::new("gen_ai.tool.call.id", id))
+                })
+                .expect("tool");
+            assert!(tool.attributes.contains(&KeyValue::new(
+                "agentty.tool.output.bytes",
+                i64::try_from(output.to_string().len()).expect("fixture size")
+            )));
+            assert_eq!(
+                tool.attributes.contains(&KeyValue::new(
+                    "gen_ai.tool.call.result",
+                    output.to_string()
+                )),
+                capture
+            );
+            assert!(tool.attributes.contains(&KeyValue::new(
+                "agentty.outcome",
+                if id == "dynamic" {
+                    "completed"
+                } else {
+                    "failed"
+                }
+            )));
+        }
+    }
+}
+
+#[tokio::test]
+async fn gemini_content_fallback_and_separate_streams_keep_partial_update_metadata() {
+    // Arrange
+    let events = vec![
+        gemini(
+            &json!({"sessionUpdate": "tool_call", "toolCallId": "streams", "kind": "execute", "rawInput": {"command": "cargo test"}}),
+        ),
+        gemini(
+            &json!({"sessionUpdate": "tool_call_update", "toolCallId": "streams", "status": "failed", "rawOutput": {"stdout": "building", "stderr": "compilation failed"}}),
+        ),
+        gemini(
+            &json!({"sessionUpdate": "tool_call_update", "toolCallId": "fallback", "status": "completed", "rawOutput": null, "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]}),
+        ),
+    ];
+
+    // Act / Assert
+    for capture in [false, true] {
+        let spans = capture_with_policy(AgentKind::Gemini, events.clone(), capture).await;
+        let tool = spans
+            .iter()
+            .find(|span| {
+                span.attributes
+                    .contains(&KeyValue::new("gen_ai.tool.call.id", "streams"))
+            })
+            .expect("streams");
+        assert!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.provider.operation.type", "command"))
+        );
+        assert!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.tool.stderr.bytes", 18_i64))
+        );
+        assert_eq!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.tool.stderr", "compilation failed")),
+            capture
+        );
+        assert_eq!(
+            tool.attributes
+                .contains(&KeyValue::new("agentty.tool.stdout", "building")),
+            capture
+        );
+        let fallback = spans
+            .iter()
+            .find(|span| {
+                span.attributes
+                    .contains(&KeyValue::new("gen_ai.tool.call.id", "fallback"))
+            })
+            .expect("fallback");
+        assert_eq!(
+            fallback
+                .attributes
+                .iter()
+                .any(|attribute| attribute.key.as_str() == "gen_ai.tool.call.result"),
+            capture
+        );
+    }
+}
+
+#[tokio::test]
+async fn content_capture_never_exports_response_reasoning_or_subagent_prompts() {
+    // Arrange
+    let codex = vec![
+        json!({"method": "item/completed", "params": {"item": {"id": "reasoning", "type": "reasoning", "text": "Private thought", "arguments": "Private thought"}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "response", "type": "agentMessage", "text": "Private response"}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "mcp", "type": "mcpToolCall", "tool": "lookup", "arguments": {"token": "Private credential"}, "result": {"content": ["ok"]}}}}),
+        json!({"method": "item/completed", "params": {"item": {"id": "dynamic", "type": "dynamicToolCall", "tool": "lookup", "arguments": {"query": "example"}, "contentItems": [{"type": "inputText", "text": "ok"}]}}}),
+    ];
+    let claude = vec![json!({"type": "message", "content": [
+        {"type": "tool_use", "id": "agent", "name": "Agent", "input": {"prompt": "Private prompt"}},
+        {"type": "tool_use", "id": "structured", "name": "StructuredOutput", "input": {"answer": "Private response"}},
+    ]})];
+    let antigravity_events = vec![antigravity(
+        &json!({"step_index": 1, "step_type": "tool", "state": "DONE", "tool_name": "shell", "tool_info": {"command": "Private command", "output": "Private output"}}),
+    )];
+
+    // Act / Assert
+    for (kind, events) in [
+        (AgentKind::Codex, codex),
+        (AgentKind::Claude, claude),
+        (AgentKind::Antigravity, antigravity_events),
+    ] {
+        let spans = capture_with_policy(kind, events, true).await;
+        assert!(!format!("{spans:?}").contains("Private"));
+        if kind == AgentKind::Codex {
+            assert!(spans.iter().any(|span| {
+                span.attributes.contains(&KeyValue::new(
+                    "gen_ai.tool.call.arguments",
+                    r#""[REDACTED]""#,
+                ))
+            }));
+            assert!(spans.iter().any(|span| {
+                span.attributes
+                    .contains(&KeyValue::new("gen_ai.tool.name", "lookup"))
+            }));
+        }
+    }
+}
 
 #[tokio::test]
 async fn codex_operations_keep_attempt_parentage_outcomes_and_numeric_metadata() {
@@ -38,7 +273,7 @@ async fn codex_operations_keep_attempt_parentage_outcomes_and_numeric_metadata()
     ];
     let mut events = Vec::new();
     for (index, item_type) in types.into_iter().enumerate() {
-        let item = json!({"id": index.to_string(), "type": item_type, "command": "private command", "arguments": "private arguments", "text": "private text"});
+        let item = json!({"id": index.to_string(), "type": item_type, "command": "cargo test private command", "arguments": "private arguments", "text": "private text"});
         let started = json!({"method": "item/started", "params": {"item": item}});
         events.push(started.clone());
         events.push(started);
@@ -214,7 +449,7 @@ async fn antigravity_steps_preserve_reported_durations_and_usage_without_content
 }
 
 #[tokio::test]
-async fn claude_tool_messages_pair_calls_with_results_without_tool_names_or_arguments() {
+async fn claude_tool_messages_pair_calls_with_results_without_content() {
     // Arrange
     let mut events = Vec::new();
     for (index, name) in [
@@ -258,7 +493,7 @@ async fn claude_direct_and_wrapped_tool_messages_pair_across_formats() {
     {
         let call = json!({"type": "message", "role": "assistant", "content": [
             {"type": "text", "text": "private explanation"},
-            {"type": "tool_use", "id": index.to_string(), "name": "Bash", "input": {"command": "private command"}},
+            {"type": "tool_use", "id": index.to_string(), "name": "Bash", "input": {"command": "cargo test private command"}},
         ]});
         let result = json!({"type": "message", "role": "user", "content": [
             {"type": "tool_result", "tool_use_id": index.to_string(), "is_error": index == 0, "content": "private output"},
@@ -536,16 +771,24 @@ fn disabled_tracing_ignores_provider_payloads() {
 }
 
 async fn capture(kind: AgentKind, events: Vec<Value>) -> Vec<SpanData> {
+    capture_with_policy(kind, events, false).await
+}
+
+async fn capture_with_policy(kind: AgentKind, events: Vec<Value>, capture: bool) -> Vec<SpanData> {
     let _guard = TRACER_PROVIDER_LOCK.lock().await;
     let exporter = install_provider();
-    Span::root("agent.attempt", Vec::new())
-        .scope(async {
-            let mut trace = OperationTrace::new();
-            for event in events {
-                trace.observe_line(kind, &serde_json::to_vec(&event).expect("event"));
-            }
-        })
-        .await;
+    async {
+        Span::root("agent.attempt", Vec::new())
+            .scope(async {
+                let mut trace = OperationTrace::new();
+                for event in events {
+                    trace.observe_line(kind, &serde_json::to_vec(&event).expect("event"));
+                }
+            })
+            .await;
+    }
+    .with_context(Context::new().with_value(CaptureToolContent(capture)))
+    .await;
 
     exporter.get_finished_spans().expect("spans")
 }

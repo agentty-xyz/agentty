@@ -1,11 +1,14 @@
-//! Content-free provider operation timing, owned by one execution attempt.
+//! Provider operation timing and bounded tool metadata for one execution
+//! attempt.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
 use ag_session::AgentKind;
-use ag_telemetry::{Context, Outcome, Span, TraceContextExt as _};
+use ag_telemetry::{CaptureToolContent, Context, KeyValue, Outcome, Span, TraceContextExt as _};
 use serde_json::Value;
+
+use super::tool_trace::{ToolMetadata, safe_identity};
 
 /// Bounds provider-controlled operation identities retained by one attempt.
 const MAX_OPERATIONS: usize = 4096;
@@ -29,8 +32,8 @@ impl OperationTrace {
         }
     }
 
-    /// Reads only allowlisted operation types and numeric metadata. Provider
-    /// identities stay internal; content, names, paths and errors are omitted.
+    /// Reads allowlisted operation metadata. Tool content is exported only
+    /// under the host's explicit content-capture policy.
     pub(crate) fn observe(&mut self, kind: AgentKind, payload: &Value) {
         if !self.context.span().is_recording() {
             return;
@@ -108,7 +111,22 @@ impl OperationTrace {
         let outcome = completed.then(|| Self::outcome(item));
         let mut attributes = Vec::new();
         if let Some(exit_code) = item.get("exitCode").and_then(Value::as_i64) {
-            attributes.push(("agentty.provider.exit_code", exit_code));
+            attributes.push(KeyValue::new("agentty.provider.exit_code", exit_code));
+        }
+        if matches!(category, "command" | "mcp" | "dynamic_tool") {
+            attributes.extend(
+                ToolMetadata {
+                    command: item.get("command").and_then(Value::as_str),
+                    input: item.get("arguments"),
+                    name: item.get("tool").and_then(Value::as_str),
+                    output: ["aggregatedOutput", "result", "contentItems", "error"]
+                        .into_iter()
+                        .filter_map(|field| item.get(field))
+                        .find(|value| !value.is_null()),
+                    ..ToolMetadata::default()
+                }
+                .attributes(self.capture_content()),
+            );
         }
         self.record(
             id,
@@ -152,7 +170,22 @@ impl OperationTrace {
             Some("canceled" | "cancelled") => Some(Outcome::Canceled),
             _ => None,
         };
-        self.record(id, category, outcome, None, Vec::new());
+        let input = update.get("rawInput");
+        let output = update.get("rawOutput");
+        let attributes = ToolMetadata {
+            command: input
+                .and_then(|input| input.get("command"))
+                .and_then(Value::as_str),
+            input,
+            name: update.get("name").and_then(Value::as_str),
+            output: output
+                .filter(|value| !value.is_null())
+                .or_else(|| update.get("content")),
+            stderr: output.and_then(|output| output.get("stderr")),
+            stdout: output.and_then(|output| output.get("stdout")),
+        }
+        .attributes(self.capture_content());
+        self.record(id, category, outcome, None, attributes);
     }
 
     fn antigravity(&mut self, payload: &Value) {
@@ -189,7 +222,16 @@ impl OperationTrace {
             }
             _ => return,
         };
-        let attributes = Self::usage(step.get("usage"));
+        let mut attributes = Self::usage(step.get("usage"));
+        if matches!(category, "tool" | "subagent") {
+            attributes.extend(
+                ToolMetadata {
+                    name: step.get("tool_name").and_then(Value::as_str),
+                    ..ToolMetadata::default()
+                }
+                .attributes(self.capture_content()),
+            );
+        }
         self.record(
             &index.to_string(),
             category,
@@ -226,7 +268,23 @@ impl OperationTrace {
                             Some("Agent" | "Task") => "subagent",
                             _ => "tool",
                         };
-                        self.record(id, category, None, None, Vec::new());
+                        let input = if category == "subagent"
+                            || block.get("name").and_then(Value::as_str) == Some("StructuredOutput")
+                        {
+                            None
+                        } else {
+                            block.get("input")
+                        };
+                        let attributes = ToolMetadata {
+                            command: input
+                                .and_then(|input| input.get("command"))
+                                .and_then(Value::as_str),
+                            input,
+                            name: block.get("name").and_then(Value::as_str),
+                            ..ToolMetadata::default()
+                        }
+                        .attributes(self.capture_content());
+                        self.record(id, category, None, None, attributes);
                     }
                 }
                 Some("tool_result") => {
@@ -237,7 +295,12 @@ impl OperationTrace {
                             } else {
                                 Outcome::Completed
                             };
-                        self.record(id, "tool", Some(outcome), None, Vec::new());
+                        let attributes = ToolMetadata {
+                            output: block.get("content"),
+                            ..ToolMetadata::default()
+                        }
+                        .attributes(self.capture_content());
+                        self.record(id, "tool", Some(outcome), None, attributes);
                     }
                 }
                 _ => {}
@@ -251,7 +314,7 @@ impl OperationTrace {
         category: &'static str,
         outcome: Option<Outcome>,
         duration_ms: Option<f64>,
-        attributes: Vec<(&'static str, i64)>,
+        attributes: Vec<KeyValue>,
     ) {
         if id.is_empty() || id.len() > 256 || self.completed.contains(id) {
             return;
@@ -280,6 +343,11 @@ impl OperationTrace {
             };
             let span = Span::child_at(name, start);
             span.attribute("agentty.provider.operation.type", category);
+            if (name == "agent.tool" || name == "agent.subagent")
+                && let Some(id) = safe_identity(id)
+            {
+                span.attribute("gen_ai.tool.call.id", id.to_string());
+            }
             span.attribute(
                 "agentty.timing.source",
                 if reported.is_some() {
@@ -295,8 +363,8 @@ impl OperationTrace {
         if let Some(duration) = duration_ms {
             span.attribute("agentty.provider.duration_ms", duration);
         }
-        for (key, value) in attributes {
-            span.attribute(key, value);
+        for attribute in attributes {
+            span.context().span().set_attribute(attribute);
         }
         if let Some(outcome) = outcome {
             span.finish(outcome);
@@ -328,7 +396,13 @@ impl OperationTrace {
         }
     }
 
-    fn usage(usage: Option<&Value>) -> Vec<(&'static str, i64)> {
+    fn capture_content(&self) -> bool {
+        self.context
+            .get::<CaptureToolContent>()
+            .is_some_and(|policy| policy.0)
+    }
+
+    fn usage(usage: Option<&Value>) -> Vec<KeyValue> {
         let Some(usage) = usage else {
             return Vec::new();
         };
@@ -345,7 +419,7 @@ impl OperationTrace {
                 .get(field)
                 .and_then(Value::as_u64)
                 .and_then(|tokens| i64::try_from(tokens).ok())
-                .map(|tokens| (key, tokens))
+                .map(|tokens| KeyValue::new(key, tokens))
         })
         .collect()
     }

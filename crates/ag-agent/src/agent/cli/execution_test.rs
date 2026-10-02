@@ -116,7 +116,7 @@ async fn claude_stdout_operations_are_children_of_the_attempt_and_preserve_raw_o
     let folder = tempdir().expect("temporary folder");
     let request_kind = AgentRequestKind::UtilityPrompt;
     let raw = concat!(
-        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"private command"}}]}}"#,
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call-1","name":"Bash","input":{"command":"cargo test private command"}}]}}"#,
         "\n",
         r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}}"#,
         "\n",

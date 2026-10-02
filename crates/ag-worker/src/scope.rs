@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
-use ag_telemetry::{Context, FutureExt as _, TraceContextExt as _};
+use ag_telemetry::{CaptureToolContent, Context, FutureExt as _, TraceContextExt as _};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -53,8 +53,16 @@ impl RunContext {
 
     fn inherited(mut self) -> Self {
         let parent = Self::current();
+        let capture_policy = self
+            .trace
+            .get::<CaptureToolContent>()
+            .or_else(|| parent.trace.get::<CaptureToolContent>())
+            .copied();
         if !self.trace.span().span_context().is_valid() {
             self.trace = parent.trace;
+        }
+        if let Some(policy) = capture_policy {
+            self.trace = self.trace.with_value(policy);
         }
         self.cancellations.extend(parent.cancellations);
         self.scope = RunScope {
@@ -101,7 +109,9 @@ pub async fn in_scope<T>(scope: RunScope, work: impl Future<Output = T>) -> T {
 /// Captures ownership for a utility client passed to another task or workflow.
 /// Child submissions execute directly under worker supervision, never behind
 /// a waiting parent in the session command queue.
-/// Clients captured without a trace inherit the submitting scope's trace.
+/// Clients captured without a span inherit the submitting scope's span.
+/// An explicit captured tool-content policy is retained independently;
+/// otherwise the submitting scope supplies it.
 pub fn scoped_client(client: Arc<dyn RunClient>, scope: RunScope) -> Arc<dyn RunClient> {
     Arc::new(ScopedClient {
         client,

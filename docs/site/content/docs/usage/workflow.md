@@ -542,20 +542,41 @@ response, reasoning, compaction, checkpoint, and subagent phases:
 | Gemini      | Tools                                                           |
 | Antigravity | Tools, responses, reasoning, compaction, checkpoints, subagents |
 
-Operation categories and outcomes are exported without their content. Timing comes from
-observed lifecycle events; when only a completion arrives, a reported duration can
-reconstruct an interval within the attempt. `agentty.timing.source` is `lifecycle` for
-paired events, `provider` for reconstructed intervals, and `completion` for observations
-without a start or duration. Available operations depend on the provider and CLI
-version; they do not necessarily represent individual model requests. First activity is
-not a time-to-first-token measurement.
+Operation categories and outcomes are exported by default without their content. Timing
+comes from observed lifecycle events; when only a completion arrives, a reported
+duration can reconstruct an interval within the attempt. `agentty.timing.source` is
+`lifecycle` for paired events, `provider` for reconstructed intervals, and `completion`
+for observations without a start or duration. Available operations depend on the
+provider and CLI version; they do not necessarily represent individual model requests.
+First activity is not a time-to-first-token measurement.
 
-Traces contain execution identifiers, provider/model selections, token counts, and
-bounded outcomes. They exclude prompts, transcripts, thought fragments, tool output,
-command arguments, and project paths. All observed spans are sampled while enabled.
-Export is asynchronous and best effort: a full queue or unavailable receiver may lose
-spans. Agentty reports a coalesced diagnostic summary after restoring the terminal and
-limits final export flushing to three seconds.
+Traces contain execution identifiers, provider/model selections, token counts, bounded
+outcomes, and available tool names, call identifiers, executable basenames, exit codes,
+and output byte counts. Command arguments, tool output, and project paths are excluded
+by default.
+
+Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
+arguments, and results as previews of at most 4 KiB per attribute. Separate stdout and
+stderr are included when present in Gemini's raw output; Codex supplies combined output.
+Original output sizes and truncation flags distinguish previews from complete results.
+Oversized structured arguments and results use the text attributes
+`agentty.tool.input.preview` and `agentty.tool.output.preview` instead of incomplete
+JSON in `gen_ai.tool.call.arguments` or `gen_ai.tool.call.result`. Complete structured
+values, including their redaction replacements, remain valid JSON. Exact output sizes
+still require walking the values, but metadata-only tracing does not serialize them.
+Larger payloads are not retained by tracing. Values containing common credential markers
+or URL credentials are replaced entirely with `[REDACTED]` before export, but arbitrary
+secrets and project paths may still appear. Enable this option only for content you
+intend to send to the configured receiver. Turn prompts, transcripts, reasoning, and
+subagent prompts remain excluded.
+
+Content previews are supported for Codex command, MCP, and dynamic-tool items, Claude
+tool messages, and Gemini ACP tool input/output. Antigravity exports tool identities;
+its input/output fields are not captured. Missing fields are omitted; tool categories
+and titles are not treated as provider-reported tool names. All observed spans are
+sampled while enabled. Export is asynchronous and best effort: a full queue or
+unavailable receiver may lose spans. Agentty reports a coalesced diagnostic summary
+after restoring the terminal and limits final export flushing to three seconds.
 
 ## Auto-Update
 

@@ -145,7 +145,12 @@ agentty --version    # Show the installed Agentty version
 Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP
 HTTP/protobuf traces URL. Authentication headers can come from
 `OTEL_EXPORTER_OTLP_TRACES_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`. Traces contain step
-timings and execution metadata, excluding prompts and output.
+timings, tool identities, available executable names, exit codes, and output sizes. Add
+`--otlp-capture-content` to include tool commands, arguments, and results as previews of
+at most 4 KiB each. Common credential markers suppress the entire affected preview;
+arbitrary secrets may still appear. Prompts and reasoning are excluded. See the
+[session tracing documentation](https://agentty.xyz/docs/usage/workflow/#session-traces)
+for provider limitations.
 
 Only one Agentty instance can use a given Agentty root at a time. Close the running
 instance before launching another. Separate `AGENTTY_ROOT` directories can run

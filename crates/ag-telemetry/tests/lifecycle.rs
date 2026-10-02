@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use ag_telemetry::{
-    Context, FutureExt as _, KeyValue, Outcome, QueuedTrace, Span, current_attribute, milestone,
+    CaptureToolContent, Context, FutureExt as _, KeyValue, Outcome, QueuedTrace, Span,
+    current_attribute, milestone,
 };
 use opentelemetry::global;
 use opentelemetry::trace::{
@@ -15,6 +16,80 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, Sampler, SdkTracerProvider,
 use tokio::sync::{Barrier, Mutex};
 
 static PROVIDER_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[tokio::test]
+async fn capture_policy_follows_roots_queues_tasks_and_detached_spans() {
+    // Arrange
+    let _provider_guard = PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build(),
+    );
+
+    // Act / Assert
+    for enabled in [false, true] {
+        async {
+            let queued = QueuedTrace::new("queue", Vec::new());
+            let root = queued.selected();
+            let context = root.context();
+            root.scope(async {
+                assert_eq!(
+                    Context::current()
+                        .get::<CaptureToolContent>()
+                        .expect("policy")
+                        .0,
+                    enabled
+                );
+                let nested = Span::root("independent", Vec::new());
+                assert_eq!(
+                    nested
+                        .context()
+                        .get::<CaptureToolContent>()
+                        .expect("policy")
+                        .0,
+                    enabled
+                );
+                tokio::spawn(nested.scope(async move {
+                    assert_eq!(
+                        Context::current()
+                            .get::<CaptureToolContent>()
+                            .expect("policy")
+                            .0,
+                        enabled
+                    );
+                }))
+                .await
+                .expect("task");
+            })
+            .await;
+            async {
+                let detached = Span::child("detached");
+                assert_eq!(
+                    detached
+                        .context()
+                        .get::<CaptureToolContent>()
+                        .expect("policy")
+                        .0,
+                    enabled
+                );
+                detached.finish(Outcome::Completed);
+            }
+            .with_context(context)
+            .await;
+        }
+        .with_context(Context::new().with_value(CaptureToolContent(enabled)))
+        .await;
+    }
+    assert!(
+        !Span::root("default", Vec::new())
+            .context()
+            .get::<CaptureToolContent>()
+            .expect("default policy")
+            .0
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spans_preserve_context_results_and_terminal_outcomes() {

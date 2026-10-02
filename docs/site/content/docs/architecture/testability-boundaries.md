@@ -73,6 +73,12 @@ response decoding, and schema validation. `ag-harness` provider tests exercise i
 public adapter into the router, including tool-call translation and telemetry; live
 provider qualification remains separate.
 
+Tool-trace tests feed deterministic provider events to verify metadata, opt-in content,
+credential suppression, and preview limits. Public trace-context tests cover capture
+policy propagation; PTY scenarios inspect real OTLP payloads with capture enabled and
+disabled. Provider fields absent from these supported event shapes remain a live backend
+qualification gap, rather than inferred telemetry.
+
 Focused review persistence is checked against its active invocation in SQLite. Store
 tests exercise the write and invalidation boundary with the real adapter.
 
