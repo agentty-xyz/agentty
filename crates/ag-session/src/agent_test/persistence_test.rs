@@ -16,6 +16,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
             "gemini-3.1-flash-lite-preview",
             AgentModel::Gemini35FlashLite,
         ),
+        ("claude-fable-5", AgentModel::ClaudeFable51),
         ("claude-opus-5", AgentModel::ClaudeOpus55),
         ("gpt-6-sol", AgentModel::Gpt61Sol),
         ("gpt-5.6-sol", AgentModel::Gpt61Sol),
@@ -40,6 +41,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
         "gemini-3.1-pro-preview",
         "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
+        "claude-fable-5-1",
         "claude-opus-5-5",
         "gpt-6.1-sol",
     ]
@@ -53,7 +55,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
     );
     assert_eq!(persisted_parses, retired_ids.map(|(_, model)| Ok(model)));
     assert!(selectable_parses.iter().all(Result::is_err));
-    assert_eq!(current_replacements, [None; 5]);
+    assert_eq!(current_replacements, [None; 6]);
     assert_eq!(unknown_replacement, None);
 }
 

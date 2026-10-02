@@ -13,7 +13,7 @@ fn test_agent_selection_speed_compatibility() {
     // Arrange
     let cases = [
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
             SpeedMode::Fast,
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             false,
@@ -61,9 +61,9 @@ fn test_agent_selection_speed_compatibility() {
             false,
         ),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
             SpeedMode::Normal,
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
             false,
         ),
     ];

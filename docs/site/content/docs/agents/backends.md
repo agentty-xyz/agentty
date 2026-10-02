@@ -175,7 +175,7 @@ Both providers share the same Gemini model ids:
 
 ### Claude Models
 
-- `claude-fable-5` (default): Claude Fable model for creative, narrative-heavy tasks.
+- `claude-fable-5-1` (default): Claude Fable model for creative, narrative-heavy tasks.
 - `claude-opus-5-5`: Latest Claude Opus model for complex agentic tasks.
 - `claude-sonnet-5`: Balanced Claude model for quality and latency.
 - `claude-haiku-4-5-20251001`: Fast Claude model for lighter tasks.

@@ -325,7 +325,7 @@ async fn symlink_agentty_into_stub_bin(env: &BuilderEnv) -> std::io::Result<()> 
 
 /// Seeds fake projects, pre-existing sessions in mixed statuses (`Done`,
 /// `Review`) backed by different agent models, dashboard activity and usage,
-/// and pins a `claude-fable-5` default model on the selected project.
+/// and pins a `claude-fable-5-1` default model on the selected project.
 ///
 /// The first live session explicitly selects the Fable default, while the
 /// second selects Codex `gpt-6.1-sol`. The pre-seeded rows never run, so their
@@ -386,7 +386,7 @@ ON CONFLICT(project_id, name) DO UPDATE SET value = excluded.value
 ",
                 selected_project_id,
                 name,
-                "claude-fable-5"
+                "claude-fable-5-1"
             );
             connection.execute(query).await?;
         }
@@ -455,7 +455,7 @@ async fn seed_pre_existing_sessions(
         (
             "cccc3333-cccc-3333-cccc-333333333333",
             "Fix auth token refresh",
-            "claude-fable-5",
+            "claude-fable-5-1",
             "Done",
             "main",
             42,
@@ -640,8 +640,8 @@ fn repo_demo_dir() -> PathBuf {
 ///
 /// Each session starts from the `New Session` type picker (confirming
 /// `Regular`). The first session explicitly keeps the current Claude default,
-/// `claude-fable-5`. The second walks the `/model` picker to Codex and selects
-/// `gpt-6.1-sol`, so two current agents work in parallel.
+/// `claude-fable-5-1`. The second walks the `/model` picker to Codex and
+/// selects `gpt-6.1-sol`, so two current agents work in parallel.
 fn build_demo_tape(env: &BuilderEnv, gif_path: &Path) -> String {
     let agentty_root = env.agentty_root.display().to_string();
     let path_env = {
@@ -716,7 +716,7 @@ Sleep 900ms
 Enter
 Sleep 500ms
 
-# Open /model, choose Claude, and keep its default claude-fable-5 model.
+# Open /model, choose Claude, and keep its default claude-fable-5-1 model.
 Type "/model"
 Sleep 500ms
 Enter

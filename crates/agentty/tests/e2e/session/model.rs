@@ -168,7 +168,7 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "claude-fable-5", &full);
+                    assertion::assert_text_in_region(frame, "claude-fable-5-1", &full);
                     assertion::assert_text_in_region(frame, "claude-opus-5-5", &full);
                     assertion::assert_text_in_region(frame, "claude-sonnet-5", &full);
                     assertion::assert_text_in_region(frame, "claude-haiku-4-5-20251001", &full);

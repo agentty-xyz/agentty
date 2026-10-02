@@ -76,7 +76,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0001",
         input_tokens: 9_000,
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         output_tokens: 2_400,
         size: "M",
         status: "Review",
@@ -103,7 +103,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0004",
         input_tokens: 0,
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         output_tokens: 0,
         size: "M",
         status: "Question",
@@ -121,7 +121,7 @@ const SHOWCASE_SESSIONS: [ShowcaseSessionSeed; 7] = [
     ShowcaseSessionSeed {
         id: "a1b2c3d4-0006",
         input_tokens: 0,
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         output_tokens: 0,
         size: "S",
         status: "Done",
