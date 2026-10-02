@@ -6,7 +6,7 @@ use super::{
     session_output_queued_lines, session_output_status_icon, session_output_status_message,
     session_output_uses_tachyon_loader, session_resources_line, session_speed_display,
 };
-use crate::domain::agent::{AgentModel, ReasoningLevel};
+use crate::domain::agent::{AgentModel, ReasoningLevel, ResponseStyle};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionId,
@@ -222,7 +222,7 @@ fn test_session_metadata_text_prints_speed_after_reasoning() {
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains("Reasoning: high  Speed: Fast  Tokens:"));
+    assert!(metadata_text.contains("Reasoning: high  Speed: Fast  Style: Balanced  Tokens:"));
 }
 
 #[test]
@@ -239,26 +239,71 @@ fn test_session_metadata_text_omits_speed_for_provider_without_speed_control() {
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains("Reasoning: high  Tokens:"));
+    assert!(metadata_text.contains("Reasoning: high  Style: Balanced  Tokens:"));
     assert!(!metadata_text.contains("Speed:"));
 }
 
 #[test]
-fn test_session_metadata_and_prompt_status_show_non_default_response_style() {
+fn test_session_metadata_and_prompt_status_show_every_response_style() {
+    for (response_style, label) in [
+        (ResponseStyle::Concise, "Concise"),
+        (ResponseStyle::Balanced, "Balanced"),
+        (ResponseStyle::Detailed, "Detailed"),
+    ] {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.response_style = response_style;
+
+        // Act
+        let metadata_without_speed =
+            session_metadata_text(&session, 200, ReasoningLevel::default(), 0);
+        let prompt_status_without_speed = prompt_session_status(&session);
+        session.agent = model_fixture::codex_selection();
+        let metadata_text = session_metadata_text(&session, 200, ReasoningLevel::default(), 0);
+        let prompt_status = prompt_session_status(&session);
+
+        // Assert
+        assert!(metadata_without_speed.contains(&format!("Style: {label}")));
+        assert!(metadata_text.contains(&format!("Style: {label}")));
+        assert_eq!(prompt_status_without_speed, format!("{label} · Auto Edit"));
+        assert_eq!(prompt_status, format!("{label} · Normal · Auto Edit"));
+    }
+}
+
+#[test]
+fn metadata_preserves_style_and_tokens_at_constrained_widths() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
-    session.response_style = crate::domain::agent::ResponseStyle::Detailed;
-
-    // Act
-    let prompt_status_without_speed = prompt_session_status(&session);
     session.agent = model_fixture::codex_selection();
-    let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
-    let prompt_status = prompt_session_status(&session);
+    session.stats.input_tokens = 123;
+    session.stats.output_tokens = 456;
 
-    // Assert
-    assert!(metadata_text.contains("Style: Detailed"));
-    assert_eq!(prompt_status_without_speed, "Detailed · Auto Edit");
-    assert_eq!(prompt_status, "Detailed · Normal · Auto Edit");
+    for width in 0..=200 {
+        // Act
+        let metadata = session_metadata_text(&session, width, ReasoningLevel::default(), 0);
+        let header = session_header_lines(&session, width, ReasoningLevel::default(), 0, false);
+
+        // Assert
+        assert_eq!(header.len(), 2);
+        assert_eq!(header[1].to_string(), metadata);
+        assert!(header[1].width() <= usize::from(width));
+        if width >= 32 {
+            assert!(
+                metadata.contains("Style: Balanced"),
+                "width {width}: {metadata}"
+            );
+            assert!(
+                metadata.contains("Tokens: 123/456"),
+                "width {width}: {metadata}"
+            );
+        }
+        if width >= 80 {
+            assert!(metadata.contains(&format!(
+                "Agent: codex  Model: {}",
+                model_fixture::CODEX_MODEL_ID
+            )));
+        }
+    }
 }
 
 #[test]

@@ -1,8 +1,10 @@
+use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::input_layout::{
     CHAT_INPUT_MAX_VISIBLE_LINES, calculate_input_viewport, compute_input_layout,
@@ -87,6 +89,8 @@ impl<'a> ChatInput<'a> {
     }
 
     /// Sets compact session status text rendered beside the input title.
+    /// Status takes priority over the title at constrained widths; its final
+    /// ` · `-separated indicator takes priority over earlier status fields.
     #[must_use]
     pub fn status(mut self, status: &'a str) -> Self {
         self.status = Some(status);
@@ -106,11 +110,8 @@ impl<'a> ChatInput<'a> {
     /// Returns the shared block styling for the prompt input frame.
     ///
     /// Uses accent styling when active and muted styling when inactive.
-    fn input_block(&self) -> Block<'a> {
-        let title = self.status.map_or_else(
-            || format!(" {} ", self.title),
-            |status| format!(" {} · {status} ", self.title),
-        );
+    fn input_block(&self, width: u16) -> Block<'a> {
+        let title = self.input_title(width);
         let (border_style, title_style) = if self.active {
             (Self::focused_border_style(), Self::focused_title_style())
         } else {
@@ -122,6 +123,42 @@ impl<'a> ChatInput<'a> {
             .border_type(BorderType::Rounded)
             .border_style(border_style)
             .title(Span::styled(title, title_style))
+    }
+
+    /// Fits the title and status between the border corners and padding,
+    /// preserving the trailing permission indicator before other fields.
+    fn input_title(&self, width: u16) -> String {
+        let Some(status) = self.status else {
+            return format!(" {} ", self.title);
+        };
+        let available_width = usize::from(width.saturating_sub(4));
+        let (context, indicator) = status.rsplit_once(" · ").unwrap_or(("", status));
+        let indicator = text_util::truncate_with_ellipsis(indicator, available_width);
+        let context_width = available_width.saturating_sub(indicator.width() + 3);
+        let status = if context.is_empty() || context_width == 0 {
+            indicator
+        } else {
+            let context = if context.width() > context_width {
+                context
+                    .split_once(" · ")
+                    .map_or(context, |(primary, _)| primary)
+            } else {
+                context
+            };
+
+            format!(
+                "{} · {indicator}",
+                text_util::truncate_with_ellipsis(context, context_width)
+            )
+        };
+        let title_width = available_width.saturating_sub(status.width() + 3);
+        let title = text_util::truncate_with_ellipsis(self.title, title_width);
+
+        if title.is_empty() {
+            return format!(" {status} ");
+        }
+
+        format!(" {title} · {status} ")
     }
 
     /// Returns the border style used to keep the active prompt field visually
@@ -240,7 +277,7 @@ impl<'a> ChatInput<'a> {
 
     /// Render the prompt input with an internally scrollable viewport.
     fn render_input(&self, f: &mut Frame, area: Rect) {
-        let block = self.input_block();
+        let block = self.input_block(area.width);
 
         if self.input.is_empty() {
             let prefix_style = if self.active {

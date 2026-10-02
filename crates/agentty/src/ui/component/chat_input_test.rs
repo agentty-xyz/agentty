@@ -1,4 +1,5 @@
 use ratatui::style::Style;
+use unicode_width::UnicodeWidthStr;
 
 use super::{ChatInput, SuggestionItem, SuggestionList};
 use crate::domain::theme::ColorTheme;
@@ -105,6 +106,68 @@ fn test_render_shows_session_status_beside_prompt_title() {
     // Assert
     let top_row = buffer_row_text(terminal.backend().buffer(), 0, width);
     assert!(top_row.contains(" Prompt · Fast "));
+}
+
+#[test]
+fn narrow_prompt_preserves_style_and_permission_before_model_title() {
+    for title in [
+        "Reply [gpt-5.4]",
+        "回复 [模型模型模型模型]",
+        "Re\u{301}ply [a long model]",
+    ] {
+        // Arrange
+        let width = 40;
+        let backend = ratatui::backend::TestBackend::new(width, 5);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+        let chat_input = ChatInput::new(title, "", 0).status("Balanced · Normal · Auto Edit");
+
+        // Act
+        terminal
+            .draw(|frame| chat_input.render(frame, frame.area()))
+            .expect("failed to draw narrow prompt");
+
+        // Assert
+        let row = buffer_row_text(terminal.backend().buffer(), 0, width);
+        assert!(row.contains("Balanced · Normal · Auto Edit"), "{row}");
+        assert!(row.contains("..."), "{row}");
+        assert!(row.ends_with('╮'));
+    }
+}
+
+#[test]
+fn prompt_title_reserves_the_trailing_permission_indicator() {
+    for status in [
+        "Balanced · Normal · Auto Edit",
+        "Balanced · Normal · Auto Edit + Auto Address Comments",
+        "Balanced · Read Only",
+        "Auto Edit",
+    ] {
+        // Arrange
+        let chat_input = ChatInput::new("Reply [long-model-name]", "", 0).status(status);
+        let permission = status
+            .rsplit(" · ")
+            .next()
+            .expect("status has an indicator");
+
+        for width in 4..=120 {
+            // Act
+            let title = chat_input.input_title(width);
+
+            // Assert
+            assert!(
+                title.width() <= usize::from(width - 2),
+                "width {width}: {title}"
+            );
+            if usize::from(width - 4) >= permission.width() {
+                assert!(title.contains(permission), "width {width}: {title}");
+            }
+            if let Some((response_style, _)) = status.split_once(" · ")
+                && usize::from(width - 4) >= response_style.width() + permission.width() + 3
+            {
+                assert!(title.contains(response_style), "width {width}: {title}");
+            }
+        }
+    }
 }
 
 #[test]

@@ -444,7 +444,10 @@ automatic model compatibility changes.
 `/style` affects following user turns: **Concise** retains essential results, caveats,
 and verification; **Balanced** adds useful context; **Detailed** explains decisions and
 trade-offs thoroughly. Explicit prompt instructions take precedence. Style never changes
-permissions, safety requirements, or required output fields.
+permissions, safety requirements, or required output fields. The session header and
+prompt input show the selected style, including `Balanced`. On narrow terminals, the
+header preserves style and token usage, and the prompt keeps the permission indicator
+visible by shortening less important fields.
 
 `/personality` reads `.agents/agents/*/agent.md` from the session worktree, excluding
 global definitions. Choose `None (default)` to clear it. File edits apply on the next

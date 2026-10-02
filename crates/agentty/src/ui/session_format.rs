@@ -4,6 +4,7 @@ use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
+use unicode_width::UnicodeWidthStr;
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::resource::SessionResources;
@@ -112,18 +113,20 @@ pub fn session_header_lines(
     lines
 }
 
-/// Formats the size, timer, model, reasoning, speed, and token-usage row shown
-/// in single-line metadata contexts without any chat-header-only URL suffix.
+/// Formats the metadata row, reserving space for response style and token
+/// usage before truncating other fields. Omits the chat-header-only URL.
 pub fn session_metadata_text(
     session: &Session,
     header_width: u16,
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> String {
-    let metadata =
-        session_metadata_base_text(session, default_reasoning_level, wall_clock_unix_seconds);
-
-    text_util::truncate_with_ellipsis(&metadata, usize::from(header_width))
+    session_metadata_base_text(
+        session,
+        header_width,
+        default_reasoning_level,
+        wall_clock_unix_seconds,
+    )
 }
 
 /// Formats the chat header metadata rows, including the linked review-request
@@ -138,8 +141,12 @@ fn session_header_metadata_lines(
     default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> Vec<String> {
-    let metadata =
-        session_metadata_base_text(session, default_reasoning_level, wall_clock_unix_seconds);
+    let metadata = session_metadata_base_text(
+        session,
+        header_width,
+        default_reasoning_level,
+        wall_clock_unix_seconds,
+    );
     let available_width = usize::from(header_width);
 
     let review_request_url = session
@@ -157,8 +164,8 @@ fn session_header_metadata_lines(
         )];
     };
 
-    let metadata_width = metadata.chars().count();
-    let url_width = review_request_url.chars().count();
+    let metadata_width = metadata.width();
+    let url_width = review_request_url.width();
     let separator_width = 2;
     let total_required_width = metadata_width
         .saturating_add(separator_width)
@@ -188,10 +195,11 @@ fn session_header_metadata_lines(
     metadata_lines
 }
 
-/// Builds the untruncated left-side metadata text shared by session header and
-/// single-line metadata renderers.
+/// Builds width-bounded metadata shared by session header and single-line
+/// renderers, keeping response style and token usage visible together.
 fn session_metadata_base_text(
     session: &Session,
+    header_width: u16,
     _default_reasoning_level: ReasoningLevel,
     wall_clock_unix_seconds: i64,
 ) -> String {
@@ -205,15 +213,55 @@ fn session_metadata_base_text(
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
     let speed = session_speed_display(session)
         .map_or_default(|speed_mode| format!("  Speed: {speed_mode}"));
-    let response_style = session_response_style_display(session)
-        .map_or_default(|response_style| format!("  Style: {response_style}"));
-    format!(
+    let response_style = session.response_style.name();
+
+    let details = format!(
         "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
-         {}  Reasoning: {}{speed}{response_style}  Tokens: {input_tokens}/{output_tokens}",
+         {}  Reasoning: {}{speed}",
         session.size,
         session.agent.kind(),
         session.agent.model().as_str(),
         reasoning_level.as_str(),
+    );
+    let style_and_tokens =
+        format!("Style: {response_style}  Tokens: {input_tokens}/{output_tokens}");
+    let available_width = usize::from(header_width);
+    let details_width = available_width.saturating_sub(style_and_tokens.width() + 2);
+
+    if details_width == 0 {
+        return text_util::truncate_with_ellipsis(&style_and_tokens, available_width);
+    }
+
+    let details = if details.width() > details_width {
+        let agent_model = format!(
+            "Agent: {}  Model: {}",
+            session.agent.kind(),
+            session.agent.model().as_str(),
+        );
+        let timer_agent_model = format!("Timer: {timer}  {agent_model}");
+
+        if timer_agent_model.width() <= details_width {
+            format!(
+                "{timer_agent_model}  Size: {}  Lines: +{added_lines} / -{deleted_lines}  \
+                 Reasoning: {}{speed}",
+                session.size,
+                reasoning_level.as_str(),
+            )
+        } else {
+            format!(
+                "Timer: {timer}  Size: {}  Lines: +{added_lines} / -{deleted_lines}  \
+                 {agent_model}  Reasoning: {}{speed}",
+                session.size,
+                reasoning_level.as_str(),
+            )
+        }
+    } else {
+        details
+    };
+
+    format!(
+        "{}  {style_and_tokens}",
+        text_util::truncate_with_ellipsis(&details, details_width)
     )
 }
 
@@ -231,24 +279,16 @@ pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     Some(session.speed_mode.name())
 }
 
-/// Returns a non-default response-style label for compact status surfaces.
-fn session_response_style_display(session: &Session) -> Option<&'static str> {
-    (session.response_style != crate::domain::agent::ResponseStyle::Balanced)
-        .then(|| session.response_style.name())
-}
-
 /// Formats the response-style, response-speed, and permission indicators shown
 /// in the prompt input title.
 pub(crate) fn prompt_session_status(session: &Session) -> String {
     let speed_mode = session_speed_display(session);
     let permission_mode = session.permission_mode.display_label();
-    let response_style = session_response_style_display(session);
+    let response_style = session.response_style.name();
 
-    match (response_style, speed_mode) {
-        (None, None) => permission_mode.to_string(),
-        (None, Some(speed_mode)) => format!("{speed_mode} · {permission_mode}"),
-        (Some(response_style), None) => format!("{response_style} · {permission_mode}"),
-        (Some(response_style), Some(speed_mode)) => {
+    match speed_mode {
+        None => format!("{response_style} · {permission_mode}"),
+        Some(speed_mode) => {
             format!("{response_style} · {speed_mode} · {permission_mode}")
         }
     }
