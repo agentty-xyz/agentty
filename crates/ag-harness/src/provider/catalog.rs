@@ -37,9 +37,9 @@ impl ModelProvider {
     /// Returns representative model identifiers known to this provider.
     pub const fn known_models(self) -> &'static [&'static str] {
         match self {
-            Self::Kimi => &[kimi::KIMI_K2_6],
+            Self::Kimi => &[kimi::KIMI_K3, kimi::KIMI_K2_6],
             Self::Muse => &[muse::MUSE_SPARK_1_3, muse::MUSE_SPARK_1_3_CONTRIBUTOR],
-            Self::Qwen => &[qwen::QWEN_PLUS],
+            Self::Qwen => &[qwen::QWEN3_8_MAX, qwen::QWEN_PLUS],
         }
     }
 

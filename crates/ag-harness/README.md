@@ -120,9 +120,9 @@ commands never block new turns silently.
 built-in provider selected at runtime, use `provider::ModelConfiguration`:
 
 ```rust
-use ag_harness::provider::{KIMI_K2_6, ModelConfiguration, ModelProvider};
+use ag_harness::provider::{KIMI_K3, ModelConfiguration, ModelProvider};
 
-let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K2_6)
+let kimi = ModelConfiguration::new(ModelProvider::Kimi, KIMI_K3)
     .client_from_environment(|name| std::env::var(name))?;
 ```
 
