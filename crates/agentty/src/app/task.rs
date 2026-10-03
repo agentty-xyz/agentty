@@ -606,7 +606,7 @@ impl TaskService {
         progress: impl Fn(crate::app::review::ReviewProgress) + Sync,
     ) -> Result<String, AppError> {
         let (review_selection, reasoning_level, speed_mode) = review_agent;
-        let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(15));
+        let client = ReviewDeadlineClient::new(run_client, Duration::from_mins(30));
         let all_criteria = rules.for_diff(review_diff)?;
         let review = crate::app::review_prompt::submit(
             &client,
