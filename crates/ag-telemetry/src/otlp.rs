@@ -1,4 +1,4 @@
-//! Opt-in OTLP trace export owned by the application composition root.
+//! Opt-in OTLP HTTP/protobuf trace export for host composition roots.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,52 +10,80 @@ use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::trace::{
     BatchConfigBuilder, BatchSpanProcessor, Sampler, SdkTracerProvider,
 };
+use thiserror::Error;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{Layer, Registry};
 use url::Url;
 
-/// Owns the exporter and diagnostics until background work has stopped.
-pub struct Telemetry {
+/// Resource identity attached to every exported span.
+#[derive(Clone, Copy, Debug)]
+pub struct Service {
+    /// Exported as `service.name`.
+    pub name: &'static str,
+    /// Exported as `service.version`.
+    pub version: &'static str,
+}
+
+/// Bounded export setup failures that never echo the endpoint or credentials.
+#[derive(Debug, Eq, Error, PartialEq)]
+pub enum OtlpError {
+    /// The exporter rejected the validated endpoint.
+    #[error("Could not configure OTLP HTTP/protobuf export")]
+    Configuration,
+    /// The endpoint is not a complete HTTP(S) traces URL.
+    #[error(
+        "--otlp-endpoint requires a complete HTTP(S) traces URL, such as \
+         http://localhost:4318/v1/traces"
+    )]
+    Endpoint,
+    /// The blocking exporter construction worker failed.
+    #[error("OTLP exporter initialization failed")]
+    Initialization,
+}
+
+/// Owns the exporter and its diagnostics until host work has stopped.
+pub struct OtlpExport {
     diagnostics: Arc<AtomicU64>,
     provider: SdkTracerProvider,
 }
 
-impl Telemetry {
-    /// Starts OTLP HTTP/protobuf export only when the CLI supplied an endpoint.
-    /// Environment variables alone never initialize tracing.
+impl OtlpExport {
+    /// Starts export only when the host supplied an endpoint. Environment
+    /// variables alone never enable tracing or override the endpoint;
+    /// `OTEL_EXPORTER_OTLP_TRACES_HEADERS` and `OTEL_EXPORTER_OTLP_HEADERS`
+    /// still supply authentication headers.
     ///
     /// # Errors
-    /// Returns a bounded configuration error before the terminal UI starts.
-    pub async fn start(endpoint: Option<&str>) -> Result<Option<Self>, String> {
+    /// Returns a bounded error for an invalid endpoint or exporter setup.
+    pub async fn start(
+        endpoint: Option<&str>,
+        service: Service,
+    ) -> Result<Option<Self>, OtlpError> {
         let Some(endpoint) = endpoint else {
             return Ok(None);
         };
         let endpoint = Self::validate_endpoint(endpoint)?.to_string();
 
-        Self::initialize(move || Self::build(&endpoint))
+        Self::initialize(move || Self::build(&endpoint, service))
             .await
             .map(Some)
     }
 
-    /// Installs the application-owned provider and a terminal-safe diagnostic
-    /// subscriber. Diagnostic text and authentication headers are not retained.
-    ///
-    /// # Errors
-    /// Returns an error when the process already has a tracing subscriber.
-    pub fn install(&self) -> Result<(), String> {
-        Registry::default()
+    /// Installs the process-wide provider and, when no subscriber exists yet,
+    /// a diagnostic subscriber that counts exporter warnings without retaining
+    /// their text. Repeated installs replace the provider and never fail;
+    /// without the subscriber only shutdown failures are counted.
+    pub fn install(&self) {
+        let _ = Registry::default()
             .with(Diagnostics(Arc::clone(&self.diagnostics)))
-            .try_init()
-            .map_err(|_| "Could not install OTLP diagnostics subscriber".to_string())?;
+            .try_init();
         global::set_tracer_provider(self.provider.clone());
-
-        Ok(())
     }
 
-    /// Flushes finished spans after terminal restoration. Export failure never
-    /// changes the application's result. Returns a coalesced diagnostic count.
+    /// Flushes finished spans. Export failure never changes the host result.
+    /// Returns a coalesced diagnostic count.
     pub async fn shutdown(self) -> u64 {
         let diagnostics = Arc::clone(&self.diagnostics);
         let result = tokio::task::spawn_blocking(move || {
@@ -69,42 +97,38 @@ impl Telemetry {
         diagnostics.load(Ordering::Relaxed)
     }
 
-    /// Isolates blocking exporter initialization and bounds worker failures.
+    /// Isolates blocking exporter construction from the async runtime.
     async fn initialize(
-        build: impl FnOnce() -> Result<Self, String> + Send + 'static,
-    ) -> Result<Self, String> {
+        build: impl FnOnce() -> Result<Self, OtlpError> + Send + 'static,
+    ) -> Result<Self, OtlpError> {
         tokio::task::spawn_blocking(build)
             .await
-            .map_err(|_| "OTLP exporter initialization failed".to_string())?
+            .map_err(|_| OtlpError::Initialization)?
     }
 
-    fn validate_endpoint(endpoint: &str) -> Result<Url, String> {
-        let invalid = || {
-            "--otlp-endpoint requires a complete HTTP(S) traces URL, such as \
-             http://localhost:4318/v1/traces"
-                .to_string()
-        };
-        let url = Url::parse(endpoint).map_err(|_| invalid())?;
+    fn validate_endpoint(endpoint: &str) -> Result<Url, OtlpError> {
+        let url = Url::parse(endpoint).map_err(|_| OtlpError::Endpoint)?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
+            || url.path() == "/"
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
         {
-            return Err(invalid());
+            return Err(OtlpError::Endpoint);
         }
 
         Ok(url)
     }
 
-    fn build(endpoint: &str) -> Result<Self, String> {
+    fn build(endpoint: &str, service: Service) -> Result<Self, OtlpError> {
         let exporter = SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)
             .with_endpoint(endpoint)
             .with_timeout(Duration::from_secs(2))
             .build()
-            .map_err(|_| "Could not configure OTLP HTTP/protobuf export".to_string())?;
+            .map_err(|_| OtlpError::Configuration)?;
         let processor = BatchSpanProcessor::builder(exporter)
             .with_batch_config(
                 BatchConfigBuilder::default()
@@ -115,9 +139,9 @@ impl Telemetry {
             )
             .build();
         let resource = Resource::builder_empty()
-            .with_service_name("agentty")
+            .with_service_name(service.name)
             .with_attributes([
-                KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                KeyValue::new("service.version", service.version),
                 KeyValue::new("service.instance.id", uuid::Uuid::new_v4().to_string()),
             ])
             .build();
@@ -147,5 +171,5 @@ impl<S: Subscriber> Layer<S> for Diagnostics {
 }
 
 #[cfg(test)]
-#[path = "telemetry_test.rs"]
+#[path = "otlp_test.rs"]
 mod tests;

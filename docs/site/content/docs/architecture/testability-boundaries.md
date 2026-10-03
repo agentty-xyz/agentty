@@ -158,8 +158,8 @@ required gates.
 
 ## Trace Export
 
-The application composes OTLP export; execution crates use `ag-telemetry` guards without
-choosing a destination. Local HTTP receivers verify protobuf payloads and exporter
-failure, while in-memory exporters verify span ownership and asynchronous context. Trace
-boundaries report observable backend activity without inferring hidden model or tool
-timings.
+Hosts compose OTLP export from the `ag-telemetry` `otlp` feature and choose the
+destination; execution crates use its span guards with default features disabled. Local
+HTTP receivers verify protobuf payloads and exporter failure, while in-memory exporters
+verify span ownership and asynchronous context. Trace boundaries report observable
+backend activity without inferring hidden model or tool timings.

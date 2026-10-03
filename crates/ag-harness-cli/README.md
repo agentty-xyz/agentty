@@ -39,3 +39,20 @@ cargo run --locked -p ag-harness-cli -- \
   for Kimi, Qwen, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
+
+## Tracing
+
+Tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP HTTP/protobuf
+traces URL:
+
+```sh
+cargo run --locked -p ag-harness-cli -- \
+  --otlp-endpoint http://localhost:4318/v1/traces run muse-spark-1.3
+```
+
+Each turn exports an `invoke_agent` trace with `chat <model>` and `execute_tool <tool>`
+child spans. Spans carry timings, model and tool identities, finish reasons, and token
+usage; they never contain prompts, model output, or tool content. Authentication headers
+can come from `OTEL_EXPORTER_OTLP_TRACES_HEADERS` or `OTEL_EXPORTER_OTLP_HEADERS`. Spans
+are flushed when the chat exits; export failures print a warning without failing the
+chat.

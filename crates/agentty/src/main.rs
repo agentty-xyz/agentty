@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use ag_git::{GitClient, RealGitClient};
+use ag_telemetry::otlp::{OtlpExport, Service};
 use ag_telemetry::{CaptureToolContent, Context, FutureExt as _};
 use agentty::analytics::Analytics;
 #[cfg(not(debug_assertions))]
@@ -18,7 +19,6 @@ use agentty::infra::db::{
     DB_DIR, DB_FILE, Database, acquire_instance_lock,
     timestamp_source_from_environment as environment_timestamp_source,
 };
-use agentty::infra::telemetry::Telemetry;
 use clap::Parser;
 
 /// Command-line options for launching Agentty.
@@ -62,13 +62,19 @@ async fn run(
     cli: Cli,
     runtime: impl for<'a> AsyncFnOnce(&'a mut App) -> io::Result<()>,
 ) -> Result<(), AppError> {
-    let telemetry = Telemetry::start(cli.otlp_endpoint.as_deref())
-        .await
-        .map_err(AppError::Workflow)?;
+    let telemetry = OtlpExport::start(
+        cli.otlp_endpoint.as_deref(),
+        Service {
+            name: "agentty",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+    )
+    .await
+    .map_err(|error| AppError::Workflow(error.to_string()))?;
+    if let Some(telemetry) = &telemetry {
+        telemetry.install();
+    }
     let result = async {
-        if let Some(telemetry) = &telemetry {
-            telemetry.install().map_err(AppError::Workflow)?;
-        }
         let context = Context::current().with_value(CaptureToolContent(cli.otlp_capture_content));
         run_application(cli, runtime).with_context(context).await
     }

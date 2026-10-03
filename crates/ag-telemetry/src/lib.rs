@@ -1,4 +1,5 @@
-//! Execution spans. Hosts own provider, exporter and content-capture policy.
+//! Execution spans and opt-in OTLP export. Hosts choose the exporter
+//! destination and content-capture policy.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -9,6 +10,9 @@ use opentelemetry::global;
 pub use opentelemetry::trace::{FutureExt, TraceContextExt};
 use opentelemetry::trace::{Link, SpanId, SpanKind, Status, Tracer};
 pub use opentelemetry::{Context, KeyValue};
+
+#[cfg(feature = "otlp")]
+pub mod otlp;
 
 /// Explicit host policy for bounded, sanitized tool-content capture.
 /// Attach this value to the execution context; absence disables capture.

@@ -10,3 +10,5 @@ mod format;
 mod repository;
 #[path = "main_test/support_test.rs"]
 mod support;
+#[path = "main_test/telemetry_test.rs"]
+mod telemetry;

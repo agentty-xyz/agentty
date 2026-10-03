@@ -54,6 +54,11 @@ jobs:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p testty --token "$CRATES_IO_TOKEN"
 
+      - name: Publish `ag-telemetry` to crates.io
+        env:
+          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ag-telemetry --token "$CRATES_IO_TOKEN"
+
       - name: Publish `ag-harness-cli` to crates.io
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
@@ -78,11 +83,6 @@ jobs:
         env:
           CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish -p ag-session --token "$CRATES_IO_TOKEN"
-
-      - name: Publish `ag-telemetry` to crates.io
-        env:
-          CRATES_IO_TOKEN: ${{ steps.auth.outputs.token }}
-        run: cargo publish -p ag-telemetry --token "$CRATES_IO_TOKEN"
 
       - name: Publish `ag-agent` to crates.io
         env:

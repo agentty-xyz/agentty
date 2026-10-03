@@ -31,7 +31,7 @@ For file-level detail, read the module docstrings directly.
 | `ag-router`        | Structured chat routing and provider transports                  |
 | `ag-session`       | Session models, policies, catalog, lifecycle API                 |
 | `ag-store`         | Persistence contracts, SQLite adapters, migrations               |
-| `ag-telemetry`     | Content-free span ownership and async trace context              |
+| `ag-telemetry`     | Content-free spans, async trace context, and opt-in OTLP export  |
 | `ag-tui-text`      | Markdown, forge HTML, terminal diagrams and text layout          |
 | `agentty`          | Application composition and TUI                                  |
 | `testty`           | PTY assertions and visual recordings                             |

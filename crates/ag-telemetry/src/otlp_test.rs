@@ -3,19 +3,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use opentelemetry::trace::{Span as _, Tracer as _, TracerProvider as _};
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
-use prost::Message;
+use opentelemetry_proto::tonic::common::v1::any_value;
+use prost::Message as _;
 use tracing_subscriber::Registry;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::layer::SubscriberExt as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use crate::infra::telemetry::{Diagnostics, Telemetry};
-use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
+use super::{Diagnostics, OtlpError, OtlpExport, Service};
+
+const SERVICE: Service = Service {
+    name: "otlp-test",
+    version: "1.2.3",
+};
 
 #[tokio::test]
 async fn initialization_worker_failure_returns_a_bounded_error() {
     // Arrange / Act
-    let result = Telemetry::initialize(|| {
+    let result = OtlpExport::initialize(|| {
         std::panic::resume_unwind(Box::new("private initialization detail"))
     })
     .await;
@@ -23,37 +28,41 @@ async fn initialization_worker_failure_returns_a_bounded_error() {
     // Assert
     assert_eq!(
         result.err().expect("worker failure"),
-        "OTLP exporter initialization failed"
+        OtlpError::Initialization
     );
 }
 
 #[test]
 fn exporter_configuration_failure_does_not_echo_the_endpoint() {
     // Arrange / Act
-    let result = Telemetry::build("http://host/private invalid endpoint");
+    let error = OtlpExport::build("http://host/private invalid endpoint", SERVICE)
+        .err()
+        .expect("invalid exporter configuration");
 
     // Assert
-    assert_eq!(
-        result.err().expect("invalid exporter configuration"),
-        "Could not configure OTLP HTTP/protobuf export"
-    );
+    assert_eq!(error, OtlpError::Configuration);
+    assert!(!error.to_string().contains("private"));
 }
 
 #[tokio::test]
 async fn absent_endpoint_never_constructs_an_exporter() {
     // Arrange / Act
-    let telemetry = Telemetry::start(None).await.expect("disabled startup");
+    let export = OtlpExport::start(None, SERVICE)
+        .await
+        .expect("disabled startup");
 
     // Assert
-    assert!(telemetry.is_none());
+    assert!(export.is_none());
 }
 
 #[tokio::test]
-async fn invalid_endpoint_errors_do_not_echo_credentials() {
+async fn invalid_endpoints_fail_without_echoing_credentials() {
     // Arrange
     let endpoints = [
         "",
         "localhost:4318",
+        "http://localhost:4318",
+        "http://localhost:4318/",
         "file:///private",
         "ftp://host/traces",
         "http://user:secret@host/traces",
@@ -62,15 +71,18 @@ async fn invalid_endpoint_errors_do_not_echo_credentials() {
 
     // Act / Assert
     for endpoint in endpoints {
-        let result = Telemetry::start(Some(endpoint)).await;
-        let error = result.err().expect("invalid endpoint");
-        assert!(error.contains("--otlp-endpoint"));
-        assert!(!error.contains("secret"));
+        let error = OtlpExport::start(Some(endpoint), SERVICE)
+            .await
+            .err()
+            .expect("invalid endpoint");
+        assert_eq!(error, OtlpError::Endpoint);
+        assert!(error.to_string().contains("--otlp-endpoint"));
+        assert!(!error.to_string().contains("secret"));
     }
 }
 
 #[tokio::test]
-async fn shutdown_exports_protobuf_to_the_exact_endpoint() {
+async fn shutdown_exports_protobuf_with_the_service_identity() {
     // Arrange
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -79,16 +91,15 @@ async fn shutdown_exports_protobuf_to_the_exact_endpoint() {
         .mount(&server)
         .await;
     let endpoint = format!("{}/custom/traces", server.uri());
-    let telemetry = Telemetry::start(Some(&endpoint))
+    let export = OtlpExport::start(Some(&endpoint), SERVICE)
         .await
         .expect("start")
         .expect("enabled");
 
     // Act
-    let tracer = telemetry.provider.tracer("export-test");
-    let mut span = tracer.start("session.turn");
+    let mut span = export.provider.tracer("export-test").start("session.turn");
     span.end();
-    let warnings = telemetry.shutdown().await;
+    let warnings = export.shutdown().await;
 
     // Assert
     assert_eq!(warnings, 0);
@@ -104,53 +115,51 @@ async fn shutdown_exports_protobuf_to_the_exact_endpoint() {
         .resource
         .as_ref()
         .expect("resource");
-    assert!(
+    let attribute = |key: &str| {
         resource
             .attributes
             .iter()
-            .any(|attribute| attribute.key == "service.name")
+            .find(|attribute| attribute.key == key)
+            .and_then(|attribute| attribute.value.as_ref())
+            .and_then(|value| value.value.clone())
+    };
+    assert_eq!(
+        attribute("service.name"),
+        Some(any_value::Value::StringValue("otlp-test".to_string()))
     );
-    assert!(
-        resource
-            .attributes
-            .iter()
-            .any(|attribute| attribute.key == "service.version")
+    assert_eq!(
+        attribute("service.version"),
+        Some(any_value::Value::StringValue("1.2.3".to_string()))
     );
-    assert!(
-        resource
-            .attributes
-            .iter()
-            .any(|attribute| attribute.key == "service.instance.id")
-    );
+    assert!(attribute("service.instance.id").is_some());
 }
 
 #[tokio::test]
-async fn failed_export_is_reported_without_changing_application_work() {
+async fn repeated_install_keeps_counting_failed_exports() {
     // Arrange
-    let _provider_guard = TRACER_PROVIDER_LOCK.lock().await;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(503))
         .mount(&server)
         .await;
     let endpoint = format!("{}/v1/traces", server.uri());
-    let telemetry = Telemetry::start(Some(&endpoint))
+    let export = OtlpExport::start(Some(&endpoint), SERVICE)
         .await
         .expect("start")
         .expect("enabled");
-    telemetry.install().expect("install");
-    assert!(telemetry.install().is_err());
+    export.install();
+    export.install();
 
     // Act
-    let mut span = telemetry
+    let mut span = export
         .provider
         .tracer("failure-test")
         .start("completed-work");
     span.end();
-    let diagnostics = telemetry.shutdown().await;
+    let warnings = export.shutdown().await;
 
     // Assert
-    assert!(diagnostics > 0);
+    assert!(warnings > 0);
     assert!(
         !server
             .received_requests()
@@ -163,14 +172,14 @@ async fn failed_export_is_reported_without_changing_application_work() {
 #[tokio::test]
 async fn repeated_shutdown_reports_a_bounded_diagnostic() {
     // Arrange
-    let telemetry = Telemetry::start(Some("http://localhost:4318/v1/traces"))
+    let export = OtlpExport::start(Some("http://localhost:4318/v1/traces"), SERVICE)
         .await
         .expect("start")
         .expect("enabled");
-    telemetry.provider.shutdown().expect("first shutdown");
+    export.provider.shutdown().expect("first shutdown");
 
     // Act
-    let shutdown_warnings = telemetry.shutdown().await;
+    let shutdown_warnings = export.shutdown().await;
 
     // Assert
     assert_eq!(shutdown_warnings, 1);
@@ -185,18 +194,15 @@ async fn unicode_endpoint_paths_are_normalized_before_exporter_configuration() {
         .mount(&server)
         .await;
     let endpoint = format!("{}/\u{00e4}", server.uri());
-    let telemetry = Telemetry::start(Some(&endpoint))
+    let export = OtlpExport::start(Some(&endpoint), SERVICE)
         .await
         .expect("start")
         .expect("enabled");
 
     // Act
-    let mut span = telemetry
-        .provider
-        .tracer("unicode-test")
-        .start("configured");
+    let mut span = export.provider.tracer("unicode-test").start("configured");
     span.end();
-    let warnings = telemetry.shutdown().await;
+    let warnings = export.shutdown().await;
 
     // Assert
     assert_eq!(warnings, 0);
@@ -216,7 +222,7 @@ fn diagnostics_count_only_sdk_warnings_and_errors() {
         tracing::warn!(target: "opentelemetry_sdk", "private diagnostic");
         tracing::error!(target: "opentelemetry_otlp", "private diagnostic");
         tracing::info!(target: "opentelemetry_sdk", "information");
-        tracing::warn!(target: "agentty", "application warning");
+        tracing::warn!(target: "ag_telemetry", "application warning");
     });
 
     // Assert
@@ -226,20 +232,20 @@ fn diagnostics_count_only_sdk_warnings_and_errors() {
 #[tokio::test]
 async fn cli_endpoint_and_protocol_override_environment_and_use_trace_headers() {
     // Arrange
-    const CHILD: &str = "AGENTTY_OTLP_CONFIGURATION_TEST_CHILD";
-    const ENDPOINT: &str = "AGENTTY_OTLP_CONFIGURATION_TEST_ENDPOINT";
+    const CHILD: &str = "AG_TELEMETRY_OTLP_CONFIGURATION_TEST_CHILD";
+    const ENDPOINT: &str = "AG_TELEMETRY_OTLP_CONFIGURATION_TEST_ENDPOINT";
     if std::env::var_os(CHILD).is_some() {
         let endpoint = std::env::var(ENDPOINT).expect("endpoint");
-        let telemetry = Telemetry::start(Some(&endpoint))
+        let export = OtlpExport::start(Some(&endpoint), SERVICE)
             .await
             .expect("start")
             .expect("enabled");
-        let mut span = telemetry
+        let mut span = export
             .provider
             .tracer("configuration-test")
             .start("configured");
         span.end();
-        assert_eq!(telemetry.shutdown().await, 0);
+        assert_eq!(export.shutdown().await, 0);
         return;
     }
     let server = MockServer::start().await;
@@ -252,13 +258,23 @@ async fn cli_endpoint_and_protocol_override_environment_and_use_trace_headers() 
 
     // Act
     let output = tokio::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "infra::telemetry::tests::cli_endpoint_and_protocol_override_environment_and_use_trace_headers", "--nocapture"])
-        .env(CHILD, "1").env(ENDPOINT, endpoint)
+        .args([
+            "--exact",
+            "otlp::tests::cli_endpoint_and_protocol_override_environment_and_use_trace_headers",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env(ENDPOINT, endpoint)
         .env("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "invalid endpoint")
         .env("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
-        .env("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "authorization=Bearer%20test-token")
+        .env(
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+            "authorization=Bearer%20test-token",
+        )
         .env("OTEL_EXPORTER_OTLP_HEADERS", "x-ignored=value")
-        .output().await.expect("child test");
+        .output()
+        .await
+        .expect("child test");
 
     // Assert
     assert!(

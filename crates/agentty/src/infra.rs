@@ -22,8 +22,6 @@ pub mod project_discovery;
 pub(crate) mod resource;
 /// Total provider-call deadline for focused reviews.
 pub(crate) mod review_deadline;
-/// Opt-in OTLP trace export and terminal-safe diagnostics.
-pub mod telemetry;
 /// Tmux process boundary used by app orchestration.
 pub mod tmux;
 pub mod version;
