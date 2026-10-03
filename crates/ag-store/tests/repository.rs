@@ -1292,3 +1292,102 @@ async fn session_archive_pages_bound_rows_and_preserve_project_and_detail_scope(
     assert!(empty.is_empty());
     assert!(!empty_has_more);
 }
+
+#[tokio::test]
+async fn archived_session_count_includes_all_pages_and_tracks_project_status_changes() {
+    // Arrange
+    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("archive-project", None)
+        .await
+        .expect("project");
+    let other_project = database
+        .projects()
+        .upsert_project("other-project", None)
+        .await
+        .expect("other project");
+    for status in [
+        "Draft", "Review", "Queued", "Merging", "Merged", "Done", "Canceled",
+    ] {
+        database
+            .sessions()
+            .insert_session(status, "gpt-5.6-sol", "main", status, project)
+            .await
+            .expect("row");
+    }
+    database
+        .sessions()
+        .insert_session("other", "gpt-5.6-sol", "main", "Done", other_project)
+        .await
+        .expect("other archive");
+
+    // Act & Assert
+    for (project_id, expected_total) in [(project, 2), (other_project, 1), (999, 0)] {
+        let (_, has_more) = database
+            .sessions()
+            .load_sessions_for_project_page(project_id, 1, None)
+            .await
+            .expect("page");
+        let total = database
+            .sessions()
+            .load_archived_session_count(project_id)
+            .await
+            .expect("total");
+        assert_eq!(total, expected_total);
+        assert_eq!(has_more, expected_total > 1);
+    }
+
+    // Act: an active session is archived and an existing archive is deleted.
+    database
+        .sessions()
+        .update_session_status_with_timing_at("Review", "Canceled", 123)
+        .await
+        .expect("archive session");
+    let after_archive = database
+        .sessions()
+        .load_archived_session_count(project)
+        .await
+        .expect("updated total");
+    database
+        .sessions()
+        .delete_session("Done")
+        .await
+        .expect("delete archive");
+    let after_delete = database
+        .sessions()
+        .load_archived_session_count(project)
+        .await
+        .expect("updated total");
+
+    // Assert
+    assert_eq!(after_archive, 3);
+    assert_eq!(after_delete, 2);
+}
+
+#[tokio::test]
+async fn archived_session_count_uses_covering_project_status_index() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+
+    // Act
+    let plan = sqlx::query_as::<_, (i64, i64, i64, String)>(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM session WHERE project_id = ? AND status IN \
+         ('Done', 'Canceled')",
+    )
+    .bind(1_i64)
+    .fetch_all(database.pool())
+    .await
+    .expect("archive count query plan");
+
+    // Assert
+    assert!(plan.iter().any(|(_, _, _, detail)| {
+        detail.contains("SEARCH session USING COVERING INDEX idx_session_project_status")
+    }));
+    assert!(
+        plan.iter()
+            .all(|(_, _, _, detail)| !detail.contains("SCAN session"))
+    );
+}

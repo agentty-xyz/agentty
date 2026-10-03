@@ -27,6 +27,7 @@ use crate::ui::{
 struct RouteSharedContext<'a> {
     /// Identifier for the active project shared across list-mode renders.
     active_project_id: i64,
+    archived_session_count: usize,
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
     current_tab: Tab,
@@ -221,6 +222,7 @@ impl<'a> FrameResources<'a> {
 pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>) {
     let RenderContext {
         active_project_id,
+        archived_session_count,
         has_more_archived_sessions,
         active_prompt_outputs,
         available_agent_clis,
@@ -249,6 +251,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let mut shared = RouteSharedContext {
         active_project_id,
+        archived_session_count,
         available_agent_clis,
         current_tab,
         default_reasoning_level,
@@ -860,6 +863,7 @@ fn render_list_background(
                 shared.default_reasoning_level,
                 frame_time.unix_seconds(),
             )
+            .archived_session_count(shared.archived_session_count)
             .has_more_archived_sessions(shared.has_more_archived_sessions)
             .session_git_statuses(shared.session_git_statuses)
             .render(f, chunks[1]);

@@ -1666,6 +1666,7 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
         if keybindings.iter().any(|action| action.key == "Enter" && action.footer_label == "load more"))
     );
     assert!(app.view_snapshot().has_more_archived_sessions);
+    assert_eq!(app.view_snapshot().archived_session_count, 21);
 
     // Act
     app.mode = AppMode::List;
@@ -1675,6 +1676,7 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
 
     // Assert
     assert_eq!(app.sessions.sessions().len(), 20);
+    assert_eq!(app.view_snapshot().archived_session_count, 21);
     assert_eq!(app.selected_session().expect("new row").id, "archive-10");
     assert!(matches!(app.mode, AppMode::List));
 
@@ -1689,6 +1691,7 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
     // Assert
     assert_eq!(app.sessions.sessions().len(), 21);
     assert!(!app.sessions.has_more_archived_sessions());
+    assert_eq!(app.view_snapshot().archived_session_count, 21);
     assert_eq!(app.selected_session().expect("last page").id, "archive-20");
 
     // Arrange: switching away and back resets the expanded archive.
@@ -1708,9 +1711,11 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
     app.switch_project(other_project)
         .await
         .expect("switch away");
+    assert_eq!(app.view_snapshot().archived_session_count, 0);
     app.switch_project(project).await.expect("switch back");
 
     // Assert
     assert_eq!(app.sessions.sessions().len(), 10);
     assert!(app.sessions.has_more_archived_sessions());
+    assert_eq!(app.view_snapshot().archived_session_count, 21);
 }

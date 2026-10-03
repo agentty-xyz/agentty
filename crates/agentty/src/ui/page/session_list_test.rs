@@ -1087,3 +1087,89 @@ fn archive_load_more_row_is_selectable_and_disappears_at_end() {
     assert!(!text.contains("Enter: open session"));
     assert!(!buffer_text(terminal.backend().buffer()).contains("Load more..."));
 }
+
+#[test]
+fn archive_header_uses_full_total_while_other_groups_use_loaded_rows() {
+    // Arrange
+    let sessions = vec![
+        crate::test_support::titled_session_fixture("done", Status::Done),
+        crate::test_support::titled_session_fixture("canceled", Status::Canceled),
+        crate::test_support::titled_session_fixture("active", Status::Draft),
+        crate::test_support::titled_session_fixture("queued", Status::Queued),
+    ];
+    let mut table_state = TableState::default();
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 16)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .archived_session_count(23)
+                .has_more_archived_sessions(true)
+                .render(frame, frame.area());
+        })
+        .expect("draw archive page");
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("ARCHIVE —— 23"));
+    assert!(text.contains("ACTIVE —— 1"));
+    assert!(text.contains("MERGE QUEUE —— 1"));
+    assert!(text.contains("Load more..."));
+}
+
+#[test]
+fn archive_header_remains_visible_without_loaded_archived_rows() {
+    for (total, has_more, with_active_session) in [
+        (0, false, false),
+        (2, false, false),
+        (23, true, false),
+        (23, true, true),
+    ] {
+        // Arrange
+        let sessions = if with_active_session {
+            vec![crate::test_support::titled_session_fixture(
+                "active",
+                Status::Draft,
+            )]
+        } else {
+            Vec::new()
+        };
+        let mut table_state = TableState::default();
+        table_state.select(has_more.then_some(sessions.len()));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 16)).expect("terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .archived_session_count(total)
+                    .has_more_archived_sessions(has_more)
+                    .render(frame, frame.area());
+            })
+            .expect("draw archive total");
+
+        // Assert
+        let text = buffer_text(terminal.backend().buffer());
+        if total == 0 {
+            assert!(!text.contains("ARCHIVE"));
+            assert!(text.contains(EMPTY_SESSIONS_HINT));
+        } else {
+            assert!(text.contains(&format!("ARCHIVE —— {total}")));
+            assert!(!text.contains(EMPTY_SESSIONS_HINT));
+        }
+        assert_eq!(text.contains("Load more..."), has_more);
+        assert_eq!(text.contains("Enter: load more"), has_more);
+        if with_active_session {
+            let lines = buffer_lines(terminal.backend().buffer());
+            let archive_row = lines
+                .iter()
+                .position(|line| line.contains("ARCHIVE"))
+                .expect("archive");
+            assert_eq!(lines[archive_row - 1].trim_matches([' ', '│']), "");
+            assert!(text.contains("ACTIVE —— 1"));
+        }
+    }
+}

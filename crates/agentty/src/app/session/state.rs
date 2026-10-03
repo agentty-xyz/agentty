@@ -49,6 +49,8 @@ impl SessionRuntimeState {
 pub struct SessionState {
     /// Archive window retained until the active project changes.
     pub(crate) archive_limit: usize,
+    /// Full archive total for the active project, independent of pagination.
+    pub(crate) archived_session_count: usize,
     pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
     /// affordances.
@@ -87,6 +89,10 @@ impl SessionState {
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
         let mut state = Self {
             archive_limit: crate::domain::session_order::ARCHIVE_PAGE_SIZE,
+            archived_session_count: sessions
+                .iter()
+                .filter(|session| matches!(session.status, Status::Done | Status::Canceled))
+                .count(),
             clock,
             follow_up_task_positions: HashMap::new(),
             has_more_archived_sessions: false,

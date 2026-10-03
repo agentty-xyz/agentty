@@ -54,7 +54,8 @@ of pasted text.
 | `?`                 | Help                                                 |
 
 The archive starts with the 10 most recently updated sessions. Select `Load more...` and
-press `Enter` to load the next 10. Switching projects resets the archive window.
+press `Enter` to load the next 10. The archive heading shows the project's total
+archived sessions across all pages. Switching projects resets the archive window.
 
 `a` opens the session-type selector, with a warning first if configured hooks are
 missing. `Enter` continues past that warning; `Esc` / `q` cancels. New-session setup

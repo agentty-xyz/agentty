@@ -25,6 +25,8 @@ pub(crate) struct SessionReviewView<'a> {
 pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) active_project_id: i64,
     pub(crate) active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Full archive total for the active project.
+    pub(crate) archived_session_count: usize,
     pub(crate) available_agent_clis: Vec<AgentCliInfo>,
     pub(crate) current_tab: Tab,
     pub(crate) current_version_display_text: &'a str,
@@ -98,6 +100,7 @@ impl App {
             git_branch: project.git_branch,
             git_status: project.git_status,
             git_upstream_ref: project.git_upstream_ref,
+            archived_session_count: self.sessions.state().archived_session_count,
             has_more_archived_sessions: self.sessions.has_more_archived_sessions(),
             is_tmux_session: self.is_tmux_session(),
             latest_available_version: self.latest_available_version.as_deref(),

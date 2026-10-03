@@ -43,6 +43,8 @@ pub struct RenderContext<'a> {
     pub active_project_id: i64,
     /// Exact prompt transcript blocks keyed by session id for active turns.
     pub active_prompt_outputs: &'a HashMap<SessionId, String>,
+    /// Full archive total for the active project.
+    pub archived_session_count: usize,
     /// Locally available agent CLI executables and detected versions.
     pub available_agent_clis: &'a [AgentCliInfo],
     /// Active top-level tab selection.

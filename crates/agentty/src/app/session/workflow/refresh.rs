@@ -164,35 +164,32 @@ impl SessionManager {
         let archive_limit = self.state.archive_limit;
         let clock = services.clock();
         let fs_client = services.fs_client();
-        let (
-            mut sessions,
-            stats_activity,
-            session_worktree_availability,
-            has_more_archived_sessions,
-        ) = match Self::try_load_sessions_with_fs_client(
-            SessionLoadInput {
-                archive_limit,
-                active_project_id: projects.active_project_id(),
-                active_session_id: detail_session_id.as_deref(),
-                base: services.base_path(),
-                clock: clock.as_ref(),
-                db: services.db(),
-                fs_client: fs_client.as_ref(),
-                working_dir: projects.working_dir(),
-            },
-            self.state.handles_mut(),
-        )
-        .await
-        {
-            Ok(loaded_sessions) => loaded_sessions,
-            Err(error) => {
-                warn!(%error, "preserving active session state after refresh failure");
+        let (mut sessions, stats_activity, session_worktree_availability, archive_page) =
+            match Self::try_load_sessions_with_fs_client(
+                SessionLoadInput {
+                    archive_limit,
+                    active_project_id: projects.active_project_id(),
+                    active_session_id: detail_session_id.as_deref(),
+                    base: services.base_path(),
+                    clock: clock.as_ref(),
+                    db: services.db(),
+                    fs_client: fs_client.as_ref(),
+                    working_dir: projects.working_dir(),
+                },
+                self.state.handles_mut(),
+            )
+            .await
+            {
+                Ok(loaded_sessions) => loaded_sessions,
+                Err(error) => {
+                    warn!(%error, "preserving active session state after refresh failure");
 
-                return false;
-            }
-        };
+                    return false;
+                }
+            };
         Self::preserve_live_orchestration_progress(&mut sessions, &live_orchestration_progress);
-        self.state.has_more_archived_sessions = has_more_archived_sessions;
+        self.state.archived_session_count = archive_page.archived_session_count;
+        self.state.has_more_archived_sessions = archive_page.has_more_archived_sessions;
         self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
