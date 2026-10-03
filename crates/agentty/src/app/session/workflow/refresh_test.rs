@@ -7,6 +7,11 @@ use ag_forge as forge;
 use ag_git as git;
 use tempfile::tempdir;
 use tokio::sync::mpsc;
+use tracing::field::{Field, Visit};
+use tracing::instrument::WithSubscriber;
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
 
 use super::super::SESSION_REFRESH_INTERVAL;
 use crate::app::session::{Clock, SessionDefaults};
@@ -27,6 +32,25 @@ use crate::presentation::app_mode::{
     HelpContext,
 };
 use crate::presentation::help_action::ViewSessionState;
+
+/// Captures warning fields so refresh failures exercise and verify diagnostics.
+#[derive(Clone)]
+struct WarningCapture(Arc<Mutex<HashMap<String, String>>>);
+
+impl<S: Subscriber> Layer<S> for WarningCapture {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        event.record(&mut self.clone());
+    }
+}
+
+impl Visit for WarningCapture {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .lock()
+            .expect("warning fields lock")
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+}
 
 /// Builds a filesystem mock that delegates directory checks to local disk.
 fn create_passthrough_mock_fs_client() -> fs::MockFsClient {
@@ -837,4 +861,186 @@ impl Clock for FakeClock {
             .lock()
             .expect("fake clock system-time lock should not be poisoned")
     }
+}
+
+#[tokio::test]
+async fn archive_pages_survive_refresh_and_retry_failed_reads() {
+    // Arrange
+    let (database, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("archive-project", None)
+        .await
+        .expect("project");
+    for index in 0..21 {
+        let id = format!("archive-{index:02}");
+        database
+            .sessions()
+            .insert_session(&id, "gpt-5.6-sol", "main", "Done", project)
+            .await
+            .expect("archive");
+        database
+            .sessions()
+            .update_session_updated_at(&id, 100 - index)
+            .await
+            .expect("timestamp");
+    }
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut manager = session_manager_fixture(clock);
+    let mut git_client = git::MockGitClient::new();
+    git_client
+        .expect_detect_git_info()
+        .times(0..)
+        .returning(|_| Box::pin(async { None }));
+    manager.git_client = Arc::new(git_client);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("project dir");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+
+    // Act
+    manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+    manager
+        .state
+        .table_state
+        .select(Some(manager.state.sessions.len()));
+    manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(manager.sessions().len(), 10);
+    assert!(manager.is_load_more_selected());
+
+    // Act
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+    manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(manager.sessions().len(), 20);
+    assert_eq!(
+        manager.selected_session().expect("first new row").id,
+        "archive-10"
+    );
+    assert_eq!(manager.state.archive_limit, 20);
+
+    // Act: database failure preserves the page and action for retry.
+    manager.state.table_state.select(Some(20));
+    pool.close().await;
+    let warning_fields = Arc::new(Mutex::new(HashMap::new()));
+    let subscriber = Registry::default().with(WarningCapture(Arc::clone(&warning_fields)));
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .with_subscriber(subscriber)
+        .await;
+
+    // Assert
+    assert_eq!(manager.sessions().len(), 20);
+    assert_eq!(manager.state.archive_limit, 20);
+    assert!(manager.is_load_more_selected());
+    let warning_fields = warning_fields.lock().expect("warning fields lock");
+    assert_eq!(
+        warning_fields.get("message").map(String::as_str),
+        Some("preserving active session state after refresh failure")
+    );
+    assert!(
+        warning_fields
+            .get("error")
+            .is_some_and(|error| !error.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn archive_load_more_reconciles_when_no_additional_rows_remain() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("database");
+    let project = database
+        .projects()
+        .upsert_project("archive-project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("archive", "gpt-5.6-sol", "main", "Done", project)
+        .await
+        .expect("row");
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut manager = session_manager_fixture(clock);
+    let mut git_client = git::MockGitClient::new();
+    git_client
+        .expect_detect_git_info()
+        .times(0..)
+        .returning(|_| Box::pin(async { None }));
+    manager.git_client = Arc::new(git_client);
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("project dir");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+    manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+    manager.state.has_more_archived_sessions = true;
+    manager.state.table_state.select(Some(1));
+
+    // Act
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(
+        manager.selected_session().expect("remaining row").id,
+        "archive"
+    );
+    assert!(!manager.has_more_archived_sessions());
+}
+
+#[tokio::test]
+async fn archive_load_more_clears_selection_when_all_rows_were_deleted() {
+    // Arrange
+    let session = test_session(PathBuf::from("/tmp/session"), None, Status::Done);
+    let database = database_with_session(&session).await;
+    let clock: Arc<dyn Clock> = Arc::new(FakeClock::new(Instant::now(), SystemTime::UNIX_EPOCH));
+    let mut manager = session_manager_with_session(clock, session);
+    manager.state.has_more_archived_sessions = true;
+    manager.state.table_state.select(Some(1));
+    let services = test_services(
+        &database,
+        Arc::new(git::MockGitClient::new()),
+        Arc::new(forge::MockReviewRequestClient::new()),
+    );
+    let temp_dir = tempdir().expect("project dir");
+    let projects = empty_project_manager(temp_dir.path().to_path_buf());
+    let mut mode = AppMode::List;
+    database
+        .sessions()
+        .delete_session("session-id")
+        .await
+        .expect("delete row");
+
+    // Act
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert!(manager.sessions().is_empty());
+    assert_eq!(manager.selected_session_index(), None);
+    assert!(!manager.has_more_archived_sessions());
 }

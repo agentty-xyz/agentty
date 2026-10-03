@@ -10,7 +10,7 @@ use super::SESSION_REFRESH_INTERVAL;
 use super::load::SessionLoadInput;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
-use crate::domain::session::{ForgeKind, ReviewRequest, SessionId};
+use crate::domain::session::{ForgeKind, ReviewRequest, SessionId, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 impl SessionManager {
@@ -60,6 +60,43 @@ impl SessionManager {
         self.state.refresh_deadline = self.next_refresh_deadline();
     }
 
+    /// Loads the next archive page and focuses its first newly loaded session.
+    pub(crate) async fn load_more_archived_sessions(
+        &mut self,
+        mode: &mut AppMode,
+        projects: &ProjectManager,
+        services: &AppServices,
+    ) {
+        let previous_ids: HashSet<_> = self
+            .state
+            .sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        let previous_limit = self.state.archive_limit;
+        self.state.archive_limit =
+            previous_limit.saturating_add(crate::domain::session_order::ARCHIVE_PAGE_SIZE);
+        if !self.reload_sessions(mode, projects, services, None).await {
+            self.state.archive_limit = previous_limit;
+
+            return;
+        }
+        let next_index =
+            crate::domain::session_order::selectable_session_indexes(&self.state.sessions)
+                .into_iter()
+                .find(|index| {
+                    let session = &self.state.sessions[*index];
+
+                    matches!(session.status, Status::Done | Status::Canceled)
+                        && !previous_ids.contains(&session.id)
+                });
+        self.state.table_state.select(next_index.or_else(|| {
+            crate::domain::session_order::selectable_session_indexes(&self.state.sessions)
+                .last()
+                .copied()
+        }));
+    }
+
     /// Refreshes one linked review request and persists the latest normalized
     /// remote state.
     ///
@@ -104,7 +141,8 @@ impl SessionManager {
         projects: &ProjectManager,
         services: &AppServices,
         sessions_metadata: Option<(i64, i64)>,
-    ) {
+    ) -> bool {
+        let load_more_selected = self.is_load_more_selected();
         let selected_index = self.state.table_state.selected();
         let selected_session_id = selected_index
             .and_then(|index| self.state.sessions.get(index))
@@ -123,40 +161,49 @@ impl SessionManager {
             })
             .collect::<HashMap<_, _>>();
 
+        let archive_limit = self.state.archive_limit;
         let clock = services.clock();
         let fs_client = services.fs_client();
-        let (mut sessions, stats_activity, session_worktree_availability) =
-            match Self::try_load_sessions_with_fs_client(
-                SessionLoadInput {
-                    active_project_id: projects.active_project_id(),
-                    active_session_id: detail_session_id.as_deref(),
-                    base: services.base_path(),
-                    clock: clock.as_ref(),
-                    db: services.db(),
-                    fs_client: fs_client.as_ref(),
-                    working_dir: projects.working_dir(),
-                },
-                self.state.handles_mut(),
-            )
-            .await
-            {
-                Ok(loaded_sessions) => loaded_sessions,
-                Err(error) => {
-                    warn!(
-                        error = %error,
-                        "preserving active session state after refresh failure"
-                    );
+        let (
+            mut sessions,
+            stats_activity,
+            session_worktree_availability,
+            has_more_archived_sessions,
+        ) = match Self::try_load_sessions_with_fs_client(
+            SessionLoadInput {
+                archive_limit,
+                active_project_id: projects.active_project_id(),
+                active_session_id: detail_session_id.as_deref(),
+                base: services.base_path(),
+                clock: clock.as_ref(),
+                db: services.db(),
+                fs_client: fs_client.as_ref(),
+                working_dir: projects.working_dir(),
+            },
+            self.state.handles_mut(),
+        )
+        .await
+        {
+            Ok(loaded_sessions) => loaded_sessions,
+            Err(error) => {
+                warn!(%error, "preserving active session state after refresh failure");
 
-                    return;
-                }
-            };
+                return false;
+            }
+        };
         Self::preserve_live_orchestration_progress(&mut sessions, &live_orchestration_progress);
+        self.state.has_more_archived_sessions = has_more_archived_sessions;
         self.state.replace_sessions(sessions);
         self.state
             .replace_session_worktree_availability(session_worktree_availability);
         self.refresh_session_branch_names().await;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
+        if load_more_selected && self.state.has_more_archived_sessions {
+            self.state
+                .table_state
+                .select(Some(self.state.sessions.len()));
+        }
         self.ensure_mode_session_exists(mode);
 
         let active_session_ids: HashSet<SessionId> = self
@@ -175,6 +222,8 @@ impl SessionManager {
         } else {
             self.update_sessions_metadata_cache(services).await;
         }
+
+        true
     }
 
     /// Returns the session whose detail is visible or being edited in the

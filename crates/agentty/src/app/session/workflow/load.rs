@@ -39,6 +39,8 @@ pub(crate) struct SessionLoadInput<'a> {
     pub(crate) active_project_id: i64,
     /// Session whose transcript-scale details should be loaded.
     pub(crate) active_session_id: Option<&'a str>,
+    /// Maximum number of recent archived snapshots to load.
+    pub(crate) archive_limit: usize,
     /// Root directory containing Agentty-managed session worktrees.
     pub(crate) base: &'a Path,
     /// Clock used to resolve the local offset for each activity event.
@@ -50,6 +52,14 @@ pub(crate) struct SessionLoadInput<'a> {
     /// Active project directory used to derive display metadata.
     pub(crate) working_dir: &'a Path,
 }
+
+/// Loaded snapshots, activity, worktree availability, and archive continuation.
+pub(crate) type LoadedSessionPage = (
+    Vec<Session>,
+    Vec<DailyActivity>,
+    HashMap<SessionId, bool>,
+    bool,
+);
 
 /// Mutable context threaded through the per-row session-load helper.
 ///
@@ -282,12 +292,13 @@ impl SessionManager {
     /// corrupt session cannot hide valid siblings or appear write-capable.
     ///
     /// Returns loaded sessions, local-day activity counts aggregated from
-    /// persisted session-creation activity history, and cached worktree
-    /// availability keyed by session id.
+    /// persisted session-creation activity history, cached worktree
+    /// availability keyed by session id, and whether older archive rows
+    /// remain.
     pub(crate) async fn load_sessions_with_fs_client(
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
-    ) -> (Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>) {
+    ) -> LoadedSessionPage {
         Self::try_load_sessions_with_fs_client(input, handles)
             .await
             .unwrap_or_default()
@@ -303,10 +314,11 @@ impl SessionManager {
     pub(crate) async fn try_load_sessions_with_fs_client(
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
-    ) -> Result<(Vec<Session>, Vec<DailyActivity>, HashMap<SessionId, bool>), DbError> {
+    ) -> Result<LoadedSessionPage, DbError> {
         let SessionLoadInput {
             active_project_id,
             active_session_id,
+            archive_limit,
             base,
             clock,
             db,
@@ -319,9 +331,13 @@ impl SessionManager {
             .unwrap_or_default()
             .to_string();
 
-        let db_rows = db
+        let (db_rows, has_more_archived_sessions) = db
             .sessions()
-            .load_sessions_for_project(active_project_id)
+            .load_sessions_for_project_page(
+                active_project_id,
+                archive_limit,
+                active_session_id.map(str::to_owned),
+            )
             .await?;
         let activity_timestamps = db
             .activity()
@@ -366,7 +382,12 @@ impl SessionManager {
             Self::push_loaded_session_row(&mut load_context, row, permission_mode).await;
         }
 
-        Ok((sessions, stats_activity, session_worktree_availability))
+        Ok((
+            sessions,
+            stats_activity,
+            session_worktree_availability,
+            has_more_archived_sessions,
+        ))
     }
 
     /// Aggregates persisted activity timestamps using the clock-provided

@@ -1,5 +1,6 @@
 //! Session E2E tests grouped by behavior, with shared fixtures.
 
+mod archive;
 mod diff;
 mod fixture;
 mod lifecycle;

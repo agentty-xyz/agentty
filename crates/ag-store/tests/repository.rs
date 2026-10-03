@@ -1137,3 +1137,158 @@ async fn assert_completion_failure_is_atomic(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn session_archive_continuation_counts_only_omitted_rows() {
+    for limit in [0, 10] {
+        for has_omitted_archive in [false, true] {
+            // Arrange
+            let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+                .await
+                .expect("database");
+            let project = database
+                .projects()
+                .upsert_project("archive-project", None)
+                .await
+                .expect("project");
+            let visible_count = limit + 1;
+            let archive_count = visible_count + usize::from(has_omitted_archive);
+            for index in 0..archive_count {
+                let id = format!("archive-{index:02}");
+                database
+                    .sessions()
+                    .insert_session(&id, "gpt-5.6-sol", "main", "Done", project)
+                    .await
+                    .expect("archive");
+                database
+                    .sessions()
+                    .update_session_updated_at(&id, 100 - i64::try_from(index).expect("timestamp"))
+                    .await
+                    .expect("timestamp");
+            }
+            let pinned_id = format!("archive-{limit:02}");
+
+            // Act
+            let (rows, has_more) = database
+                .sessions()
+                .load_sessions_for_project_page(project, limit, Some(pinned_id.clone()))
+                .await
+                .expect("pinned archive page");
+
+            // Assert
+            assert_eq!(rows.len(), visible_count);
+            assert!(rows.iter().any(|row| row.id == pinned_id));
+            assert_eq!(has_more, has_omitted_archive);
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_archive_pages_bound_rows_and_preserve_project_and_detail_scope() {
+    // Arrange
+    let database = Database::open_in_memory_with_timestamp_source(Arc::new(|| 123))
+        .await
+        .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("archive-project", None)
+        .await
+        .expect("project");
+    let other_project = database
+        .projects()
+        .upsert_project("other-project", None)
+        .await
+        .expect("other project");
+    for index in 0..23 {
+        let id = format!("archive-{index:02}");
+        database
+            .sessions()
+            .insert_session(
+                &id,
+                "gpt-5.6-sol",
+                "main",
+                if index % 2 == 0 { "Done" } else { "Canceled" },
+                project,
+            )
+            .await
+            .expect("archive");
+        database
+            .sessions()
+            .update_session_updated_at(&id, 100 - index)
+            .await
+            .expect("timestamp");
+    }
+    for (id, status) in [
+        ("active", "Review"),
+        ("queue", "Queued"),
+        ("merged", "Merged"),
+    ] {
+        database
+            .sessions()
+            .insert_session(id, "gpt-5.6-sol", "main", status, project)
+            .await
+            .expect("active row");
+    }
+    database
+        .sessions()
+        .insert_session("other", "gpt-5.6-sol", "main", "Done", other_project)
+        .await
+        .expect("other row");
+
+    for (limit, expected_count, expected_more) in [
+        (0, 3, true),
+        (10, 13, true),
+        (20, 23, true),
+        (23, 26, false),
+        (30, 26, false),
+        (usize::MAX, 26, false),
+    ] {
+        // Act
+        let (rows, has_more) = database
+            .sessions()
+            .load_sessions_for_project_page(project, limit, None)
+            .await
+            .expect("page");
+
+        // Assert
+        assert_eq!(rows.len(), expected_count);
+        assert_eq!(has_more, expected_more);
+        let archived = rows
+            .iter()
+            .filter(|row| matches!(row.status.as_str(), "Done" | "Canceled"))
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>();
+        let expected = (0..limit.min(23))
+            .map(|index| format!("archive-{index:02}"))
+            .collect::<Vec<_>>();
+        assert_eq!(archived, expected);
+        assert!(rows.iter().all(|row| row.project_id == Some(project)));
+    }
+
+    // Act
+    let (pinned, has_more) = database
+        .sessions()
+        .load_sessions_for_project_page(project, 10, Some("archive-22".into()))
+        .await
+        .expect("pinned page");
+    let (other, other_has_more) = database
+        .sessions()
+        .load_sessions_for_project_page(other_project, 10, Some("archive-22".into()))
+        .await
+        .expect("other page");
+    let (empty, empty_has_more) = database
+        .sessions()
+        .load_sessions_for_project_page(999, 10, None)
+        .await
+        .expect("empty page");
+
+    // Assert
+    assert_eq!(pinned.len(), 14);
+    assert!(pinned.iter().any(|row| row.id == "archive-22"));
+    assert!(!pinned.iter().any(|row| row.id == "archive-10"));
+    assert!(has_more);
+    assert_eq!(other.len(), 1);
+    assert!(!other_has_more);
+    assert!(empty.is_empty());
+    assert!(!empty_has_more);
+}

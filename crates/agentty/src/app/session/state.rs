@@ -47,10 +47,14 @@ impl SessionRuntimeState {
 
 /// Holds all in-memory state related to session listing and refresh tracking.
 pub struct SessionState {
+    /// Archive window retained until the active project changes.
+    pub(crate) archive_limit: usize,
     pub(super) clock: Arc<dyn Clock>,
     /// Selected follow-up-task positions keyed by session id for session-view
     /// affordances.
     pub(super) follow_up_task_positions: HashMap<SessionId, usize>,
+    /// Whether the archive window has older rows available.
+    pub(crate) has_more_archived_sessions: bool,
     pub(super) refresh_deadline: Instant,
     pub(super) row_count: i64,
     /// Cached detected branch names keyed by session id.
@@ -82,8 +86,10 @@ impl SessionState {
         let _state_created_at = clock.now_system_time();
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
         let mut state = Self {
+            archive_limit: crate::domain::session_order::ARCHIVE_PAGE_SIZE,
             clock,
             follow_up_task_positions: HashMap::new(),
+            has_more_archived_sessions: false,
             refresh_deadline,
             row_count,
             runtime: SessionRuntimeState { handles },
@@ -216,12 +222,17 @@ impl SessionState {
     }
 
     /// Appends one session snapshot and records its new stable identifier
-    /// lookup entry.
+    /// lookup entry, preserving selection on the archive pagination action.
     pub(crate) fn push_session(&mut self, session: Session) {
         let session_index = self.sessions.len();
+        let load_more_selected =
+            self.has_more_archived_sessions && self.table_state.selected() == Some(session_index);
         self.session_index_by_id
             .insert(session.id.clone(), session_index);
         self.sessions.push(session);
+        if load_more_selected {
+            self.table_state.select(Some(self.sessions.len()));
+        }
     }
 
     /// Removes one session snapshot by list index and rebuilds the cached

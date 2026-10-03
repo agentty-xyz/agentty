@@ -4,6 +4,9 @@ use std::collections::HashMap;
 
 use crate::domain::session::{Session, Status};
 
+/// Number of archived sessions loaded per request.
+pub(crate) const ARCHIVE_PAGE_SIZE: usize = 10;
+
 /// Group bucket used to organize sessions in the list before rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionGroup {

@@ -54,7 +54,8 @@ identifies the owning crates and layers.
 Campaign tests inject repositories, `SessionBackend`, `OrchestrationEventSink`, and
 `OrchestrationSchedule`. They do not construct the TUI. Storage tests exercise real
 SQLite adapters with injected timestamps; test fixtures do not alter production
-contracts.
+contracts. Session-list archive windows are bounded by the repository query; test
+pagination with real SQLite and selection behavior through the host and PTY.
 
 Resource tests inject process identities and readings to cover PID reuse, stale data,
 and sensor stalls. Host tests separately verify native access. A stalled sensor must not
