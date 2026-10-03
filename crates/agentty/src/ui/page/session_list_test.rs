@@ -1045,3 +1045,45 @@ fn test_render_keeps_selected_new_status_text_visible() {
     assert_eq!(new_cell.bg, style::palette::surface_selection());
     assert_ne!(new_cell.fg, new_cell.bg);
 }
+
+#[test]
+fn archive_load_more_row_is_selectable_and_disappears_at_end() {
+    // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
+    let sessions = vec![crate::test_support::titled_session_fixture(
+        "archived",
+        Status::Done,
+    )];
+    let mut table_state = TableState::default();
+    table_state.select(Some(sessions.len()));
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 16)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .has_more_archived_sessions(true)
+                .render(frame, frame.area());
+        })
+        .expect("draw action");
+    let action =
+        find_text_start_cell(terminal.backend().buffer(), "Load more...").expect("action visible");
+    let action_background = action.bg;
+    let text = buffer_text(terminal.backend().buffer());
+    let preserved_selection = table_state.selected();
+    terminal
+        .draw(|frame| {
+            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                .has_more_archived_sessions(false)
+                .render(frame, frame.area());
+        })
+        .expect("draw completed archive");
+
+    // Assert
+    assert_eq!(action_background, style::palette::surface_selection());
+    assert_eq!(preserved_selection, Some(1));
+    assert!(text.contains("Enter: load more"));
+    assert!(!text.contains("Enter: open session"));
+    assert!(!buffer_text(terminal.backend().buffer()).contains("Load more..."));
+}

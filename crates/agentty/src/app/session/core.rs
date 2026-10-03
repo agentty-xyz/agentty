@@ -445,6 +445,23 @@ impl SessionManager {
         &self.active_prompt_outputs
     }
 
+    /// Returns whether older archived rows can be loaded.
+    pub(crate) fn has_more_archived_sessions(&self) -> bool {
+        self.state.has_more_archived_sessions
+    }
+
+    /// Returns whether selection points at the archive pagination action.
+    pub(crate) fn is_load_more_selected(&self) -> bool {
+        self.state.has_more_archived_sessions
+            && self.state.table_state.selected() == Some(self.state.sessions.len())
+    }
+
+    /// Resets the archive window when switching active projects.
+    pub(crate) fn reset_archive_page(&mut self) {
+        self.state.archive_limit = crate::domain::session_order::ARCHIVE_PAGE_SIZE;
+        self.state.has_more_archived_sessions = false;
+    }
+
     /// Returns shared immutable access to session render and refresh state.
     pub(crate) fn state(&self) -> &SessionState {
         &self.state

@@ -292,6 +292,39 @@ fn replace_sessions_rebuilds_session_id_index() {
 }
 
 #[test]
+/// Keeps the pagination action selected through successive appends while
+/// preserving ordinary session and empty selections.
+fn push_session_preserves_archive_pagination_selection() {
+    for (has_more, selected, expected) in [
+        (true, Some(1), Some(3)),
+        (true, Some(0), Some(0)),
+        (true, None, None),
+        (false, Some(1), Some(1)),
+    ] {
+        // Arrange
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![state_session_fixture("archive", Status::Done)],
+            SelectionState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+        state.has_more_archived_sessions = has_more;
+        state.table_state.select(selected);
+
+        // Act
+        state.push_session(state_session_fixture("created-first", Status::Draft));
+        state.push_session(state_session_fixture("created-second", Status::Draft));
+
+        // Assert
+        assert_eq!(state.table_state.selected(), expected);
+        assert_eq!(state.session_index_for_id("created-first"), Some(1));
+        assert_eq!(state.session_index_for_id("created-second"), Some(2));
+    }
+}
+
+#[test]
 /// Verifies persisted refreshes retain active workflow loaders.
 fn replace_sessions_preserves_active_transient_messages() {
     // Arrange

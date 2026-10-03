@@ -168,6 +168,13 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Sessions => {
+            if app.sessions.is_load_more_selected() {
+                app.sessions
+                    .load_more_archived_sessions(&mut app.mode, &app.projects, &app.services)
+                    .await;
+
+                return Ok(EventResult::Continue);
+            }
             if let Some(session_index) = app.sessions.selected_session_index() {
                 let Some(session_id) = app
                     .sessions
@@ -254,7 +261,15 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
             .selected_session_index()
             .and_then(|selected_index| app.sessions.session_at(selected_index))
             .is_some();
-    session_list_actions(can_cancel_selected_session, can_open_selected_session)
+    let mut actions = session_list_actions(can_cancel_selected_session, can_open_selected_session);
+    if app.sessions.is_load_more_selected() {
+        actions.insert(
+            0,
+            HelpAction::new("load more", "Enter", "Load next 10 archived sessions"),
+        );
+    }
+
+    actions
 }
 
 #[cfg(test)]

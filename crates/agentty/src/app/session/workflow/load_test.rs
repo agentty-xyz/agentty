@@ -142,9 +142,10 @@ async fn load_sessions_skips_invalid_permission_mode_without_hiding_valid_siblin
     let mut handles = HashMap::new();
 
     // Act
-    let (sessions, _, session_worktree_availability) =
+    let (sessions, _, session_worktree_availability, _) =
         SessionManager::load_sessions_with_fs_client(
             SessionLoadInput {
+                archive_limit: 10,
                 active_project_id: project_id,
                 active_session_id: None,
                 base: Path::new("/virtual/session-base"),
@@ -320,8 +321,9 @@ async fn test_load_sessions_preserves_live_handle_output_and_status() {
     );
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -398,8 +400,9 @@ async fn test_load_sessions_restores_queued_actions_from_live_handles() {
     let mut handles_by_session = HashMap::from([(session_id.clone(), handles)]);
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: Some(&session_id),
             base: base_path,
@@ -464,8 +467,9 @@ async fn test_load_sessions_reports_worktree_availability() {
     let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
     // Act
-    let (_, _, session_worktree_availability) = SessionManager::load_sessions_with_fs_client(
+    let (_, _, session_worktree_availability, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -536,8 +540,9 @@ async fn test_load_sessions_reads_persisted_detail_for_active_session() {
     );
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: Some(session_id),
             base: base_path,
@@ -608,8 +613,9 @@ async fn test_load_sessions_defers_persisted_detail_for_inactive_session() {
     let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -675,8 +681,9 @@ async fn test_load_sessions_hydrates_empty_handle_for_active_session() {
     );
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: Some(session_id),
             base: base_path,
@@ -760,8 +767,9 @@ async fn test_load_sessions_terminal_db_status_overrides_handle_status() {
     );
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -809,8 +817,9 @@ async fn test_load_sessions_switches_active_session_off_retired_model() {
     let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -1065,8 +1074,9 @@ async fn test_load_sessions_keeps_retired_model_in_db_for_finished_session() {
     let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,
@@ -1134,8 +1144,9 @@ async fn test_load_sessions_maps_review_request_metadata() {
     let mut handles: HashMap<SessionId, SessionHandles> = HashMap::new();
 
     // Act
-    let (sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: base_path,

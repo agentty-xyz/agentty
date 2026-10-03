@@ -176,8 +176,9 @@ async fn test_load_sessions_uses_persisted_size_for_non_terminal_status() {
 
     // Act
     let fs_client = fs::RealFsClient;
-    let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (reloaded_sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: app.projects.active_project_id(),
             active_session_id: None,
             base: app.services.base_path(),
@@ -245,8 +246,9 @@ async fn test_load_sessions_uses_persisted_size_for_done_status() {
 
     // Act
     let fs_client = fs::RealFsClient;
-    let (reloaded_sessions, _, _) = SessionManager::load_sessions_with_fs_client(
+    let (reloaded_sessions, _, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: app.projects.active_project_id(),
             active_session_id: None,
             base: app.services.base_path(),

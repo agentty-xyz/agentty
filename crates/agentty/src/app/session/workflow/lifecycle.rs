@@ -355,29 +355,34 @@ pub(super) struct SessionTitleGenerationTaskInput {
 }
 
 impl SessionManager {
-    /// Moves selection to the next selectable session in grouped list order.
+    /// Moves selection forward, including the archive pagination action.
     ///
     /// Group header rows are non-selectable and are skipped by design.
     pub fn next(&mut self) {
-        if let Some(index) = session_order::next_selectable_session_index(
-            &self.state.sessions,
-            self.state.table_state.selected(),
-        ) {
-            self.state.table_state.select(Some(index));
-        }
+        let indexes = session_order::selectable_session_indexes(&self.state.sessions);
+        let selected = self.state.table_state.selected();
+        let next = if self.is_load_more_selected() {
+            indexes.first().copied()
+        } else if self.state.has_more_archived_sessions && selected == indexes.last().copied() {
+            Some(self.state.sessions.len())
+        } else {
+            session_order::next_selectable_session_index(&self.state.sessions, selected)
+        };
+        self.state.table_state.select(next);
     }
 
-    /// Moves selection to the previous selectable session in grouped list
-    /// order.
-    ///
-    /// Group header rows are non-selectable and are skipped by design.
+    /// Moves selection backward, including the archive pagination action.
     pub fn previous(&mut self) {
-        if let Some(index) = session_order::previous_selectable_session_index(
-            &self.state.sessions,
-            self.state.table_state.selected(),
-        ) {
-            self.state.table_state.select(Some(index));
-        }
+        let indexes = session_order::selectable_session_indexes(&self.state.sessions);
+        let selected = self.state.table_state.selected();
+        let previous = if self.is_load_more_selected() {
+            indexes.last().copied()
+        } else if self.state.has_more_archived_sessions && selected == indexes.first().copied() {
+            Some(self.state.sessions.len())
+        } else {
+            session_order::previous_selectable_session_index(&self.state.sessions, selected)
+        };
+        self.state.table_state.select(previous);
     }
 
     /// Creates a blank session with an empty prompt and output.

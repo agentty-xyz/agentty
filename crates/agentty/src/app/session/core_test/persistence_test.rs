@@ -96,8 +96,9 @@ async fn test_load_sessions_aggregates_daily_activity() {
 
     // Act
     let fs_client = fs::RealFsClient;
-    let (sessions, stats_activity, _) = SessionManager::load_sessions_with_fs_client(
+    let (sessions, stats_activity, _, _) = SessionManager::load_sessions_with_fs_client(
         SessionLoadInput {
+            archive_limit: 10,
             active_project_id: project_id,
             active_session_id: None,
             base: dir.path(),

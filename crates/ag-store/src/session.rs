@@ -438,6 +438,18 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         project_id: i64,
     ) -> Result<Vec<SessionListRow>, DbError>;
 
+    /// Loads all non-archived rows and the newest `archive_limit` archived
+    /// rows.
+    ///
+    /// Returns whether any archived rows are omitted. The currently open detail
+    /// session is retained even if it falls outside the archive window.
+    async fn load_sessions_for_project_page(
+        &self,
+        project_id: i64,
+        archive_limit: usize,
+        detail_session_id: Option<String>,
+    ) -> Result<(Vec<SessionListRow>, bool), DbError>;
+
     /// Loads transcript-scale detail for one session when it becomes active.
     async fn load_session_detail(
         &self,
@@ -1504,6 +1516,101 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
             .collect::<Vec<_>>();
 
         Ok(rows)
+    }
+
+    async fn load_sessions_for_project_page(
+        &self,
+        project_id: i64,
+        archive_limit: usize,
+        detail_session_id: Option<String>,
+    ) -> Result<(Vec<SessionListRow>, bool), DbError> {
+        // A pinned archive can occupy the first lookahead row.
+        let lookahead = 1 + usize::from(detail_session_id.is_some());
+        let fetch_limit =
+            i64::try_from(archive_limit.saturating_add(lookahead)).unwrap_or(i64::MAX);
+        let rows = sqlx::query_as::<_, SessionJoinRow>(
+            r"WITH archived AS (
+    SELECT id FROM session
+    WHERE project_id = ?1 AND status IN ('Done', 'Canceled')
+    ORDER BY updated_at DESC, created_at DESC, id
+    LIMIT ?2
+)
+SELECT session.base_branch AS base_branch,
+       session.added_lines AS added_lines,
+       session.agent AS agent,
+       session.created_at AS created_at,
+       session.deleted_lines AS deleted_lines,
+       session.has_diff AS has_diff,
+       session.id AS id,
+       session.in_progress_started_at,
+       session.in_progress_total_seconds AS in_progress_total_seconds,
+       session.input_tokens AS input_tokens,
+       session.is_draft AS is_draft,
+       session.model AS model,
+       session.output_tokens AS output_tokens,
+       session.parent_session_id,
+       session.permission_mode AS permission_mode,
+       session.personality_id,
+       session.project_id,
+       '' AS prompt,
+       session.reasoning_level AS reasoning_level_override,
+       session.response_style AS response_style,
+       session.speed_mode AS speed_mode,
+       session.published_upstream_ref,
+       NULL AS questions,
+       session_review_request.display_id AS review_request_display_id,
+       session_review_request.forge_kind AS review_request_forge_kind,
+       session_review_request.last_refreshed_at AS review_request_last_refreshed_at,
+       session_review_request.source_branch AS review_request_source_branch,
+       session_review_request.state AS review_request_state,
+       session_review_request.status_summary AS review_request_status_summary,
+       session_review_request.target_branch AS review_request_target_branch,
+       session_review_request.title AS review_request_title,
+       session_review_request.web_url AS review_request_web_url,
+       session.role,
+       session.size AS size,
+       session.status AS status,
+       session.title,
+       session.updated_at AS updated_at
+FROM session
+LEFT JOIN session_review_request
+ON session_review_request.session_id = session.id
+WHERE session.project_id = ?1
+  AND (session.status NOT IN ('Done', 'Canceled')
+       OR session.id IN (SELECT id FROM archived)
+       OR session.id = ?3)
+ORDER BY session.updated_at DESC, session.created_at DESC, session.id
+",
+        )
+        .bind(project_id)
+        .bind(fetch_limit)
+        .bind(&detail_session_id)
+        .fetch_all(&self.0)
+        .await?;
+        let mut archive_count = 0;
+        let mut has_more_archived_sessions = false;
+        let rows = rows
+            .into_iter()
+            .filter(SessionJoinRow::has_loadable_status)
+            .filter(|row| {
+                if matches!(row.status.as_str(), "Done" | "Canceled") {
+                    archive_count += 1;
+
+                    if archive_count > archive_limit
+                        && detail_session_id.as_deref() != Some(row.id.as_str())
+                    {
+                        has_more_archived_sessions = true;
+
+                        return false;
+                    }
+                }
+
+                true
+            })
+            .map(SessionJoinRow::into_session_list_row)
+            .collect();
+
+        Ok((rows, has_more_archived_sessions))
     }
 
     async fn load_session_detail(

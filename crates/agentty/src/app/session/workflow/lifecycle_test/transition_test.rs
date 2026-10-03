@@ -730,3 +730,42 @@ async fn test_run_title_generation_command_returns_none_after_retry_exhaustion()
     // Assert
     assert_eq!(title, None);
 }
+
+#[test]
+fn archive_load_more_navigation_wraps_and_skips_group_headers() {
+    // Arrange
+    let mut manager = session_manager_with_sessions(vec![
+        session_with_id("archive", Status::Done),
+        session_with_id("active", Status::Review),
+    ]);
+    manager.state.has_more_archived_sessions = true;
+    manager.state.table_state.select(Some(1));
+
+    // Act
+    manager.next();
+    let archive_selected = manager.state.table_state.selected();
+    manager.next();
+    let action_selected = manager.is_load_more_selected();
+    let action_is_not_session = manager.selected_session().is_none();
+    manager.previous();
+    let back_to_archive = manager.state.table_state.selected();
+    manager.next();
+    manager.next();
+    let wrapped_forward = manager.state.table_state.selected();
+    manager.previous();
+    let wrapped_backward = manager.is_load_more_selected();
+    manager.previous();
+    manager.previous();
+    let back_to_active = manager.state.table_state.selected();
+    manager.reset_archive_page();
+
+    // Assert
+    assert_eq!(archive_selected, Some(0));
+    assert!(action_selected && action_is_not_session);
+    assert_eq!(back_to_archive, Some(0));
+    assert_eq!(wrapped_forward, Some(1));
+    assert!(wrapped_backward);
+    assert_eq!(back_to_active, Some(1));
+    assert!(!manager.has_more_archived_sessions());
+    assert_eq!(manager.state.archive_limit, 10);
+}

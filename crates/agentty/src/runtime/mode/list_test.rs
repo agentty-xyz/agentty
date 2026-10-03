@@ -1504,3 +1504,213 @@ async fn test_handle_sync_key_shows_blocked_status_for_uncommitted_main() {
             if message.contains("cannot run while `main` has uncommitted changes")
     ));
 }
+
+#[tokio::test]
+async fn archive_list_help_tracks_session_and_pagination_selection() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    app.sessions
+        .push_session(crate::test_support::titled_session_fixture(
+            "archived",
+            Status::Done,
+        ));
+    app.sessions.state_mut().has_more_archived_sessions = true;
+    app.sessions.select_session_index(Some(0));
+    app.tabs.set(Tab::Sessions);
+
+    for (selected_index, expected_label) in [(0, "open session"), (1, "load more")] {
+        // Arrange
+        app.mode = AppMode::List;
+        app.sessions.select_session_index(Some(selected_index));
+
+        // Act
+        let event_result = handle(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        )
+        .await
+        .expect("open list help");
+
+        // Assert
+        assert!(matches!(event_result, EventResult::Continue));
+        let enter_labels = match &app.mode {
+            AppMode::Help {
+                context: HelpContext::List { keybindings },
+                ..
+            } => Some(
+                keybindings
+                    .iter()
+                    .filter(|action| action.key == "Enter")
+                    .map(|action| action.footer_label)
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        assert_eq!(enter_labels, Some(vec![expected_label]));
+    }
+}
+
+#[tokio::test]
+async fn archive_load_more_enter_survives_programmatic_creation() {
+    for refresh_before_enter in [false, true] {
+        // Arrange
+        let (mut app, base_dir) = crate::test_support::new_test_app().await;
+        let project = app.projects.active_project_id();
+        for index in 0..21 {
+            let id = format!("archive-{index:02}");
+            app.services
+                .db()
+                .sessions()
+                .insert_session(&id, "gpt-5.6-sol", "main", "Done", project)
+                .await
+                .expect("archive");
+            app.services
+                .db()
+                .sessions()
+                .update_session_updated_at(&id, 100 - index)
+                .await
+                .expect("timestamp");
+        }
+        app.refresh_sessions_now().await;
+        app.tabs.set(Tab::Sessions);
+        let load_more_index = app.sessions.sessions().len();
+        app.sessions.select_session_index(Some(load_more_index));
+        app.services
+            .db()
+            .sessions()
+            .insert_draft_session(
+                "background-created",
+                "gpt-5.6-sol",
+                "main",
+                "Draft",
+                project,
+            )
+            .await
+            .expect("programmatically persisted session");
+
+        // Act
+        app.sessions
+            .register_created_session(&app.services, "background-created", base_dir.path())
+            .await
+            .expect("register session");
+        if refresh_before_enter {
+            app.refresh_sessions_now().await;
+        }
+
+        // Assert
+        assert_eq!(app.sessions.sessions().len(), 11);
+        assert!(app.sessions.is_load_more_selected());
+        assert!(app.selected_session().is_none());
+
+        // Act
+        handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+            .expect("load next archive page");
+
+        // Assert
+        assert!(matches!(app.mode, AppMode::List));
+        assert_eq!(app.sessions.sessions().len(), 21);
+        assert_eq!(app.sessions.state().archive_limit, 20);
+        assert_eq!(
+            app.selected_session().expect("first new archive").id,
+            "archive-10"
+        );
+        assert!(app.sessions.session_for_id("background-created").is_some());
+    }
+}
+
+#[tokio::test]
+async fn archive_load_more_enter_and_project_switch_reset_the_window() {
+    // Arrange
+    let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    let project = app.projects.active_project_id();
+    for index in 0..21 {
+        let id = format!("archive-{index:02}");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(&id, "gpt-5.6-sol", "main", "Done", project)
+            .await
+            .expect("row");
+        app.services
+            .db()
+            .sessions()
+            .update_session_updated_at(&id, 100 - index)
+            .await
+            .expect("timestamp");
+    }
+    app.refresh_sessions_now().await;
+    app.tabs.set(Tab::Sessions);
+    app.sessions.select_session_index(Some(0));
+
+    // Act
+    handle(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
+        .await
+        .expect("select action");
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("cancel action is inert");
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("help");
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::Help { context: HelpContext::List { keybindings }, .. }
+        if keybindings.iter().any(|action| action.key == "Enter" && action.footer_label == "load more"))
+    );
+    assert!(app.view_snapshot().has_more_archived_sessions);
+
+    // Act
+    app.mode = AppMode::List;
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("load page");
+
+    // Assert
+    assert_eq!(app.sessions.sessions().len(), 20);
+    assert_eq!(app.selected_session().expect("new row").id, "archive-10");
+    assert!(matches!(app.mode, AppMode::List));
+
+    // Act
+    for _ in 0..10 {
+        app.next();
+    }
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("load last page");
+
+    // Assert
+    assert_eq!(app.sessions.sessions().len(), 21);
+    assert!(!app.sessions.has_more_archived_sessions());
+    assert_eq!(app.selected_session().expect("last page").id, "archive-20");
+
+    // Arrange: switching away and back resets the expanded archive.
+    let other_dir = base_dir.path().join("other-project");
+    tokio::fs::create_dir_all(&other_dir)
+        .await
+        .expect("other directory");
+    let other_project = app
+        .services
+        .db()
+        .projects()
+        .upsert_project(&other_dir.to_string_lossy(), None)
+        .await
+        .expect("other project");
+
+    // Act
+    app.switch_project(other_project)
+        .await
+        .expect("switch away");
+    app.switch_project(project).await.expect("switch back");
+
+    // Assert
+    assert_eq!(app.sessions.sessions().len(), 10);
+    assert!(app.sessions.has_more_archived_sessions());
+}

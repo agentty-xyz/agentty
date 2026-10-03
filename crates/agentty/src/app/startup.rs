@@ -209,9 +209,10 @@ impl AppStartup {
         let mut handles = std::collections::HashMap::new();
         let clock = services.clock();
         let fs_client = services.fs_client();
-        let (sessions, stats_activity, session_worktree_availability) =
+        let (sessions, stats_activity, session_worktree_availability, has_more_archived_sessions) =
             SessionManager::load_sessions_with_fs_client(
                 SessionLoadInput {
+                    archive_limit: session_order::ARCHIVE_PAGE_SIZE,
                     active_project_id,
                     active_session_id: None,
                     base: services.base_path(),
@@ -246,6 +247,7 @@ impl AppStartup {
             ),
             stats_activity,
         );
+        session_manager.state_mut().has_more_archived_sessions = has_more_archived_sessions;
         session_manager.replace_session_worktree_availability(session_worktree_availability);
         session_manager.refresh_session_branch_names().await;
 
