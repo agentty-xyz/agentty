@@ -300,7 +300,7 @@ async fn settings_manager_preserves_retired_default_when_provider_is_unavailable
     // Assert
     assert_eq!(
         unavailable_manager.default_smart_selection,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5)
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51)
     );
     assert_eq!(
         persisted_model.as_deref(),

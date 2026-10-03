@@ -92,9 +92,9 @@ define_model_catalog! {
         },
     }
     Claude {
-        /// Claude Fable model backed by `claude-fable-5`.
-        ClaudeFable5 = 10 => {
-            id: "claude-fable-5",
+        /// Claude Fable model backed by `claude-fable-5-1`.
+        ClaudeFable51 = 10 => {
+            id: "claude-fable-5-1",
             description: "Claude Fable model for creative, narrative-heavy tasks.",
             fast: false,
             context: None,
@@ -327,6 +327,7 @@ impl AgentModel {
                 "gemini-3.1-flash-lite-preview",
                 AgentModel::Gemini35FlashLite,
             ),
+            ("claude-fable-5", AgentModel::ClaudeFable51),
             ("claude-opus-5", AgentModel::ClaudeOpus55),
             ("gpt-6-sol", AgentModel::Gpt61Sol),
             ("gpt-5.6-sol", AgentModel::Gpt61Sol),
@@ -566,7 +567,7 @@ impl AgentKind {
     pub fn default_model(self) -> AgentModel {
         match self {
             Self::Antigravity | Self::Gemini => AgentModel::Gemini31Pro,
-            Self::Claude => AgentModel::ClaudeFable5,
+            Self::Claude => AgentModel::ClaudeFable51,
             Self::Codex => AgentModel::Gpt61Sol,
         }
     }

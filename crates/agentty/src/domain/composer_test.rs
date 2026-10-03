@@ -453,7 +453,7 @@ fn test_selected_slash_action_returns_selected_model() {
         selection,
         Some(PromptSuggestionSelection::Model(AgentSelection::new(
             AgentKind::Claude,
-            AgentModel::ClaudeFable5,
+            AgentModel::ClaudeFable51,
         )))
     );
 }

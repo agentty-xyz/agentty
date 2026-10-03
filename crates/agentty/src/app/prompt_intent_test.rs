@@ -34,7 +34,7 @@ async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {
     );
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
     )
     .await
     .expect("initial model should update");
@@ -65,7 +65,7 @@ async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {
             .session_for_id(&session_id)
             .map(|session| (session.agent, session.speed_mode)),
         Some((
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
             SpeedMode::Normal,
         ))
     );
@@ -87,7 +87,7 @@ async fn compatibility_model_switch_preserves_last_used_project_default() {
             .await
             .expect("session should be created"),
     );
-    let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5);
+    let selected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51);
     app.set_session_model(&session_id, selected_agent)
         .await
         .expect("initial model should update");
@@ -114,7 +114,7 @@ async fn compatibility_model_switch_preserves_last_used_project_default() {
     assert_eq!(default_agent.as_deref(), Some("claude"));
     assert_eq!(
         default_model.as_deref(),
-        Some(AgentModel::ClaudeFable5.as_str())
+        Some(AgentModel::ClaudeFable51.as_str())
     );
     assert_eq!(
         app.sessions

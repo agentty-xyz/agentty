@@ -62,7 +62,7 @@ async fn test_speed_slash_submit_enables_fast_mode_and_compatible_model() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
     app.sessions.sessions_mut()[0].agent =
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable5);
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51);
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         slash_state.stage = PromptSlashStage::Speed;
         slash_state.selected_index = 1;
