@@ -767,6 +767,53 @@ async fn test_open_review_output_mode_shows_loading_for_cache_loading_entry() {
 }
 
 #[tokio::test]
+async fn focused_review_key_reveals_running_review_after_sync() {
+    // Arrange
+    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    app.sessions.sessions_mut()[0].status = Status::Review;
+    let request_id = uuid::Uuid::new_v4();
+    app.review_cache.insert(
+        session_id.clone().into(),
+        ReviewCacheEntry::Loading {
+            request_id,
+            progress: None,
+            diff_hash: 456,
+            review_agent: app.review_agent(),
+        },
+    );
+    let view_context = ViewContext {
+        scroll_offset: Some(2),
+        session_id: session_id.into(),
+        session_index: 0,
+    };
+    let mut pending_update = ViewPendingUpdate::from_context(&view_context);
+
+    // Act
+    open_or_regenerate_review(&mut app, &view_context, &mut pending_update);
+
+    // Assert
+    assert_eq!(pending_update.scroll_offset, None);
+    assert_eq!(app.sessions.sessions()[0].status, Status::AgentReview);
+    assert_eq!(
+        app.review_cache
+            .get(&view_context.session_id)
+            .and_then(ReviewCacheEntry::request_id),
+        Some(request_id)
+    );
+    assert_eq!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(crate::domain::transient_message::TransientMessageSlot::Review)
+            .expect("running review progress")
+            .body
+            .text(),
+        review_loading_message(app.review_agent())
+    );
+    assert!(app.pending_session_diff_requests.is_empty());
+    assert!(!matches!(app.mode, AppMode::Confirmation { .. }));
+}
+
+#[tokio::test]
 async fn test_end_in_progress_turn_transitions_session_to_review() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;

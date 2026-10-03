@@ -1,12 +1,16 @@
 //! Focused review persistence and automatic review.
 
 use std::os::unix::fs::PermissionsExt;
+use std::process::Stdio;
+use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use testty::assertion;
 use testty::region::Region;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
 
 use super::fixture::{
     E2eResult, MISSING_DECISION_CONTEXT_POLICY_TEXT, MISSING_RESOLVED_DECISION_HISTORY_TEXT,
@@ -20,6 +24,20 @@ use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
 /// Focused-review output emitted after Gemini starts without plan-mode flags.
 const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
+
+/// Holds review completion until release, or exits when scenario cleanup
+/// removes the gate.
+const SYNC_FOCUSED_REVIEW_PROVIDER_SCRIPT: &str = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+cat >/dev/null
+printf '%s\n' '{"type":"system","subtype":"init"}'
+while [ ! -f "$AGENTTY_TEST_REVIEW_RELEASE" ]; do
+    [ -d "${AGENTTY_TEST_REVIEW_RELEASE%/*}" ] || exit 0
+    sleep 0.01
+done
+printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\":[\"Review finished after sync.\"],\"suggestions\":[],\"candidate_decisions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+"#;
 
 /// Verifies project criteria, host source anchors, and individual warnings for
 /// unverified citations in the TUI. The independent single-batch pass finds
@@ -1266,6 +1284,137 @@ async fn agent_review_session_shows_sync_shortcut() -> E2eResult {
             },
         )
         .await?;
+
+    Ok(())
+}
+
+/// A conflict-free sync keeps an in-flight focused review visible, and `f`
+/// reveals its progress without requesting a second review.
+#[tokio::test]
+async fn focused_review_progress_survives_sync() -> E2eResult {
+    // Arrange
+    let review_gate = tempfile::tempdir()?;
+    let release_path = review_gate.path().join("release");
+    FeatureTest::new("focused_review_progress_survives_sync")
+        .with_git()
+        .env(
+            "AGENTTY_TEST_REVIEW_RELEASE",
+            release_path.to_string_lossy(),
+        )
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_linked_review_worktree_with_diff(env)?;
+                let path = env.stub_bin.join("claude");
+                std::fs::write(&path, SYNC_FOCUSED_REVIEW_PROVIDER_SCRIPT)?;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
+                seed_project_settings(
+                    env,
+                    &[
+                        ("DefaultReviewAgent", "claude"),
+                        ("DefaultReviewModel", "claude-haiku-4-5-20251001"),
+                    ],
+                )
+                .await
+            })
+        })
+        .run(
+            move |scenario| {
+                scenario
+                    // Act
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .press_key("f")
+                    .wait_for_text("0/1 batches complete", 10000)
+                    .press_key("r")
+                    .wait_for_text("Successfully synced", 15000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "after_sync",
+                        "Running focused review remains visible after sync",
+                    )
+                    .press_key("f")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "after_review_key",
+                        "Review shortcut reveals existing progress",
+                    )
+                    .eventually(
+                        Duration::from_secs(5),
+                        Duration::from_millis(20),
+                        move |frame| {
+                            assertion::match_text_in_region(
+                                frame,
+                                "0/1 batches complete",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )?;
+                            std::fs::write(&release_path, "release")
+                                .expect("release focused review");
+
+                            Ok(())
+                        },
+                    )
+                    .wait_for_text("Review finished after sync.", 40000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    for capture in &report.captures {
+                        let captured_frame = common::frame_from_capture(capture);
+                        assertion::assert_text_in_region(
+                            &captured_frame,
+                            "0/1 batches complete",
+                            &Region::full(captured_frame.cols(), captured_frame.rows()),
+                        );
+                        assertion::assert_not_visible(
+                            &captured_frame,
+                            "Regenerate focused review?",
+                        );
+                    }
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Review finished after sync.",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                    assertion::assert_not_visible(frame, "0/1 batches complete");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Scenario cleanup stops a provider still waiting for the review release gate.
+#[tokio::test]
+async fn focused_review_provider_exits_when_gate_is_removed() -> E2eResult {
+    // Arrange
+    let review_gate = tempfile::tempdir()?;
+    let release_path = review_gate.path().join("release");
+    let mut command = Command::new("sh");
+    command
+        .arg("-c")
+        .arg(SYNC_FOCUSED_REVIEW_PROVIDER_SCRIPT)
+        .env("AGENTTY_TEST_REVIEW_RELEASE", &release_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true);
+
+    // Act
+    let mut provider = command.spawn()?;
+    let mut stdout = BufReader::new(provider.stdout.take().expect("provider stdout"));
+    let mut line = String::new();
+    tokio::time::timeout(Duration::from_secs(5), stdout.read_line(&mut line)).await??;
+    assert_eq!(line.trim(), r#"{"type":"system","subtype":"init"}"#);
+    assert!(provider.try_wait()?.is_none(), "provider waits for release");
+    review_gate.close()?;
+    let status = tokio::time::timeout(Duration::from_secs(5), provider.wait()).await??;
+
+    // Assert
+    assert!(status.success());
+    line.clear();
+    assert_eq!(stdout.read_line(&mut line).await?, 0, "no completed review");
 
     Ok(())
 }

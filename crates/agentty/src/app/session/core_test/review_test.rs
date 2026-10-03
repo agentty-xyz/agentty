@@ -329,6 +329,13 @@ async fn test_periodic_session_refresh_preserves_focused_review_states() {
     assert_eq!(ready_message.text(), review_text);
 
     let loading_message = review_message_body(&app, loading_session_id);
+    assert_eq!(
+        app.sessions
+            .session_for_id(loading_session_id)
+            .expect("loading session")
+            .status,
+        Status::AgentReview
+    );
     assert!(matches!(loading_message, TransientMessageBody::Loading(_)));
     assert_eq!(
         loading_message.text(),

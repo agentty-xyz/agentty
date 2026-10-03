@@ -653,7 +653,8 @@ fn confirmation_view_mode(view_context: &ViewContext) -> ConfirmationViewMode {
 ///
 /// When a review result (or error) is already present, shows a confirmation
 /// popup before regenerating. If a generation is already in flight (loading),
-/// the press is ignored to avoid spawning duplicate background tasks.
+/// the press restores its progress and scrolls to the bottom without spawning
+/// duplicate background tasks.
 /// Otherwise, loads or starts focused review output and resets scroll to
 /// bottom-aligned mode.
 fn open_or_regenerate_review(
@@ -663,6 +664,9 @@ fn open_or_regenerate_review(
 ) {
     let (review_status_message, review_text) = app.review_view_state(&view_context.session_id);
     if app.review_is_loading(&view_context.session_id) {
+        app.restore_review_output(&view_context.session_id);
+        pending_update.scroll_offset = None;
+
         return;
     }
 

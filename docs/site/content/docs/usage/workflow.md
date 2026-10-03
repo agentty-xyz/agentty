@@ -133,8 +133,9 @@ clear when the next turn starts. Read-only sessions cannot submit comments. See
 
 Agentty automatically reviews a changed diff when an eligible session enters **Review**.
 Unchanged diffs, stopped turns, and orchestrator controllers skip automatic review.
-Press `f` to show the review or request one manually. Pressing `r` cancels a pending
-review before syncing.
+Press `f` to show the review or request one manually. While a review is running, `f`
+brings its progress into view without starting another review. A conflict-free sync
+keeps the running review and its progress visible.
 
 Reviews use the diff and saved conversation, respecting accepted decisions. They inspect
 files and history and may browse, but recommend checks rather than run them. Progress
