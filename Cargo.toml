@@ -27,7 +27,7 @@ ag-router = { path = "crates/ag-router", version = "0.16.7" }
 ag-scheduler = { path = "crates/ag-scheduler", version = "0.16.7" }
 ag-session = { path = "crates/ag-session", version = "0.16.7" }
 ag-store = { path = "crates/ag-store", version = "0.16.7" }
-ag-telemetry = { path = "crates/ag-telemetry", version = "0.16.7" }
+ag-telemetry = { path = "crates/ag-telemetry", version = "0.16.7", default-features = false }
 ag-tui-text = { path = "crates/ag-tui-text", version = "0.16.7" }
 ag-worker = { path = "crates/ag-worker", version = "0.16.7" }
 testty = { path = "crates/testty", version = "0.16.7" }

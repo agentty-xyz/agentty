@@ -118,9 +118,12 @@ name = "ag-harness-cli"
 version = "0.16.7"
 dependencies = [
  "ag-harness",
+ "ag-telemetry",
  "assert_cmd",
  "async-trait",
  "clap",
+ "opentelemetry-proto",
+ "prost",
  "serde_json",
  "tempfile",
  "testty",
@@ -226,8 +229,17 @@ name = "ag-telemetry"
 version = "0.16.7"
 dependencies = [
  "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry_sdk",
+ "prost",
+ "thiserror 2.0.21",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -352,7 +364,6 @@ dependencies = [
  "libproc",
  "mockall",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
@@ -374,7 +385,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width",
- "url",
  "uuid",
  "wiremock",
 ]

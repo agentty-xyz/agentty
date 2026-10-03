@@ -13,6 +13,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use super::{Cli, map_runtime_result, run, run_with_analytics};
 
 const LOCK_FAILURE_CHILD_ENV: &str = "AGENTTY_LOCK_FAILURE_CHILD";
+const TRACED_STARTUP_CHILD_ENV: &str = "AGENTTY_TRACED_STARTUP_CHILD";
 const OWNED_ROOT_CHILD_ENV: &str = "AGENTTY_OWNED_ROOT_CHILD";
 const DATABASE_FAILURE_CHILD_ENV: &str = "AGENTTY_DATABASE_FAILURE_CHILD";
 const TELEMETRY_STARTUP_CHILD_ENV: &str = "AGENTTY_TELEMETRY_STARTUP_CHILD";
@@ -210,6 +211,72 @@ async fn run_reports_instance_lock_parent_creation_failure() {
         .status()
         .await
         .expect("isolated startup test should run");
+
+    // Assert
+    assert!(status.success());
+}
+
+#[tokio::test]
+async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
+    // Arrange
+    let cli = Cli {
+        no_update: false,
+        otlp_capture_content: false,
+        otlp_endpoint: Some("http://localhost:4318".to_string()),
+    };
+
+    // Act
+    let error = run(cli, closed_runtime)
+        .await
+        .expect_err("an endpoint without a traces path should be rejected");
+
+    // Assert
+    assert!(matches!(error, AppError::Workflow(_)));
+    assert!(error.to_string().contains("--otlp-endpoint"));
+}
+
+#[tokio::test]
+async fn run_installs_trace_export_and_flushes_after_startup_failure() {
+    if env::var_os(TRACED_STARTUP_CHILD_ENV).is_some() {
+        // Arrange
+        let cli = Cli {
+            no_update: false,
+            otlp_capture_content: false,
+            otlp_endpoint: Some("http://127.0.0.1:9/v1/traces".to_string()),
+        };
+
+        // Act
+        let error = run(cli, closed_runtime)
+            .await
+            .expect_err("startup should reject a file-backed root");
+
+        // Assert
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to acquire the Agentty instance lock")
+        );
+
+        return;
+    }
+
+    // Arrange
+    let temp_dir = tempfile::tempdir().expect("temp dir should be created");
+    let blocking_root = temp_dir.path().join("agentty-root");
+    tokio::fs::write(&blocking_root, b"")
+        .await
+        .expect("blocking root file should be created");
+    let test_binary = env::current_exe().expect("test binary path should resolve");
+
+    // Act
+    let status = tokio::process::Command::new(test_binary)
+        .arg("--exact")
+        .arg("tests::run_installs_trace_export_and_flushes_after_startup_failure")
+        .env(TRACED_STARTUP_CHILD_ENV, "1")
+        .env("AGENTTY_ROOT", blocking_root)
+        .status()
+        .await
+        .expect("isolated traced startup test should run");
 
     // Assert
     assert!(status.success());

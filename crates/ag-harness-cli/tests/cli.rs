@@ -8,6 +8,8 @@ use std::{fs, io};
 use ag_harness::provider::ModelProvider;
 use ag_harness::tool::ToolDefinition;
 use assert_cmd::cargo::cargo_bin;
+use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
+use prost::Message as _;
 use serde_json::json;
 use testty::session::PtySessionBuilder;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
@@ -1190,4 +1192,155 @@ async fn comparison_repository(root: &Path) -> io::Result<(String, String)> {
     tokio::fs::write(root.join(".git/refs/heads/release"), &source[1]).await?;
 
     Ok((source[1].clone(), source[2].clone()))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn otlp_endpoint_exports_content_free_turn_traces() {
+    // Arrange
+    let model_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call-read",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": r#"{"path":"Cargo.toml","limit":2}"#
+                        }
+                    }]
+                }
+            }]
+        })))
+        .with_priority(2)
+        .expect(1)
+        .mount(&model_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains(r#""tool_call_id":"call-read""#))
+        .respond_with(response("private answer", 9, 3))
+        .with_priority(1)
+        .expect(1)
+        .mount(&model_server)
+        .await;
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/traces"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&collector)
+        .await;
+    let endpoint = format!("{}/v1/traces", collector.uri());
+    let (_storage, mut command) = harness_command().expect("temporary storage should exist");
+
+    // Act
+    let output = command
+        .args(["--otlp-endpoint", &endpoint])
+        .args(["run", "muse-test", "private prompt", "--base-url"])
+        .arg(model_server.uri())
+        .env("MODEL_API_KEY", "test-key")
+        .output()
+        .expect("CLI request should run");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stderr, [] as [u8; 0]);
+    let requests = collector.received_requests().await.expect("requests");
+    assert!(!requests.is_empty());
+    let mut span_names = Vec::new();
+    for request in &requests {
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(!body.contains("private"));
+        assert!(!body.contains("Cargo.toml"));
+        assert!(!body.contains("[package]"));
+        let payload =
+            ExportTraceServiceRequest::decode(request.body.as_slice()).expect("OTLP protobuf");
+        span_names.extend(
+            payload
+                .resource_spans
+                .iter()
+                .flat_map(|resource| &resource.scope_spans)
+                .flat_map(|scope| &scope.spans)
+                .map(|span| span.name.clone()),
+        );
+    }
+    assert!(span_names.contains(&"invoke_agent".to_string()));
+    assert!(span_names.contains(&"chat muse-test".to_string()));
+    assert!(span_names.contains(&"execute_tool read".to_string()));
+}
+
+#[test]
+fn invalid_otlp_endpoint_fails_before_the_chat_starts() {
+    // Arrange
+    let (storage, mut command) = harness_command().expect("temporary storage should exist");
+
+    // Act
+    let output = command
+        .args(["--otlp-endpoint", "http://user:private@host/traces"])
+        .args([
+            "run",
+            "muse-test",
+            "Hello",
+            "--base-url",
+            "http://127.0.0.1:9",
+        ])
+        .env("MODEL_API_KEY", "test-key")
+        .output()
+        .expect("CLI should run");
+
+    // Assert
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--otlp-endpoint"));
+    assert!(!stderr.contains("private"));
+    assert_eq!(
+        fs::read_dir(storage.path())
+            .expect("storage entries")
+            .count(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_trace_export_warns_without_failing_the_chat() {
+    // Arrange
+    let model_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(response("Hi there", 9, 3))
+        .expect(1)
+        .mount(&model_server)
+        .await;
+    let collector = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&collector)
+        .await;
+    let endpoint = format!("{}/v1/traces", collector.uri());
+    let (_storage, mut command) = harness_command().expect("temporary storage should exist");
+
+    // Act
+    let output = command
+        .args(["run", "muse-test", "Hello", "--otlp-endpoint", &endpoint])
+        .args(["--base-url", &model_server.uri()])
+        .env("MODEL_API_KEY", "test-key")
+        .output()
+        .expect("CLI request should run");
+
+    // Assert
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
+    assert!(stdout.contains("assistant> Hi there\n"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("OTLP export reported"));
+    assert!(stderr.contains("some traces may be missing."));
 }

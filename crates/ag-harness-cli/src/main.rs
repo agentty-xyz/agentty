@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, io};
 
+use ag_harness::lifecycle::LifecycleTraceObserver;
 use ag_harness::model::ReasoningEffort;
 use ag_harness::provider::{ModelConfiguration, ModelConfigurationError, ModelProvider};
 use ag_harness::store::SessionInfo;
@@ -14,6 +15,7 @@ use ag_harness::{
     ComparisonBase, Harness, OutputSchema, Repository, Session, Tool, ToolPolicy, TurnLimits,
     TurnOptions, TurnOutcome,
 };
+use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand};
 use serde_json::{Map, Value};
@@ -74,6 +76,9 @@ struct Cli {
     /// in PATH.
     #[arg(long, global = true, value_name = "FILE")]
     git_executable: Option<PathBuf>,
+    /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
+    #[arg(long, global = true, value_name = "URL")]
+    otlp_endpoint: Option<String>,
     /// Model reasoning depth used for chat requests.
     #[arg(
         long,
@@ -243,6 +248,59 @@ async fn main() -> ExitCode {
     )
 }
 
+async fn execute<Input, Output>(
+    cli: Cli,
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    input: Input,
+    output: Output,
+    mode: ChatMode,
+) -> Result<(), CliError>
+where
+    Input: AsyncBufRead + Unpin,
+    Output: AsyncWrite + Unpin,
+{
+    execute_with_telemetry(cli, environment, input, output, mode, io::stderr()).await
+}
+
+/// Runs the chat inside an optional OTLP trace export. Export failures are
+/// reported as a warning and never change the chat result.
+async fn execute_with_telemetry<Input, Output>(
+    cli: Cli,
+    environment: impl FnMut(&str) -> Result<String, env::VarError>,
+    input: Input,
+    output: Output,
+    mode: ChatMode,
+    mut warning_output: impl io::Write,
+) -> Result<(), CliError>
+where
+    Input: AsyncBufRead + Unpin,
+    Output: AsyncWrite + Unpin,
+{
+    let telemetry = OtlpExport::start(
+        cli.otlp_endpoint.as_deref(),
+        Service {
+            name: "ag-harness",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+    )
+    .await?;
+    if let Some(telemetry) = &telemetry {
+        telemetry.install();
+    }
+    let result = execute_chat(cli, environment, input, output, mode).await;
+    if let Some(telemetry) = telemetry {
+        let warnings = telemetry.shutdown().await;
+        if warnings > 0 {
+            let _ = writeln!(
+                warning_output,
+                "OTLP export reported {warnings} warnings or failures; some traces may be missing."
+            );
+        }
+    }
+
+    result
+}
+
 fn report_exit(result: Result<(), CliError>, mut error_output: impl io::Write) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -256,7 +314,7 @@ fn report_exit(result: Result<(), CliError>, mut error_output: impl io::Write) -
     }
 }
 
-async fn execute<Input, Output>(
+async fn execute_chat<Input, Output>(
     cli: Cli,
     mut environment: impl FnMut(&str) -> Result<String, env::VarError>,
     input: Input,
@@ -270,6 +328,7 @@ where
     let database = database_path(cli.database, &mut environment)?;
     let git_executable = cli.git_executable;
     let reasoning_effort = cli.reasoning_effort;
+    let trace = cli.otlp_endpoint.is_some();
     match cli.command {
         Command::Run(args) => {
             let session_id = args
@@ -294,6 +353,7 @@ where
                 repository,
                 args.allow_write,
                 reasoning_effort,
+                trace,
             );
             let mut session = harness
                 .session(&session_id, chat_schema()?)
@@ -332,6 +392,7 @@ where
                 repository,
                 args.allow_write,
                 reasoning_effort,
+                trace,
             );
             let mut session = harness.resume(&args.session).await?;
             let mut output = output;
@@ -455,12 +516,16 @@ fn configured_harness(
     repository: Repository,
     allow_write: bool,
     reasoning_effort: ReasoningEffort,
+    trace: bool,
 ) -> (Harness, &'static str) {
     let mut harness = Harness::new(client)
         .database(database)
         .model_reasoning_effort(reasoning_effort)
         .repository(repository)
         .allow(Tool::Read);
+    if trace {
+        harness = harness.with_lifecycle_observer(LifecycleTraceObserver::new());
+    }
     if allow_write {
         harness = harness.allow(Tool::Write);
 
@@ -771,6 +836,8 @@ enum CliError {
     Repository(#[from] ag_harness::RepositoryError),
     #[error(transparent)]
     Session(#[from] ag_harness::SessionError),
+    #[error(transparent)]
+    Telemetry(#[from] OtlpError),
     #[error(transparent)]
     Turn(#[from] ag_harness::TurnError),
 }
