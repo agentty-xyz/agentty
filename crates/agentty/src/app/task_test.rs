@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ag_contracts::{OneShotError, OneShotSubmission};
+use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission};
 use ag_forge::{
     ForgeKind, ForgeRemote, MockReviewRequestClient, ReviewComment, ReviewCommentAnchorSide,
     ReviewCommentSnapshot,
@@ -12,7 +12,10 @@ use ag_forge::{
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, parse_agent_response_strict};
 use ag_session::test_support as model_fixture;
+use ag_worker::RunClient;
+use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::time::{Instant, sleep};
 
 use super::{
     MockVersionTaskRunner, RealVersionTaskRunner, ReviewAssistTaskInput, SessionDiffTaskInput,
@@ -1102,6 +1105,58 @@ async fn review_assist_text_with_client_preserves_review_selection_provider() {
     ));
     assert!(text.contains("Processed files: 1/1. Unfinished files: 0."));
     assert!(text.contains("Unanchored findings: 0."));
+}
+
+struct DelayedReviewClient {
+    delay: Duration,
+}
+
+#[async_trait]
+impl RunClient for DelayedReviewClient {
+    async fn submit(&self, _: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
+        sleep(self.delay).await;
+
+        Ok(OneShotSubmission {
+            response: AgentResponse::plain(r#"{"project_impact":[],"suggestions":[]}"#),
+            stats: ag_contracts::SessionStats::default(),
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn focused_review_allows_eighteen_minutes_but_caps_all_phases_at_thirty() {
+    for (delay_minutes, elapsed_minutes, partial) in [(6, 18, false), (11, 30, true)] {
+        // Arrange
+        let client = DelayedReviewClient {
+            delay: Duration::from_mins(delay_minutes),
+        };
+        let started = Instant::now();
+
+        // Act
+        let text = TaskService::review_assist_text_with_client(
+            Path::new("project"),
+            (
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                ReasoningLevel::Medium,
+                crate::domain::agent::SpeedMode::Normal,
+            ),
+            "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+            None,
+            &ReviewRules::default(),
+            &client,
+            |_| {},
+        )
+        .await
+        .expect("review output");
+
+        // Assert
+        assert_eq!(started.elapsed(), Duration::from_mins(elapsed_minutes));
+        assert_eq!(text.contains("Partial review:"), partial);
+        assert_eq!(text.contains("deadline exceeded"), partial);
+        if partial {
+            assert!(text.contains("final consolidation failed"));
+        }
+    }
 }
 
 #[test]
