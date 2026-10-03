@@ -8,7 +8,8 @@ use super::super::{
     view_session_snapshot,
 };
 use super::support::{
-    apply_next_session_diff, install_mock_clipboard_image_client, new_test_app_with_session,
+    apply_next_prompt_image_paste, apply_next_session_diff, install_mock_clipboard_image_client,
+    new_test_app_with_session,
 };
 use crate::domain::session::{SessionRole, Status};
 use crate::infra::tmux::MockTmuxClient;
@@ -262,6 +263,7 @@ async fn test_open_draft_prompt_with_pasted_image_inserts_clipboard_image() {
 
     // Act
     open_draft_prompt_with_pasted_image(&mut app, &view_context, Some(2)).await;
+    apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
     assert!(matches!(

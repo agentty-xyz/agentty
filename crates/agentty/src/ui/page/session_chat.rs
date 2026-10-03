@@ -20,6 +20,7 @@ use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
 };
+use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
@@ -45,6 +46,8 @@ struct PreparedPromptPanel {
     /// Whether the transcript above the composer currently holds focus, which
     /// dims the composer border and hides its cursor.
     is_chat_focused: bool,
+    /// Whether the footer carries the clipboard image-capture loader.
+    is_pasting_image: bool,
     status: Option<String>,
     suggestion_list: Option<SuggestionList>,
     title: String,
@@ -346,6 +349,13 @@ impl<'a> SessionChatPage<'a> {
                 Paragraph::new(prepared_prompt_panel.footer_text.clone()),
                 panel_areas.footer_area,
             );
+            if prepared_prompt_panel.is_pasting_image {
+                TachyonLoaderEffect::apply_to_last_glyph(
+                    f.buffer_mut(),
+                    panel_areas.footer_area,
+                    Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
+                );
+            }
 
             return;
         }
@@ -497,8 +507,10 @@ fn prepare_prompt_panel(
             session,
             attachment_state.attachments.len(),
             *focus,
+            attachment_state.is_pasting_image(),
         ),
         is_chat_focused: *focus == ChatFocus::Chat,
+        is_pasting_image: attachment_state.is_pasting_image(),
         status: Some(session_format::prompt_session_status(session)),
         suggestion_list,
         title: format!("[{}]", session.agent.model().as_str()),

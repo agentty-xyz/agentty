@@ -17,6 +17,8 @@ use tracing::{debug, warn};
 
 use crate::analytics::{Analytics, SessionType, TurnOutcome};
 use crate::app::AppEvent;
+use crate::app::prompt_intent::PromptImagePasteUpdate;
+use crate::app::session::SessionManager;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection};
 use crate::domain::session::SessionId;
@@ -280,9 +282,10 @@ impl AppServices {
     }
 
     /// Tracks one best-effort cleanup task that should complete before the app
-    /// finishes graceful shutdown.
+    /// finishes graceful shutdown, reaping already completed tasks.
     pub(crate) fn track_cleanup_task(&self, join_handle: JoinHandle<()>) {
         if let Ok(mut cleanup_task_handles) = self.cleanup_task_handles.lock() {
+            cleanup_task_handles.retain(|task| !task.is_finished());
             cleanup_task_handles.push(join_handle);
         }
     }
@@ -300,8 +303,9 @@ impl AppServices {
     /// Settles worker execution, worktree creation, cleanup, and telemetry
     /// tasks within one deadline. Escalates worker shutdown when grace expires.
     /// When supplied, pending app events are drained for turn telemetry after
-    /// background work settles, before waiting for telemetry delivery. Other
-    /// events are discarded so shutdown cannot start new workflow work.
+    /// background work settles, before waiting for telemetry delivery.
+    /// Clipboard images captured but never applied to a composer are removed.
+    /// Other events are discarded so shutdown cannot start new workflow work.
     ///
     /// The task list is drained before awaiting so the synchronous mutex guard
     /// is never held across an `.await`. The loop repeats in case a cleanup
@@ -350,15 +354,28 @@ impl AppServices {
         Self::wait_for_cleanup_task_handles(self.cleanup_task_handles.as_ref(), deadline).await;
 
         if let Some(event_rx) = pending_events {
+            let mut unapplied_image_paths = Vec::new();
             while let Ok(event) = event_rx.try_recv() {
                 match event {
                     AppEvent::SessionTurnStarted { agent, .. } => self.record_turn_start(agent),
                     AppEvent::SessionTurnEnded { agent, outcome } => {
                         self.record_turn_end(agent, outcome);
                     }
+                    AppEvent::PromptImagePasted {
+                        update:
+                            PromptImagePasteUpdate {
+                                result: Ok(local_image_path),
+                                ..
+                            },
+                    } => unapplied_image_paths.push(local_image_path),
                     _ => {}
                 }
             }
+            SessionManager::cleanup_prompt_attachment_paths(
+                self.fs_client(),
+                unapplied_image_paths,
+            )
+            .await;
         }
 
         Self::wait_for_cleanup_task_handles(self.telemetry_task_handles.as_ref(), deadline).await;
@@ -403,6 +420,7 @@ impl AppServices {
         match event {
             AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
             AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",
+            AppEvent::PromptImagePasted { .. } => "PromptImagePasted",
             AppEvent::DiffPreviewLoaded { .. } => "DiffPreviewLoaded",
             AppEvent::SessionDiffLoaded { .. } => "SessionDiffLoaded",
             AppEvent::GitStatusUpdated { .. } => "GitStatusUpdated",

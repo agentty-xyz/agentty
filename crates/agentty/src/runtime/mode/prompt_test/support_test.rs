@@ -7,9 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::Terminal;
 use tempfile::tempdir;
 
-use super::super::{
-    handle_with_cache, insert_pasted_image_placeholder, take_submitted_turn_prompt,
-};
+use super::super::{handle_with_cache, take_submitted_turn_prompt};
 use crate::app::App;
 use crate::domain::input::InputState;
 use crate::domain::session_message::SessionTranscript;
@@ -29,7 +27,7 @@ pub(super) trait PromptTestAppExt {
 
 impl PromptTestAppExt for App {
     fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
-        let _ = insert_pasted_image_placeholder(self, local_image_path);
+        let _ = self.insert_prompt_image_placeholder(local_image_path, None);
     }
 
     fn take_submitted_turn_prompt(&mut self) -> TurnPrompt {
@@ -57,6 +55,22 @@ pub(super) async fn apply_next_session_diff(app: &mut App) {
         let is_session_diff = matches!(event, crate::app::AppEvent::SessionDiffLoaded { .. });
         app.apply_app_events(event).await;
         if is_session_diff {
+            return;
+        }
+    }
+}
+
+/// Applies queued app events through the first completed clipboard-image
+/// capture.
+pub(super) async fn apply_next_prompt_image_paste(app: &mut App) {
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), app.next_app_event())
+            .await
+            .expect("prompt image paste event should arrive")
+            .expect("app event channel should remain open");
+        let is_prompt_image_paste = matches!(event, crate::app::AppEvent::PromptImagePasted { .. });
+        app.apply_app_events(event).await;
+        if is_prompt_image_paste {
             return;
         }
     }

@@ -1,6 +1,7 @@
 //! Prompt footer and suggestion-list formatting.
 
-use ratatui::text::Line;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::domain::agent::AgentKind;
 use crate::domain::file_entry::filter_entries;
@@ -11,8 +12,12 @@ use crate::presentation::prompt::{
     build_prompt_slash_suggestion_list,
 };
 use crate::ui::component::chat_input::{SuggestionItem, SuggestionList};
+use crate::ui::icon::Icon;
+use crate::ui::style;
 
 const AT_MENTION_DEFAULT_MAX_VISIBLE: usize = 10;
+/// Footer label shown beside the loader while a clipboard image is captured.
+const PASTING_IMAGE_LABEL: &str = "Pasting image...";
 const NEW_SESSION_PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
     help_action::HelpAction::new("stage draft", "Enter", "Stage draft"),
     help_action::HelpAction::new("newline", "Alt+Enter", "Insert newline"),
@@ -39,7 +44,8 @@ const PROMPT_FOOTER_ACTIONS: [help_action::HelpAction; 4] = [
 /// toggle, so each focus target advertises its own action set: composing shows
 /// send/newline/cancel, and reading the transcript shows the scroll keys. The
 /// diff-preview shortcut is omitted only when persisted session statistics
-/// report a known-empty diff.
+/// report a known-empty diff. A leading loader advertises a clipboard image
+/// capture that is still running, so narrow terminals cannot clip it.
 ///
 /// Footer entries follow the canonical composer-footer ordering shared with
 /// question mode: the `Tab` focus toggle first as the stable anchor, then the
@@ -48,6 +54,7 @@ pub fn prompt_footer_line(
     session: &crate::domain::session::Session,
     attachment_count: usize,
     focus: ChatFocus,
+    is_pasting_image: bool,
 ) -> Line<'static> {
     let is_chat_focused = focus == ChatFocus::Chat;
     let focus_label = if is_chat_focused { "Compose" } else { "Chat" };
@@ -79,6 +86,22 @@ pub fn prompt_footer_line(
             .push(crate::ui::help_format::footer_muted_span(format!(
                 "{attachment_count} image{suffix} ready"
             )));
+    }
+
+    if is_pasting_image {
+        let pasting_image_span = Span::styled(
+            format!("{} {PASTING_IMAGE_LABEL}", Icon::current_spinner()),
+            Style::default()
+                .fg(style::palette::accent())
+                .add_modifier(Modifier::BOLD),
+        );
+        footer_line.spans.splice(
+            0..0,
+            [
+                pasting_image_span,
+                crate::ui::help_format::footer_separator_span(),
+            ],
+        );
     }
 
     footer_line

@@ -4,6 +4,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use ag_clipboard::Clipboard;
@@ -13,6 +14,10 @@ use image::{ExtendedColorType, ImageEncoder};
 use crate::infra::clock::Clock;
 use crate::infra::fs::{self, FsClient};
 use crate::infra::home;
+
+/// Process-wide capture sequence that keeps pasted image paths unique when
+/// two captures share an attachment number and clock millisecond.
+static NEXT_CLIPBOARD_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Boxed async result used by [`ClipboardImageClient`] trait methods.
 pub(crate) type ClipboardImageFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -210,7 +215,8 @@ fn build_clipboard_image_path(
         .duration_since(UNIX_EPOCH)
         .map_err(ClipboardError::SystemClock)?
         .as_millis();
-    let file_name = format!("image-{attachment_number:03}-{timestamp_millis}.png");
+    let sequence = NEXT_CLIPBOARD_IMAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let file_name = format!("image-{attachment_number:03}-{timestamp_millis}-{sequence}.png");
 
     Ok(clipboard_image_directory(session_id)?.join(file_name))
 }

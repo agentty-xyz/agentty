@@ -1,5 +1,4 @@
 use std::io;
-use std::path::PathBuf;
 
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
@@ -22,11 +21,10 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffRestoreTarget, DiffSidebarFocus, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
+    PendingImagePaste, PromptAtMentionState, PromptSlashStage, PromptSuggestionSelection,
     apply_prompt_delete_range as apply_prompt_delete_range_components,
     current_line_delete_range as prompt_current_line_delete_range, drain_prompt_submission,
-    insert_prompt_local_image, insert_prompt_text, prompt_slash_option_count,
-    resolve_prompt_slash_selection,
+    insert_prompt_text, prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::runtime::EventResult;
 use crate::runtime::mode::chat_scroll::{self, ChatScrollMetrics};
@@ -207,13 +205,16 @@ fn show_prompt_diff(app: &mut App, session_id: &str) {
 
 /// Snapshots the current prompt-mode state for later restoration.
 ///
+/// Abandons any running clipboard image capture, so a restored composer is
+/// idle and the late capture is removed as orphaned.
+///
 /// Returns `None` if the app is not in prompt mode.
 fn take_prompt_snapshot(app: &mut App) -> Option<PromptModeSnapshot> {
     let mode = std::mem::replace(&mut app.mode, AppMode::List);
 
     if let AppMode::Prompt {
         at_mention_state,
-        attachment_state,
+        mut attachment_state,
         history_state,
         input,
         scroll_offset,
@@ -222,6 +223,8 @@ fn take_prompt_snapshot(app: &mut App) -> Option<PromptModeSnapshot> {
         ..
     } = mode
     {
+        attachment_state.pending_image_paste = None;
+
         Some(PromptModeSnapshot {
             at_mention_state,
             attachment_state,
@@ -285,7 +288,7 @@ where
             handle_prompt_down_key(app, terminal, prompt_context)?;
         }
         KeyCode::Char('v' | 'V') if is_prompt_image_paste_key(key) => {
-            handle_prompt_image_paste(app, prompt_context).await;
+            handle_prompt_image_paste(app, prompt_context);
         }
         KeyCode::Char('p') if input_key::is_control_key(key) => {
             handle_prompt_up_key(app, terminal, prompt_context)?;
@@ -632,6 +635,10 @@ where
     Ok(())
 }
 
+/// Shows the previous prompt-history entry, stashing the draft on first use.
+///
+/// Navigation pauses while a clipboard image capture runs so the image lands
+/// in the composer text it was pasted into instead of a history entry.
 fn navigate_prompt_history_up(mode: &mut AppMode) {
     if let AppMode::Prompt {
         attachment_state,
@@ -640,7 +647,7 @@ fn navigate_prompt_history_up(mode: &mut AppMode) {
         ..
     } = mode
     {
-        if history_state.entries.is_empty() {
+        if history_state.entries.is_empty() || attachment_state.is_pasting_image() {
             return;
         }
 
@@ -660,6 +667,10 @@ fn navigate_prompt_history_up(mode: &mut AppMode) {
     }
 }
 
+/// Shows the next prompt-history entry or restores the stashed draft.
+///
+/// Navigation pauses while a clipboard image capture runs, matching
+/// [`navigate_prompt_history_up`].
 fn navigate_prompt_history_down(mode: &mut AppMode) {
     if let AppMode::Prompt {
         attachment_state,
@@ -668,6 +679,10 @@ fn navigate_prompt_history_down(mode: &mut AppMode) {
         ..
     } = mode
     {
+        if attachment_state.is_pasting_image() {
+            return;
+        }
+
         let Some(selected_index) = history_state.selected_index else {
             return;
         };
@@ -755,7 +770,17 @@ fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
 /// is `InProgress` or `Rebasing`, slash command mode is already demoted to
 /// text in [`prompt_context`], so any leading `/` falls through to the queue
 /// path instead of executing a slash command against the active operation.
+///
+/// Submission is ignored while a clipboard image capture runs, so the pasted
+/// image is never dropped from the sent turn or a cleared slash input.
 async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext) {
+    if matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, .. } if attachment_state.is_pasting_image()
+    ) {
+        return;
+    }
+
     if prompt_context.is_slash_command() {
         handle_prompt_slash_submit(app, prompt_context).await;
 
@@ -812,8 +837,8 @@ pub(crate) async fn submit_current_text_prompt(app: &mut App) {
 }
 
 /// Dispatches one clipboard-image paste intent for the active prompt.
-async fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
-    paste_image_into_active_prompt(app, &prompt_context.session_id).await;
+fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
+    paste_image_into_active_prompt(app, &prompt_context.session_id);
 }
 
 /// Cancels the active prompt and drops any composer-owned attachment files.
@@ -1080,56 +1105,35 @@ async fn apply_prompt_apply_outcome(app: &mut App, outcome: PromptApplyOutcome) 
     }
 }
 
-/// Persists a clipboard image and inserts it into the active presentation
-/// composer when the capture succeeds.
-pub(crate) async fn paste_image_into_active_prompt(app: &mut App, session_id: &SessionId) {
+/// Starts a background clipboard-image capture for the active presentation
+/// composer, which shows a loading indicator until the capture completes.
+/// The cursor position is recorded so the placeholder lands there even if the
+/// user keeps editing.
+///
+/// Repeated paste shortcuts are ignored while one capture is still running.
+pub(crate) fn paste_image_into_active_prompt(app: &mut App, session_id: &SessionId) {
     let attachment_number = match &app.mode {
         AppMode::Prompt {
             attachment_state, ..
-        } => attachment_state.next_attachment_number,
+        } if !attachment_state.is_pasting_image() => attachment_state.next_attachment_number,
         _ => return,
     };
-    let request = PromptImagePaste {
+    let request_id = app.start_prompt_image_paste(PromptImagePaste {
         attachment_number,
         session_id: session_id.clone(),
-    };
-    let Some(local_image_path) = app.persist_prompt_image(request).await else {
-        return;
-    };
+    });
 
-    let unreachable_attachments = insert_pasted_image_placeholder(app, local_image_path);
-    app.cleanup_prompt_attachments(unreachable_attachments)
-        .await;
-}
-
-/// Inserts one persisted image placeholder into presentation-owned prompt
-/// state.
-fn insert_pasted_image_placeholder(
-    app: &mut App,
-    local_image_path: PathBuf,
-) -> Vec<PromptAttachment> {
     if let AppMode::Prompt {
-        at_mention_state,
         attachment_state,
-        history_state,
         input,
-        slash_state,
         ..
     } = &mut app.mode
     {
-        insert_prompt_local_image(
-            attachment_state,
-            history_state,
-            input,
-            slash_state,
-            local_image_path,
-        );
-        *at_mention_state = None;
-
-        return attachment_state.prune_unreachable(input);
+        attachment_state.pending_image_paste = Some(PendingImagePaste {
+            anchor: Some(input.cursor),
+            request_id,
+        });
     }
-
-    Vec::new()
 }
 
 /// Drains presentation-owned prompt input into an app-layer submission and

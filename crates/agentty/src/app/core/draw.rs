@@ -70,8 +70,12 @@ impl App {
                         }
                     )
             }
+            AppMode::Prompt {
+                attachment_state,
+                session_id,
+                ..
+            } => attachment_state.is_pasting_image() || self.session_has_tick_driven_ui(session_id),
             AppMode::View { session_id, .. }
-            | AppMode::Prompt { session_id, .. }
             | AppMode::Question { session_id, .. }
             | AppMode::LaunchConfigurationSelector {
                 restore_view: ConfirmationViewMode { session_id, .. },

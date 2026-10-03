@@ -57,11 +57,29 @@ fn test_build_clipboard_image_path_uses_png_extension_in_images_directory() {
 
     // Assert
     assert_eq!(image_path.parent(), Some(expected_directory.as_path()));
-    assert!(
-        image_path
-            .file_name()
-            .is_some_and(|name| { name.to_string_lossy() == "image-002-42.png" })
-    );
+    assert!(image_path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy();
+
+        name.starts_with("image-002-42-") && name.ends_with(".png")
+    }));
+}
+
+#[test]
+fn test_build_clipboard_image_path_stays_unique_within_one_clock_millisecond() {
+    // Arrange
+    let session_id = "session-123";
+    let clock = FixedClock {
+        system_time: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(42),
+    };
+
+    // Act
+    let first_path =
+        build_clipboard_image_path(session_id, 1, &clock).expect("image path should resolve");
+    let second_path =
+        build_clipboard_image_path(session_id, 1, &clock).expect("image path should resolve");
+
+    // Assert
+    assert_ne!(first_path, second_path);
 }
 
 #[test]
