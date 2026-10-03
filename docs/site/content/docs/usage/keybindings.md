@@ -117,7 +117,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
 | `d`                 | Show diff when the session has changes              |
-| `f`                 | Append or regenerate focused review output          |
+| `f`                 | Show, generate, or regenerate focused review        |
 | `F`                 | Fork session with copied transcript history         |
 | `m`                 | Add to merge queue after confirmation               |
 | `r`                 | Sync session branch                                 |

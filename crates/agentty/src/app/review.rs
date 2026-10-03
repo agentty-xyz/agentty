@@ -282,11 +282,18 @@ pub(crate) fn review_view_text<'a>(
     }
 }
 
-/// Rehydrates cached focused-review states into explicit display slots.
+/// Rehydrates cached focused-review states and restores the transient running
+/// status after workflows such as sync return a session to `Review`.
 pub(crate) fn hydrate_review_transients(
     review_cache: &HashMap<SessionId, ReviewCacheEntry>,
     session_state: &mut SessionState,
 ) {
+    for (session_id, entry) in review_cache {
+        if matches!(entry, ReviewCacheEntry::Loading { .. }) {
+            mark_session_agent_review(session_state, session_id);
+        }
+    }
+
     for session in session_state.sessions_mut() {
         hydrate_session_review_transient(review_cache, session);
     }
@@ -299,6 +306,13 @@ pub(crate) fn hydrate_review_transient(
     session_state: &mut SessionState,
     session_id: &str,
 ) {
+    if matches!(
+        review_cache.get(session_id),
+        Some(ReviewCacheEntry::Loading { .. })
+    ) {
+        mark_session_agent_review(session_state, session_id);
+    }
+
     let Some(session) = session_state.session_mut_for_id(session_id) else {
         return;
     };

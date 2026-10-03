@@ -118,6 +118,57 @@ fn loading_review_cache(
     )])
 }
 
+#[test]
+fn loading_review_hydration_restores_status_after_sync_without_interrupting_workflows() {
+    // Arrange / Act / Assert
+    for hydrate_all in [false, true] {
+        for (status, expected_status) in [
+            (Status::Review, Status::AgentReview),
+            (Status::AgentReview, Status::AgentReview),
+            (Status::Rebasing, Status::Rebasing),
+            (Status::Question, Status::Question),
+            (Status::InProgress, Status::InProgress),
+            (Status::Done, Status::Done),
+        ] {
+            // Arrange
+            let session_id = SessionId::from("session-id");
+            let cache = loading_review_cache(&session_id, 42);
+            let mut state = session_state_with_stale_review(&session_id);
+            state.sessions_mut()[0].status = status;
+
+            // Act
+            if hydrate_all {
+                hydrate_review_transients(&cache, &mut state);
+            } else {
+                hydrate_review_transient(&cache, &mut state, &session_id);
+            }
+
+            // Assert
+            let session = &state.sessions()[0];
+            assert_eq!(session.status, expected_status);
+            assert_eq!(
+                matches!(
+                    session.transient_messages.get(TransientMessageSlot::Review),
+                    Some(TransientMessage {
+                        body: TransientMessageBody::Loading(_),
+                        ..
+                    })
+                ),
+                matches!(
+                    expected_status,
+                    Status::AgentReview | Status::Rebasing | Status::Question
+                )
+            );
+            assert_eq!(
+                cache
+                    .get(&session_id)
+                    .and_then(ReviewCacheEntry::request_id),
+                Some(uuid::Uuid::nil())
+            );
+        }
+    }
+}
+
 /// Builds a single successful review update for one session.
 fn successful_review_update(
     session_id: &SessionId,
