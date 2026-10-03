@@ -7,6 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.16.7] - 2026-10-02
+
+### Changed
+
+- `agentty`: replace Claude Fable 5 with Fable 5.1 as the Claude default and migrate
+  saved model selections.
+- `agentty`: allow focused reviews 30 minutes across all phases under one shared
+  wall-clock limit.
+- release: bump workspace crate metadata and lockfile package versions to `0.16.7`.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.16.6] - 2026-10-01
 
 ### Added
