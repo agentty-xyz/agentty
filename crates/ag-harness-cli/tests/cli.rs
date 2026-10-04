@@ -683,6 +683,142 @@ async fn resume_restores_history_from_the_default_database() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_command_switches_providers_and_resume_keeps_the_switch() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(bearer_token("muse-key"))
+        .and(body_string_contains(r#""model":"muse-test""#))
+        .respond_with(response("muse answer", 4, 2))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(bearer_token("kimi-key"))
+        .and(body_string_contains(r#""model":"kimi-test""#))
+        .and(body_string_contains(
+            r#""content":"{\"message\":\"muse answer\"}","role":"assistant""#,
+        ))
+        .respond_with(response("kimi answer", 8, 2))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let storage = tempfile::tempdir().expect("temporary storage should exist");
+    let mut child = tokio::process::Command::new(cargo_bin!("ag-harness"))
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .args([
+            "run",
+            "muse-test",
+            "first question",
+            "--session",
+            "switched",
+            "--base-url",
+            &server.uri(),
+        ])
+        .env("MODEL_API_KEY", "muse-key")
+        .env("KIMI_API_KEY", "kimi-key")
+        .env("KIMI_BASE_URL", server.uri())
+        .env("AG_HARNESS_ROOT", storage.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("CLI chat should start");
+
+    // Act
+    child
+        .stdin
+        .take()
+        .expect("stdin should be piped")
+        .write_all(b"/model kimi/kimi-test\nsecond question\n")
+        .await
+        .expect("switch and prompt should be written");
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("CLI chat should finish");
+    let resumed = tokio::process::Command::new(cargo_bin!("ag-harness"))
+        .arg("--git-executable")
+        .arg(test_git_executable())
+        .args(["resume", "switched", "third question"])
+        .env("KIMI_API_KEY", "kimi-key")
+        .env("KIMI_BASE_URL", server.uri())
+        .env("AG_HARNESS_ROOT", storage.path())
+        .output()
+        .await
+        .expect("resumed CLI request should run");
+
+    // Assert
+    assert!(
+        output.status.success(),
+        "CLI failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("output should be UTF-8");
+    assert!(stdout.contains("assistant> muse answer\n---\n"));
+    assert!(stdout.contains("model: kimi/kimi-test\nassistant> kimi answer\n---\n"));
+    assert!(
+        resumed.status.success(),
+        "resume failed: {}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&resumed.stdout).contains("assistant> kimi answer\n---\n"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn model_ids_beyond_the_registration_limit_run_and_resume() {
+    // Arrange
+    let model = "m".repeat(300);
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(body_string_contains(format!(r#""model":"{model}""#)))
+        .respond_with(response("long answer", 4, 2))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let storage = tempfile::tempdir().expect("temporary storage should exist");
+    let run = |arguments: &[&str]| {
+        let mut command = tokio::process::Command::new(cargo_bin!("ag-harness"));
+        command
+            .arg("--git-executable")
+            .arg(test_git_executable())
+            .args(arguments)
+            .env("MODEL_API_KEY", "test-key")
+            .env("MODEL_API_BASE_URL", server.uri())
+            .env("AG_HARNESS_ROOT", storage.path());
+
+        command
+    };
+
+    // Act
+    let first = run(&["run", &model, "first question", "--session", "long-model"])
+        .output()
+        .await
+        .expect("CLI request should run");
+    let resumed = run(&["resume", "long-model", "second question"])
+        .output()
+        .await
+        .expect("resumed CLI request should run");
+
+    // Assert
+    assert!(
+        first.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        resumed.status.success(),
+        "resume failed: {}",
+        String::from_utf8_lossy(&resumed.stderr)
+    );
+    assert!(String::from_utf8_lossy(&resumed.stdout).contains("assistant> long answer\n---\n"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
     // Arrange
     let server = MockServer::start().await;

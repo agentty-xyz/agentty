@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT provider, model, registration_key, registration_revision FROM session WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "provider",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "provider"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "registration_key",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "registration_key"
+          }
+        }
+      },
+      {
+        "name": "registration_revision",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session",
+            "name": "registration_revision"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "3d4c056496151aa2429935e7034605084eceee6557421d5ae1345f4267eae26e"
+}

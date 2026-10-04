@@ -8,6 +8,7 @@ use tempfile::tempdir;
 use super::support::{TurnStatusRow, metadata_model, model, schema};
 use crate::harness::Harness;
 use crate::model::{ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelResponse};
+use crate::recovery::ExecutionIdentity;
 use crate::session::{Database, NewSession, SessionError, SessionInfo};
 use crate::store::SessionStore as _;
 
@@ -20,19 +21,32 @@ async fn session_info_loads_model_identity_and_reports_missing_sessions() {
         .await
         .expect("database should open");
     let metadata = ModelMetadata::new("provider", "model").expect("metadata should be valid");
+    let identity = ExecutionIdentity::new("host/model", "1").expect("identity should be valid");
     database
         .create_session(
             &NewSession::new("session-a", schema()),
-            Some(metadata),
+            Some(metadata.clone()),
             100_000,
         )
         .await
         .expect("session should be created");
+    database
+        .create_session(
+            &NewSession::new("session-b", schema())
+                .with_registration_identity(Some(identity.clone())),
+            Some(metadata),
+            100_000,
+        )
+        .await
+        .expect("registered session should be created");
 
     // Act
     let info = SessionInfo::load(&database_path, "session-a")
         .await
         .expect("session identity should load");
+    let registered = SessionInfo::load(&database_path, "session-b")
+        .await
+        .expect("registered session identity should load");
     let missing = SessionInfo::load(&database_path, "missing")
         .await
         .expect_err("missing session should fail");
@@ -40,6 +54,8 @@ async fn session_info_loads_model_identity_and_reports_missing_sessions() {
     // Assert
     assert_eq!(info.provider(), Some("provider"));
     assert_eq!(info.model(), Some("model"));
+    assert_eq!(info.registration_identity(), None);
+    assert_eq!(registered.registration_identity(), Some(&identity));
     assert!(matches!(missing, SessionError::NotFound { .. }));
 }
 
@@ -237,6 +253,35 @@ async fn opening_session_rejects_incomplete_saved_model_identity() {
 
     // Assert
     assert!(matches!(error, SessionError::InvalidData { .. }));
+}
+
+#[tokio::test]
+async fn session_info_rejects_incomplete_saved_registration_identity() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory should be created");
+    let database_path = directory.path().join("harness.db");
+    let database = Database::open(&database_path)
+        .await
+        .expect("database should open");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session should be created");
+    sqlx::query("UPDATE session SET registration_key = 'host/model' WHERE id = 'session-a'")
+        .execute(&database.pool)
+        .await
+        .expect("registration identity should be corrupted");
+
+    // Act
+    let error = SessionInfo::load(&database_path, "session-a")
+        .await
+        .expect_err("incomplete registration should fail");
+
+    // Assert
+    assert!(matches!(
+        error,
+        SessionError::InvalidData { reason } if reason.contains("incomplete registration identity")
+    ));
 }
 
 #[tokio::test]
