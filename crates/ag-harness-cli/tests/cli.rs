@@ -5,7 +5,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{fs, io};
 
+use ag_harness::model::ModelMessage;
 use ag_harness::provider::{KIMI_K2_6, ModelProvider, QWEN_PLUS};
+use ag_harness::store::StoppedTurn;
 use ag_harness::tool::ToolDefinition;
 use assert_cmd::cargo::cargo_bin;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -831,11 +833,17 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
         .expect(1)
         .mount(&server)
         .await;
+    let failure_note = match StoppedTurn::Failed.note("Model(Provider), HTTP 500") {
+        ModelMessage::User(text) => text,
+        _ => String::new(),
+    };
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(body_json(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
+                {"content": "first question", "role": "user"},
+                {"content": failure_note, "role": "user"},
                 {"content": "retry question", "role": "user"}
             ],
             "model": "muse-test",
@@ -850,6 +858,7 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
             "tools": [read_tool()]
         })))
         .respond_with(response("recovered answer", 5, 2))
+        .with_priority(1)
         .expect(1)
         .mount(&server)
         .await;

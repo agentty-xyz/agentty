@@ -13,7 +13,7 @@ use crate::session::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
 use crate::session::{Database, NewSession, SessionError, StoreIdentity};
-use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, SessionStore, StoppedTurn, WriteStatus};
 
 #[tokio::test]
 async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle() {
@@ -83,6 +83,12 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
                 .await,
             Err(SessionError::OwnershipLost { .. })
         ));
+        assert!(matches!(
+            database
+                .record_progress(candidate, &[ModelMessage::Assistant("late".into())])
+                .await,
+            Err(SessionError::OwnershipLost { .. })
+        ));
     }
     assert!(database.finish_write(&wrong, intent, true).await.is_err());
     assert!(database.finish_write(&foreign, intent, true).await.is_err());
@@ -103,7 +109,13 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
     assert_eq!(database.identity(), reopened.identity());
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].status, WriteStatus::Applied);
-    assert_eq!(loaded.turns, Vec::<Vec<ModelMessage>>::new());
+    assert_eq!(
+        loaded.turns,
+        vec![vec![
+            ModelMessage::User("prompt".to_string()),
+            StoppedTurn::Interrupted.note("cancelled"),
+        ]]
+    );
 }
 
 #[tokio::test]

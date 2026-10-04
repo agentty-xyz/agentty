@@ -2,7 +2,7 @@ use std::env;
 use std::sync::atomic::AtomicUsize;
 
 use ag_harness::provider::ModelProvider;
-use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnOptions};
 use serde_json::json;
 use tokio::io::BufReader;
 
@@ -25,11 +25,7 @@ fn test_models() -> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<FixedMod
 }
 
 fn test_options() -> TurnOptions {
-    TurnOptions::new(
-        chat_schema().expect("schema"),
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    )
+    TurnOptions::new(chat_schema().expect("schema"), ToolPolicy::default())
 }
 
 #[tokio::test]

@@ -1,7 +1,6 @@
 use std::io;
 use std::io::Cursor;
-use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -9,17 +8,17 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::support::{
-    model, object_schema, read_call, read_harness, readable_file_system, response_without_metadata,
-    write_call, write_harness,
+    model, object_schema, read_call, read_harness, response_without_metadata, write_call,
+    write_harness,
 };
 use crate::bash::{BashConfig, BashError};
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
-use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ToolErrorType, TurnErrorType};
+use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::tool::ToolDefinition;
 use crate::turn::TurnError;
-use crate::{Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{Repository, Tool, ToolPolicy, TurnOptions};
 
 #[tokio::test]
 async fn rejects_schema_invalid_output_from_injected_model() {
@@ -273,106 +272,84 @@ async fn rejects_disabled_read_call() {
 }
 
 #[tokio::test]
-async fn enforces_tool_call_limit() {
-    for observed in [false, true] {
-        // Arrange
-        let mut model = model();
-        model.expect_complete().times(2).returning(|_| {
-            Ok(response_without_metadata(ModelResponse::ToolCall(
-                read_call("call_read"),
-            )))
-        });
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let mut harness = read_harness(model, readable_file_system())
-            .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
-        if observed {
-            let events = Arc::clone(&events);
-            harness = harness.with_lifecycle_observer(move |event: LifecycleEvent| {
-                events.lock().expect("events lock").push(event);
-            });
-        }
-
-        // Act
-        let error = harness
-            .run_once("inspect", object_schema())
-            .await
-            .expect_err("second tool call should exceed the limit");
-
-        // Assert
-        assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
-        assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
-        let events = events.lock().expect("events lock");
-        assert_eq!(
-            events.iter().any(|event| matches!(
-                event.kind(),
-                LifecycleEventKind::ToolFailed {
-                    error_type: ToolErrorType::CallLimit,
-                    ..
-                }
-            )),
-            observed
-        );
-    }
-}
-
-#[tokio::test]
-async fn enforces_tool_call_limit_within_one_model_response() {
+async fn runs_sequential_tool_calls_until_the_model_returns_output() {
     // Arrange
+    let tool_rounds = 12;
+    let completions = AtomicUsize::new(0);
     let mut model = model();
-    model.expect_complete().times(1).returning(|_| {
-        Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
-            read_call("call_one"),
-            read_call("call_two"),
-        ])))
-    });
-    let mut file_system = MockFileSystem::new();
-    file_system.expect_canonicalize().times(0);
-    file_system.expect_open_beneath().times(0);
-    let harness = read_harness(model, file_system)
-        .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
+    model
+        .expect_complete()
+        .times(tool_rounds + 1)
+        .returning(move |_| {
+            let index = completions.fetch_add(1, Ordering::SeqCst);
+            let response = if index < tool_rounds {
+                ModelResponse::ToolCall(read_call(&format!("call_{index}")))
+            } else {
+                ModelResponse::Output(json!({"summary": "done"}))
+            };
+
+            Ok(response_without_metadata(response))
+        });
+    let harness = read_harness(model, repeatedly_readable_file_system());
 
     // Act
-    let error = harness
+    let outcome = harness
         .run_once("inspect", object_schema())
         .await
-        .expect_err("second batched tool call should exceed the limit");
+        .expect("every tool call should run");
 
     // Assert
-    assert!(matches!(error, TurnError::ToolCallLimit { limit: 1 }));
+    assert_eq!(outcome.output(), &json!({"summary": "done"}));
+    assert_eq!(outcome.report().tool_calls().len(), tool_rounds);
+    assert_eq!(outcome.report().model_requests().len(), tool_rounds + 1);
 }
 
 #[tokio::test]
-async fn rejects_batched_writes_before_any_write_executes() {
+async fn runs_every_call_in_a_large_batch() {
     // Arrange
+    let batch_size = 10;
+    let completions = AtomicUsize::new(0);
     let mut model = model();
-    model.expect_complete().times(1).returning(|_| {
-        Ok(response_without_metadata(ModelResponse::ToolCalls(vec![
-            write_call(
-                "call_one",
-                "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+first\n",
-            ),
-            write_call(
-                "call_two",
-                "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+second\n",
-            ),
-        ])))
+    model.expect_complete().times(2).returning(move |_| {
+        let response = if completions.fetch_add(1, Ordering::SeqCst) == 0 {
+            ModelResponse::ToolCalls(
+                (0..batch_size)
+                    .map(|index| read_call(&format!("call_{index}")))
+                    .collect(),
+            )
+        } else {
+            ModelResponse::Output(json!({"summary": "done"}))
+        };
+
+        Ok(response_without_metadata(response))
     });
-    let mut file_system = MockFileSystem::new();
-    file_system.expect_canonicalize().times(0);
-    file_system.expect_open_beneath().times(0);
-    file_system.expect_replace_beneath().times(0);
-    let harness = write_harness(model, file_system)
-        .max_tool_calls(NonZeroUsize::new(1).expect("limit should be non-zero"));
+    let harness = read_harness(model, repeatedly_readable_file_system());
 
     // Act
-    let error = harness
-        .run_once("update twice", object_schema())
+    let outcome = harness
+        .run_once("inspect", object_schema())
         .await
-        .expect_err("oversized batch should fail before writing");
+        .expect("every batched call should run");
 
     // Assert
-    assert!(matches!(&error, TurnError::ToolCallLimit { limit: 1 }));
-    assert_eq!(error.error_type(), TurnErrorType::ToolCallLimit);
+    assert_eq!(outcome.report().tool_calls().len(), batch_size);
+}
+
+fn repeatedly_readable_file_system() -> MockFileSystem {
+    let mut file_system = MockFileSystem::new();
+    file_system.expect_canonicalize().returning(|path| {
+        Ok(if path == Path::new("repo") {
+            PathBuf::from("/repo")
+        } else {
+            path.to_path_buf()
+        })
+    });
+    file_system
+        .expect_open_beneath()
+        .returning(|_, _| Ok(Box::new(Cursor::new(b"[workspace]\n".to_vec()))));
+    file_system.expect_replace_beneath().never();
+
+    file_system
 }
 
 #[tokio::test]
@@ -502,11 +479,7 @@ async fn bash_permission_requires_host_configuration_and_host_information_grant(
     let mut model = model();
     model.expect_complete().never();
     let harness = Harness::new(model).repository(Repository::fixture("repo"));
-    let options = TurnOptions::new(
-        object_schema(),
-        ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(object_schema(), ToolPolicy::default().allow(Tool::Bash));
     let configuration = BashConfig::new(
         "/trusted/launcher".into(),
         "/bin/bash".into(),

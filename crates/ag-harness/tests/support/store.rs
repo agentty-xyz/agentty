@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
-    SessionCheckpoint, SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
-    WriteStatus,
+    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, RejectedContent,
+    Reservation, ReservedTurn, SessionCheckpoint, SessionStore, StoppedTurn, StoreIdentity,
+    TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ pub(crate) struct ExternalStore {
 struct Record {
     loaded: LoadedSession,
     next_turn: i64,
+    notes: Vec<Option<ModelMessage>>,
     owner: Option<(TurnOwner, Instant)>,
     pending: Vec<ModelMessage>,
     positions: Vec<i64>,
@@ -83,45 +84,61 @@ impl Record {
             .checkpoint
             .as_ref()
             .map_or(-1, SessionCheckpoint::covered_through);
-        loaded.latest_completed_turn = self.positions.iter().copied().max();
-        let mut turns: Vec<Vec<ModelMessage>> = self
+        loaded.latest_replayable_turn = self.positions.iter().copied().max();
+        let bytes =
+            |turn: &[ModelMessage]| turn.iter().map(ModelMessage::retained_bytes).sum::<usize>();
+        let mut remaining = loaded.max_history_bytes;
+        let mut turns = Vec::new();
+        for (turn, note) in self
             .positions
             .iter()
-            .zip(loaded.turns.iter())
+            .zip(loaded.turns.iter().zip(&self.notes))
             .filter(|(position, _)| **position > boundary)
-            .map(|(_, turn)| turn.clone())
-            .collect();
-        while turns
-            .iter()
-            .flatten()
-            .map(ModelMessage::retained_bytes)
-            .sum::<usize>()
-            > loaded.max_history_bytes
+            .map(|(_, turn)| turn)
+            .rev()
         {
-            turns.remove(0);
+            // A stopped turn that does not fit whole replays only its input
+            // and note; the note counts against the budget.
+            let note_bytes = note.as_ref().map_or(0, ModelMessage::retained_bytes);
+            let mut turn = if bytes(turn) + note_bytes <= remaining {
+                turn.clone()
+            } else if note.is_some() && bytes(&turn[..1]) + note_bytes <= remaining {
+                turn[..1].to_vec()
+            } else {
+                break;
+            };
+            remaining -= bytes(&turn) + note_bytes;
+            turn.extend(note.clone());
+            turns.push(turn);
         }
+        turns.reverse();
         loaded.turns = turns;
 
         loaded
     }
 
     fn recover(&mut self) {
-        if self
-            .owner
-            .as_ref()
-            .is_some_and(|(_, deadline)| *deadline <= Instant::now())
+        if let Some((owner, deadline)) = self.owner.clone()
+            && deadline <= Instant::now()
         {
-            if let Some((owner, _)) = self.owner.clone() {
-                self.set_status(
-                    &owner,
-                    HostTurnStatus::Interrupted {
-                        error_type: "interrupted".into(),
-                    },
-                );
-            }
-            self.owner = None;
-            self.loaded.provider_session_id = None;
+            self.stop(&owner, StoppedTurn::Interrupted, "interrupted".into());
         }
+    }
+
+    /// Retains a stopped turn's input and progress for replay with its note.
+    fn stop(&mut self, owner: &TurnOwner, stopped: StoppedTurn, error_type: String) {
+        self.loaded.turns.push(std::mem::take(&mut self.pending));
+        self.notes.push(Some(stopped.note(&error_type)));
+        self.positions.push(owner.turn_position());
+        self.set_status(
+            owner,
+            match stopped {
+                StoppedTurn::Failed => HostTurnStatus::Failed { error_type },
+                StoppedTurn::Interrupted => HostTurnStatus::Interrupted { error_type },
+            },
+        );
+        self.owner = None;
+        self.loaded.provider_session_id = None;
     }
 
     fn validate(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -151,11 +168,13 @@ impl ExternalStore {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
         session.validate(owner)?;
+        session.pending.truncate(1);
         session.pending.extend_from_slice(messages);
         session
             .loaded
             .turns
             .push(std::mem::take(&mut session.pending));
+        session.notes.push(None);
         session.positions.push(owner.turn_position());
         if let Some(outcome) = outcome {
             session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
@@ -205,7 +224,7 @@ impl SessionStore for ExternalStore {
             Record {
                 loaded: LoadedSession {
                     checkpoint: None,
-                    latest_completed_turn: None,
+                    latest_replayable_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -217,6 +236,7 @@ impl SessionStore for ExternalStore {
                     turns: Vec::new(),
                 },
                 next_turn: 0,
+                notes: Vec::new(),
                 owner: None,
                 pending: Vec::new(),
                 positions: Vec::new(),
@@ -312,14 +332,15 @@ impl SessionStore for ExternalStore {
                 id: session_id.to_string(),
             })?;
         session.recover();
-        let latest_completed = session.positions.iter().copied().max();
-        let stale =
-            session.loaded.model_generation != checkpoint.model_generation()
-                || latest_completed
-                    .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
-                || session.loaded.checkpoint.as_ref().is_some_and(|existing| {
-                    existing.covered_through() > checkpoint.covered_through()
-                });
+        let latest_replayable = session.positions.iter().copied().max();
+        let stale = session.loaded.model_generation != checkpoint.model_generation()
+            || latest_replayable
+                .is_none_or(|latest_replayable| checkpoint.covered_through() > latest_replayable)
+            || session
+                .loaded
+                .checkpoint
+                .as_ref()
+                .is_some_and(|existing| existing.covered_through() > checkpoint.covered_through());
         if stale {
             return Err(SessionError::CheckpointStale {
                 id: session_id.to_string(),
@@ -366,6 +387,32 @@ impl SessionStore for ExternalStore {
         Ok(deadline)
     }
 
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions.get_mut(owner.session_id()).expect("session");
+        session.validate(owner)?;
+        session.pending.extend_from_slice(messages);
+
+        Ok(())
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions.get_mut(owner.session_id()).expect("session");
+        session.validate(owner)?;
+        rejected.omit(&mut session.pending);
+
+        Ok(())
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
@@ -379,14 +426,11 @@ impl SessionStore for ExternalStore {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
         session.validate(owner)?;
-        session.set_status(
+        session.stop(
             owner,
-            HostTurnStatus::Failed {
-                error_type: format!("{:?}", error.error_type()),
-            },
+            StoppedTurn::Failed,
+            format!("{:?}", error.error_type()),
         );
-        session.owner = None;
-        session.loaded.provider_session_id = None;
 
         Ok(())
     }
@@ -399,14 +443,11 @@ impl SessionStore for ExternalStore {
                 .as_ref()
                 .is_some_and(|(active, _)| active == owner)
         {
-            session.set_status(
+            session.stop(
                 owner,
-                HostTurnStatus::Interrupted {
-                    error_type: owner.interruption_error_type().into(),
-                },
+                StoppedTurn::Interrupted,
+                owner.interruption_error_type().into(),
             );
-            session.owner = None;
-            session.loaded.provider_session_id = None;
         }
 
         Ok(())

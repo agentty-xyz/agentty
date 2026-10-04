@@ -9,13 +9,12 @@ use crate::recovery::{
 };
 use crate::schema_contract::OutputSchema;
 use crate::store::{Admission, StoredTurnOptions};
-use crate::{SessionError, Tool, TurnLimits, TurnOptions};
+use crate::{SessionError, Tool, TurnOptions};
 
 fn options(tool_policy: ToolPolicy) -> TurnOptions {
     TurnOptions::new(
         OutputSchema::new(json!({"type": "object"})).expect("schema"),
         tool_policy,
-        TurnLimits::default(),
     )
 }
 

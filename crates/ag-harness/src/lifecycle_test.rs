@@ -38,7 +38,7 @@ fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
             Some(turn_id),
         )
         .expect("tool should be observed")
-        .failed(ToolErrorType::CallLimit);
+        .failed(ToolErrorType::Execution);
     drop(
         emitter
             .request_tool(
@@ -355,7 +355,7 @@ fn emits_ordered_terminal_events_for_every_operation() {
     assert!(matches!(
         events[18].kind(),
         LifecycleEventKind::ToolFailed {
-            error_type: ToolErrorType::CallLimit,
+            error_type: ToolErrorType::Execution,
             ..
         }
     ));

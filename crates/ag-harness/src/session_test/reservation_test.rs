@@ -11,12 +11,12 @@ use super::support::{
 };
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
-use crate::model::ModelError;
+use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::session::{
     Database, NewSession, SessionError, TimestampSource, connect_options, interrupt_owned_turn,
 };
-use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
+use crate::store::{AcquiredTurn, SessionStore as _, StoppedTurn, TurnAdmission};
 use crate::turn::TurnError;
 
 #[tokio::test]
@@ -579,13 +579,73 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     .expect("turn status should load");
 
     // Assert
-    assert_eq!(loaded.turns, vec![turn("first", "first")]);
+    assert_eq!(
+        loaded.turns,
+        vec![
+            turn("first", "first"),
+            vec![
+                ModelMessage::User("abandoned".to_string()),
+                StoppedTurn::Interrupted.note("interrupted"),
+            ],
+        ]
+    );
     assert!(loaded.provider_session_id.is_none());
     assert!(replacement.provider_session_id.is_none());
     assert_eq!(status, "interrupted");
     assert_eq!(
         replacement.guard.owner().turn_position,
         abandoned.guard.owner().turn_position + 1
+    );
+}
+
+#[tokio::test]
+async fn acquisition_replays_a_turn_recovered_during_its_reservation() {
+    // Arrange
+    let now = Arc::new(AtomicI64::new(10));
+    let timestamp_source: Arc<dyn TimestampSource> = {
+        let now = Arc::clone(&now);
+
+        Arc::new(move || now.load(Ordering::SeqCst))
+    };
+    let database = Database::open_in_memory_with_timestamp_source(timestamp_source)
+        .await
+        .expect("database should open");
+    database
+        .create_session(&NewSession::new("session-a", schema()), None, 100_000)
+        .await
+        .expect("session should be created");
+    let mut abandoned = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("abandoned"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
+    abandoned.guard.disarm();
+    now.store(10 + TURN_LEASE_SECONDS + 1, Ordering::SeqCst);
+
+    // Act
+    // Without a continuation to clear, only the replayable position reveals
+    // that reservation recovered the expired turn after the history snapshot.
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement turn should begin");
+
+    // Assert
+    assert_eq!(
+        replacement.turns,
+        vec![vec![
+            ModelMessage::User("abandoned".to_string()),
+            StoppedTurn::Interrupted.note("interrupted"),
+        ]]
     );
 }
 

@@ -1,7 +1,7 @@
 //! Compaction checkpoint contract shared by both built-in stores.
 
 use std::num::NonZeroU64;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
@@ -24,6 +24,7 @@ use crate::store_conformance_test::{schema, stores};
 /// schema.
 struct CompactingModel {
     entered: Notify,
+    fail_answers: AtomicBool,
     generations: AtomicUsize,
     mode: Mutex<SummaryMode>,
     name: &'static str,
@@ -44,6 +45,7 @@ impl CompactingModel {
     fn shared(name: &'static str, requests: &Arc<Mutex<Vec<ModelRequest>>>) -> Arc<Self> {
         Arc::new(Self {
             entered: Notify::new(),
+            fail_answers: AtomicBool::new(false),
             generations: AtomicUsize::new(0),
             mode: Mutex::new(SummaryMode::Valid),
             name,
@@ -80,6 +82,10 @@ impl Model for CompactingModel {
             .expect("requests")
             .push(request.clone());
         if !Self::is_generation(&request) {
+            if self.fail_answers.load(Ordering::SeqCst) {
+                return Err(ModelError::InvalidResponse);
+            }
+
             return Ok(ModelCompletion::from_response(ModelResponse::Output(
                 json!({"answer": self.name}),
             ))
@@ -252,10 +258,10 @@ async fn repeated_compaction_extends_coverage_without_gaps() {
         // Assert
         assert_eq!(first.covered_through(), 0);
         assert_eq!(second.covered_through(), 1);
-        assert!(noop.is_none(), "no uncovered completed turn remains");
+        assert!(noop.is_none(), "no uncovered replayable turn remains");
         assert_eq!(model.generations.load(Ordering::SeqCst), 2);
         let loaded = store.load_session("repeat").await.expect("canonical");
-        assert!(loaded.turns.is_empty(), "every completed turn is covered");
+        assert!(loaded.turns.is_empty(), "every replayable turn is covered");
         assert_eq!(loaded.checkpoint.expect("checkpoint").covered_through(), 1);
     }
 }
@@ -536,7 +542,7 @@ async fn bounded_generation_falls_back_to_recent_turns_under_budget() {
 }
 
 #[tokio::test]
-async fn compaction_without_completed_turns_is_a_noop() {
+async fn compaction_without_replayable_turns_is_a_noop() {
     for store in stores().await {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -557,9 +563,64 @@ async fn compaction_without_completed_turns_is_a_noop() {
         // Assert
         assert!(
             compacted.is_none(),
-            "nothing completed leaves nothing to cover"
+            "no replayable turn leaves nothing to cover"
         );
         assert_eq!(model.generations.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn compaction_covers_stopped_turns_exactly_once() {
+    for store in stores().await {
+        // Arrange
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let model = CompactingModel::shared("stopped", &requests);
+        let registry = registry(Arc::clone(&model), None);
+        let harness = Harness::from_registry(&registry, "stopped")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut only_stopped = harness
+            .session("only-stopped", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut trailing_stopped = harness
+            .session("trailing-stopped", schema())
+            .create()
+            .await
+            .expect("session");
+        trailing_stopped.send("first").await.expect("first");
+        model.fail_answers.store(true, Ordering::SeqCst);
+        only_stopped.send("lost").await.expect_err("failed turn");
+        trailing_stopped
+            .send("second")
+            .await
+            .expect_err("failed turn");
+        model.fail_answers.store(false, Ordering::SeqCst);
+
+        // Act
+        let only_stopped_checkpoint = only_stopped
+            .compact()
+            .await
+            .expect("compact")
+            .expect("checkpoint");
+        let published = trailing_stopped
+            .compact()
+            .await
+            .expect("compact")
+            .expect("checkpoint");
+        trailing_stopped.send("third").await.expect("third");
+
+        // Assert
+        assert_eq!(only_stopped_checkpoint.covered_through(), 0);
+        assert_eq!(published.covered_through(), 1);
+        let requests = requests.lock().expect("requests");
+        let third = requests.last().expect("third request");
+        assert!(summary_message(third).is_some());
+        assert!(
+            !user_texts(third).iter().any(|text| text == "second"),
+            "the summarized stopped turn is not replayed again"
+        );
     }
 }
 

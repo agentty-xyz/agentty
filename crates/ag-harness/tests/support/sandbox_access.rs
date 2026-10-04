@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ag_harness::bash::{BashConfig, CommandOutcome};
-use ag_harness::{ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use ag_harness::{ToolPolicy, TurnError, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
 
@@ -180,7 +180,7 @@ async fn native_positive_controls_and_filesystem_network_denials() {
 async fn native_denied_tool_and_unsafe_aliases_never_execute() {
     // Arrange
     let workspace = Workspace::new();
-    let options = TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema(), ToolPolicy::default());
     let outside = tempfile::tempdir().expect("outside");
     std::fs::write(outside.path().join("secret"), "secret").expect("secret");
 

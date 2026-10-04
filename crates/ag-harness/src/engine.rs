@@ -14,6 +14,7 @@ use crate::model::{
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
+use crate::store::RejectedContent;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
 use crate::turn::{
     ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOptions, TurnOutcome,
@@ -42,11 +43,15 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
         let started_at = Instant::now();
+        let progress = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
-        let mut completed_tool_calls = 0_usize;
+        // The current input is already durable; only later exchanges remain.
+        let mut recorded_messages = request.messages().len();
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut tool_calls = Vec::new();
+        // Content the next model request sends that no provider accepted yet.
+        let mut unaccepted = RejectedContent::Input;
 
         loop {
             let (
@@ -55,9 +60,15 @@ impl Engine<'_> {
                 provider_session_id,
                 native_resume_rejected,
                 reasoning_content,
-            ) = self
+            ) = match self
                 .complete_model_request(&request, model_request_index, turn_id)
-                .await?;
+                .await
+            {
+                Ok(completion) => completion,
+                Err(error) => {
+                    return Err(Self::omit_rejected(progress.as_ref(), unaccepted, error).await);
+                }
+            };
             if native_resume_rejected || provider_session_id.is_some() {
                 request.set_provider_session_id(provider_session_id);
             }
@@ -79,41 +90,53 @@ impl Engine<'_> {
                     ));
                 }
                 ModelResponse::ToolCall(call) => {
-                    let (result, activity) = self
-                        .execute_tool_call(&call, &tools, completed_tool_calls, turn_id)
-                        .await?;
+                    let (result, activity) = self.execute_tool_call(&call, &tools, turn_id).await?;
                     request.record_tool_result(call, result);
                     tool_calls.push(activity);
-                    completed_tool_calls += 1;
+                    unaccepted = RejectedContent::ToolResults(1);
                 }
                 ModelResponse::ToolCalls(calls) => {
                     if calls.is_empty() {
                         return Err(ModelError::MissingToolCall.into());
                     }
                     ensure_unique_tool_call_ids(&calls)?;
-                    if calls.len()
-                        > self
-                            .options
-                            .limits()
-                            .max_tool_calls()
-                            .get()
-                            .saturating_sub(completed_tool_calls)
-                    {
-                        return Err(TurnError::ToolCallLimit {
-                            limit: self.options.limits().max_tool_calls().get(),
-                        });
-                    }
+                    let batch_reasoning = calls
+                        .first()
+                        .and_then(ToolCall::reasoning_content)
+                        .map(str::to_string);
                     let mut results = Vec::with_capacity(calls.len());
                     for call in &calls {
-                        let (result, activity) = self
-                            .execute_tool_call(call, &tools, completed_tool_calls, turn_id)
+                        let (result, activity) =
+                            self.execute_tool_call(call, &tools, turn_id).await?;
+                        // Each finished call is recorded as its own exchange,
+                        // so a batch stopped by a later call's failure or by
+                        // cancellation still replays the work it finished.
+                        // Every split call carries the batch's reasoning,
+                        // which reasoning-preserving providers require on
+                        // each replayed assistant tool-call message.
+                        if let Some(progress) = &progress {
+                            let call = call
+                                .clone()
+                                .with_batch_reasoning(batch_reasoning.as_deref());
+                            Self::record_progress(
+                                progress,
+                                &ModelMessage::tool_exchange(call, result.clone()),
+                            )
                             .await?;
+                        }
                         results.push(result);
                         tool_calls.push(activity);
-                        completed_tool_calls += 1;
                     }
+                    unaccepted = RejectedContent::ToolResults(calls.len());
                     request.record_tool_results(calls, results);
+                    recorded_messages = request.messages().len();
                 }
+            }
+            if let Some(progress) = &progress
+                && recorded_messages < request.messages().len()
+            {
+                Self::record_progress(progress, &request.messages()[recorded_messages..]).await?;
+                recorded_messages = request.messages().len();
             }
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits fails typed here instead of
@@ -122,6 +145,37 @@ impl Engine<'_> {
                 context::admit_grown_request(self.context_estimator, budget, &request)?;
             }
         }
+    }
+
+    /// Omits the content a provider-rejected request introduced from durable
+    /// progress, so replaying the stopped turn does not resend it.
+    async fn omit_rejected(
+        progress: Option<&WriteJournal>,
+        unaccepted: RejectedContent,
+        error: TurnError,
+    ) -> TurnError {
+        if let Some(progress) = progress
+            && error.is_rejected_request()
+            && let Err(source) = progress.omit_rejected(unaccepted).await
+        {
+            return TurnError::Progress {
+                source: Box::new(source),
+            };
+        }
+
+        error
+    }
+
+    async fn record_progress(
+        progress: &WriteJournal,
+        messages: &[ModelMessage],
+    ) -> Result<(), TurnError> {
+        progress
+            .record_progress(messages)
+            .await
+            .map_err(|source| TurnError::Progress {
+                source: Box::new(source),
+            })
     }
 
     fn prepare_request(
@@ -334,7 +388,6 @@ impl Engine<'_> {
         &self,
         call: &ToolCall,
         tools: &Tools,
-        completed_tool_calls: usize,
         turn_id: Option<LifecycleId>,
     ) -> Result<(String, ToolActivity), TurnError> {
         let mut tool_lifecycle =
@@ -363,15 +416,6 @@ impl Engine<'_> {
                 name: call.name().to_string(),
             });
         };
-        if completed_tool_calls >= self.options.limits().max_tool_calls().get() {
-            if let Some(tool_lifecycle) = tool_lifecycle {
-                tool_lifecycle.failed(ToolErrorType::CallLimit);
-            }
-
-            return Err(TurnError::ToolCallLimit {
-                limit: self.options.limits().max_tool_calls().get(),
-            });
-        }
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }

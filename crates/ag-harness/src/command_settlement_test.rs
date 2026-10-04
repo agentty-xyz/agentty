@@ -13,7 +13,7 @@ use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore};
 use crate::store_conformance_test::{options, schema};
-use crate::{OutputSchema, ToolPolicy, TurnInput, TurnLimits, TurnOptions, reservation};
+use crate::{OutputSchema, ToolPolicy, TurnInput, TurnOptions, reservation};
 
 struct Control {
     calls: AtomicUsize,
@@ -135,7 +135,7 @@ async fn reconciliation_releases_retained_store_and_control_after_caller_drop() 
     let store: Arc<dyn SessionStore> = Arc::new(MemoryStore::new());
     let weak_store = Arc::downgrade(&store);
     let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
     store
         .create_session(&NewSession::new("retained", schema), None, 1024)
         .await

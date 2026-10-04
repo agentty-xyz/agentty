@@ -14,14 +14,10 @@ use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
 use crate::model::{MockModel, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
 use crate::repository::Repository;
 use crate::session::{Database, SessionError};
-use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnError, TurnOptions};
 
-fn options(schema: OutputSchema, policy: ToolPolicy, limit: usize) -> TurnOptions {
-    TurnOptions::new(
-        schema,
-        policy,
-        TurnLimits::new(NonZeroUsize::new(limit).expect("nonzero budget")),
-    )
+fn options(schema: OutputSchema, policy: ToolPolicy) -> TurnOptions {
+    TurnOptions::new(schema, policy)
 }
 
 fn readable_file_system() -> MockFileSystem {
@@ -76,10 +72,17 @@ fn assert_captured_turn_options(requests: &[ModelRequest], snapshots: &[Value]) 
             Some(ReasoningEffort::High)
         );
     }
-    assert_eq!(snapshots[0]["max_tool_calls"], 1);
-    assert_eq!(snapshots[1]["max_tool_calls"], 2);
+    assert_eq!(snapshots[0]["output_schema"], json!({"type": "integer"}));
+    assert_eq!(
+        snapshots[1]["tool_policy"],
+        json!({"read": true, "write": false})
+    );
     assert_eq!(snapshots[2], snapshots[1]);
-    assert_eq!(snapshots[3]["max_tool_calls"], 7);
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.get("max_tool_calls").is_none())
+    );
     assert_eq!(
         snapshots[3]["tool_policy"],
         json!({"read": true, "write": true})
@@ -115,7 +118,6 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
         .repository(Repository::fixture("old"))
         .file_system(readable_file_system())
         .allow(Tool::Read)
-        .max_tool_calls(NonZeroUsize::new(2).expect("tool budget"))
         .max_history_bytes(NonZeroUsize::new(1024).expect("history budget"))
         .model_reasoning_effort(ReasoningEffort::Low)
         .with_lifecycle_observer(move |event: LifecycleEvent| {
@@ -139,7 +141,6 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
         .repository(Repository::fixture("new"))
         .file_system(MockFileSystem::new())
         .allow(Tool::Write)
-        .max_tool_calls(NonZeroUsize::new(7).expect("tool budget"))
         .max_history_bytes(NonZeroUsize::new(1).expect("history budget"))
         .model_reasoning_effort(ReasoningEffort::High)
         .with_lifecycle_observer(move |event: LifecycleEvent| {
@@ -162,7 +163,6 @@ async fn handles_capture_configuration_and_isolate_explicit_turn_options() {
         .options(options(
             OutputSchema::new(json!({"type": "integer"})).expect("integer schema"),
             ToolPolicy::default(),
-            1,
         ))
         .await
         .expect("explicit turn");
@@ -225,7 +225,7 @@ async fn equivalent_ephemeral_and_durable_turns_send_the_same_requests() {
         .repository(Repository::fixture("repo"))
         .file_system(readable_file_system())
         .model_reasoning_effort(ReasoningEffort::Low);
-    let options = options(object_schema(), ToolPolicy::default().allow(Tool::Read), 2);
+    let options = options(object_schema(), ToolPolicy::default().allow(Tool::Read));
 
     // Act
     harness
@@ -284,7 +284,7 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
         .await
         .expect("session");
     let mut stale = harness.resume("session").await.expect("stale handle");
-    let read = options(object_schema(), ToolPolicy::default().allow(Tool::Read), 1);
+    let read = options(object_schema(), ToolPolicy::default().allow(Tool::Read));
     let integer = OutputSchema::new(json!({"type":"integer"})).expect("integer schema");
 
     // Act
@@ -299,15 +299,14 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
         .options(options(
             integer.clone(),
             ToolPolicy::default().allow(Tool::Read),
-            1,
         ))
         .await
         .expect("schema change");
     stale
-        .turn("budget change")
-        .options(options(integer, ToolPolicy::default().allow(Tool::Read), 2))
+        .turn("repeated options")
+        .options(options(integer, ToolPolicy::default().allow(Tool::Read)))
         .await
-        .expect("budget change");
+        .expect("repeated options");
     let mut reopened = harness.resume("session").await.expect("reopened session");
     reopened
         .send("defaults again")
@@ -348,8 +347,7 @@ async fn changing_options_uses_canonical_state_without_changing_session_defaults
         snapshots[1]["tool_policy"],
         json!({"read":true, "write":false})
     );
-    assert_eq!(snapshots[2]["max_tool_calls"], 1);
-    assert_eq!(snapshots[3]["max_tool_calls"], 2);
+    assert_eq!(snapshots[2], snapshots[3]);
     assert_eq!(snapshots[0], snapshots[4]);
 }
 
@@ -368,7 +366,7 @@ async fn empty_explicit_policy_denies_calls_despite_allowed_harness_defaults() {
         .allow(Tool::Read)
         .allow(Tool::Write)
         .database(directory.path().join("history.db"));
-    let denied = options(object_schema(), ToolPolicy::default(), 1);
+    let denied = options(object_schema(), ToolPolicy::default());
 
     // Act
     let once = harness.turn("denied", denied.clone()).await;
@@ -384,57 +382,6 @@ async fn empty_explicit_policy_denies_calls_despite_allowed_harness_defaults() {
     assert!(matches!(
         durable,
         Err(SessionError::Turn(TurnError::ToolDenied { .. }))
-    ));
-}
-
-#[tokio::test]
-async fn explicit_budget_replaces_default_and_resets_for_the_next_turn() {
-    // Arrange
-    let mut model = model();
-    model.expect_complete().times(3).returning(|request| {
-        let response = if matches!(request.messages().last(), Some(ModelMessage::User(_))) {
-            ModelResponse::ToolCalls(vec![read_call("first"), read_call("second")])
-        } else {
-            ModelResponse::Output(json!({"summary":"done"}))
-        };
-        Ok(response_without_metadata(response))
-    });
-    let directory = tempdir().expect("temporary directory");
-    let harness = Harness::new(model)
-        .allow(Tool::Read)
-        .repository(Repository::fixture("repo"))
-        .file_system(readable_file_system())
-        .max_tool_calls(NonZeroUsize::new(1).expect("nonzero budget"))
-        .database(directory.path().join("history.db"));
-    let mut session = harness
-        .session("session", object_schema())
-        .create()
-        .await
-        .expect("session");
-
-    // Act
-    let allowed = session
-        .turn("two calls")
-        .options(options(
-            object_schema(),
-            ToolPolicy::default().allow(Tool::Read),
-            2,
-        ))
-        .await;
-    let limited = session.send("two calls again").await;
-
-    // Assert
-    assert_eq!(
-        allowed
-            .expect("explicit budget")
-            .report()
-            .tool_calls()
-            .len(),
-        2
-    );
-    assert!(matches!(
-        limited,
-        Err(SessionError::Turn(TurnError::ToolCallLimit { limit: 1 }))
     ));
 }
 
@@ -467,7 +414,7 @@ async fn options_persistence_failure_prevents_execution_and_reports_session_fail
     // Act
     let result = session
         .turn("never executed")
-        .options(options(object_schema(), ToolPolicy::default(), 1))
+        .options(options(object_schema(), ToolPolicy::default()))
         .await;
     let messages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_message")
         .fetch_one(database.pool())
@@ -513,7 +460,7 @@ async fn failed_schema_override_does_not_leak_into_the_next_turn() {
     // Act
     let invalid = session
         .turn("integer")
-        .options(options(integer, ToolPolicy::default(), 1))
+        .options(options(integer, ToolPolicy::default()))
         .await;
     let valid = session.send("default schema").await;
 
@@ -545,7 +492,7 @@ async fn comparison_changes_clear_native_continuation_using_persisted_options() 
     let harness = Harness::new(model)
         .repository(fixture.repository.clone())
         .database(fixture.directory.path().join("session.db"));
-    let without = options(object_schema(), ToolPolicy::default().allow(Tool::Read), 2);
+    let without = options(object_schema(), ToolPolicy::default().allow(Tool::Read));
     let first = without.clone().with_comparison_base(
         ComparisonBase::validate(&fixture.repository, &fixture.base)
             .await
@@ -597,7 +544,7 @@ async fn comparison_changes_clear_native_continuation_using_persisted_options() 
 }
 
 #[tokio::test]
-async fn reopening_preserves_comparison_continuation_across_key_order_and_budget_changes() {
+async fn reopening_preserves_comparison_continuation_across_key_order_changes() {
     // Arrange
     let fixture = ComparisonRepository::new().await;
     let base = ComparisonBase::resolve(&fixture.repository, "release")
@@ -607,14 +554,13 @@ async fn reopening_preserves_comparison_continuation_across_key_order_and_budget
         r#"{"type":"object","properties":{"summary":{"type":"string","minLength":1}},"required":["summary"]}"#,
         r#"{"required":["summary"],"properties":{"summary":{"minLength":1,"type":"string"}},"type":"object"}"#,
     ];
-    let turns: Vec<_> = [(schemas[0], 2), (schemas[1], 2), (schemas[1], 3)]
+    let turns: Vec<_> = [schemas[0], schemas[1], schemas[1]]
         .into_iter()
-        .map(|(schema, budget)| {
+        .map(|schema| {
             options(
                 OutputSchema::new(serde_json::from_str(schema).expect("schema JSON"))
                     .expect("schema"),
                 ToolPolicy::default().allow(Tool::Read),
-                budget,
             )
             .with_comparison_base(base.clone())
         })
@@ -678,20 +624,18 @@ async fn reopening_preserves_comparison_continuation_across_key_order_and_budget
     for (index, request) in requests.iter().enumerate() {
         assert_eq!(request.messages().len(), index * 2 + 1);
         assert!(request.tools()[0].description().contains(base.oid()));
-        assert_eq!(snapshots[index]["version"], 3);
+        assert_eq!(snapshots[index]["version"], 5);
         assert_eq!(snapshots[index]["comparison_base"], json!(base.identity()));
     }
     assert_eq!(snapshots[0]["fingerprint"], snapshots[1]["fingerprint"]);
-    assert_ne!(snapshots[1]["fingerprint"], snapshots[2]["fingerprint"]);
-    assert_eq!(snapshots[1]["max_tool_calls"], 2);
-    assert_eq!(snapshots[2]["max_tool_calls"], 3);
+    assert_eq!(snapshots[1]["fingerprint"], snapshots[2]["fingerprint"]);
 }
 
 #[tokio::test]
 async fn comparison_scope_mismatch_fails_before_calling_the_model() {
     // Arrange
     let base = ComparisonBase::fixture("other");
-    let selected = options(object_schema(), ToolPolicy::default(), 2).with_comparison_base(base);
+    let selected = options(object_schema(), ToolPolicy::default()).with_comparison_base(base);
     let directory = tempdir().expect("temporary directory");
     let events = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&events);

@@ -50,8 +50,9 @@ crates/
   `host_id`, then either await the turn or `start` it for a `TurnControl`.
   `Harness::turn` takes explicit options for a stateless turn and is likewise awaited or
   started; it has no host ID.
-- `TurnOptions` fixes the schema, `ToolPolicy`, limits, and optional `ComparisonBase`
-  for one execution. Explicit options replace defaults; they are never merged.
+- `TurnOptions` fixes the schema, `ToolPolicy`, optional `BashConfig`, and optional
+  `ComparisonBase` for one execution. Explicit options replace defaults; they are never
+  merged.
 - The crate root exports what a typical host needs; extension points and detailed
   records live in the `provider`, `model`, `tool`, `bash`, `turn`, `store`, `recovery`,
   and `lifecycle` modules.
@@ -64,7 +65,9 @@ crates/
 ## Agent loop
 
 A turn continues until the model responds without requesting a tool, and the terminal
-response must satisfy the caller's schema:
+response must satisfy the caller's schema. There is no per-turn tool-call limit; hosts
+stop runaway turns by cancelling them. Each finished tool exchange is persisted before
+the next model call:
 
 ```mermaid
 flowchart TD
@@ -72,7 +75,8 @@ flowchart TD
     Pending --> Model["Call model"]
     Model --> Tool{"Tool requested?"}
     Tool -->|yes| Execute["Check policy and run tool"]
-    Execute --> Model
+    Execute --> Progress["Persist tool exchange"]
+    Progress --> Model
     Tool -->|no| Complete["Persist completed turn"]
     Model -->|error| Failed["Persist failed turn"]
 ```
@@ -82,7 +86,18 @@ flowchart TD
 - The selected store is canonical. Provider-native continuation is an optimization,
   never the only copy of conversation state.
 - One active turn per session. Renewable leases fence concurrent processes; expired
-  leases mark turns `interrupted`, and only completed turns re-enter model context.
+  leases mark turns `interrupted`.
+- Failed and interrupted turns re-enter model context as stopped history: their input,
+  the tool exchanges they finished, and a note that they produced no answer and that
+  running commands or writes may have partially executed. Notes count against the
+  history budget; a stopped turn too large for it replays only its input and note, and
+  older turns stay. Stopped turns are never replayed as completed, so later turns see
+  work that changed the repository. When a provider rejects a request as invalid (HTTP
+  400, 413, or 422), the store replaces the content no earlier request carried (the
+  input, or the latest tool results and their calls' Bash source, patches, and
+  reasoning) with omission placeholders, so replay does not resend it. SQLite skips
+  turns that stopped before turn-options snapshot version 5, because their input never
+  went through that omission.
 - Reservation and model switching run in one store-owned atomic section that reads the
   admission state and records the harness's decision: recorded host requests first, then
   the model generation, an idle session, and no unresolved command.

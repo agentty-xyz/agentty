@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT 1 AS \"owned!: i64\" FROM session_turn\nWHERE session_id = ? AND turn_position = ? AND status = 'running'\n  AND owner_token = ? AND lease_expires_at > ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "owned!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9b34d4f341e75bfa165487b5e10f1d9b044db370246a31b8bb58bf47254a4c85"
+}

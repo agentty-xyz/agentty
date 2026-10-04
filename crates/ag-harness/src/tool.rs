@@ -306,6 +306,42 @@ impl ToolCall {
         self.reasoning_content.as_deref()
     }
 
+    /// Returns this call carrying `reasoning_content` when it has none of its
+    /// own, so a call recorded apart from its batch replays the reasoning
+    /// the provider attached only to the batch's first call.
+    pub(crate) fn with_batch_reasoning(mut self, reasoning_content: Option<&str>) -> Self {
+        if self.reasoning_content.is_none() {
+            self.reasoning_content = reasoning_content.map(str::to_string);
+        }
+
+        self
+    }
+
+    /// Returns this call with its Bash source, patch, and reasoning replaced
+    /// by omission placeholders, keeping its identifier, tool, and bounded
+    /// read or write path, so replay does not resend what a provider
+    /// rejected.
+    pub(crate) fn omitted(&self) -> Self {
+        let arguments = match &self.arguments {
+            ToolArguments::Bash(_) => ToolArguments::Bash(BashArguments::omitted()),
+            ToolArguments::Read(arguments) => ToolArguments::Read(arguments.clone()),
+            ToolArguments::Write(arguments) => ToolArguments::Write(WriteArguments {
+                patch: "[Patch omitted: the provider rejected the request that contained it.]"
+                    .to_string(),
+                path: arguments.path.clone(),
+            }),
+        };
+
+        Self {
+            arguments,
+            id: self.id.clone(),
+            reasoning_content: self.reasoning_content.as_ref().map(|_| {
+                "[Reasoning omitted: the provider rejected the request that contained it.]"
+                    .to_string()
+            }),
+        }
+    }
+
     pub(crate) fn read(
         id: String,
         arguments: ReadArguments,

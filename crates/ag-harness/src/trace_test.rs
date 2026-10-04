@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use opentelemetry::baggage::BaggageExt as _;
-use opentelemetry::trace::{FutureExt as _, Span as _, SpanId, SpanKind, Status, Tracer as _};
+use opentelemetry::trace::{
+    FutureExt as _, Span as _, SpanId, SpanKind, Status, TraceContextExt as _, Tracer as _,
+};
 use opentelemetry::{Context, KeyValue, global};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::json;
@@ -29,14 +31,15 @@ use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
     ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
+use crate::policy::ToolPolicy;
 use crate::recovery::HostTurnRecord;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
-use crate::store::{ModelSwitch, Reservation, SessionStore, TurnAdmission};
+use crate::store::{ModelSwitch, RejectedContent, Reservation, SessionStore, TurnAdmission};
 use crate::telemetry;
 use crate::tool::{ReadArguments, Tool, ToolCall};
-use crate::turn::{TurnError, TurnOutcome};
+use crate::turn::{TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::{WriteRecord, WriteStatus};
 
 static TRACE_PROVIDER_LOCK: TestMutex<()> = TestMutex::const_new(());
@@ -257,8 +260,8 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
             Some(limited_turn_id),
         )
         .expect("turn should enable tools")
-        .failed(ToolErrorType::CallLimit);
-    limited_turn.failed(TurnErrorType::ToolCallLimit);
+        .failed(ToolErrorType::Execution);
+    limited_turn.failed(TurnErrorType::ContextBudget);
 
     let cancelled_tool_turn = emitter.start_turn().expect("observer should enable turns");
     let cancelled_tool_turn_id = cancelled_tool_turn.id();
@@ -426,7 +429,7 @@ fn assert_failure_spans(spans: &[SpanData]) {
     let failed_tool = find_span(spans, "execute_tool read", Some("tool_execution_error"));
     assert_eq!(failed_tool.status, Status::error(""));
     find_span(spans, "invoke_agent", Some("cancelled"));
-    find_span(spans, "invoke_agent", Some("tool_call_limit"));
+    find_span(spans, "invoke_agent", Some("context_budget_exceeded"));
     find_span(spans, "execute_tool write", Some("cancelled"));
 }
 
@@ -583,6 +586,84 @@ async fn propagates_model_and_tool_contexts_to_nested_spans() {
     provider.shutdown().expect("test provider should shut down");
 }
 
+struct OutputModel;
+
+#[async_trait]
+impl Model for OutputModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({ "summary": "workspace" }),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn started_turns_nest_under_the_awaiting_application_span() {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let schema = OutputSchema::new(json!({
+        "type": "object",
+        "properties": { "summary": { "type": "string" } },
+        "required": ["summary"],
+        "additionalProperties": false
+    }))
+    .expect("schema should be valid");
+    let harness = Harness::new(OutputModel)
+        .store(Arc::new(MemoryStore::new()))
+        .with_lifecycle_observer(LifecycleTraceObserver::new());
+    let mut session = harness
+        .session("traced", schema.clone())
+        .create()
+        .await
+        .expect("session should be created");
+    let mut application_span = global::tracer("ag-harness-test").start("agent.attempt");
+    let application_span_context = application_span.span_context().clone();
+    application_span.end();
+    let application_context =
+        Context::current().with_remote_span_context(application_span_context.clone());
+
+    // Act
+    harness
+        .turn("summarize", TurnOptions::new(schema, ToolPolicy::default()))
+        .start()
+        .with_context(application_context.clone())
+        .await
+        .expect("started one-shot turn should succeed");
+    session
+        .turn("summarize")
+        .start()
+        .with_context(application_context)
+        .await
+        .expect("started session turn should succeed");
+    provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let turn_spans = spans
+        .iter()
+        .filter(|span| span.name == "invoke_agent")
+        .collect::<Vec<_>>();
+    assert_eq!(turn_spans.len(), 2);
+    for turn_span in turn_spans {
+        assert_eq!(turn_span.parent_span_id, application_span_context.span_id());
+        assert_eq!(
+            turn_span.span_context.trace_id(),
+            application_span_context.trace_id()
+        );
+    }
+
+    provider.shutdown().expect("test provider should shut down");
+}
+
 #[tokio::test]
 async fn omits_oversized_tool_call_id_attribute() {
     // Arrange
@@ -629,16 +710,11 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Model(ModelErrorType::InvalidOutput),
         TurnErrorType::Tool,
         TurnErrorType::ToolDenied,
-        TurnErrorType::ToolCallLimit,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
-    let tool_errors = [
-        ToolErrorType::Cancelled,
-        ToolErrorType::CallLimit,
-        ToolErrorType::Execution,
-    ];
+    let tool_errors = [ToolErrorType::Cancelled, ToolErrorType::Execution];
 
     // Act
     let turn_values = turn_errors.map(TurnErrorType::as_str);
@@ -652,16 +728,12 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "invalid_output",
             "tool_execution_error",
             "tool_denied",
-            "tool_call_limit",
             "context_budget_exceeded",
             "repository_required",
             "session_error",
         ]
     );
-    assert_eq!(
-        tool_values,
-        ["cancelled", "tool_call_limit", "tool_execution_error"]
-    );
+    assert_eq!(tool_values, ["cancelled", "tool_execution_error"]);
 }
 
 #[tokio::test]
@@ -842,6 +914,22 @@ impl SessionStore for TracedWriteStore {
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
         self.store.renew(owner).await
+    }
+
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.store.record_progress(owner, messages).await
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        self.store.omit_rejected(owner, rejected).await
     }
 
     async fn complete_turn(

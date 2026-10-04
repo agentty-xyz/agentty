@@ -115,6 +115,7 @@ mod reservation;
 mod schema_contract;
 mod session;
 mod session_model;
+mod stopped_turn;
 pub mod store;
 mod telemetry;
 pub mod tool;
@@ -133,7 +134,7 @@ pub use repository::{Repository, RepositoryError};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
 pub use tool::Tool;
-pub use turn::{TurnControl, TurnError, TurnLimits, TurnOptions, TurnOutcome};
+pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome};
 
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.
 /// Run only in a dedicated process, before creating any runtime or threads.

@@ -51,9 +51,18 @@ let mut session = harness.resume("review-42").await?;
 let outcome = session.send("Now focus on error handling").await?;
 ```
 
-Resuming replays completed turns only; failed and interrupted turns stay visible in the
-store but never re-enter model context. Sessions run concurrently, with one active turn
-per session. The library never picks a database location for you.
+Resuming replays completed turns and stopped ones. A failed or interrupted turn replays
+its input and the tool exchanges it finished, followed by a note that it stopped without
+an answer, so the model knows about work that may have changed the repository. When a
+stopped turn is too large for the history budget, only its input and note are replayed
+and older turns are kept; notes count against that budget. When the provider rejects a
+request as invalid (HTTP 400, 413, or 422), the content that request added (the input on
+a turn's first request, otherwise the latest tool results and their calls' Bash source,
+patches, and reasoning) is replayed as an omission placeholder, so rejected content
+cannot block later turns. Stopped turns are never replayed as completed, and SQLite
+sessions do not replay turns that stopped under releases before this behavior. Sessions
+run concurrently, with one active turn per session. The library never picks a database
+location for you.
 
 ## Turns
 
@@ -63,14 +72,14 @@ and chain what you need before awaiting it:
 ```rust
 let outcome = session
     .turn("Review against main")
-    .options(TurnOptions::new(schema, ToolPolicy::default().allow(Tool::Read), limits))
+    .options(TurnOptions::new(schema, ToolPolicy::default().allow(Tool::Read)))
     .host_id("request-7")
     .await?;
 ```
 
 | Need                                    | Chain                                       |
 | --------------------------------------- | ------------------------------------------- |
-| Different schema, tools, or limits      | `.options(TurnOptions::new(...))`           |
+| Different schema or tools               | `.options(TurnOptions::new(...))`           |
 | Safe retries under a host request ID    | `.host_id(id)`, later `session.recover(id)` |
 | Cancellation and settlement observation | `.start()` instead of `.await`              |
 | A one-shot turn with explicit options   | `harness.turn(input, options)`              |
@@ -80,9 +89,11 @@ let outcome = session
 - **Host IDs make a turn idempotent.** A retry with the same ID and the same effective
   request returns the recorded outcome without calling the model or tools again. This
   requires an `ExecutionIdentity` on the harness (or a registered model).
+- **A turn runs until the model answers.** There is no per-turn tool-call limit; stop a
+  runaway turn by cancelling it.
 - **`start()` returns a `ControlledTurn`.** Its `control()` can `cancel()` the turn and
   then wait on `settled()`, `effects_settled()`, and `commands_settled()` independently
-  of the caller's future.
+  of the caller's future. The turn's task inherits the caller's OpenTelemetry context.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.
@@ -110,10 +121,11 @@ There is never a silent fallback.
 
 The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
 environment values (`with_environment`), and host details (`with_host_information`) are
-explicit too. Networking is always denied. Long output keeps each stream's start and end
-within the capture budget, with the omitted byte counts on the `CommandOutcome`. Command
-intents are recorded before spawning; await `commands_settled()` (and `retry_commands()`
-after failures) so unresolved commands never block new turns silently.
+explicit too. Networking is always denied. Stdout and stderr share one capture budget of
+up to `bash::MAX_CAPTURE_BYTES`; long output keeps each stream's start and end within
+it, with the omitted byte counts on the `CommandOutcome`. Command intents are recorded
+before spawning; await `commands_settled()` (and `retry_commands()` after failures) so
+unresolved commands never block new turns silently.
 
 ## Models
 

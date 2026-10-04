@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_position AS \"turn_position!: i64\"\n           FROM session_turn WHERE session_id = ? AND host_id = ?",
+  "query": "SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_options, turn_position AS \"turn_position!: i64\"\n           FROM session_turn WHERE session_id = ? AND host_id = ?",
   "describe": {
     "columns": [
       {
@@ -59,8 +59,19 @@
         }
       },
       {
-        "name": "turn_position!: i64",
+        "name": "turn_options",
         "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "turn_options"
+          }
+        }
+      },
+      {
+        "name": "turn_position!: i64",
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -79,8 +90,9 @@
       true,
       false,
       true,
+      true,
       false
     ]
   },
-  "hash": "59ef5d50f4925557dc0eadfe954d855bf018402a095753209216a97461fcfdc1"
+  "hash": "0ffb6fca3fac21689a12da810d724aa7a95ac39727b7ba3078bfea6c2cc8ba5c"
 }

@@ -11,7 +11,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SqliteStore;
 use ag_harness::tool::ToolCall;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -107,12 +107,8 @@ impl Workspace {
         .with_write("output".into())
         .expect("write grant");
 
-        TurnOptions::new(
-            schema(),
-            ToolPolicy::default().allow(Tool::Bash),
-            TurnLimits::default(),
-        )
-        .with_bash(with_runtime(configuration, extra))
+        TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+            .with_bash(with_runtime(configuration, extra))
     }
 
     pub(super) fn executor_options(
@@ -136,12 +132,8 @@ impl Workspace {
                 .with_write("output".into())
                 .expect("write grant");
 
-                TurnOptions::new(
-                    schema(),
-                    ToolPolicy::default().allow(Tool::Bash),
-                    TurnLimits::default(),
-                )
-                .with_bash(configuration)
+                TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+                    .with_bash(configuration)
             }
         }
     }

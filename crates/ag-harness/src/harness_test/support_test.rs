@@ -21,6 +21,7 @@ use crate::model::{
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
 use crate::session::{Database, SessionError};
+use crate::store::StoppedTurn;
 use crate::tool::{ReadArguments, Tool, ToolCall, WriteArguments};
 use crate::turn::TurnOutcome;
 
@@ -172,6 +173,10 @@ pub(super) struct ContinuationInterruptionModel {
     pub(super) call_count: AtomicUsize,
     pub(super) dropped: Arc<Notify>,
     pub(super) started: Arc<Notify>,
+    /// Prompt of the interrupted turn, replayed before the retry.
+    pub(super) stopped_prompt: &'static str,
+    /// Stored interruption classification quoted by the replay note.
+    pub(super) stopped_reason: &'static str,
 }
 
 #[async_trait]
@@ -201,6 +206,8 @@ impl Model for ContinuationInterruptionModel {
                     [
                         ModelMessage::User("first".to_string()),
                         ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
+                        ModelMessage::User(self.stopped_prompt.to_string()),
+                        StoppedTurn::Interrupted.note(self.stopped_reason),
                         ModelMessage::User("retry".to_string()),
                     ]
                 );

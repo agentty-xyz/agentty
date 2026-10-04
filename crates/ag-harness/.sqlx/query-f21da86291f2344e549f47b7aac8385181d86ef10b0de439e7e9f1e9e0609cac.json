@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session_message SET kind = ?, payload = ?, retained_bytes = ?\nWHERE session_id = ? AND turn_position = ? AND message_position = ?\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "f21da86291f2344e549f47b7aac8385181d86ef10b0de439e7e9f1e9e0609cac"
+}

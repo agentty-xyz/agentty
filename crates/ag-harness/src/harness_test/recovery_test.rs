@@ -2,6 +2,9 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
+use tempfile::tempdir;
 
 use crate::harness::Harness;
 use crate::harness::tests::support::{model, response_without_metadata};
@@ -11,8 +14,7 @@ use crate::repository::Repository;
 use crate::store::MemoryStore;
 use crate::store_conformance_test::{image_input, png_image};
 use crate::{
-    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
-    TurnOptions,
+    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
 
 #[tokio::test]
@@ -22,7 +24,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object","properties":{"first":{"type":"string"},"second":{"type":"string"}}})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("session", schema)
         .create()
@@ -34,7 +36,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
 
     // Act / Assert
     let reordered = OutputSchema::new(serde_json::from_str(r#"{"properties":{"second":{"type":"string"},"first":{"type":"string"}},"type":"object"}"#).expect("json")).expect("schema");
-    let reordered = TurnOptions::new(reordered, ToolPolicy::default(), TurnLimits::default());
+    let reordered = TurnOptions::new(reordered, ToolPolicy::default());
     assert_eq!(
         request,
         session
@@ -45,17 +47,10 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
         TurnOptions::new(
             OutputSchema::new(json!({"type":"object"})).expect("schema"),
             ToolPolicy::default(),
-            TurnLimits::default(),
         ),
         TurnOptions::new(
             options.schema().clone(),
             ToolPolicy::default().allow(Tool::Read),
-            TurnLimits::default(),
-        ),
-        TurnOptions::new(
-            options.schema().clone(),
-            ToolPolicy::default(),
-            TurnLimits::new(NonZeroUsize::MIN),
         ),
     ] {
         assert_ne!(
@@ -97,6 +92,111 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
 }
 
 #[tokio::test]
+async fn text_fingerprints_recorded_with_the_former_tool_call_limit_stay_retryable() {
+    // Arrange
+    let harness = Harness::new(model())
+        .store(Arc::new(MemoryStore::new()))
+        .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let session = harness
+        .session("session", schema)
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let request = session
+        .host_request("id".into(), &TurnInput::from("input"), &options)
+        .expect("request");
+
+    // Assert
+    assert_eq!(
+        request.fingerprint(),
+        "v1:4da118733f1dc225fd3d6836bafb287d27bb611b81af0f03202074545abef38e",
+        "fingerprint recorded before the tool-call limit was removed"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_requests_recorded_with_a_custom_tool_call_limit_stay_retryable() {
+    // Arrange
+    let directory = tempdir().expect("temporary directory");
+    let database_path = directory.path().join("legacy.db");
+    let mut model = model();
+    model
+        .expect_complete()
+        .times(1)
+        .returning(|_| Ok(response_without_metadata(ModelResponse::Output(json!({})))));
+    let harness = Harness::new(model)
+        .database(&database_path)
+        .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let mut session = harness
+        .session("session", schema)
+        .create()
+        .await
+        .expect("session");
+    let recorded = session
+        .turn("input")
+        .options(options.clone())
+        .host_id("id")
+        .await
+        .expect("recorded turn");
+    let pool = SqlitePool::connect(&format!("sqlite://{}", database_path.display()))
+        .await
+        .expect("pool");
+    // Recorded by the harness before the limit was removed, with limit 2.
+    let legacy_request = json!({
+        "fingerprint": "v1:aed81c119771d5819be693d17bd5bea79dbd9c3831092f74e417331f83590162",
+        "id": "id",
+    });
+    let record_legacy_limit = |max_tool_calls: usize| {
+        let mut snapshot = json!({
+            "bash": null,
+            "comparison_base": null,
+            "max_tool_calls": max_tool_calls,
+            "output_schema": options.schema().value(),
+            "tool_policy": options.tool_policy(),
+            "version": 4,
+        });
+        snapshot.sort_all_objects();
+        snapshot["fingerprint"] = json!(hex::encode(Sha256::digest(snapshot.to_string())));
+
+        sqlx::query(
+            "UPDATE session_turn SET host_request = ?, turn_options = ? WHERE host_id = 'id'",
+        )
+        .bind(legacy_request.to_string())
+        .bind(snapshot.to_string())
+        .execute(&pool)
+    };
+
+    // Act
+    record_legacy_limit(2).await.expect("legacy limit");
+    let retried = session
+        .turn("input")
+        .options(options.clone())
+        .host_id("id")
+        .await;
+    record_legacy_limit(3).await.expect("other legacy limit");
+    let mismatched = session
+        .turn("input")
+        .options(options.clone())
+        .host_id("id")
+        .await;
+
+    // Assert
+    assert_eq!(retried.expect("legacy retry"), recorded);
+    assert!(matches!(mismatched, Err(SessionError::HostTurnConflict)));
+    let request = session
+        .host_request("id".into(), &TurnInput::from("input"), &options)
+        .expect("request");
+    let debug = format!("{request:?}");
+    assert!(debug.contains("legacy_max_tool_calls") && !debug.contains("\"input\""));
+}
+
+#[tokio::test]
 async fn image_fingerprints_track_content_and_image_capability_only() {
     // Arrange
     let registration = |image_capable: bool| {
@@ -120,7 +220,7 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("session", schema)
         .create()

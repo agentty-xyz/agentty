@@ -24,6 +24,7 @@ use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
+use crate::stopped_turn::{RejectedContent, StoppedTurn};
 use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
@@ -100,6 +101,7 @@ struct HostTurnRow {
     model_snapshot: Option<String>,
     status: String,
     terminal_outcome: Option<String>,
+    turn_options: Option<String>,
     turn_position: i64,
 }
 
@@ -120,9 +122,17 @@ struct ModelIdentityRow {
 }
 
 struct SessionMessageRow {
+    error_type: Option<String>,
     kind: String,
     payload: String,
+    status: String,
     turn_position: i64,
+}
+
+struct TurnMessageRow {
+    kind: String,
+    message_position: i64,
+    payload: String,
 }
 
 struct SessionRow {
@@ -147,7 +157,10 @@ struct TurnConfigurationRow {
 }
 
 struct TurnSizeRow {
+    error_type: Option<String>,
+    reduced_bytes: Option<i64>,
     retained_bytes: i64,
+    status: String,
     turn_position: i64,
 }
 
@@ -420,7 +433,7 @@ impl Database {
         let max_history_bytes =
             decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let latest_replayable_turn = latest_replayable_turn(&mut transaction, session_id).await?;
         let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
         let turns = load_turns_from(
             &mut transaction,
@@ -437,7 +450,7 @@ impl Database {
         Ok(TurnAcquisition {
             checkpoint,
             configuration,
-            latest_completed_turn,
+            latest_replayable_turn,
             turn_position,
             turns,
         })
@@ -487,6 +500,15 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
         if result.rows_affected() == 0 {
             return Err(owner.lost());
         }
+        sqlx::query!(
+            "DELETE FROM session_message WHERE session_id = ? AND turn_position = ? AND \
+             message_position > 0",
+            session_id,
+            turn_position
+        )
+        .execute(&mut *transaction)
+        .await
+        .session_context("complete persistent session turn")?;
         for (index, message) in encoded_messages.iter().enumerate() {
             let message_position = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
             insert_message(
@@ -678,7 +700,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             .await
             .session_context("load persistent session history")?;
         let checkpoint = load_checkpoint_from(&mut connection, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut connection, session_id).await?;
+        let latest_replayable_turn = latest_replayable_turn(&mut connection, session_id).await?;
         let turns = load_turns_from(
             &mut connection,
             session_id,
@@ -687,7 +709,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         )
         .await?;
 
-        Ok((checkpoint, latest_completed_turn, turns))
+        Ok((checkpoint, latest_replayable_turn, turns))
     }
 
     fn validate_owner(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -911,14 +933,14 @@ WHERE id = ?
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
-        let (checkpoint, latest_completed_turn, turns) =
+        let (checkpoint, latest_replayable_turn, turns) =
             self.load_history(id, max_history_bytes).await?;
         let registration_identity =
             decode_registration_identity(id, row.registration_key, row.registration_revision)?;
 
         Ok(LoadedSession {
             checkpoint,
-            latest_completed_turn,
+            latest_replayable_turn,
             model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
@@ -943,11 +965,11 @@ WHERE id = ?
             .await
             .session_context(operation)?;
         let configuration = load_turn_configuration(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let latest_replayable_turn = latest_replayable_turn(&mut transaction, session_id).await?;
         let existing = load_checkpoint_from(&mut transaction, session_id).await?;
         let stale = configuration.model_generation != checkpoint.model_generation()
-            || latest_completed_turn
-                .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
+            || latest_replayable_turn
+                .is_none_or(|latest_replayable| checkpoint.covered_through() > latest_replayable)
             || existing
                 .is_some_and(|existing| existing.covered_through() > checkpoint.covered_through());
         if stale {
@@ -998,10 +1020,10 @@ ON CONFLICT(session_id) DO UPDATE SET
         let operation = "switch session model";
         loop {
             // Validate canonical history outside the writer transaction, then
-            // revalidate its completed-turn boundary under the admission lock.
+            // revalidate its replayable-turn boundary under the admission lock.
             let mut snapshot = self.pool.begin().await.session_context(operation)?;
             load_turn_configuration(&mut snapshot, id).await?;
-            let revision = latest_completed_turn(&mut snapshot, id).await?;
+            let revision = latest_replayable_turn(&mut snapshot, id).await?;
             check_switch_history(&mut snapshot, id, switch).await?;
             snapshot.commit().await.session_context(operation)?;
             self.reservation_observer.model_validated().await;
@@ -1012,7 +1034,7 @@ ON CONFLICT(session_id) DO UPDATE SET
                 .session_context(operation)?;
             let now = self.timestamp_source.now_timestamp_seconds();
             recover_stale_turns(&mut transaction, id, now).await?;
-            if latest_completed_turn(&mut transaction, id).await? != revision {
+            if latest_replayable_turn(&mut transaction, id).await? != revision {
                 transaction.commit().await.session_context(operation)?;
                 continue;
             }
@@ -1103,7 +1125,7 @@ ON CONFLICT(session_id) DO UPDATE SET
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
-        let error_type = format!("{:?}", error.error_type());
+        let error_type = error.stored_error_type();
         let mut transaction = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -1282,6 +1304,133 @@ WHERE id = ? AND session_id = ? AND turn_position = ?
             .session_context("renew persistent session turn lease")?;
 
         Ok(deadline)
+    }
+
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        let operation = "record persistent session turn progress";
+        let encoded_messages = messages
+            .iter()
+            .map(EncodedMessage::from_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context(operation)?;
+        self.validate_owner(owner)?;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let next_position = sqlx::query_scalar!(
+            r#"
+SELECT COALESCE(MAX(message.message_position), -1) + 1 AS "next_position!: i64"
+FROM session_turn AS turn
+LEFT JOIN session_message AS message
+  ON message.session_id = turn.session_id
+ AND message.turn_position = turn.turn_position
+WHERE turn.session_id = ? AND turn.turn_position = ? AND turn.status = 'running'
+  AND turn.owner_token = ? AND turn.lease_expires_at > ?
+GROUP BY turn.turn_position
+"#,
+            owner.session_id,
+            owner.turn_position,
+            owner.token,
+            now
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .session_context(operation)?
+        .ok_or_else(|| owner.lost())?;
+        for (index, message) in encoded_messages.iter().enumerate() {
+            let message_position =
+                next_position.saturating_add(i64::try_from(index).unwrap_or(i64::MAX));
+            insert_message(
+                &mut transaction,
+                &owner.session_id,
+                owner.turn_position,
+                message_position,
+                message,
+                now,
+                operation,
+            )
+            .await?;
+        }
+        transaction.commit().await.session_context(operation)?;
+
+        Ok(())
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        let operation = "omit rejected persistent session turn content";
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context(operation)?;
+        self.validate_owner(owner)?;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        sqlx::query_scalar!(
+            r#"
+SELECT 1 AS "owned!: i64" FROM session_turn
+WHERE session_id = ? AND turn_position = ? AND status = 'running'
+  AND owner_token = ? AND lease_expires_at > ?
+"#,
+            owner.session_id,
+            owner.turn_position,
+            owner.token,
+            now
+        )
+        .fetch_optional(&mut *transaction)
+        .await
+        .session_context(operation)?
+        .ok_or_else(|| owner.lost())?;
+        let rows = sqlx::query_as!(
+            TurnMessageRow,
+            r#"
+SELECT message_position AS "message_position!: i64", kind AS "kind!: String",
+       payload AS "payload!: String"
+FROM session_message
+WHERE session_id = ? AND turn_position = ?
+ORDER BY message_position
+"#,
+            owner.session_id,
+            owner.turn_position
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .session_context(operation)?;
+        let mut messages = rows
+            .iter()
+            .map(|row| EncodedMessage::into_message(&row.kind, &row.payload))
+            .collect::<Result<Vec<_>, _>>()?;
+        for index in rejected.omit(&mut messages) {
+            let message = EncodedMessage::from_message(&messages[index])?;
+            let message_position = rows[index].message_position;
+            sqlx::query!(
+                r"
+UPDATE session_message SET kind = ?, payload = ?, retained_bytes = ?
+WHERE session_id = ? AND turn_position = ? AND message_position = ?
+",
+                message.kind,
+                message.payload,
+                message.retained_bytes,
+                owner.session_id,
+                owner.turn_position,
+                message_position
+            )
+            .execute(&mut *transaction)
+            .await
+            .session_context(operation)?;
+        }
+        transaction.commit().await.session_context(operation)?;
+
+        Ok(())
     }
 
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -1471,13 +1620,14 @@ impl From<StoredTurnOptionsError> for SessionError {
     }
 }
 
-/// Session configuration and bounded completed turns returned by a store.
+/// Session configuration and bounded replayable turns returned by a store.
 #[derive(Clone)]
 pub struct LoadedSession {
     /// Current compaction checkpoint, replayed ahead of `turns`.
     pub checkpoint: Option<SessionCheckpoint>,
-    /// Highest completed turn position, used as the next coverage boundary.
-    pub latest_completed_turn: Option<i64>,
+    /// Highest completed, failed, or interrupted turn position, used as the
+    /// next coverage boundary.
+    pub latest_replayable_turn: Option<i64>,
     /// Maximum history payload bytes, counted with
     /// `ModelMessage::retained_bytes`.
     pub max_history_bytes: usize,
@@ -1496,8 +1646,8 @@ pub struct LoadedSession {
     pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
-    /// Recent complete turns after the checkpoint boundary, oldest first;
-    /// never split tool-call/result groups.
+    /// Recent replayable turns after the checkpoint boundary, oldest first;
+    /// stopped turns end with their note. Never split tool-call/result groups.
     pub turns: Vec<Vec<ModelMessage>>,
 }
 
@@ -1516,12 +1666,15 @@ impl LoadedSession {
 struct TurnAcquisition {
     checkpoint: Option<SessionCheckpoint>,
     configuration: TurnConfigurationRow,
-    latest_completed_turn: Option<i64>,
+    latest_replayable_turn: Option<i64>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
 }
 
 impl TurnAcquisition {
+    /// A turn that stopped after the snapshot, including one recovered inside
+    /// the reservation, advances the replayable position and forces a reload,
+    /// so the successor replays it.
     async fn is_current(
         &self,
         transaction: &mut Transaction<'_, sqlx::Sqlite>,
@@ -1529,14 +1682,14 @@ impl TurnAcquisition {
     ) -> Result<bool, SessionError> {
         let configuration = load_turn_configuration(transaction, session_id).await?;
         let turn_position = next_turn_position(transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
+        let latest_replayable_turn = latest_replayable_turn(transaction, session_id).await?;
         let checkpoint_boundary = load_checkpoint_from(transaction, session_id)
             .await?
             .map(|checkpoint| checkpoint.covered_through());
 
         Ok(configuration == self.configuration
             && turn_position == self.turn_position
-            && latest_completed_turn == self.latest_completed_turn
+            && latest_replayable_turn == self.latest_replayable_turn
             && checkpoint_boundary
                 == self
                     .checkpoint
@@ -1838,13 +1991,20 @@ async fn load_request_from(
     host_id: &str,
 ) -> Result<Option<HostTurnRecord>, SessionError> {
     let row = sqlx::query_as!(HostTurnRow,
-        r#"SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_position AS "turn_position!: i64"
+        r#"SELECT model_snapshot, error_type, host_request, status, terminal_outcome, turn_options, turn_position AS "turn_position!: i64"
            FROM session_turn WHERE session_id = ? AND host_id = ?"#, session_id, host_id)
         .fetch_optional(&mut *connection).await.session_context("load host request")?;
     let Some(row) = row else {
         return Ok(None);
     };
-    let request = deserialize_payload(row.host_request.as_deref().unwrap_or(""))?;
+    let legacy_max_tool_calls = row
+        .turn_options
+        .as_deref()
+        .map(StoredTurnOptions::decode)
+        .transpose()?
+        .and_then(|options| options.legacy_max_tool_calls());
+    let request = deserialize_payload::<HostRequest>(row.host_request.as_deref().unwrap_or(""))?
+        .with_legacy_max_tool_calls(legacy_max_tool_calls);
     let status = match row.status.as_str() {
         "pending" | "running" => HostTurnStatus::InProgress,
         "completed" => {
@@ -1914,7 +2074,10 @@ async fn check_switch_history(
             r#"SELECT message.id AS "id!: i64", message.kind AS "kind!: String", message.payload AS "payload!: String"
                FROM session_message AS message JOIN session_turn AS turn
                  ON turn.session_id = message.session_id AND turn.turn_position = message.turn_position
-               WHERE message.session_id = ? AND turn.status = 'completed' AND message.id > ?
+               WHERE message.session_id = ? AND message.id > ?
+                 AND (turn.status = 'completed'
+                      OR (turn.status IN ('failed', 'interrupted')
+                          AND json_extract(turn.turn_options, '$.version') >= 5))
                  AND message.kind NOT IN ('user', 'assistant')
                ORDER BY message.id LIMIT 64"#, id, after)
             .fetch_all(&mut *connection).await.session_context("validate model switch history")?;
@@ -1958,57 +2121,101 @@ async fn load_turns_from(
     max_history_bytes: usize,
     after_turn: Option<i64>,
 ) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
-    let Some(oldest_turn) =
+    let Some((oldest_turn, reduced_turns)) =
         oldest_turn_within_budget(connection, session_id, max_history_bytes, after_turn).await?
     else {
         return Ok(Vec::new());
     };
+    let reduced_turns = format!(
+        "[{}]",
+        reduced_turns
+            .iter()
+            .map(i64::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     let rows = sqlx::query_as!(
         SessionMessageRow,
         r#"
 SELECT message.turn_position AS "turn_position!: i64",
        message.kind AS "kind!: String",
-       message.payload AS "payload!: String"
+       message.payload AS "payload!: String",
+       turn.status AS "status!: String",
+       turn.error_type
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
  AND turn.turn_position = message.turn_position
 WHERE message.session_id = ?
   AND message.turn_position >= ?
-  AND turn.status = 'completed'
+  AND (turn.status = 'completed'
+       OR (turn.status IN ('failed', 'interrupted')
+           AND json_extract(turn.turn_options, '$.version') >= 5))
+  AND (message.message_position = 0
+       OR message.turn_position NOT IN (SELECT value FROM json_each(?)))
 ORDER BY message.turn_position, message.message_position
 "#,
         session_id,
-        oldest_turn
+        oldest_turn,
+        reduced_turns
     )
     .fetch_all(&mut *connection)
     .await
     .session_context("load persistent session history")?;
-    let mut turns = Vec::<Vec<ModelMessage>>::new();
+    let mut turns = Vec::<(Vec<ModelMessage>, Option<ModelMessage>)>::new();
     let mut current_position = None;
 
     for row in rows {
-        if current_position != Some(row.turn_position) {
-            turns.push(Vec::new());
-            current_position = Some(row.turn_position);
-        }
         let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
-        if let Some(turn) = turns.last_mut() {
-            turn.push(message);
+        match turns.last_mut() {
+            Some((turn, _)) if current_position == Some(row.turn_position) => turn.push(message),
+            _ => {
+                let note = stopped_turn_note(&row.status, row.error_type.as_deref());
+                turns.push((vec![message], note));
+                current_position = Some(row.turn_position);
+            }
         }
     }
 
-    Ok(turns)
+    Ok(turns
+        .into_iter()
+        .map(|(mut messages, note)| {
+            messages.extend(note);
+
+            messages
+        })
+        .collect())
 }
 
+/// Returns the replay note ending a stopped turn, or `None` for a completed
+/// turn.
+fn stopped_turn_note(status: &str, error_type: Option<&str>) -> Option<ModelMessage> {
+    let stopped = match status {
+        "failed" => StoppedTurn::Failed,
+        "interrupted" => StoppedTurn::Interrupted,
+        _ => return None,
+    };
+
+    Some(stopped.note(error_type.unwrap_or_default()))
+}
+
+/// Walks turn sizes newest first like
+/// [`crate::context::fit_history_bytes`], returning the oldest replayed turn
+/// with the stopped turns that replay only their input and note.
 async fn oldest_turn_within_budget(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Option<i64>, SessionError> {
+) -> Result<Option<(i64, Vec<i64>)>, SessionError> {
+    let decode_bytes = |bytes: i64| {
+        usize::try_from(bytes).map_err(|_| SessionError::InvalidData {
+            reason: format!("session `{session_id}` has an invalid retained byte count"),
+        })
+    };
     let mut retained_bytes = 0_usize;
     let mut oldest_turn = None;
+    let mut reduced_turns = Vec::new();
     let mut before_turn = None;
 
     'pages: loop {
@@ -2020,14 +2227,17 @@ async fn oldest_turn_within_budget(
         let page_is_full =
             turn_sizes.len() == usize::try_from(TURN_SIZE_PAGE_SIZE).unwrap_or(usize::MAX);
 
-        for (turn_position, turn_bytes) in turn_sizes {
-            let turn_bytes =
-                usize::try_from(turn_bytes).map_err(|_| SessionError::InvalidData {
-                    reason: format!("session `{session_id}` has an invalid retained byte count"),
-                })?;
-            let next_retained_bytes = retained_bytes.saturating_add(turn_bytes);
+        for (turn_position, turn_bytes, reduced_bytes) in turn_sizes {
+            let mut next_retained_bytes = retained_bytes.saturating_add(decode_bytes(turn_bytes)?);
             if next_retained_bytes > max_history_bytes {
-                break 'pages;
+                let Some(reduced_bytes) = reduced_bytes else {
+                    break 'pages;
+                };
+                next_retained_bytes = retained_bytes.saturating_add(decode_bytes(reduced_bytes)?);
+                if next_retained_bytes > max_history_bytes {
+                    break 'pages;
+                }
+                reduced_turns.push(turn_position);
             }
             retained_bytes = next_retained_bytes;
             oldest_turn = Some(turn_position);
@@ -2039,15 +2249,17 @@ async fn oldest_turn_within_budget(
         }
     }
 
-    Ok(oldest_turn)
+    Ok(oldest_turn.map(|oldest_turn| (oldest_turn, reduced_turns)))
 }
 
+/// Returns each turn's position and replayed bytes, newest first, with the
+/// input and note bytes of a stopped turn, which can replay only those.
 async fn load_turn_size_page(
     connection: &mut SqliteConnection,
     session_id: &str,
     before_turn: Option<i64>,
     after_turn: Option<i64>,
-) -> Result<Vec<(i64, i64)>, SessionError> {
+) -> Result<Vec<(i64, i64, Option<i64>)>, SessionError> {
     let Some(inclusive_end) =
         before_turn.map_or(Some(i64::MAX), |position| position.checked_sub(1))
     else {
@@ -2057,7 +2269,13 @@ async fn load_turn_size_page(
         TurnSizeRow,
         r#"
 SELECT message.turn_position AS "turn_position!: i64",
-       SUM(message.retained_bytes) AS "retained_bytes!: i64"
+       SUM(message.retained_bytes) AS "retained_bytes!: i64",
+       CASE WHEN turn.status IN ('failed', 'interrupted')
+            THEN SUM(CASE WHEN message.message_position = 0
+                          THEN message.retained_bytes ELSE 0 END)
+       END AS "reduced_bytes?: i64",
+       turn.status AS "status!: String",
+       turn.error_type
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
@@ -2065,8 +2283,10 @@ JOIN session_turn AS turn
 WHERE message.session_id = ?
   AND message.turn_position <= ?
   AND (? IS NULL OR message.turn_position > ?)
-  AND turn.status = 'completed'
-GROUP BY message.turn_position
+  AND (turn.status = 'completed'
+       OR (turn.status IN ('failed', 'interrupted')
+           AND json_extract(turn.turn_options, '$.version') >= 5))
+GROUP BY message.turn_position, turn.status, turn.error_type
 ORDER BY message.turn_position DESC
 LIMIT ?
 "#,
@@ -2082,7 +2302,19 @@ LIMIT ?
 
     Ok(rows
         .into_iter()
-        .map(|row| (row.turn_position, row.retained_bytes))
+        .map(|row| {
+            let note_bytes = stopped_turn_note(&row.status, row.error_type.as_deref())
+                .map_or(0, |note| {
+                    i64::try_from(note.retained_bytes()).unwrap_or(i64::MAX)
+                });
+
+            (
+                row.turn_position,
+                row.retained_bytes.saturating_add(note_bytes),
+                row.reduced_bytes
+                    .map(|bytes| bytes.saturating_add(note_bytes)),
+            )
+        })
         .collect())
 }
 
@@ -2123,7 +2355,13 @@ WHERE session_id = ?
     .session_context("append persistent session turn")
 }
 
-async fn latest_completed_turn(
+/// Latest turn that history replays: completed, or failed or interrupted
+/// under turn-options snapshot version 5 or later.
+///
+/// Stopped turns recorded before version 5 predate rejected-content
+/// omission, so their inputs may be ones a provider already rejected; every
+/// history query skips them, as before.
+async fn latest_replayable_turn(
     connection: &mut SqliteConnection,
     session_id: &str,
 ) -> Result<Option<i64>, SessionError> {
@@ -2131,7 +2369,10 @@ async fn latest_completed_turn(
         r"
 SELECT MAX(turn_position)
 FROM session_turn
-WHERE session_id = ? AND status = 'completed'
+WHERE session_id = ?
+  AND (status = 'completed'
+       OR (status IN ('failed', 'interrupted')
+           AND json_extract(turn_options, '$.version') >= 5))
 ",
     )
     .bind(session_id)
@@ -2142,7 +2383,7 @@ WHERE session_id = ? AND status = 'completed'
 
 /// Exclusive lower turn bound applied to history loading: positions at or
 /// below a published checkpoint's boundary are replayed through its summary.
-/// `None` loads all completed turns.
+/// `None` loads all replayable turns.
 fn checkpoint_boundary(checkpoint: Option<&SessionCheckpoint>) -> Option<i64> {
     checkpoint.map(SessionCheckpoint::covered_through)
 }

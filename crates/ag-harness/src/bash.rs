@@ -29,6 +29,11 @@ pub use crate::execution::{
 /// Identity recorded for the default native sandbox executor.
 pub(crate) const NATIVE_EXECUTOR: &str = "native";
 
+/// Largest per-command output budget, shared by stdout and stderr. Output
+/// beyond the budget keeps each stream's start and end and counts the bytes
+/// omitted between them.
+pub const MAX_CAPTURE_BYTES: usize = 32 * 1024;
+
 /// Immutable host capabilities for Bash. No external reads or environment
 /// values are inherited. Runtime libraries and executables require read grants.
 /// Grants and denials state policy; their enforcement is the selected
@@ -50,6 +55,8 @@ impl BashConfig {
     /// revision whenever executable contents or granted environment values
     /// change. Paths must be absolute and outside the workspace; launch
     /// performs filesystem validation.
+    ///
+    /// `capture_bytes` must be between 1 and [`MAX_CAPTURE_BYTES`].
     ///
     /// # Errors
     /// Rejects invalid identities, paths, deadlines, and capture bounds.
@@ -117,7 +124,7 @@ impl BashConfig {
             || timeout.is_zero()
             || timeout > Duration::from_secs(3600)
             || capture_bytes == 0
-            || capture_bytes > 8192
+            || capture_bytes > MAX_CAPTURE_BYTES
         {
             return Err(BashError::InvalidPolicy);
         }
@@ -339,6 +346,14 @@ impl BashArguments {
     /// Returns the validated shell source. Do not include it in telemetry.
     pub fn command(&self) -> &str {
         &self.command
+    }
+
+    /// Shell comment replayed in place of source the provider rejected.
+    pub(crate) fn omitted() -> Self {
+        Self {
+            command: "# Command omitted: the provider rejected the request that contained it."
+                .to_string(),
+        }
     }
 }
 

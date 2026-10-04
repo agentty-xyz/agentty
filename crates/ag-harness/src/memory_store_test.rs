@@ -12,8 +12,8 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::Database;
 use crate::store::{
-    AcquiredTurn, MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner, WriteRecord,
-    WriteStatus,
+    AcquiredTurn, MemoryStore, NewSession, SessionStore, StoppedTurn, StoreIdentity, TurnOwner,
+    WriteRecord, WriteStatus,
 };
 use crate::store_conformance_test::{harness, options, schema};
 use crate::{ComparisonBase, ModelError, SessionError, TurnError, TurnInput};
@@ -438,8 +438,10 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 TurnInput::from("expired"),
                 TurnInput::from("next"),
             );
+            // Room for the expired turn's stop note, which counts against
+            // the budget.
             store
-                .create_session(&NewSession::new("expiry", schema()), None, 100)
+                .create_session(&NewSession::new("expiry", schema()), None, 1024)
                 .await
                 .expect("create");
             let first = AcquiredTurn::begin(store.clone(), "expiry", &first_input, &options(), 0)
@@ -510,7 +512,15 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
             // Assert
             let loaded = store.load_session("expiry").await.expect("history");
             assert_eq!(loaded.provider_session_id.as_deref(), Some("successor"));
-            assert_eq!(loaded.turns.len(), 2);
+            assert_eq!(
+                loaded.turns.len(),
+                3,
+                "the expired turn replays as interrupted"
+            );
+            assert_eq!(
+                loaded.turns[1].last(),
+                Some(&StoppedTurn::Interrupted.note("interrupted"))
+            );
             assert_ne!(old.owner(), next.owner());
             assert_eq!(
                 store.load_writes("expiry").await.expect("writes")[0].status,

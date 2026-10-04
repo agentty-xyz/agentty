@@ -15,7 +15,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
 use ag_harness::{
     ComparisonBase, Harness, Model, OutputSchema, Repository, Session, Tool, ToolPolicy,
-    TurnLimits, TurnOptions, TurnOutcome,
+    TurnOptions, TurnOutcome,
 };
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
@@ -683,7 +683,7 @@ async fn comparison_options(
     if allow_write {
         policy = policy.allow(Tool::Write);
     }
-    let options = TurnOptions::new(chat_schema()?, policy, TurnLimits::default());
+    let options = TurnOptions::new(chat_schema()?, policy);
 
     match revision {
         Some(revision) => {

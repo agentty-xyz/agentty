@@ -24,6 +24,7 @@ pub use crate::session::{
     Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity, TurnOwner,
 };
 pub use crate::session_model::RecordedModel;
+pub use crate::stopped_turn::{RejectedContent, StoppedTurn};
 use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use crate::write_journal::{WriteRecord, WriteStatus};
@@ -31,11 +32,18 @@ pub use crate::write_journal::{WriteRecord, WriteStatus};
 /// Stores supply atomic record operations; the harness applies admission
 /// rules and owns every reservation's lease. Owner-scoped mutations validate
 /// ownership in the transaction applying their effects. History returned by
-/// loads and reservations contains only complete turns within the stored byte
-/// budget and, when a compaction checkpoint exists, only turns after its
-/// covered boundary; both return the current checkpoint alongside that
-/// history. Implementations preserve the existing
-/// options codec and fingerprints.
+/// loads and reservations contains completed and stopped (failed or
+/// interrupted) turns, never a running turn, within the stored byte budget
+/// and, when a compaction checkpoint exists, only turns after its covered
+/// boundary; both return the current checkpoint alongside that history. A
+/// stopped turn replays its input and recorded progress followed by
+/// [`StoppedTurn::note`] for its stored error type; the note counts against
+/// the byte budget. Selection walks turns newest first and stops at the first
+/// turn that does not fit, except that a stopped turn that does not fit whole
+/// replays only its input and note when those fit, and older turns stay
+/// eligible. Content replaced through [`SessionStore::omit_rejected`] replays
+/// as its placeholder. Implementations preserve the existing options codec
+/// and fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Returns command records independently of completed history. Stores that
@@ -101,7 +109,7 @@ pub trait SessionStore: Send + Sync {
     /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
     /// Switches an idle session's model in one atomic section: recover
-    /// expired turns and validate every completed canonical message with
+    /// expired turns and validate every replayable canonical message with
     /// [`ModelSwitch::check_history`], including turns outside the replay
     /// budget, so unsupported history is reported before stale or busy
     /// admission. Then read [`AdmissionState`], apply [`ModelSwitch::admit`]
@@ -137,10 +145,10 @@ pub trait SessionStore: Send + Sync {
     /// Atomically publishes the session's compaction checkpoint, replacing an
     /// existing record. Validate before mutating: the checkpoint's generation
     /// must equal the session's current model generation, its boundary must
-    /// not exceed the latest completed turn, and coverage must never regress
-    /// below an existing checkpoint. Reject stale publications with
-    /// [`SessionError::CheckpointStale`] without changing state. Canonical
-    /// messages, host requests, and journals remain intact.
+    /// not exceed the latest completed, failed, or interrupted turn, and
+    /// coverage must never regress below an existing checkpoint. Reject stale
+    /// publications with [`SessionError::CheckpointStale`] without changing
+    /// state. Canonical messages, host requests, and journals remain intact.
     async fn publish_checkpoint(
         &self,
         session_id: &str,
@@ -157,8 +165,9 @@ pub trait SessionStore: Send + Sync {
     ) -> Result<Option<HostTurnRecord>, SessionError>;
 
     /// Commit the complete result together with messages and terminal state
-    /// under live ownership. An acknowledgment failure must not overwrite a
-    /// committed result during subsequent interrupt/cleanup.
+    /// under live ownership, replacing any recorded progress. An
+    /// acknowledgment failure must not overwrite a committed result during
+    /// subsequent interrupt/cleanup.
     async fn complete_request(
         &self,
         owner: &TurnOwner,
@@ -169,14 +178,34 @@ pub trait SessionStore: Send + Sync {
 
     /// Renew only an unexpired owner; return a conservative confirmed deadline.
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError>;
-    /// Atomically commits messages and continuation under an unexpired owner.
+    /// Atomically appends completed tool exchanges of a running turn under an
+    /// unexpired owner, after the turn's last recorded message, so a turn that
+    /// later stops replays the work it finished. Completion replaces recorded
+    /// progress with the turn's complete messages.
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError>;
+    /// Atomically commits messages and continuation under an unexpired owner,
+    /// replacing any progress recorded for the turn.
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
         provider_session_id: Option<&str>,
     ) -> Result<(), SessionError>;
-    /// Marks an unexpired owned turn failed and clears its continuation.
+    /// Atomically replaces the [`RejectedContent`] of a running turn under an
+    /// unexpired owner with omission placeholders, so a later replay does not
+    /// resend content the provider rejected. Recorded tool calls keep their
+    /// identifiers, tools, and paths.
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError>;
+    /// Marks an unexpired owned turn failed and clears its continuation,
+    /// retaining its input and recorded progress for replay.
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError>;
 
     /// Idempotent cleanup must never clear a successor's continuation.

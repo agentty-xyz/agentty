@@ -27,10 +27,14 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{Database, LoadedSession, NewSession, SessionError};
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
-use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
+use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
+/// Former default per-turn tool-call limit, kept in host-request fingerprints
+/// so requests recorded before its removal remain retryable. Requests recorded
+/// with another limit are matched under the limit their stored options keep.
+const RETIRED_MAX_TOOL_CALLS: usize = 8;
 
 /// Durable, resumable sequence of model turns.
 ///
@@ -133,8 +137,8 @@ impl Session {
     }
 
     /// Generates and publishes a compaction checkpoint covering every
-    /// completed turn, replacing covered turns with a structured summary in
-    /// later outgoing requests.
+    /// completed, failed, or interrupted turn, replacing covered turns with a
+    /// structured summary in later outgoing requests.
     ///
     /// Generation runs the session's current model through the shared engine
     /// with every tool denied, outside store writer transactions, and bounded
@@ -147,7 +151,7 @@ impl Session {
     /// history. Canonical messages, host requests, model provenance, and
     /// write journals always remain intact.
     ///
-    /// Returns `None` without a model call when no completed turn is
+    /// Returns `None` without a model call when no replayable turn is
     /// uncovered.
     ///
     /// # Errors
@@ -161,7 +165,7 @@ impl Session {
             loaded.model_generation,
             self.model_generation,
         )?;
-        let Some(boundary) = loaded.latest_completed_turn else {
+        let Some(boundary) = loaded.latest_replayable_turn else {
             return Ok(None);
         };
         if loaded
@@ -174,7 +178,7 @@ impl Session {
             return Ok(None);
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
-        let options = TurnOptions::new(schema, ToolPolicy::default(), self.harness.limits);
+        let options = TurnOptions::new(schema, ToolPolicy::default());
         let input = self.compaction_input(&loaded, &options)?;
         let outcome = self.harness.run_compaction(input, &options).await?;
         let checkpoint = SessionCheckpoint::new(
@@ -267,7 +271,7 @@ impl Session {
     /// [`SessionTurn::start`] to keep a cancellation control.
     ///
     /// Without [`SessionTurn::options`] the turn resolves the stored session
-    /// schema and the captured permission and tool-limit defaults afresh;
+    /// schema and the captured permission defaults afresh;
     /// earlier explicit overrides are not inherited.
     pub fn turn(&mut self, input: impl Into<TurnInput>) -> SessionTurn<'_> {
         SessionTurn {
@@ -348,7 +352,7 @@ impl Session {
             "options": {
                 "schema": options.schema().value(),
                 "permissions": options.tool_policy(),
-                "max_tool_calls": options.limits().max_tool_calls(),
+                "max_tool_calls": RETIRED_MAX_TOOL_CALLS,
                 "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
             },
             "repository": repository,
@@ -732,17 +736,20 @@ impl SessionHistory {
         &self.turns
     }
 
+    /// Appends a turn, then reselects history within the byte budget the way
+    /// stores load it when the turn overflows that budget.
     pub(crate) fn push(&mut self, turn: Vec<ModelMessage>) {
-        self.bytes = self.bytes.saturating_add(retained_bytes(&turn));
+        self.bytes = self.bytes.saturating_add(context::turn_bytes(&turn));
         self.turns.push_back(turn);
-
-        while self.bytes > self.max_bytes && !self.turns.is_empty() {
-            let evicted_bytes = self
-                .turns
-                .pop_front()
-                .map_or(self.bytes, |evicted| retained_bytes(&evicted));
-            self.bytes = self.bytes.saturating_sub(evicted_bytes);
+        if self.bytes <= self.max_bytes {
+            return;
         }
+
+        let turns = std::mem::take(&mut self.turns);
+        self.turns = context::fit_history_bytes(turns.into_iter(), self.max_bytes).into();
+        self.bytes = self.turns.iter().fold(0, |bytes, turn| {
+            bytes.saturating_add(context::turn_bytes(turn))
+        });
     }
 
     fn replace(&mut self, turns: Vec<Vec<ModelMessage>>) {
@@ -752,12 +759,6 @@ impl SessionHistory {
             self.push(turn);
         }
     }
-}
-
-fn retained_bytes(messages: &[ModelMessage]) -> usize {
-    messages.iter().fold(0, |bytes, message| {
-        bytes.saturating_add(message.retained_bytes())
-    })
 }
 
 /// One durable turn being configured, created by [`Session::turn`].
@@ -917,7 +918,6 @@ pub struct Harness {
     execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
-    limits: TurnLimits,
     max_history_bytes: usize,
     model: Arc<dyn Model>,
     model_reasoning_effort: Option<ReasoningEffort>,
@@ -1033,14 +1033,6 @@ impl Harness {
         self
     }
 
-    /// Overrides the maximum number of native calls allowed in one turn.
-    #[must_use]
-    pub fn max_tool_calls(mut self, max_tool_calls: NonZeroUsize) -> Self {
-        self.limits = TurnLimits::new(max_tool_calls);
-
-        self
-    }
-
     /// Overrides the retained chat-history payload budget.
     ///
     /// Complete oldest turns are evicted when the budget is exceeded, so
@@ -1079,12 +1071,12 @@ impl Harness {
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
     /// images. Shorthand for `self.turn(input, defaults).await`, where the
-    /// defaults come from [`Self::allow`] and [`Self::max_tool_calls`].
+    /// defaults come from [`Self::allow`].
     ///
     /// # Errors
     ///
-    /// Returns [`TurnError`] when the model fails, requests a denied tool,
-    /// exceeds the call limit, or a requested repository operation fails.
+    /// Returns [`TurnError`] when the model fails, requests a denied tool, or
+    /// a requested repository operation fails.
     pub async fn run_once(
         &self,
         input: impl Into<TurnInput>,
@@ -1095,8 +1087,8 @@ impl Harness {
 
     /// Configures one turn with exactly `options` and no stored history.
     ///
-    /// Options replace the harness schema, permission, and tool-limit
-    /// defaults; an empty policy denies all tools. This never opens a store.
+    /// Options replace the harness schema and permission defaults; an empty
+    /// policy denies all tools. This never opens a store.
     /// Await the result to run it, or call [`OneShotTurn::start`] to keep a
     /// cancellation control.
     pub fn turn(&self, input: impl Into<TurnInput>, options: TurnOptions) -> OneShotTurn<'_> {
@@ -1160,7 +1152,6 @@ impl Harness {
             execution_identity: None,
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
-            limits: TurnLimits::default(),
             max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
             model,
             model_reasoning_effort: None,
@@ -1241,7 +1232,6 @@ impl Harness {
             execution_identity: self.execution_identity.clone(),
             file_system: Arc::clone(&self.file_system),
             lifecycle: self.lifecycle.clone(),
-            limits: self.limits,
             max_history_bytes: self.max_history_bytes,
             model: Arc::clone(&self.model),
             model_reasoning_effort: self.model_reasoning_effort,
@@ -1329,7 +1319,7 @@ impl Harness {
     }
 
     fn default_options(&self, schema: OutputSchema) -> TurnOptions {
-        TurnOptions::new(schema, self.policy, self.limits)
+        TurnOptions::new(schema, self.policy)
     }
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {

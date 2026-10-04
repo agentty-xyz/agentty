@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT COALESCE(MAX(message.message_position), -1) + 1 AS \"next_position!: i64\"\nFROM session_turn AS turn\nLEFT JOIN session_message AS message\n  ON message.session_id = turn.session_id\n AND message.turn_position = turn.turn_position\nWHERE turn.session_id = ? AND turn.turn_position = ? AND turn.status = 'running'\n  AND turn.owner_token = ? AND turn.lease_expires_at > ?\nGROUP BY turn.turn_position\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "next_position!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d5a2f43793b8eccf7e291ff332c47dc68d72ed05869dcccad18bbea67fc07910"
+}

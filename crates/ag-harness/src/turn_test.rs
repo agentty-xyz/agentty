@@ -234,3 +234,40 @@ fn context_budget_error_has_stable_classification() {
         "mandatory request content weighs 21 but the model context budget is 8"
     );
 }
+
+#[test]
+fn stored_error_types_name_the_provider_status_and_rejections() {
+    // Arrange
+    let request_error = |status| {
+        TurnError::Model(ModelError::classified_request(
+            ModelErrorType::Provider,
+            status,
+            io::Error::other("provider request failed").into(),
+        ))
+    };
+    let failures = [
+        (request_error(Some(400)), "Model(Provider), HTTP 400", true),
+        (request_error(Some(413)), "Model(Provider), HTTP 413", true),
+        (request_error(Some(422)), "Model(Provider), HTTP 422", true),
+        (request_error(Some(429)), "Model(Provider), HTTP 429", false),
+        (request_error(Some(503)), "Model(Provider), HTTP 503", false),
+        (request_error(None), "Model(Provider)", false),
+        (TurnError::Cancelled, "Cancelled", false),
+    ];
+
+    // Act
+    let classified = failures.map(|(error, expected, rejected)| {
+        (
+            error.stored_error_type(),
+            error.is_rejected_request(),
+            expected,
+            rejected,
+        )
+    });
+
+    // Assert
+    for (stored, is_rejected, expected, rejected) in classified {
+        assert_eq!(stored, expected);
+        assert_eq!(is_rejected, rejected, "{expected}");
+    }
+}

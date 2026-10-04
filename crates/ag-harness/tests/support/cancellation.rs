@@ -13,13 +13,13 @@ use ag_harness::model::{
 };
 use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
-    LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation, SessionStore, SqliteStore,
-    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    LoadedSession, MemoryStore, ModelSwitch, NewSession, RejectedContent, Reservation,
+    SessionStore, SqliteStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
-    TurnError, TurnLimits, TurnOptions, TurnOutcome,
+    TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -35,7 +35,7 @@ fn schema() -> OutputSchema {
 }
 
 fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+    TurnOptions::new(schema(), ToolPolicy::default())
 }
 
 async fn bounded<T>(future: impl Future<Output = T>) -> T {
@@ -231,6 +231,22 @@ impl SessionStore for Gate {
         self.store.renew(owner).await
     }
 
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.store.record_progress(owner, messages).await
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        self.store.omit_rejected(owner, rejected).await
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
@@ -415,10 +431,11 @@ async fn abandoned_acquisition_keeps_admission_and_never_executes() {
 
             // Assert
             assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
-            assert_eq!(
-                store.load_session(id).await.expect("history").turns.len(),
-                0
-            );
+            // The reservation never executed; it replays only as interrupted.
+            let turns = store.load_session(id).await.expect("history").turns;
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0][0], ModelMessage::User("ok".to_string()));
+            assert!(ends_with_note(&turns[0], "turn_aborted"));
             gate.release.notify_one();
             successor.send("ok").await.expect("successor completes");
         }
@@ -477,9 +494,12 @@ async fn terminal_acknowledgment_survives_cancellation_and_caller_drop() {
                 .expect("stale retry is inert");
 
             // Assert
+            let turns = store.load_session(&id).await.expect("history").turns;
+            assert_eq!(turns.len(), 1);
             assert_eq!(
-                store.load_session(&id).await.expect("history").turns.len(),
-                usize::from(phase != Phase::Fail)
+                ends_with_note(&turns[0], "turn_failed"),
+                phase == Phase::Fail,
+                "a failed turn replays as stopped, never as completed"
             );
             gate.release.notify_one();
             successor.send("ok").await.expect("successor unaffected");
@@ -617,11 +637,7 @@ impl FileSystem for DeferredReplacement {
 }
 
 fn write_options() -> TurnOptions {
-    TurnOptions::new(
-        schema(),
-        ToolPolicy::default().allow(Tool::Write),
-        TurnLimits::default(),
-    )
+    TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write))
 }
 
 async fn effects_pending(control: &TurnControl) {
@@ -1079,16 +1095,15 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
     let store = SqliteStore::open(&path).await.expect("reopen");
 
     // Assert
-    assert_eq!(
-        store
-            .load_session("session")
-            .await
-            .expect("history")
-            .turns
-            .len(),
-        1
-    );
+    let turns = store.load_session("session").await.expect("history").turns;
+    assert_eq!(turns.len(), 2);
+    assert!(!ends_with_note(&turns[0], "turn_failed"));
+    assert!(ends_with_note(&turns[1], "turn_failed"));
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+}
+
+fn ends_with_note(turn: &[ModelMessage], tag: &str) -> bool {
+    matches!(turn.last(), Some(ModelMessage::User(text)) if text.starts_with(&format!("<{tag}>")))
 }
 
 struct BrokenReplacement {

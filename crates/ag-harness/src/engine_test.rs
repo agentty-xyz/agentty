@@ -8,7 +8,7 @@ use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{MockModel, Model, ModelRequest, ReasoningEffort};
-use crate::{OutputSchema, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{OutputSchema, ToolPolicy, TurnOptions};
 
 fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({"type": "object"})).expect("valid schema")
@@ -21,11 +21,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     model.expect_metadata().return_const(None);
     let model: Arc<dyn Model> = Arc::new(model);
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
-    let options = TurnOptions::new(
-        object_schema(),
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
     let engine = Engine {
         context_budget: None,

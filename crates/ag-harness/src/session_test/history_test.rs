@@ -142,9 +142,9 @@ VALUES (?, ?, 0, 'user', '"boundary"', ?, 1)
         .expect("page before minimum should load");
 
     // Assert
-    assert_eq!(initial_page, [(i64::MAX, 2), (i64::MIN, 1)]);
-    assert_eq!(before_maximum, [(i64::MIN, 1)]);
-    assert_eq!(before_minimum, [] as [(i64, i64); 0]);
+    assert_eq!(initial_page, [(i64::MAX, 2, None), (i64::MIN, 1, None)]);
+    assert_eq!(before_maximum, [(i64::MIN, 1, None)]);
+    assert_eq!(before_minimum, [] as [(i64, i64, Option<i64>); 0]);
 }
 
 #[tokio::test]

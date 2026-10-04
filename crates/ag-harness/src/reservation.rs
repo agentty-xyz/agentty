@@ -27,7 +27,7 @@ use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
 use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
-use crate::store::{SessionStore, WriteRecord};
+use crate::store::{RejectedContent, SessionStore, WriteRecord};
 use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
 pub(crate) const TURN_LEASE_SECONDS: i64 = 300;
@@ -323,6 +323,20 @@ impl WriteJournal {
 
     pub(crate) async fn finish(&self, id: i64, applied: bool) -> Result<(), SessionError> {
         self.database.finish_write(&self.owner, id, applied).await
+    }
+
+    pub(crate) async fn record_progress(
+        &self,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.database.record_progress(&self.owner, messages).await
+    }
+
+    pub(crate) async fn omit_rejected(
+        &self,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        self.database.omit_rejected(&self.owner, rejected).await
     }
 }
 
@@ -772,6 +786,22 @@ impl SessionStore for AdmittedStore {
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
         self.store.renew(owner).await
+    }
+
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.store.record_progress(owner, messages).await
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        self.store.omit_rejected(owner, rejected).await
     }
 
     async fn complete_turn(

@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ag_harness::TurnOutcome;
 use ag_harness::recovery::HostTurnRecord;
@@ -16,7 +16,8 @@ use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
 use crate::store::{
-    AcquiredTurn, ModelSwitch, Reservation, SessionStore, TurnAdmission, WriteRecord,
+    AcquiredTurn, ModelSwitch, RejectedContent, Reservation, SessionStore, TurnAdmission,
+    WriteRecord,
 };
 use crate::store_conformance_test::{options, schema};
 
@@ -33,6 +34,7 @@ pub(crate) enum PauseAt {
 pub(crate) struct GatedStore {
     pub(crate) database: Database,
     pub(crate) entered: Notify,
+    pub(crate) fail_progress: AtomicBool,
     pub(crate) interrupted: Notify,
     pub(crate) pause_at: PauseAt,
     pub(crate) release: Notify,
@@ -46,6 +48,7 @@ impl GatedStore {
         Self {
             database,
             entered: Notify::new(),
+            fail_progress: AtomicBool::new(false),
             interrupted: Notify::new(),
             pause_at,
             release: Notify::new(),
@@ -155,6 +158,34 @@ impl SessionStore for GatedStore {
         self.pause(PauseAt::RenewalAcknowledgement).await;
 
         Ok(renewed)
+    }
+
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        if self.fail_progress.load(Ordering::SeqCst) {
+            return Err(SessionError::InvalidData {
+                reason: "progress unavailable".to_string(),
+            });
+        }
+
+        SessionStore::record_progress(&self.database, owner, messages).await
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        if self.fail_progress.load(Ordering::SeqCst) {
+            return Err(SessionError::InvalidData {
+                reason: "progress unavailable".to_string(),
+            });
+        }
+
+        SessionStore::omit_rejected(&self.database, owner, rejected).await
     }
 
     async fn complete_turn(

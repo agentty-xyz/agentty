@@ -3,12 +3,18 @@
 use std::num::NonZeroUsize;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::comparison::{ComparisonBase, ComparisonIdentity};
 use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
+
+/// Snapshot version written by [`StoredTurnOptions::encode`]. Version 5
+/// retired the per-turn tool-call limit and always records Bash policy. It
+/// also marks the first stopped turns that SQLite history replays, so its
+/// history queries compare against the literal `5`.
+const CURRENT_VERSION: u8 = 5;
 
 /// Versioned durable metadata, independent of live repository validation.
 #[derive(Debug, Deserialize)]
@@ -20,7 +26,10 @@ pub struct StoredTurnOptions {
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
     fingerprint: Option<String>,
-    max_tool_calls: NonZeroUsize,
+    /// Retired per-turn tool-call limit, retained so snapshots from versions
+    /// 1 through 4 keep decoding and validating their fingerprints.
+    #[serde(default)]
+    max_tool_calls: Option<NonZeroUsize>,
     output_schema: Value,
     tool_policy: ToolPolicy,
     version: u8,
@@ -35,10 +44,10 @@ impl StoredTurnOptions {
                 .comparison_base()
                 .map(|base| base.identity().clone()),
             fingerprint: None,
-            max_tool_calls: options.limits().max_tool_calls(),
+            max_tool_calls: None,
             output_schema: options.schema().value().clone(),
             tool_policy: options.tool_policy(),
-            version: if options.bash().is_some() { 4 } else { 3 },
+            version: CURRENT_VERSION,
         };
         let mut snapshot = stored.effective_options();
         snapshot["fingerprint"] = json!(stored.fingerprint());
@@ -53,7 +62,10 @@ impl StoredTurnOptions {
     /// schemas, comparison identities, or fingerprints.
     pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
-        if !matches!(stored.version, 1..=4) || (stored.version < 4 && stored.bash.is_some()) {
+        if !matches!(stored.version, 1..=CURRENT_VERSION)
+            || (stored.version < 4 && stored.bash.is_some())
+            || (stored.version < CURRENT_VERSION) != stored.max_tool_calls.is_some()
+        {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
             });
@@ -81,7 +93,7 @@ impl StoredTurnOptions {
     /// Legacy v1 snapshots cannot establish compatibility; budget alone does
     /// not invalidate a continuation. This is not a host-request fingerprint.
     pub fn continuation_compatible(&self, options: &TurnOptions) -> bool {
-        matches!(self.version, 2..=4)
+        matches!(self.version, 2..=CURRENT_VERSION)
             && self.bash.as_ref() == options.bash().map(|config| &config.snapshot)
             && self.output_schema == *options.schema().value()
             && self.tool_policy == options.tool_policy()
@@ -89,19 +101,29 @@ impl StoredTurnOptions {
                 == options.comparison_base().map(ComparisonBase::identity)
     }
 
+    /// Returns the retired per-turn tool-call limit recorded by snapshot
+    /// versions 1 through 4.
+    pub(crate) fn legacy_max_tool_calls(&self) -> Option<NonZeroUsize> {
+        self.max_tool_calls
+    }
+
+    /// Builds the fingerprinted object with keys inserted alphabetically:
+    /// versions 1 and 2 hash insertion order when `serde_json`'s
+    /// `preserve_order` feature is unified into the build.
     fn effective_options(&self) -> Value {
-        let mut value = json!({
-            "comparison_base": self.comparison_base,
-            "max_tool_calls": self.max_tool_calls,
-            "output_schema": self.output_schema,
-            "tool_policy": self.tool_policy,
-            "version": self.version,
-        });
+        let mut options = Map::new();
+        options.insert("comparison_base".to_string(), json!(self.comparison_base));
+        if let Some(max_tool_calls) = self.max_tool_calls {
+            options.insert("max_tool_calls".to_string(), json!(max_tool_calls));
+        }
+        options.insert("output_schema".to_string(), self.output_schema.clone());
+        options.insert("tool_policy".to_string(), json!(self.tool_policy));
+        options.insert("version".to_string(), json!(self.version));
         if self.version >= 4 {
-            value["bash"] = json!(self.bash);
+            options.insert("bash".to_string(), json!(self.bash));
         }
 
-        value
+        Value::Object(options)
     }
 
     fn fingerprint(&self) -> String {

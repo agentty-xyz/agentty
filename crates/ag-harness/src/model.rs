@@ -622,14 +622,8 @@ impl ModelRequest {
     }
 
     pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
-        let call_id = call.id().to_string();
-        let name = call.name().to_string();
-        self.messages.push(ModelMessage::AssistantToolCall(call));
-        self.messages.push(ModelMessage::ToolResult {
-            call_id,
-            content,
-            name,
-        });
+        self.messages
+            .extend(ModelMessage::tool_exchange(call, content));
     }
 
     pub(crate) fn record_tool_results(
@@ -795,6 +789,21 @@ impl ModelMessage {
                 .saturating_add(name.len()),
             Self::UserInput(input) => input.retained_bytes(),
         }
+    }
+
+    /// One assistant tool call followed by its result.
+    pub(crate) fn tool_exchange(call: tool::ToolCall, content: String) -> [Self; 2] {
+        let call_id = call.id().to_string();
+        let name = call.name().to_string();
+
+        [
+            Self::AssistantToolCall(call),
+            Self::ToolResult {
+                call_id,
+                content,
+                name,
+            },
+        ]
     }
 }
 
@@ -1070,6 +1079,12 @@ impl ModelError {
                 .and_then(|error| error.http_status),
             _ => None,
         }
+    }
+
+    /// Returns whether the provider rejected the request itself as invalid
+    /// (HTTP 400, 413, or 422), so resending its content would fail again.
+    pub(crate) fn is_rejected_request(&self) -> bool {
+        matches!(self.http_status(), Some(400 | 413 | 422))
     }
 
     pub(crate) fn classified_request(

@@ -5,14 +5,16 @@ use serde_json::json;
 
 use super::{
     ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator,
-    admit_grown_request, admit_mandatory_content, advertised_tools, select_recent_turns,
+    admit_grown_request, admit_mandatory_content, advertised_tools, fit_history_bytes,
+    select_recent_turns,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::{ModelMessage, ModelRequest};
 use crate::policy::ToolPolicy;
 use crate::schema_contract::OutputSchema;
+use crate::stopped_turn::StoppedTurn;
 use crate::tool::{Tool, ToolCall, ToolDefinition};
-use crate::turn::{TurnError, TurnLimits, TurnOptions};
+use crate::turn::{TurnError, TurnOptions};
 
 struct FixedEstimator;
 
@@ -33,7 +35,7 @@ fn budget(max_request_weight: u64) -> ContextBudget {
 fn options_with(tool_policy: ToolPolicy) -> TurnOptions {
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
 
-    TurnOptions::new(schema, tool_policy, TurnLimits::default())
+    TurnOptions::new(schema, tool_policy)
 }
 
 #[test]
@@ -235,6 +237,60 @@ fn selection_keeps_the_most_recent_whole_turns() {
         &projected[1],
         ModelMessage::ToolResult { call_id, .. } if call_id == "call"
     ));
+}
+
+#[test]
+fn selection_reduces_a_stopped_turn_that_does_not_fit_and_keeps_older_turns() {
+    // Arrange
+    let note = StoppedTurn::Failed.note("Model");
+    let turns = VecDeque::from(vec![
+        vec![ModelMessage::User("older".into())],
+        vec![
+            ModelMessage::User("stopped".into()),
+            ModelMessage::Assistant("progress".into()),
+            ModelMessage::Assistant("more progress".into()),
+            note.clone(),
+        ],
+        vec![ModelMessage::User("recent".into())],
+    ]);
+
+    // Act
+    let reduced = select_recent_turns(&FixedEstimator, &turns, 28);
+    let too_small = select_recent_turns(&FixedEstimator, &turns, 20);
+
+    // Assert
+    // 7 for the recent turn and 14 for the stopped input and note leave 7.
+    assert_eq!(
+        reduced,
+        (
+            vec![
+                ModelMessage::User("older".into()),
+                ModelMessage::User("stopped".into()),
+                note,
+                ModelMessage::User("recent".into()),
+            ],
+            0
+        )
+    );
+    // The reduced stopped turn needs 14 of the remaining 13.
+    assert_eq!(too_small, (vec![ModelMessage::User("recent".into())], 2));
+}
+
+#[test]
+fn history_bytes_count_stop_notes_so_empty_stopped_turns_stay_bounded() {
+    // Arrange
+    let stopped = vec![
+        ModelMessage::User(String::new()),
+        StoppedTurn::Interrupted.note("Cancelled"),
+    ];
+    let stopped_bytes = stopped[1].retained_bytes();
+    let turns = vec![stopped; 5];
+
+    // Act
+    let kept = fit_history_bytes(turns.into_iter(), 2 * stopped_bytes);
+
+    // Assert
+    assert_eq!(kept.len(), 2);
 }
 
 #[test]

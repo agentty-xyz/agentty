@@ -38,12 +38,12 @@ use std::sync::{Arc, Mutex};
 
 use ag_harness::bash::{
     BashConfig, BashExecutor, BashProcess, CommandCleanupScope, CommandOutcome, CommandTermination,
-    ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit, OutputStream,
-    ProcessEvent, UnsandboxedExecutor,
+    ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy, MAX_CAPTURE_BYTES,
+    MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,
 };
 use ag_harness::lifecycle::{
     LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
-    ModelResponseType,
+    ModelResponseType, TurnErrorType,
 };
 use ag_harness::model::{
     CompletionMetadata, CompletionUsage, ModelCapabilities, ModelCompletion, ModelMessage,
@@ -51,12 +51,12 @@ use ag_harness::model::{
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, WriteStatus};
+use ag_harness::store::{MemoryStore, SessionInfo, SessionStore, StoppedTurn, WriteStatus};
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
     OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnLimits, TurnOptions,
+    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -873,8 +873,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .file_system(NameFileSystem);
     let schema = request()?.schema().clone();
     let policy = ToolPolicy::default().allow(Tool::Read);
-    let limits = TurnLimits::default();
-    let options = TurnOptions::new(schema.clone(), policy, limits);
+    let options = TurnOptions::new(schema.clone(), policy);
 
     // Act
     let once = harness.turn("Read the name", options.clone()).await?;
@@ -883,7 +882,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .turn("Read the name")
         .options(options.clone())
         .await?;
-    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read), limits);
+    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read));
     let recalled = session.turn("Recall the name").options(denied).await?;
 
     // Assert
@@ -898,7 +897,6 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     );
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
-    assert_eq!(options.limits().max_tool_calls().get(), 8);
     let requests = requests
         .lock()
         .map_err(|_| io::Error::other("requests lock poisoned"))?;
@@ -959,7 +957,6 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
     let options = TurnOptions::new(
         request()?.schema().clone(),
         ToolPolicy::default().allow(Tool::Read),
-        TurnLimits::default(),
     )
     .with_comparison_base(base.clone());
 
@@ -1262,7 +1259,7 @@ async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn
     .store(Arc::new(MemoryStore::new()))
     .execution_identity(ExecutionIdentity::new("echo", "1").expect("identity"));
     let schema = request()?.schema().clone();
-    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("host-images", schema.clone())
         .create()
@@ -1416,7 +1413,6 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
     let options = TurnOptions::new(
         OutputSchema::new(json!({"type": "object"}))?,
         ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::default(),
     )
     .with_bash(configuration);
     let harness = Harness::new(BashDrivingModel)
@@ -1440,4 +1436,31 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
     let _explicit: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
 
     Ok(())
+}
+
+#[test]
+fn stopped_turn_notes_capture_bounds_and_progress_errors_are_public() {
+    // Arrange
+    let executor: Arc<dyn BashExecutor> = Arc::new(UnsandboxedExecutor::without_isolation());
+    let configure = |capture_bytes| {
+        BashConfig::for_executor(
+            Arc::clone(&executor),
+            "/bin/bash".into(),
+            "revision".into(),
+            std::time::Duration::from_secs(1),
+            capture_bytes,
+        )
+    };
+    let progress = TurnError::Progress {
+        source: Box::new(SessionError::StorageRequired),
+    };
+
+    // Act
+    let note = StoppedTurn::Interrupted.note("cancelled");
+
+    // Assert
+    assert!(matches!(note, ModelMessage::User(text) if text.starts_with("<turn_aborted>")));
+    assert!(configure(MAX_CAPTURE_BYTES).is_ok());
+    assert!(configure(MAX_CAPTURE_BYTES + 1).is_err());
+    assert_eq!(progress.error_type(), TurnErrorType::Session);
 }

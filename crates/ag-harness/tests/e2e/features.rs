@@ -19,7 +19,7 @@ use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, Qw
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::{
     Harness, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy, TurnError,
-    TurnLimits, TurnOptions,
+    TurnOptions,
 };
 use serde_json::{Value, json};
 
@@ -736,12 +736,10 @@ struct BashStep {
 }
 
 fn bash_options(executor: Executor, step: &BashStep) -> Result<TurnOptions, DynError> {
-    Ok(TurnOptions::new(
-        stdout_schema()?,
-        ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::new(NonZeroUsize::new(2).ok_or("limit")?),
+    Ok(
+        TurnOptions::new(stdout_schema()?, ToolPolicy::default().allow(Tool::Bash))
+            .with_bash(executor.config(step.timeout, step.capture)?),
     )
-    .with_bash(executor.config(step.timeout, step.capture)?))
 }
 
 fn bash_prompt(command: &str) -> String {
@@ -852,7 +850,15 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
             ("deadline", _) => {
                 result.termination == CommandTermination::Deadline && !stdout.contains("finished")
             }
-            ("truncation", _) => result.truncated && result.stdout.len() <= step.capture,
+            ("truncation", _) => {
+                result.truncated
+                    && result.stdout_omitted_bytes > 0
+                    && result.stdout.len() + result.stdout_tail.len() <= step.capture
+                    && result
+                        .stdout_tail
+                        .trim_end()
+                        .ends_with("line 400 of the sandbox output stream")
+            }
             _ => false,
         };
         if !ok {
@@ -954,11 +960,7 @@ async fn image_host_request(provider: Provider) -> Result<String, DynError> {
         .execution_identity(ExecutionIdentity::new("live-image", "1")?)
         .max_history_bytes(NonZeroUsize::new(4 * 1024 * 1024).ok_or("history")?)
         .store(Arc::new(ag_harness::store::MemoryStore::new()));
-    let options = TurnOptions::new(
-        vision::color_schema()?,
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(vision::color_schema()?, ToolPolicy::default());
     let mut session = harness
         .session("images", vision::color_schema()?)
         .create()

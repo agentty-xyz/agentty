@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelRequest};
+use crate::stopped_turn::StoppedTurn;
 use crate::tool::{Tool, ToolDefinition};
 use crate::turn::{TurnError, TurnOptions};
 
@@ -18,7 +19,8 @@ use crate::turn::{TurnError, TurnOptions};
 /// registration and revise the registration's
 /// [`crate::recovery::ExecutionIdentity`] when it changes. The budget governs
 /// every provider request of a turn: the initial request keeps the most recent
-/// whole turns that fit, requests grown by in-turn tool traffic are re-admitted
+/// whole turns that fit, reducing a stopped turn that does not fit to its input
+/// and stop note, requests grown by in-turn tool traffic are re-admitted
 /// before each follow-up model call, and budgeted registrations replay
 /// projected history instead of reusing native continuation. The stored
 /// byte-based replay budget still bounds how much history is loaded.
@@ -201,35 +203,84 @@ pub(crate) fn admit_grown_request(
     Ok(())
 }
 
-/// Flattens the most recent complete turns whose combined weight fits
-/// `available_weight`, dropping every turn older than the first that does
-/// not, so a turn's tool groups are never split. Returns the projected
-/// messages with the number of loaded turns that projection evicted.
+/// Flattens the most recent turns that fit `available_weight` as selected by
+/// [`fit_recent_turns`]. Returns the projected messages with the number of
+/// loaded turns that projection evicted entirely.
 pub(crate) fn select_recent_turns(
     estimator: &dyn ContextEstimator,
     turns: &VecDeque<Vec<ModelMessage>>,
     available_weight: u64,
 ) -> (Vec<ModelMessage>, usize) {
-    let mut kept = 0_usize;
-    let mut remaining = available_weight;
-    for turn in turns.iter().rev() {
-        let weight = turn.iter().fold(0_u64, |weight, message| {
+    let kept = fit_recent_turns(turns.iter().map(Vec::as_slice), available_weight, |turn| {
+        turn.iter().fold(0_u64, |weight, message| {
             weight.saturating_add(estimator.message_weight(message))
-        });
+        })
+    });
+    let dropped_turns = turns.len().saturating_sub(kept.len());
+
+    (kept.into_iter().flatten().collect(), dropped_turns)
+}
+
+/// Returns the bytes a replayed turn counts against the stored history
+/// budget, including a stopped turn's note.
+pub(crate) fn turn_bytes(turn: &[ModelMessage]) -> usize {
+    turn.iter().fold(0_usize, |bytes, message| {
+        bytes.saturating_add(message.retained_bytes())
+    })
+}
+
+/// Keeps the most recent turns within the stored history byte budget as
+/// selected by [`fit_recent_turns`], counting [`turn_bytes`].
+pub(crate) fn fit_history_bytes<T>(
+    turns: impl DoubleEndedIterator<Item = T>,
+    max_history_bytes: usize,
+) -> Vec<Vec<ModelMessage>>
+where
+    T: AsRef<[ModelMessage]> + Into<Vec<ModelMessage>>,
+{
+    let weight = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX);
+
+    fit_recent_turns(turns, weight(max_history_bytes), |turn| {
+        weight(turn_bytes(turn))
+    })
+}
+
+/// Keeps the most recent turns whose combined `turn_weight` fits
+/// `available_weight`, oldest first, so a turn's tool groups are never split.
+///
+/// A stopped turn that does not fit whole keeps only its input and stop note
+/// when those fit, and selection continues with older turns. Any other turn
+/// that does not fit drops itself and every older turn.
+pub(crate) fn fit_recent_turns<T>(
+    turns: impl DoubleEndedIterator<Item = T>,
+    available_weight: u64,
+    turn_weight: impl Fn(&[ModelMessage]) -> u64,
+) -> Vec<Vec<ModelMessage>>
+where
+    T: AsRef<[ModelMessage]> + Into<Vec<ModelMessage>>,
+{
+    let mut kept = Vec::new();
+    let mut remaining = available_weight;
+    for turn in turns.rev() {
+        let weight = turn_weight(turn.as_ref());
+        if weight <= remaining {
+            remaining -= weight;
+            kept.push(turn.into());
+            continue;
+        }
+        let Some(reduced) = StoppedTurn::input_and_note(turn.as_ref()) else {
+            break;
+        };
+        let weight = turn_weight(&reduced);
         if weight > remaining {
             break;
         }
         remaining -= weight;
-        kept += 1;
+        kept.push(reduced);
     }
-    let dropped_turns = turns.len().saturating_sub(kept);
-    let messages = turns
-        .iter()
-        .skip(dropped_turns)
-        .flat_map(|turn| turn.iter().cloned())
-        .collect();
+    kept.reverse();
 
-    (messages, dropped_turns)
+    kept
 }
 
 /// Returns the definitions the engine advertises for these options, in order.

@@ -5,12 +5,12 @@ use serde_json::json;
 
 use crate::bash::{
     BashArguments, BashConfig, BashError, BashExecutor, BashProcess, ExecutionError,
-    UnsandboxedExecutor,
+    MAX_CAPTURE_BYTES, UnsandboxedExecutor,
 };
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
 use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
-use crate::{OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{OutputSchema, Tool, ToolPolicy, TurnOptions};
 
 fn configuration() -> BashConfig {
     BashConfig::new(
@@ -78,7 +78,6 @@ fn options(configuration: BashConfig) -> TurnOptions {
     TurnOptions::new(
         OutputSchema::new(json!({"type":"object"})).expect("schema"),
         ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::default(),
     )
     .with_bash(configuration)
 }
@@ -308,7 +307,7 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
         ("ok", Duration::ZERO, 1),
         ("ok", Duration::from_secs(3601), 1),
         ("ok", Duration::from_secs(1), 0),
-        ("ok", Duration::from_secs(1), 8193),
+        ("ok", Duration::from_secs(1), MAX_CAPTURE_BYTES + 1),
     ] {
         assert!(
             BashConfig::new(
@@ -321,6 +320,16 @@ fn malformed_or_unsupported_host_grants_are_rejected() {
             .is_err()
         );
     }
+    assert!(
+        BashConfig::new(
+            "/launcher".into(),
+            "/bin/bash".into(),
+            "ok".into(),
+            Duration::from_secs(1),
+            MAX_CAPTURE_BYTES,
+        )
+        .is_ok()
+    );
     assert_eq!(
         BashConfig::new(
             "relative-launcher".into(),

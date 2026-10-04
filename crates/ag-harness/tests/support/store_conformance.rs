@@ -16,12 +16,14 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, MemoryStore, ModelSwitch, NewSession, SessionCheckpoint, SessionStore,
-    SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner, WriteStatus,
+    AcquiredTurn, MemoryStore, ModelSwitch, NewSession, RejectedContent, SessionCheckpoint,
+    SessionStore, SqliteStore, StoppedTurn, StoreIdentity, StoredTurnOptions, TurnOwner,
+    WriteStatus,
 };
+use ag_harness::tool::{ToolCall, ToolCallArguments};
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
-    SessionError, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions,
+    SessionError, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -34,7 +36,7 @@ pub(crate) fn schema() -> OutputSchema {
 }
 
 pub(crate) fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+    TurnOptions::new(schema(), ToolPolicy::default())
 }
 
 pub(crate) fn png_image(payload: &[u8]) -> ImageContent {
@@ -219,8 +221,9 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
     // Arrange
     let config = NewSession::new("session", schema())
         .with_optional_system_prompt(Some("policy".to_string()));
+    // Room for the failed turn's stop note, which counts against the budget.
     store
-        .create_session(&config, None, 256)
+        .create_session(&config, None, 1024)
         .await
         .expect("create");
     let inputs: Vec<TurnInput> = ["first", "busy", "second"]
@@ -311,7 +314,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
             .expect("failed history")
             .turns
             .len(),
-        1
+        2
     );
 }
 
@@ -320,6 +323,332 @@ async fn all_backends_satisfy_lifecycle_and_journal_contract() {
     // Arrange / Act / Assert
     for store in stores().await {
         lifecycle(store).await;
+    }
+}
+
+fn tool_exchange(id: &str) -> [ModelMessage; 2] {
+    [
+        ModelMessage::AssistantToolCall(
+            ToolCall::from_json(id.to_string(), "read", r#"{"path":"Cargo.toml"}"#, None)
+                .expect("tool call"),
+        ),
+        ModelMessage::ToolResult {
+            call_id: id.to_string(),
+            content: format!("{id}-result"),
+            name: "read".to_string(),
+        },
+    ]
+}
+
+#[tokio::test]
+async fn all_backends_replay_stopped_turns_with_recorded_progress_and_a_note() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("stopped", schema()), None, 4096)
+            .await
+            .expect("create");
+        let failure = TurnError::Model(ModelError::InvalidResponse);
+        let mut owners = Vec::new();
+
+        // Act
+        for (index, input) in ["completed", "failed", "interrupted"]
+            .into_iter()
+            .enumerate()
+        {
+            let acquired = AcquiredTurn::begin(
+                Arc::clone(&store),
+                "stopped",
+                &TurnInput::from(input),
+                &options(),
+                0,
+            )
+            .await
+            .expect("begin");
+            let owner = acquired.owner().clone();
+            store
+                .record_progress(&owner, &tool_exchange(input))
+                .await
+                .expect("progress");
+            match index {
+                0 => {
+                    let mut messages = tool_exchange(input).to_vec();
+                    messages.push(ModelMessage::Assistant("answer".to_string()));
+                    store
+                        .complete_turn(&owner, &messages, None)
+                        .await
+                        .expect("complete");
+                }
+                1 => store.fail_turn(&owner, &failure).await.expect("fail"),
+                _ => store.interrupt(&owner).await.expect("interrupt"),
+            }
+            drop(acquired);
+            owners.push(owner);
+        }
+        let late_progress = store
+            .record_progress(&owners[2], &tool_exchange("late"))
+            .await;
+        let running = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "stopped",
+            &TurnInput::from("running"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("running turn");
+        store
+            .record_progress(running.owner(), &tool_exchange("running"))
+            .await
+            .expect("running progress");
+        let loaded = store.load_session("stopped").await.expect("load");
+
+        // Assert
+        assert!(matches!(
+            late_progress,
+            Err(SessionError::OwnershipLost { .. })
+        ));
+        assert_eq!(loaded.latest_replayable_turn, Some(2));
+        let expected = |input: &str, end: ModelMessage| {
+            let mut messages = vec![ModelMessage::User(input.to_string())];
+            messages.extend(tool_exchange(input));
+            messages.push(end);
+
+            messages
+        };
+        assert_eq!(
+            loaded.turns,
+            vec![
+                expected("completed", ModelMessage::Assistant("answer".to_string())),
+                expected(
+                    "failed",
+                    StoppedTurn::Failed.note(&format!("{:?}", failure.error_type()))
+                ),
+                expected(
+                    "interrupted",
+                    StoppedTurn::Interrupted.note(owners[2].interruption_error_type())
+                ),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn all_backends_omit_rejected_content_only_while_the_turn_runs() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("rejected", schema()), None, 4096)
+            .await
+            .expect("create");
+        let failure = TurnError::Model(ModelError::InvalidResponse);
+        let mut owners = Vec::new();
+
+        // Act
+        for (input, rejected) in [
+            ("results", RejectedContent::ToolResults(1)),
+            ("input", RejectedContent::Input),
+        ] {
+            let acquired = AcquiredTurn::begin(
+                Arc::clone(&store),
+                "rejected",
+                &TurnInput::from(input),
+                &options(),
+                0,
+            )
+            .await
+            .expect("begin");
+            let owner = acquired.owner().clone();
+            if rejected != RejectedContent::Input {
+                let rejected_call = ToolCall::from_json(
+                    "rejected".to_string(),
+                    "bash",
+                    r#"{"command":"cargo test"}"#,
+                    Some("plan".to_string()),
+                )
+                .expect("tool call");
+                let mut progress = tool_exchange("accepted").to_vec();
+                progress.extend([
+                    ModelMessage::AssistantToolCall(rejected_call),
+                    ModelMessage::ToolResult {
+                        call_id: "rejected".to_string(),
+                        content: "rejected-result".to_string(),
+                        name: "bash".to_string(),
+                    },
+                ]);
+                store
+                    .record_progress(&owner, &progress)
+                    .await
+                    .expect("progress");
+            }
+            store.omit_rejected(&owner, rejected).await.expect("omit");
+            store.fail_turn(&owner, &failure).await.expect("fail");
+            drop(acquired);
+            owners.push(owner);
+        }
+        let late = store
+            .omit_rejected(&owners[0], RejectedContent::Input)
+            .await;
+        let loaded = store.load_session("rejected").await.expect("load");
+
+        // Assert
+        assert!(matches!(late, Err(SessionError::OwnershipLost { .. })));
+        let note = StoppedTurn::Failed.note(&format!("{:?}", failure.error_type()));
+        let turns = &loaded.turns;
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0][0], ModelMessage::User("results".to_string()));
+        assert_eq!(turns[0][1..3], tool_exchange("accepted"));
+        assert!(matches!(
+            &turns[0][3],
+            ModelMessage::AssistantToolCall(call)
+                if matches!(
+                    call.arguments(),
+                    ToolCallArguments::Bash(arguments)
+                        if arguments.command().starts_with("# Command omitted:")
+                ) && call
+                    .reasoning_content()
+                    .is_some_and(|reasoning| reasoning.starts_with("[Reasoning omitted:"))
+        ));
+        assert!(matches!(
+            &turns[0][4],
+            ModelMessage::ToolResult { call_id, content, .. }
+                if call_id == "rejected" && content.starts_with("[Result omitted:")
+        ));
+        assert_eq!(turns[0][5], note);
+        assert_eq!(turns[1].len(), 2);
+        assert!(matches!(
+            &turns[1][0],
+            ModelMessage::User(text) if text.starts_with("[Input omitted:")
+        ));
+        assert_eq!(turns[1][1], note);
+    }
+}
+
+/// Records one turn that completes with `answer` or, without one, fails.
+async fn record_turn(
+    store: &Arc<dyn SessionStore>,
+    id: &str,
+    input: &str,
+    progress: &[ModelMessage],
+    answer: Option<&str>,
+) {
+    let acquired = AcquiredTurn::begin(
+        Arc::clone(store),
+        id,
+        &TurnInput::from(input),
+        &options(),
+        0,
+    )
+    .await
+    .expect("begin");
+    let owner = acquired.owner().clone();
+    store
+        .record_progress(&owner, progress)
+        .await
+        .expect("progress");
+    match answer {
+        Some(answer) => {
+            let mut messages = progress.to_vec();
+            messages.push(ModelMessage::Assistant(answer.to_string()));
+            store
+                .complete_turn(&owner, &messages, None)
+                .await
+                .expect("complete");
+        }
+        None => store
+            .fail_turn(&owner, &TurnError::Model(ModelError::InvalidResponse))
+            .await
+            .expect("fail"),
+    }
+}
+
+#[tokio::test]
+async fn all_backends_count_stop_notes_against_the_history_budget() {
+    let failure = TurnError::Model(ModelError::InvalidResponse);
+    let note = StoppedTurn::Failed.note(&format!("{:?}", failure.error_type()));
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(
+                &NewSession::new("notes", schema()),
+                None,
+                2 * note.retained_bytes(),
+            )
+            .await
+            .expect("create");
+
+        // Act
+        for _ in 0..4 {
+            record_turn(&store, "notes", "", &[], None).await;
+        }
+        let loaded = store.load_session("notes").await.expect("load");
+
+        // Assert
+        let stopped = vec![ModelMessage::User(String::new()), note.clone()];
+        assert_eq!(loaded.turns, vec![stopped.clone(), stopped]);
+    }
+}
+
+#[tokio::test]
+async fn all_backends_reduce_an_oversized_stopped_turn_to_its_input_and_note() {
+    for store in stores().await {
+        // Arrange
+        let completed = |input: &str| {
+            vec![
+                ModelMessage::User(input.to_string()),
+                ModelMessage::Assistant(format!("{input} answer")),
+            ]
+        };
+        let bytes = |messages: &[ModelMessage]| {
+            messages
+                .iter()
+                .map(ModelMessage::retained_bytes)
+                .sum::<usize>()
+        };
+        let note = StoppedTurn::Failed.note(&format!(
+            "{:?}",
+            TurnError::Model(ModelError::InvalidResponse).error_type()
+        ));
+        let stopped_input = ModelMessage::User("stopped".to_string());
+        let latest_bytes = bytes(&completed("latest"));
+        let budget = bytes(&completed("older"))
+            + bytes(&[stopped_input.clone(), note.clone()])
+            + latest_bytes;
+        let [call, _] = tool_exchange("stopped");
+        let oversized = [
+            call,
+            ModelMessage::ToolResult {
+                call_id: "stopped".to_string(),
+                content: "x".repeat(budget),
+                name: "read".to_string(),
+            },
+        ];
+        let dropped_answer = "x".repeat(budget);
+        for (id, budget) in [("roomy", budget), ("tight", latest_bytes)] {
+            store
+                .create_session(&NewSession::new(id, schema()), None, budget)
+                .await
+                .expect("create");
+            record_turn(&store, id, "dropped", &[], Some(&dropped_answer)).await;
+            record_turn(&store, id, "older", &[], Some("older answer")).await;
+            record_turn(&store, id, "stopped", &oversized, None).await;
+            record_turn(&store, id, "latest", &[], Some("latest answer")).await;
+        }
+
+        // Act
+        let roomy = store.load_session("roomy").await.expect("load roomy");
+        let tight = store.load_session("tight").await.expect("load tight");
+
+        // Assert
+        assert_eq!(
+            roomy.turns,
+            vec![
+                completed("older"),
+                vec![stopped_input, note],
+                completed("latest"),
+            ]
+        );
+        assert_eq!(tight.turns, vec![completed("latest")]);
     }
 }
 
@@ -417,7 +746,7 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             Err(SessionError::CheckpointStale { .. })
         ));
         let loaded = store.load_session("checkpoints").await.expect("load");
-        assert_eq!(loaded.latest_completed_turn, Some(1));
+        assert_eq!(loaded.latest_replayable_turn, Some(1));
         assert_eq!(
             loaded.checkpoint.expect("checkpoint").covered_through(),
             0,
@@ -432,6 +761,74 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             &loaded.turns[0][0],
             ModelMessage::User(text) if text == "one"
         ));
+    }
+}
+
+#[tokio::test]
+async fn all_backends_let_checkpoints_cover_stopped_turns_exactly_once() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("stopped-checkpoint", schema()), None, 4096)
+            .await
+            .expect("create");
+        for (index, input) in ["completed", "failed"].into_iter().enumerate() {
+            let acquired = AcquiredTurn::begin(
+                Arc::clone(&store),
+                "stopped-checkpoint",
+                &TurnInput::from(input),
+                &options(),
+                0,
+            )
+            .await
+            .expect("begin");
+            if index == 0 {
+                store
+                    .complete_turn(
+                        acquired.owner(),
+                        &[ModelMessage::Assistant("answer".to_string())],
+                        None,
+                    )
+                    .await
+                    .expect("complete");
+            } else {
+                store
+                    .fail_turn(
+                        acquired.owner(),
+                        &TurnError::Model(ModelError::InvalidResponse),
+                    )
+                    .await
+                    .expect("fail");
+            }
+        }
+        let summary = json!({"context": "c", "decisions": [], "state": "s"});
+        let loaded = store
+            .load_session("stopped-checkpoint")
+            .await
+            .expect("load");
+
+        // Act
+        let beyond = SessionCheckpoint::new(2, 0, None, None, summary.clone()).expect("record");
+        let beyond = store
+            .publish_checkpoint("stopped-checkpoint", &beyond)
+            .await;
+        let covering = SessionCheckpoint::new(1, 0, None, None, summary).expect("record");
+        store
+            .publish_checkpoint("stopped-checkpoint", &covering)
+            .await
+            .expect("publish over the stopped turn");
+        let covered = store
+            .load_session("stopped-checkpoint")
+            .await
+            .expect("load");
+
+        // Assert
+        assert_eq!(loaded.latest_replayable_turn, Some(1));
+        assert!(matches!(beyond, Err(SessionError::CheckpointStale { .. })));
+        assert!(
+            covered.turns.is_empty(),
+            "the checkpoint covers the stopped turn"
+        );
     }
 }
 
@@ -771,7 +1168,10 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
     assert_eq!(store.renewals.load(Ordering::SeqCst), 1);
     assert_eq!(
         store.load_session("expired").await.expect("history").turns,
-        Vec::<Vec<ModelMessage>>::new()
+        vec![vec![
+            ModelMessage::User("work".to_string()),
+            StoppedTurn::Interrupted.note("interrupted"),
+        ]]
     );
 }
 
@@ -846,7 +1246,6 @@ async fn bounded_history_and_continuation_policy_are_shared() {
         let changed = TurnOptions::new(
             OutputSchema::new(changed_schema).expect("changed schema"),
             ToolPolicy::default(),
-            TurnLimits::default(),
         );
         session
             .turn("three")
@@ -1067,9 +1466,10 @@ async fn abandoned_acquisition_retains_admission_and_never_executes() {
                 .send("recovered")
                 .await
                 .expect("owner cleanup and successor");
+            // The abandoned reservation replays as interrupted; it never ran.
             assert_eq!(
                 store.load_session(&id).await.expect("history").turns.len(),
-                1
+                2
             );
         }
     }

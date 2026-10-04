@@ -34,6 +34,8 @@ async fn cancelling_a_provider_request_durably_interrupts_the_session_turn() {
             call_count: AtomicUsize::new(0),
             dropped: Arc::new(Notify::new()),
             started: Arc::clone(&request_started),
+            stopped_prompt: "pending provider request",
+            stopped_reason: "cancelled",
         })
         .database(&database_path),
     );
@@ -275,6 +277,8 @@ async fn recovered_lease_cancels_the_original_model_request() {
         call_count: AtomicUsize::new(0),
         dropped: Arc::clone(&first_dropped),
         started: Arc::clone(&first_started),
+        stopped_prompt: "interrupted",
+        stopped_reason: "interrupted",
     });
     let mut first = Session {
         checkpoint: None,

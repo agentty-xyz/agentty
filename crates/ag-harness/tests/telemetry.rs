@@ -13,9 +13,7 @@ use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTra
 use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest, ModelResponse};
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolDefinition;
-use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions,
-};
+use ag_harness::{Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnOptions};
 use async_trait::async_trait;
 use opentelemetry::context::FutureExt as _;
 use opentelemetry::trace::{TraceContextExt as _, Tracer as _};
@@ -1439,11 +1437,7 @@ async fn started_turns_nest_under_the_caller_span() {
     let harness = Harness::new(SummaryModel)
         .store(Arc::new(MemoryStore::new()))
         .with_lifecycle_observer(LifecycleTraceObserver::new());
-    let options = TurnOptions::new(
-        lifecycle_schema(),
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(lifecycle_schema(), ToolPolicy::default());
     let mut session = harness
         .session("traced-session", lifecycle_schema())
         .create()

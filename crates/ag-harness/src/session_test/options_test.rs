@@ -6,8 +6,9 @@ use tempfile::tempdir;
 
 use super::support::{create_version_one_database, schema, turn_options};
 use crate::input::TurnInput;
+use crate::model::ModelMessage;
 use crate::session::{Database, NewSession, SessionError};
-use crate::store::{AcquiredTurn, SessionStore as _};
+use crate::store::{AcquiredTurn, SessionStore as _, StoppedTurn};
 use crate::turn_options_snapshot::StoredTurnOptions;
 use crate::{OutputSchema, TurnError};
 
@@ -40,7 +41,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
         .fail_turn(
             "session",
             first.guard.owner().turn_position,
-            &TurnError::ToolCallLimit { limit: 8 },
+            &TurnError::RepositoryRequired,
         )
         .await
         .expect("failed turn");
@@ -148,7 +149,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     first.guard.disarm();
     let encoded = StoredTurnOptions::encode(&turn_options());
     let mut unsupported: Value = serde_json::from_str(&encoded).expect("snapshot");
-    unsupported["version"] = json!(5);
+    unsupported["version"] = json!(6);
     let invalid_schema = json!({"type": "invalid"});
     let schema_error = OutputSchema::new(invalid_schema.clone()).expect_err("invalid schema");
     let mut invalid: Value = serde_json::from_str(&encoded).expect("snapshot");
@@ -156,7 +157,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     let cases = [
         (
             unsupported.to_string(),
-            "invalid persistent session data: unsupported turn options version 5".to_string(),
+            "invalid persistent session data: unsupported turn options version 6".to_string(),
             false,
         ),
         (
@@ -209,12 +210,91 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
 }
 
 #[tokio::test]
+async fn stopped_turns_recorded_before_version_five_are_not_replayed() {
+    // Arrange
+    let options = turn_options();
+    let mut legacy = json!({
+        "bash": null,
+        "comparison_base": null,
+        "max_tool_calls": 8,
+        "output_schema": options.schema().value(),
+        "tool_policy": options.tool_policy(),
+        "version": 4,
+    });
+    legacy.sort_all_objects();
+    let fingerprint = hex::encode(Sha256::digest(legacy.to_string()));
+    legacy["fingerprint"] = json!(fingerprint);
+    let database = Database::open_in_memory().await.expect("database");
+    database
+        .create_session(&NewSession::new("session", schema()), None, 4096)
+        .await
+        .expect("session");
+    for input in ["completed", "legacy failed", "legacy interrupted", "failed"] {
+        let mut acquired = AcquiredTurn::begin(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from(input),
+            &options,
+            0,
+        )
+        .await
+        .expect("reservation");
+        let turn_position = acquired.guard.owner().turn_position;
+        match input {
+            "completed" => database
+                .complete_turn("session", turn_position, &[], None)
+                .await
+                .expect("completed turn"),
+            "legacy interrupted" => {
+                drop(acquired);
+                database.load_session("session").await.expect("recovery");
+                continue;
+            }
+            _ => database
+                .fail_turn("session", turn_position, &TurnError::RepositoryRequired)
+                .await
+                .expect("failed turn"),
+        }
+        acquired.guard.disarm();
+    }
+    sqlx::query("UPDATE session_turn SET turn_options = ? WHERE turn_position IN (1, 2)")
+        .bind(legacy.to_string())
+        .execute(database.pool())
+        .await
+        .expect("legacy snapshots");
+
+    // Act
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("next"),
+        &options,
+        0,
+    )
+    .await
+    .expect("next turn");
+
+    // Assert
+    assert!(StoredTurnOptions::decode(&legacy.to_string()).is_ok());
+    assert_eq!(
+        acquired.turns,
+        vec![
+            vec![ModelMessage::User("completed".to_string())],
+            vec![
+                ModelMessage::User("failed".to_string()),
+                StoppedTurn::Failed.note("RepositoryRequired"),
+            ],
+        ]
+    );
+}
+
+#[tokio::test]
 async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuation() {
     // Arrange
     let options = turn_options();
     let mut legacy = json!({
         "comparison_base": null,
-        "max_tool_calls": options.limits().max_tool_calls(),
+        "max_tool_calls": 8,
         "output_schema": options.schema().value(),
         "tool_policy": options.tool_policy(),
         "version": 2,
@@ -282,6 +362,6 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
     assert_eq!(acquired.provider_session_id.as_deref(), Some("native"));
     assert_eq!(
         serde_json::from_str::<Value>(&snapshot).expect("new metadata")["version"],
-        3
+        5
     );
 }

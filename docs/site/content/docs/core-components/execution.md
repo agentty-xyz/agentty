@@ -85,8 +85,7 @@ separate from disabling MCP access.
 
 Shared policy types live in `ag-contracts`; `ag-runtime` carries the resolved policy,
 and harness adapters translate and enforce it. Provider flags stay in `ag-agent`.
-Retained processes must match the requested policy before reuse. The standalone
-`ag-harness` tool-call budget remains separate until its runtime adapter is integrated.
+Retained processes must match the requested policy before reuse.
 
 ## Agent Runtime
 

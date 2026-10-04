@@ -12,8 +12,9 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
-    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
-    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, RejectedContent,
+    Reservation, ReservedTurn, SessionStore, StoppedTurn, StoreIdentity, TurnAdmission, TurnOwner,
+    WriteRecord, WriteStatus,
 };
 use crate::write_journal::content_hash;
 use crate::{SessionError, TurnError, TurnOutcome};
@@ -57,6 +58,7 @@ impl MemoryStore {
             });
         }
         turn.outcome = outcome.cloned();
+        turn.messages.truncate(1);
         turn.messages.extend_from_slice(messages);
         turn.status = Status::Completed;
         session.configuration.provider_session_id = provider_session_id.map(str::to_string);
@@ -198,7 +200,7 @@ impl SessionStore for MemoryStore {
                 commands: Vec::new(),
                 configuration: LoadedSession {
                     checkpoint: None,
-                    latest_completed_turn: None,
+                    latest_replayable_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -226,7 +228,7 @@ impl SessionStore for MemoryStore {
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
         let mut loaded = session.configuration.clone();
-        loaded.latest_completed_turn = session.latest_completed_turn();
+        loaded.latest_replayable_turn = session.latest_replayable_turn();
         loaded.turns = session.history();
 
         Ok(loaded)
@@ -247,8 +249,8 @@ impl SessionStore for MemoryStore {
         session.recover();
         let outdated = session.configuration.model_generation != checkpoint.model_generation()
             || session
-                .latest_completed_turn()
-                .is_none_or(|completed| checkpoint.covered_through() > completed)
+                .latest_replayable_turn()
+                .is_none_or(|replayable| checkpoint.covered_through() > replayable)
             || session
                 .configuration
                 .checkpoint
@@ -275,7 +277,7 @@ impl SessionStore for MemoryStore {
             session
                 .turns
                 .iter()
-                .filter(|turn| turn.status == Status::Completed)
+                .filter(|turn| turn.status != Status::Running)
                 .flat_map(|turn| turn.messages.iter()),
         )?;
         let next = switch.admit(id, &session.admission_state(None))?;
@@ -377,6 +379,32 @@ impl SessionStore for MemoryStore {
         Ok(turn.deadline)
     }
 
+    async fn record_progress(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let turn = state.owned_session(owner)?.live_turn(owner)?;
+        turn.messages.extend_from_slice(messages);
+
+        Ok(())
+    }
+
+    async fn omit_rejected(
+        &self,
+        owner: &TurnOwner,
+        rejected: RejectedContent,
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        let turn = state.owned_session(owner)?.live_turn(owner)?;
+        rejected.omit(&mut turn.messages);
+
+        Ok(())
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
@@ -392,7 +420,7 @@ impl SessionStore for MemoryStore {
         let session = state.owned_session(owner)?;
         let turn = session.live_turn(owner)?;
         turn.status = Status::Failed;
-        turn.error_type = Some(format!("{:?}", error.error_type()));
+        turn.error_type = Some(error.stored_error_type());
         session.configuration.provider_session_id = None;
 
         Ok(())
@@ -584,10 +612,10 @@ impl Record {
         }
     }
 
-    fn latest_completed_turn(&self) -> Option<i64> {
+    fn latest_replayable_turn(&self) -> Option<i64> {
         self.turns
             .iter()
-            .filter(|turn| turn.status == Status::Completed)
+            .filter(|turn| turn.status != Status::Running)
             .map(|turn| turn.owner.turn_position())
             .max()
     }
@@ -598,23 +626,25 @@ impl Record {
             .checkpoint
             .as_ref()
             .map_or(-1, crate::store::SessionCheckpoint::covered_through);
-        let mut remaining = self.configuration.max_history_bytes;
-        let mut turns = Vec::new();
-        for turn in self.turns.iter().rev().filter(|turn| {
-            turn.status == Status::Completed && turn.owner.turn_position() > boundary
-        }) {
-            let bytes = turn.messages.iter().fold(0_usize, |bytes, message| {
-                bytes.saturating_add(message.retained_bytes())
-            });
-            if bytes > remaining {
-                break;
-            }
-            remaining -= bytes;
-            turns.push(turn.messages.clone());
-        }
-        turns.reverse();
+        let replayed = self
+            .turns
+            .iter()
+            .filter(|turn| turn.status != Status::Running && turn.owner.turn_position() > boundary)
+            .map(|turn| {
+                let mut messages = turn.messages.clone();
+                let error_type = turn.error_type.as_deref().unwrap_or_default();
+                match turn.status {
+                    Status::Failed => messages.push(StoppedTurn::Failed.note(error_type)),
+                    Status::Interrupted => {
+                        messages.push(StoppedTurn::Interrupted.note(error_type));
+                    }
+                    Status::Completed | Status::Running => {}
+                }
 
-        turns
+                messages
+            });
+
+        crate::context::fit_history_bytes(replayed, self.configuration.max_history_bytes)
     }
 
     fn live_turn(&mut self, owner: &TurnOwner) -> Result<&mut TurnRecord, SessionError> {

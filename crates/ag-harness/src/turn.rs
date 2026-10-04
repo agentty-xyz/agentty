@@ -7,7 +7,6 @@
 //! and observes settlement.
 
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -30,24 +29,23 @@ use crate::write::WriteError;
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
 ///
 /// Construct a new value for each turn. Explicit options never inherit
-/// permissions or schema changes from an earlier turn. Counters, cancellation,
-/// and conversation history belong to execution state, not this snapshot.
+/// permissions or schema changes from an earlier turn. A turn runs until the
+/// model returns output; cancellation and conversation history belong to
+/// execution state, not this snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
-    limits: TurnLimits,
     schema: OutputSchema,
     tool_policy: ToolPolicy,
 }
 
 impl TurnOptions {
-    /// Resolves a required schema, explicit permissions, and execution limits.
-    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy, limits: TurnLimits) -> Self {
+    /// Resolves a required schema and explicit permissions.
+    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy) -> Self {
         Self {
             bash: None,
             comparison_base: None,
-            limits,
             schema,
             tool_policy,
         }
@@ -65,11 +63,6 @@ impl TurnOptions {
     /// Returns this turn's Bash host policy, if configured.
     pub fn bash(&self) -> Option<&BashConfig> {
         self.bash.as_ref()
-    }
-
-    /// Returns the execution bounds for this turn.
-    pub fn limits(&self) -> TurnLimits {
-        self.limits
     }
 
     /// Returns the schema required for every terminal model output.
@@ -93,30 +86,6 @@ impl TurnOptions {
     /// Returns the selected comparison base, if comparisons are available.
     pub fn comparison_base(&self) -> Option<&ComparisonBase> {
         self.comparison_base.as_ref()
-    }
-}
-
-/// Immutable execution bounds; consuming a budget does not modify these limits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TurnLimits {
-    max_tool_calls: NonZeroUsize,
-}
-
-impl TurnLimits {
-    /// Sets the total permitted tool calls, including calls in batches.
-    pub fn new(max_tool_calls: NonZeroUsize) -> Self {
-        Self { max_tool_calls }
-    }
-
-    /// Returns the total permitted tool calls in a turn.
-    pub fn max_tool_calls(self) -> NonZeroUsize {
-        self.max_tool_calls
-    }
-}
-
-impl Default for TurnLimits {
-    fn default() -> Self {
-        Self::new(NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN))
     }
 }
 
@@ -490,6 +459,14 @@ pub enum TurnError {
     /// A sandbox policy, execution, or cleanup failed.
     #[error(transparent)]
     Bash(#[from] BashError),
+    /// Recording a finished tool exchange of a durable turn failed. The
+    /// exchange's effects already happened; nothing is rolled back.
+    #[error("turn progress persistence failed: {source}")]
+    Progress {
+        /// Underlying transactional store error.
+        #[source]
+        source: Box<crate::SessionError>,
+    },
     /// Cancellation stopped the waiter; persistence may still be settling.
     #[error("turn cancelled")]
     Cancelled,
@@ -514,12 +491,6 @@ pub enum TurnError {
     /// A repository write failed.
     #[error(transparent)]
     Write(#[from] WriteError),
-    /// The model exceeded the bounded number of calls in one turn.
-    #[error("model exceeded the per-turn tool call limit of {limit}")]
-    ToolCallLimit {
-        /// Configured maximum calls.
-        limit: usize,
-    },
     /// Mandatory content exceeds the effective model's declared context
     /// budget, before any history is considered.
     #[error("mandatory request content weighs {required} but the model context budget is {budget}")]
@@ -544,11 +515,32 @@ impl TurnError {
             | Self::Bash(_)
             | Self::CommandJournal { .. }
             | Self::CommandFailed { .. } => TurnErrorType::Tool,
+            Self::Progress { .. } => TurnErrorType::Session,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
-            Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
         }
+    }
+
+    /// Returns the classification stores persist for stop notes, with the
+    /// provider HTTP status when a failed model request reached a provider.
+    pub(crate) fn stored_error_type(&self) -> String {
+        let error_type = format!("{:?}", self.error_type());
+        let http_status = match self {
+            Self::Model(error) => error.http_status(),
+            _ => None,
+        };
+
+        match http_status {
+            Some(status) => format!("{error_type}, HTTP {status}"),
+            None => error_type,
+        }
+    }
+
+    /// Returns whether a provider rejected the failed model request as
+    /// invalid.
+    pub(crate) fn is_rejected_request(&self) -> bool {
+        matches!(self, Self::Model(error) if error.is_rejected_request())
     }
 }
 

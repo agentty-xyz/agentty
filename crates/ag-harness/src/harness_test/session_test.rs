@@ -10,10 +10,12 @@ use super::support::{
     model, object_schema, read_call, response_without_metadata, resume_fallback_model,
     send_with_resumed_session, turn_started_id, wait_for_stored_turn_state,
 };
-use crate::harness::{Harness, SessionHistory, retained_bytes};
+use crate::context;
+use crate::harness::{Harness, SessionHistory};
 use crate::lifecycle::{LifecycleEventKind, ModelResponseType, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::session::{Database, SessionError};
+use crate::store::StoppedTurn;
 use crate::turn::TurnError;
 
 #[tokio::test]
@@ -194,7 +196,7 @@ fn chat_history_evicts_complete_tool_turns() {
         ModelMessage::User("latest".to_string()),
         ModelMessage::Assistant(r#"{"summary":"new"}"#.to_string()),
     ];
-    let max_bytes = retained_bytes(&tool_turn).max(retained_bytes(&latest_turn));
+    let max_bytes = context::turn_bytes(&tool_turn).max(context::turn_bytes(&latest_turn));
     let mut history = SessionHistory::new(max_bytes);
 
     // Act
@@ -204,6 +206,48 @@ fn chat_history_evicts_complete_tool_turns() {
     // Assert
     assert_eq!(history.messages(), latest_turn);
     assert!(history.bytes <= max_bytes);
+}
+
+#[test]
+fn chat_history_reduces_an_oversized_stopped_turn_and_keeps_older_turns() {
+    // Arrange
+    let note = StoppedTurn::Failed.note("Model");
+    let older_turn = vec![
+        ModelMessage::User("older".to_string()),
+        ModelMessage::Assistant(r#"{"summary":"older"}"#.to_string()),
+    ];
+    let stopped_turn = vec![
+        ModelMessage::User("stopped".to_string()),
+        ModelMessage::AssistantToolCall(read_call("call_read")),
+        ModelMessage::ToolResult {
+            call_id: "call_read".to_string(),
+            content: "x".repeat(512),
+            name: "read".to_string(),
+        },
+        note.clone(),
+    ];
+    let latest_turn = vec![
+        ModelMessage::User("latest".to_string()),
+        ModelMessage::Assistant(r#"{"summary":"new"}"#.to_string()),
+    ];
+    let reduced_turn = vec![ModelMessage::User("stopped".to_string()), note];
+    let max_bytes = [&older_turn, &reduced_turn, &latest_turn]
+        .into_iter()
+        .map(|turn| context::turn_bytes(turn))
+        .sum();
+    let mut history = SessionHistory::new(max_bytes);
+
+    // Act
+    history.push(older_turn.clone());
+    history.push(stopped_turn);
+    history.push(latest_turn.clone());
+
+    // Assert
+    assert_eq!(
+        history.messages(),
+        [older_turn, reduced_turn, latest_turn].concat()
+    );
+    assert_eq!(history.bytes, max_bytes);
 }
 
 #[tokio::test]
@@ -324,7 +368,7 @@ async fn sequential_resumed_handles_reload_completed_canonical_history() {
 }
 
 #[tokio::test]
-async fn session_does_not_replay_a_failed_turn() {
+async fn session_replays_a_failed_turn_as_stopped_history() {
     // Arrange
     let mut model = model();
     let mut sequence = Sequence::new();
@@ -338,9 +382,17 @@ async fn session_does_not_replay_a_failed_turn() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|request| {
+            let error_type = format!(
+                "{:?}",
+                TurnError::Model(ModelError::InvalidResponse).error_type()
+            );
             assert_eq!(
                 request.messages(),
-                &[ModelMessage::User("retry".to_string())]
+                &[
+                    ModelMessage::User("failed question".to_string()),
+                    StoppedTurn::Failed.note(&error_type),
+                    ModelMessage::User("retry".to_string()),
+                ]
             );
 
             Ok(response_without_metadata(ModelResponse::Output(json!({
@@ -363,7 +415,7 @@ async fn session_does_not_replay_a_failed_turn() {
     let recovered = session
         .send("retry")
         .await
-        .expect("the next turn should start from clean history");
+        .expect("the next turn should see the failed turn as stopped");
 
     // Assert
     assert!(matches!(
@@ -405,11 +457,22 @@ async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
         .times(1)
         .in_sequence(&mut sequence)
         .withf(|request| {
+            let error_type = format!(
+                "{:?}",
+                TurnError::Model(ModelError::SchemaViolation {
+                    path: "/summary".to_string(),
+                    reason: "required property is missing".to_string(),
+                })
+                .error_type()
+            );
+
             request.provider_session_id().is_none()
                 && request.messages()
                     == [
                         ModelMessage::User("first".to_string()),
                         ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
+                        ModelMessage::User("failed".to_string()),
+                        StoppedTurn::Failed.note(&error_type),
                         ModelMessage::User("retry".to_string()),
                     ]
         })

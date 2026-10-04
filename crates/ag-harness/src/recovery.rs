@@ -5,8 +5,11 @@
 //! returns the recorded outcome without running the model or tools again;
 //! `Session::recover` reads a [`HostTurnRecord`] without executing anything.
 
+use std::fmt;
+use std::num::NonZeroUsize;
+
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::store::{AcquiredTurn, WriteRecord};
@@ -50,10 +53,19 @@ impl ExecutionIdentity {
 
 /// Versioned request fingerprint supplied to atomic store acquisition.
 /// Stores retain this value unchanged and compare it before admitting work.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+/// Equality compares only the ID and fingerprint.
+#[derive(Clone, Deserialize, Serialize)]
 pub struct HostRequest {
+    /// Canonical configuration behind `fingerprint`, kept on a new request
+    /// so it can be rehashed under a recorded legacy tool-call limit.
+    #[serde(skip)]
+    configuration: Option<Box<Value>>,
     fingerprint: String,
     id: String,
+    /// Tool-call limit hashed into a recorded request from before the limit
+    /// was removed.
+    #[serde(skip)]
+    legacy_max_tool_calls: Option<NonZeroUsize>,
 }
 
 impl HostRequest {
@@ -63,12 +75,13 @@ impl HostRequest {
     ) -> Result<Self, SessionError> {
         validate_identifier(&id)?;
         configuration.sort_all_objects();
-        let fingerprint = format!(
-            "v1:{}",
-            hex::encode(Sha256::digest(configuration.to_string()))
-        );
 
-        Ok(Self { fingerprint, id })
+        Ok(Self {
+            fingerprint: Self::hash(&configuration),
+            configuration: Some(Box::new(configuration)),
+            id,
+            legacy_max_tool_calls: None,
+        })
     }
 
     /// Returns the session-scoped host ID.
@@ -79,6 +92,59 @@ impl HostRequest {
     /// Returns the versioned SHA-256 effective-request fingerprint.
     pub fn fingerprint(&self) -> &str {
         &self.fingerprint
+    }
+
+    /// Marks a recorded request with the tool-call limit of its stored turn
+    /// options, so retries match the limit its fingerprint hashed.
+    pub(crate) fn with_legacy_max_tool_calls(
+        mut self,
+        legacy_max_tool_calls: Option<NonZeroUsize>,
+    ) -> Self {
+        self.legacy_max_tool_calls = legacy_max_tool_calls;
+
+        self
+    }
+
+    /// Whether this new request repeats `recorded`. A recorded legacy limit
+    /// replaces the retired constant the harness now hashes.
+    fn repeats(&self, recorded: &Self) -> bool {
+        let fingerprint = match (recorded.legacy_max_tool_calls, &self.configuration) {
+            (Some(max_tool_calls), Some(configuration)) => {
+                let mut configuration = Value::clone(configuration);
+                configuration["options"]["max_tool_calls"] = json!(max_tool_calls);
+
+                Self::hash(&configuration)
+            }
+            _ => self.fingerprint.clone(),
+        };
+
+        self.id == recorded.id && fingerprint == recorded.fingerprint
+    }
+
+    fn hash(configuration: &Value) -> String {
+        format!(
+            "v1:{}",
+            hex::encode(Sha256::digest(configuration.to_string()))
+        )
+    }
+}
+
+impl PartialEq for HostRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.fingerprint == other.fingerprint
+    }
+}
+
+impl Eq for HostRequest {}
+
+impl fmt::Debug for HostRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HostRequest")
+            .field("fingerprint", &self.fingerprint)
+            .field("id", &self.id)
+            .field("legacy_max_tool_calls", &self.legacy_max_tool_calls)
+            .finish_non_exhaustive()
     }
 }
 
@@ -124,7 +190,7 @@ impl HostTurnRecord {
     /// # Errors
     /// Returns a conflict if the same host ID denotes different configuration.
     pub fn check_request(&self, request: &HostRequest) -> Result<(), SessionError> {
-        if self.request != *request {
+        if !request.repeats(&self.request) {
             return Err(SessionError::HostTurnConflict);
         }
 

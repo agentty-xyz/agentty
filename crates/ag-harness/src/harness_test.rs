@@ -8,6 +8,8 @@ mod policy;
 mod read;
 #[path = "harness_test/session_test.rs"]
 mod session;
+#[path = "harness_test/stopped_turn_test.rs"]
+mod stopped_turn;
 #[path = "harness_test/support_test.rs"]
 mod support;
 #[path = "harness_test/write_journal_test.rs"]

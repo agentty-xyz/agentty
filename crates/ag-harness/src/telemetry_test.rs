@@ -120,8 +120,8 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
             Some(limited_turn_id),
         )
         .expect("observer should request a limited tool")
-        .failed(ToolErrorType::CallLimit);
-    limited_turn.failed(TurnErrorType::ToolCallLimit);
+        .failed(ToolErrorType::Execution);
+    limited_turn.failed(TurnErrorType::ContextBudget);
 }
 
 fn assert_request_duration(metrics: &[&Metric]) {
@@ -185,7 +185,7 @@ fn assert_agent_duration(metrics: &[&Metric]) {
                 [
                     vec![],
                     vec![("error.type", "cancelled".to_string())],
-                    vec![("error.type", "tool_call_limit".to_string())],
+                    vec![("error.type", "context_budget_exceeded".to_string())],
                     vec![("error.type", "tool_denied".to_string())],
                     vec![("error.type", "tool_execution_error".to_string())],
                 ]

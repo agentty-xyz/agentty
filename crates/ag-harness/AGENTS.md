@@ -31,8 +31,10 @@ tools, independent of Agentty UI and orchestration.
 - Validate and retain provider metadata at construction.
 - Keep response bodies and diagnostics bounded, and apply duration telemetry uniformly.
 - Allow only one active turn per durable session. Report completion only after messages
-  are committed; retain failed/interrupted turns without replaying them as completed
-  history. Durable write records describe past operations, not current filesystem state.
+  are committed. Replay failed/interrupted turns as stopped history (input, finished
+  tool exchanges, and a stop note), never as completed history; replace content only a
+  provider-rejected request carried with an omission placeholder. Durable write records
+  describe past operations, not current filesystem state.
 
 ## SQLite Invariants
 
