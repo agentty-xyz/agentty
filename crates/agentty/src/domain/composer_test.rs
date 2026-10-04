@@ -4,10 +4,11 @@ use ag_protocol::render_prompt_text_for_agent;
 use ag_session::test_support as model_fixture;
 
 use super::{
-    PromptAttachment, PromptAttachmentState, PromptComposerState, PromptHistoryState,
-    PromptSlashStage, PromptSlashState, PromptSuggestionItem, PromptSuggestionList,
-    PromptSuggestionSelection, build_prompt_slash_suggestion_list, current_line_delete_range,
-    drain_prompt_submission, insert_prompt_local_image, resolve_prompt_slash_selection,
+    PendingImagePaste, PromptAttachment, PromptAttachmentState, PromptComposerState,
+    PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
+    PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
+    current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
+    insert_prompt_local_image_at, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
@@ -70,6 +71,11 @@ fn test_prompt_attachment_state_reset_clears_attachments_and_restarts_numbering(
     // Arrange
     let mut attachment_state = PromptAttachmentState::default();
     let _ = attachment_state.register_local_image(PathBuf::from("/tmp/first-image.png"), 0);
+    attachment_state.pending_image_paste = Some(PendingImagePaste {
+        anchor: Some(0),
+        request_id: 7,
+    });
+    let was_pasting_image = attachment_state.is_pasting_image();
 
     // Act
     attachment_state.reset();
@@ -77,9 +83,123 @@ fn test_prompt_attachment_state_reset_clears_attachments_and_restarts_numbering(
         attachment_state.register_local_image(PathBuf::from("/tmp/second-image.png"), 0);
 
     // Assert
+    assert!(was_pasting_image);
+    assert!(!attachment_state.is_pasting_image());
     assert_eq!(attachment_state.attachments.len(), 1);
     assert_eq!(attachment_state.next_attachment_number, 2);
     assert_eq!(placeholder, "[Image #1]");
+}
+
+/// Returns attachment state with one running capture anchored at `anchor`.
+fn pasting_attachment_state(anchor: Option<usize>) -> PromptAttachmentState {
+    PromptAttachmentState {
+        pending_image_paste: Some(PendingImagePaste {
+            anchor,
+            request_id: 1,
+        }),
+        ..PromptAttachmentState::default()
+    }
+}
+
+/// Returns the running capture's anchor.
+fn pending_image_paste_anchor(attachment_state: &PromptAttachmentState) -> Option<usize> {
+    attachment_state
+        .pending_image_paste
+        .expect("capture should still be pending")
+        .anchor
+}
+
+#[test]
+fn test_prompt_attachment_state_shifts_pending_image_paste_anchor_across_edits() {
+    // Arrange
+    let input = InputState::default();
+    let edits = [
+        // Insertion before the anchor shifts it right.
+        (Some(5), (1, 1, 4), Some(8)),
+        // Deletion before the anchor shifts it left.
+        (Some(5), (1, 3, 1), Some(3)),
+        // Typing at the anchor keeps the image before the typed text.
+        (Some(5), (5, 5, 6), Some(5)),
+        // Edits after the anchor leave it in place.
+        (Some(5), (7, 9, 7), Some(5)),
+        // Replacing text around the anchor moves it after the replacement.
+        (Some(5), (3, 8, 4), Some(4)),
+        // A dropped anchor stays dropped.
+        (None, (0, 0, 1), None),
+    ];
+
+    for (anchor, (old_start, old_end, new_end), expected_anchor) in edits {
+        let mut attachment_state = pasting_attachment_state(anchor);
+
+        // Act
+        attachment_state.sync_after_edit(&input, old_start, old_end, new_end);
+
+        // Assert
+        assert_eq!(
+            pending_image_paste_anchor(&attachment_state),
+            expected_anchor
+        );
+    }
+}
+
+#[test]
+fn test_prompt_attachment_state_drops_pending_image_paste_anchor_on_text_replacement() {
+    // Arrange
+    let input = InputState::default();
+    let mut history_restored = pasting_attachment_state(Some(3));
+    let mut archived = pasting_attachment_state(Some(3));
+    let mut draft_restored = pasting_attachment_state(Some(3));
+    let mut idle = PromptAttachmentState::default();
+
+    // Act
+    history_restored.sync_after_history_restore(&input);
+    archived.archive_current();
+    draft_restored.restore_draft_revision(input.revision(), &input);
+    idle.archive_current();
+
+    // Assert
+    assert_eq!(pending_image_paste_anchor(&history_restored), None);
+    assert_eq!(pending_image_paste_anchor(&archived), None);
+    assert_eq!(pending_image_paste_anchor(&draft_restored), None);
+    assert!(!idle.is_pasting_image());
+}
+
+#[test]
+fn test_insert_prompt_local_image_at_keeps_cursor_on_its_text() {
+    // Arrange
+    let cases = [
+        // Cursor after the anchor moves past the placeholder.
+        (8, 4, "abc [Image #1]defgh", 18),
+        // Cursor at the anchor ends after the placeholder.
+        (4, 4, "abc [Image #1]defgh", 14),
+        // Cursor before the anchor stays put.
+        (1, 4, "abc [Image #1]defgh", 1),
+        // Anchors past the text end are clamped.
+        (8, 20, "abc defgh[Image #1]", 8),
+    ];
+
+    for (cursor, anchor, expected_text, expected_cursor) in cases {
+        let mut attachment_state = PromptAttachmentState::default();
+        let mut history_state = PromptHistoryState::default();
+        let mut slash_state = PromptSlashState::default();
+        let mut input = InputState::with_text("abc defgh".to_string());
+        input.cursor = cursor;
+
+        // Act
+        insert_prompt_local_image_at(
+            &mut attachment_state,
+            &mut history_state,
+            &mut input,
+            &mut slash_state,
+            PathBuf::from("/tmp/image.png"),
+            anchor,
+        );
+
+        // Assert
+        assert_eq!(input.text(), expected_text);
+        assert_eq!(input.cursor, expected_cursor);
+        assert_eq!(attachment_state.attachments.len(), 1);
+    }
 }
 
 #[test]
@@ -92,6 +212,7 @@ fn test_prompt_attachment_state_refresh_next_attachment_number_stays_monotonic()
             PromptAttachment::new(3, PathBuf::from("/tmp/third-image.png")),
         ],
         next_attachment_number: 99,
+        pending_image_paste: None,
     };
 
     // Act

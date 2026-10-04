@@ -15,6 +15,7 @@ use tracing::instrument::WithSubscriber;
 
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::BranchPublishTaskFailure;
+use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::service::AppServices;
 use crate::app::session::{SyncSessionStartError, TurnAppliedState};
 use crate::app::sync::{ProjectSyncContext, SyncMainCompletion};
@@ -104,6 +105,24 @@ fn app_event_label_names_diff_preview_loads() {
 
     // Assert
     assert_eq!(label, "DiffPreviewLoaded");
+}
+
+#[test]
+fn app_event_label_names_prompt_image_pastes() {
+    // Arrange
+    let event = AppEvent::PromptImagePasted {
+        update: PromptImagePasteUpdate {
+            request_id: 1,
+            result: Ok(std::path::PathBuf::from("/tmp/pasted.png")),
+            session_id: "session-id".into(),
+        },
+    };
+
+    // Act
+    let label = AppServices::app_event_label(&event);
+
+    // Assert
+    assert_eq!(label, "PromptImagePasted");
 }
 
 #[test]

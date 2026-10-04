@@ -423,12 +423,43 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
 }
 
 #[test]
+fn test_render_prompt_footer_shows_loader_while_pasting_image() {
+    // Arrange
+    let session = session_fixture();
+    let mut mode = prompt_mode("draft");
+    if let AppMode::Prompt {
+        attachment_state, ..
+    } = &mut mode
+    {
+        attachment_state.pending_image_paste = Some(crate::domain::composer::PendingImagePaste {
+            anchor: Some(0),
+            request_id: 1,
+        });
+    }
+    let mut page = test_session_chat_page(&session, &mode);
+    let backend = ratatui::backend::TestBackend::new(80, 14);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw prompt mode");
+
+    // Assert
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("▌▌▌ Pasting image..."));
+}
+
+#[test]
 fn test_prompt_footer_shows_permission_mode_shortcut() {
     // Arrange
     let session = session_fixture();
 
     // Act
-    let footer = prompt_format::prompt_footer_line(&session, 0, ChatFocus::Input);
+    let footer = prompt_format::prompt_footer_line(&session, 0, ChatFocus::Input, false);
 
     // Assert
     assert!(footer.to_string().contains("Shift+Tab: switch mode"));

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
+use crate::app::task::{PromptImagePasteTaskInput, TaskService};
 use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::PromptAttachment;
@@ -17,8 +18,8 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
-use crate::infra::clipboard_image;
-use crate::presentation::app_mode::ReviewCommentSelection;
+use crate::presentation::app_mode::{AppMode, ReviewCommentSelection};
+use crate::presentation::prompt::{PendingImagePaste, insert_prompt_local_image_at};
 
 /// Maximum automatic focused-review remediation turns per user prompt.
 pub(crate) const MAX_AUTO_ADDRESS_REVIEW_ITERATIONS: u8 = 3;
@@ -98,6 +99,18 @@ pub(crate) struct PromptImagePaste {
     /// One-based image placeholder number allocated by presentation state.
     pub(crate) attachment_number: usize,
     /// Session that owns the prompt composer.
+    pub(crate) session_id: SessionId,
+}
+
+/// Completed clipboard-image capture ready for stale-safe reducer
+/// application.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PromptImagePasteUpdate {
+    /// Request id returned when the capture started.
+    pub(crate) request_id: u64,
+    /// Persisted PNG path or normalized user-facing failure text.
+    pub(crate) result: Result<PathBuf, String>,
+    /// Session whose prompt composer requested the paste.
     pub(crate) session_id: SessionId,
 }
 
@@ -218,30 +231,130 @@ impl App {
         PromptWorkflowOutcome::ShowSession { session_id }
     }
 
-    /// Persists one clipboard image and returns its local path for the
-    /// presentation-owned composer to insert as a placeholder.
-    pub(crate) async fn persist_prompt_image(&self, request: PromptImagePaste) -> Option<PathBuf> {
-        match self
-            .services
-            .clipboard_image_client()
-            .persist_clipboard_image(
-                request.session_id.as_str().to_string(),
-                request.attachment_number,
-            )
-            .await
-        {
-            Ok(persisted_image) => Some(persisted_image.local_image_path),
-            Err(error) => {
+    /// Starts one background clipboard-image capture and returns the request
+    /// id the presentation-owned composer tracks while the capture runs.
+    ///
+    /// The result arrives as [`crate::app::AppEvent::PromptImagePasted`] and is
+    /// applied by [`App::apply_prompt_image_paste_update`]. The capture is
+    /// tracked as cleanup work so graceful shutdown waits for it and removes
+    /// an image that was never applied.
+    pub(crate) fn start_prompt_image_paste(&self, request: PromptImagePaste) -> u64 {
+        let (request_id, capture_task) =
+            TaskService::spawn_prompt_image_paste_task(PromptImagePasteTaskInput {
+                app_event_tx: self.services.event_sender(),
+                attachment_number: request.attachment_number,
+                clipboard_image_client: self.services.clipboard_image_client(),
+                session_id: request.session_id,
+            });
+        self.services.track_cleanup_task(capture_task);
+
+        request_id
+    }
+
+    /// Applies one completed clipboard-image capture to the prompt composer
+    /// that is still waiting for it.
+    ///
+    /// The placeholder lands where the paste shortcut was pressed, shifted
+    /// across edits made while the capture ran. Captures finishing after
+    /// their composer was submitted, canceled, or replaced remove their
+    /// orphaned PNG instead of inserting a placeholder. Capture failures are
+    /// reported in the session transcript.
+    pub(crate) async fn apply_prompt_image_paste_update(&mut self, update: PromptImagePasteUpdate) {
+        let PromptImagePasteUpdate {
+            request_id,
+            result,
+            session_id,
+        } = update;
+        let pending_image_paste = self.take_pending_prompt_image_paste(&session_id, request_id);
+
+        match (result, pending_image_paste) {
+            (Ok(local_image_path), Some(pending_image_paste)) => {
+                let unreachable_attachments = self
+                    .insert_prompt_image_placeholder(local_image_path, pending_image_paste.anchor);
+                self.cleanup_prompt_attachments(unreachable_attachments)
+                    .await;
+            }
+            (Ok(local_image_path), None) => {
+                let orphaned_prompt = TurnPrompt {
+                    attachments: vec![TurnPromptAttachment {
+                        local_image_path,
+                        placeholder: String::new(),
+                    }],
+                    text: String::new(),
+                    text_source: TurnPromptTextSource::UserPrompt,
+                };
+                self.cleanup_prompt_attachment_files(&orphaned_prompt).await;
+            }
+            (Err(message), _) => {
                 self.append_prompt_status_line(
-                    request.session_id.as_str(),
+                    session_id.as_str(),
                     TranscriptNotice::PasteImageError,
-                    &clipboard_image::normalize_clipboard_image_error(&error),
+                    &message,
                 )
                 .await;
-
-                None
             }
         }
+    }
+
+    /// Inserts one persisted image placeholder into the active prompt
+    /// composer at `anchor`, or at the cursor when no anchor survived, and
+    /// returns archived attachments that are no longer reachable through
+    /// undo history.
+    pub(crate) fn insert_prompt_image_placeholder(
+        &mut self,
+        local_image_path: PathBuf,
+        anchor: Option<usize>,
+    ) -> Vec<PromptAttachment> {
+        let AppMode::Prompt {
+            at_mention_state,
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            ..
+        } = &mut self.mode
+        else {
+            return Vec::new();
+        };
+
+        let anchor = anchor.unwrap_or(input.cursor);
+        insert_prompt_local_image_at(
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            local_image_path,
+            anchor,
+        );
+        *at_mention_state = None;
+
+        attachment_state.prune_unreachable(input)
+    }
+
+    /// Clears and returns the composer's pending capture when it matches
+    /// `request_id`, meaning the completion still belongs to that composer.
+    fn take_pending_prompt_image_paste(
+        &mut self,
+        session_id: &SessionId,
+        request_id: u64,
+    ) -> Option<PendingImagePaste> {
+        let AppMode::Prompt {
+            attachment_state,
+            session_id: mode_session_id,
+            ..
+        } = &mut self.mode
+        else {
+            return None;
+        };
+        if mode_session_id != session_id
+            || attachment_state
+                .pending_image_paste
+                .is_none_or(|pending_image_paste| pending_image_paste.request_id != request_id)
+        {
+            return None;
+        }
+
+        attachment_state.pending_image_paste.take()
     }
 
     /// Removes image files whose attachment identities are no longer

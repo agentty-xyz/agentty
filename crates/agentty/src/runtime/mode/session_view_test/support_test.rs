@@ -45,6 +45,22 @@ pub(super) async fn apply_next_session_diff(app: &mut App) {
     }
 }
 
+/// Applies queued app events through the first completed clipboard-image
+/// capture.
+pub(super) async fn apply_next_prompt_image_paste(app: &mut App) {
+    loop {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), app.next_app_event())
+            .await
+            .expect("prompt image paste event should arrive")
+            .expect("app event channel should remain open");
+        let is_prompt_image_paste = matches!(event, AppEvent::PromptImagePasted { .. });
+        app.apply_app_events(event).await;
+        if is_prompt_image_paste {
+            return;
+        }
+    }
+}
+
 /// Applies a deterministic completion for the one pending session-diff
 /// request.
 pub(super) async fn apply_pending_session_diff(

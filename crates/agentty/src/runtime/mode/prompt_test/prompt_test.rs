@@ -8,16 +8,17 @@ use super::super::{
     PromptInputMode, apply_prompt_apply_outcome, apply_prompt_input_command, handle_at_mention_key,
     handle_at_mention_select, handle_chat_focus_key, handle_paste, handle_prompt_cancel_key,
     handle_prompt_down_key, handle_prompt_image_paste, handle_prompt_slash_submit,
-    handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache,
-    insert_pasted_image_placeholder, is_active_at_mention, is_prompt_image_paste_key,
-    move_prompt_slash_selection, navigate_prompt_history_down, navigate_prompt_history_up,
-    paste_image_into_active_prompt, prompt_context, show_prompt_diff, submit_current_text_prompt,
-    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
+    handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache, is_active_at_mention,
+    is_prompt_image_paste_key, move_prompt_slash_selection, navigate_prompt_history_down,
+    navigate_prompt_history_up, paste_image_into_active_prompt, prompt_context, show_prompt_diff,
+    submit_current_text_prompt, take_prompt_attachment_cleanup, take_prompt_snapshot,
+    take_submitted_turn_prompt,
 };
 use super::support::{
-    PromptTestAppExt, apply_next_session_diff, install_mock_clipboard_image_client,
-    install_mock_git_client, new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode,
-    press_prompt_key, prompt_focus, session_replay_text, test_terminal,
+    PromptTestAppExt, apply_next_prompt_image_paste, apply_next_session_diff,
+    install_mock_clipboard_image_client, install_mock_fs_client, install_mock_git_client,
+    new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode, press_prompt_key,
+    prompt_focus, session_replay_text, test_terminal,
 };
 use crate::app::prompt_intent::PromptApplyOutcome;
 use crate::domain::agent::{
@@ -30,8 +31,8 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
-    PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashStage,
-    PromptSlashState, prompt_slash_option_count,
+    PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
+    PromptSlashStage, PromptSlashState, prompt_slash_option_count,
 };
 use crate::ui::RenderCacheStore;
 
@@ -1220,7 +1221,7 @@ async fn test_insert_pasted_image_placeholder_records_attachment_and_resets_prom
 }
 
 #[tokio::test]
-async fn test_handle_prompt_image_paste_uses_injected_clipboard_image_client() {
+async fn test_ctrl_v_pastes_image_through_injected_clipboard_image_client() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
@@ -1240,17 +1241,34 @@ async fn test_handle_prompt_image_paste_uses_injected_clipboard_image_client() {
             })
         });
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    let mut terminal = test_terminal();
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context).await;
+    handle_with_cache(
+        &mut app,
+        &RenderCacheStore::default(),
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('v'), event::KeyModifiers::CONTROL),
+    )
+    .await
+    .expect("prompt key handling failed");
+    let was_pasting_image = matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, .. } if attachment_state.is_pasting_image()
+    );
+    let has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
+    assert!(was_pasting_image);
+    assert!(has_tick_driven_ui);
     if let AppMode::Prompt {
         attachment_state,
         input,
         ..
     } = &app.mode
     {
+        assert!(!attachment_state.is_pasting_image());
         assert_eq!(input.text(), "Review [Image #1]");
         assert_eq!(attachment_state.attachments.len(), 1);
         assert_eq!(
@@ -1275,7 +1293,8 @@ async fn test_handle_prompt_image_paste_reports_injected_clipboard_image_errors(
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context).await;
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
     app.sessions.sync_from_handles();
@@ -1318,7 +1337,8 @@ async fn test_handle_prompt_image_paste_reports_unavailable_clipboard_backend() 
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
 
     // Act
-    handle_prompt_image_paste(&mut app, &prompt_context).await;
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
 
     // Assert
     app.sessions.sync_from_handles();
@@ -1337,6 +1357,423 @@ async fn test_handle_prompt_image_paste_reports_unavailable_clipboard_backend() 
             [] as [crate::domain::composer::PromptAttachment; 0]
         );
     }
+}
+
+/// Verifies repeated paste shortcuts do not start a second clipboard capture
+/// while the first one is still running.
+#[tokio::test]
+async fn test_handle_prompt_image_paste_ignores_repeat_while_capture_runs() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                    local_image_path: PathBuf::from("/tmp/pasted.png"),
+                })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+
+    // Act
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    if let AppMode::Prompt {
+        attachment_state,
+        input,
+        ..
+    } = &app.mode
+    {
+        assert_eq!(input.text(), "Review [Image #1]");
+        assert_eq!(attachment_state.attachments.len(), 1);
+    }
+}
+
+/// Verifies a capture completing after the user kept editing inserts its
+/// placeholder where the paste shortcut was pressed and keeps the cursor on
+/// the text it was on.
+#[tokio::test]
+async fn test_prompt_image_paste_completion_lands_at_paste_position() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                    local_image_path: PathBuf::from("/tmp/pasted.png"),
+                })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    press_prompt_key(&mut app, KeyCode::Char('!')).await;
+    press_prompt_key(&mut app, KeyCode::Home).await;
+    press_prompt_key(&mut app, KeyCode::Char('>')).await;
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == ">Review [Image #1]!"
+                && input.cursor == 1
+                && attachment_state.attachments.len() == 1
+    ));
+}
+
+/// Verifies `Enter` is ignored while a capture runs, so the pasted image is
+/// not dropped from the submitted turn.
+#[tokio::test]
+async fn test_prompt_submit_is_ignored_while_image_paste_runs() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    install_pasted_image_clipboard(&mut app);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Enter).await;
+    let is_waiting_for_image = matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if attachment_state.is_pasting_image() && input.text() == "Review "
+    );
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(is_waiting_for_image);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == "Review [Image #1]" && attachment_state.attachments.len() == 1
+    ));
+}
+
+/// Verifies prompt-history navigation pauses while a capture runs, so the
+/// image lands in the draft instead of replacing it inside a history entry.
+#[tokio::test]
+async fn test_prompt_history_navigation_is_ignored_while_image_paste_runs() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+        history_state.entries = vec!["earlier prompt".to_string()];
+    }
+    install_pasted_image_clipboard(&mut app);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+
+    // Act
+    press_prompt_key(&mut app, KeyCode::Up).await;
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, history_state, input, .. }
+            if input.text() == "Review [Image #1]"
+                && history_state.selected_index.is_none()
+                && attachment_state.attachments.len() == 1
+    ));
+}
+
+#[test]
+fn test_navigate_prompt_history_down_is_ignored_while_image_paste_runs() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("first");
+    if let AppMode::Prompt {
+        attachment_state,
+        history_state,
+        ..
+    } = &mut mode
+    {
+        history_state.entries = vec!["first".to_string(), "second".to_string()];
+        history_state.selected_index = Some(0);
+        attachment_state.pending_image_paste = Some(PendingImagePaste {
+            anchor: Some(0),
+            request_id: 1,
+        });
+    }
+
+    // Act
+    navigate_prompt_history_down(&mut mode);
+
+    // Assert
+    assert!(matches!(
+        &mode,
+        AppMode::Prompt { history_state, input, .. }
+            if input.text() == "first" && history_state.selected_index == Some(0)
+    ));
+}
+
+/// Installs a clipboard client whose single capture returns one image path.
+fn install_pasted_image_clipboard(app: &mut crate::app::App) {
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                    local_image_path: PathBuf::from("/tmp/pasted.png"),
+                })
+            })
+        });
+    install_mock_clipboard_image_client(app, clipboard_image_client);
+}
+
+/// Verifies graceful shutdown waits for a running capture and removes its
+/// image when the completion was never applied to the composer.
+#[tokio::test]
+async fn test_shutdown_removes_unapplied_prompt_image_paste() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let image_path = crate::infra::home::agentty_home()
+        .join("tmp")
+        .join(prompt_context.session_id.as_str())
+        .join("images")
+        .join("image-001.png");
+    let mock_image_path = image_path.clone();
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(move |_, _| {
+            let local_image_path = mock_image_path.clone();
+
+            Box::pin(async move {
+                tokio::task::yield_now().await;
+
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage { local_image_path })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    let expected_image_directory = image_path
+        .parent()
+        .expect("managed image path should have a parent")
+        .to_path_buf();
+    let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+    mock_fs_client
+        .expect_remove_file()
+        .once()
+        .withf(move |path| path == &image_path)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_fs_client
+        .expect_remove_dir()
+        .once()
+        .withf(move |path| path == &expected_image_directory)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    install_mock_fs_client(&mut app, mock_fs_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+
+    // Act
+    app.wait_for_background_cleanup_tasks().await;
+
+    // Assert
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if attachment_state.is_pasting_image() && input.text() == "Review "
+    ));
+}
+
+/// Verifies a capture finishing after its composer was reset removes the
+/// orphaned image instead of inserting a placeholder.
+#[tokio::test]
+async fn test_prompt_image_paste_completion_after_reset_removes_orphaned_image() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let image_path = crate::infra::home::agentty_home()
+        .join("tmp")
+        .join(prompt_context.session_id.as_str())
+        .join("images")
+        .join("image-001.png");
+    let mock_image_path = image_path.clone();
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(move |_, _| {
+            let local_image_path = mock_image_path.clone();
+
+            Box::pin(async move {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage { local_image_path })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    let expected_image_directory = image_path
+        .parent()
+        .expect("managed image path should have a parent")
+        .to_path_buf();
+    let mut mock_fs_client = crate::infra::fs::MockFsClient::new();
+    mock_fs_client
+        .expect_remove_file()
+        .once()
+        .withf(move |path| path == &image_path)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    mock_fs_client
+        .expect_remove_dir()
+        .once()
+        .withf(move |path| path == &expected_image_directory)
+        .returning(|_| Box::pin(async { Ok(()) }));
+    install_mock_fs_client(&mut app, mock_fs_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    if let AppMode::Prompt {
+        attachment_state, ..
+    } = &mut app.mode
+    {
+        attachment_state.reset();
+    }
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    if let AppMode::Prompt {
+        attachment_state,
+        input,
+        ..
+    } = &app.mode
+    {
+        assert_eq!(input.text(), "Review ");
+        assert_eq!(attachment_state.attachments, [] as [PromptAttachment; 0]);
+    }
+}
+
+/// Verifies a capture failing after the user left the composer still
+/// reports the failure in the session transcript.
+#[tokio::test]
+async fn test_prompt_image_paste_failure_after_leaving_prompt_reports_error() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async { Err(crate::infra::clipboard_image::ClipboardError::NoImage) })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    app.mode = AppMode::List;
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    app.sessions.sync_from_handles();
+    assert!(matches!(app.mode, AppMode::List));
+    assert!(
+        session_replay_text(&app.sessions.sessions()[0])
+            .contains("[Paste Image Error] Clipboard does not contain an image.")
+    );
+}
+
+/// Verifies snapshotting the composer for diff preview abandons a running
+/// capture, so the restored composer is idle and accepts a new paste.
+#[tokio::test]
+async fn test_prompt_snapshot_abandons_running_image_paste() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .times(2)
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                    local_image_path: PathBuf::from("/tmp/pasted.png"),
+                })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+
+    // Act
+    let snapshot = take_prompt_snapshot(&mut app).expect("expected AppMode::Prompt");
+    apply_next_prompt_image_paste(&mut app).await;
+    app.mode = snapshot.into_prompt_mode();
+    let has_tick_driven_ui = app.has_visible_tick_driven_ui();
+    let restored_text = match &app.mode {
+        AppMode::Prompt {
+            attachment_state,
+            input,
+            ..
+        } if !attachment_state.is_pasting_image() => Some(input.text().to_string()),
+        _ => None,
+    };
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(!has_tick_driven_ui);
+    assert_eq!(restored_text.as_deref(), Some("Review "));
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == "Review [Image #1]" && attachment_state.attachments.len() == 1
+    ));
+}
+
+/// Verifies leaving for the sessions list while a capture runs restores an
+/// idle composer that accepts a new paste.
+#[tokio::test]
+async fn test_saved_prompt_progress_abandons_running_image_paste() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
+    let mut clipboard_image_client = crate::infra::clipboard_image::MockClipboardImageClient::new();
+    clipboard_image_client
+        .expect_persist_clipboard_image()
+        .times(2)
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(crate::infra::clipboard_image::PersistedClipboardImage {
+                    local_image_path: PathBuf::from("/tmp/pasted.png"),
+                })
+            })
+        });
+    install_mock_clipboard_image_client(&mut app, clipboard_image_client);
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    press_prompt_key(&mut app, KeyCode::Tab).await;
+    press_prompt_key(&mut app, KeyCode::Char('q')).await;
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+    let is_restored = app
+        .restore_prompt_progress(prompt_context.session_id.as_str())
+        .await;
+    let is_pasting_image = matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, .. } if attachment_state.is_pasting_image()
+    );
+    handle_prompt_image_paste(&mut app, &prompt_context);
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    assert!(is_restored);
+    assert!(!is_pasting_image);
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { attachment_state, input, .. }
+            if input.text() == "Review [Image #1]" && attachment_state.attachments.len() == 1
+    ));
 }
 
 #[tokio::test]
@@ -1955,9 +2392,9 @@ async fn test_prompt_attachment_helpers_ignore_non_prompt_mode() {
     let session_id = SessionId::from("session-id");
 
     // Act
-    paste_image_into_active_prompt(&mut app, &session_id).await;
+    paste_image_into_active_prompt(&mut app, &session_id);
     let inserted_attachments =
-        insert_pasted_image_placeholder(&mut app, PathBuf::from("/tmp/image-1.png"));
+        app.insert_prompt_image_placeholder(PathBuf::from("/tmp/image-1.png"), None);
     let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app);
     let cleanup_attachments = take_prompt_attachment_cleanup(&mut app);
 

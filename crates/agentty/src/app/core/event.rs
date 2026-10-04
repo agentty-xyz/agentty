@@ -23,6 +23,7 @@ use tracing::warn;
 
 use super::state::{App, SyncReviewRequestTaskResult, UpdateStatus};
 use crate::analytics::TurnOutcome;
+use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::{
     SessionTaskService, StatusTransition, SyncSessionStartError, TurnAppliedState,
 };
@@ -75,6 +76,9 @@ pub(crate) enum AppEvent {
         entries: Vec<FileEntry>,
         session_id: SessionId,
     },
+    /// Indicates completion of one background clipboard-image capture for a
+    /// prompt composer.
+    PromptImagePasted { update: PromptImagePasteUpdate },
     /// Indicates completion of one bounded diff-preview worktree read.
     DiffPreviewLoaded {
         /// Selected repository-relative markdown path.
@@ -378,6 +382,7 @@ pub(super) struct AppEventBatch {
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
+    pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
     pub(super) review_progress_updates:
         Vec<(SessionId, u64, uuid::Uuid, app::review::ReviewProgress)>,
@@ -463,6 +468,7 @@ impl AppEventBatch {
             || !self.branch_publish_resolved_session_ids.is_empty()
             || !self.branch_publish_started_session_ids.is_empty()
             || !self.diff_preview_updates.is_empty()
+            || !self.prompt_image_paste_updates.is_empty()
             || !self.published_branch_sync_updates.is_empty()
             || !self.review_request_status_updates.is_empty()
             || !self.review_updates.is_empty()
@@ -605,6 +611,7 @@ impl AppEventBatch {
                 self.session_rebase_review_invalidated_ids
                     .insert(session_id);
             }
+            AppEvent::PromptImagePasted { update } => self.prompt_image_paste_updates.push(update),
             AppEvent::RefreshSessions => self.should_reload_sessions = true,
             AppEvent::RefreshProjects => self.should_reload_projects = true,
             AppEvent::RefreshGitStatus => self.should_refresh_git_status = true,
@@ -619,9 +626,7 @@ impl AppEventBatch {
             AppEvent::AtMentionEntriesLoaded {
                 entries,
                 session_id,
-            } => {
-                self.at_mention_entries_updates.insert(session_id, entries);
-            }
+            } => self.collect_at_mention_entries_loaded(entries, session_id),
             AppEvent::SessionModelUpdated {
                 session_id,
                 session_agent,
@@ -706,6 +711,7 @@ impl AppEventBatch {
             | AppEvent::SessionResponseStyleUpdated { .. }
             | AppEvent::SessionSpeedModeUpdated { .. }
             | AppEvent::SessionRebaseReviewInvalidated { .. }
+            | AppEvent::PromptImagePasted { .. }
             | AppEvent::RefreshSessions
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
@@ -715,6 +721,15 @@ impl AppEventBatch {
                 unreachable!("top-level app event should be collected before runtime events")
             }
         }
+    }
+
+    /// Collects the latest background `@`-mention index for one session.
+    fn collect_at_mention_entries_loaded(
+        &mut self,
+        entries: Vec<FileEntry>,
+        session_id: SessionId,
+    ) {
+        self.at_mention_entries_updates.insert(session_id, entries);
     }
 
     /// Collects one background full-diff completion for foreground reduction.
@@ -805,6 +820,7 @@ impl AppEventBatch {
             | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::AtMentionEntriesLoaded { .. }
+            | AppEvent::PromptImagePasted { .. }
             | AppEvent::DiffPreviewLoaded { .. }
             | AppEvent::SessionDiffLoaded { .. }
             | AppEvent::GitStatusUpdated { .. }
@@ -1129,6 +1145,11 @@ impl App {
         self.supersede_review_diff_loads(&completed_turn_session_ids);
         for session_diff_update in std::mem::take(&mut event_batch.session_diff_updates) {
             self.apply_session_diff_update(session_diff_update).await;
+        }
+        for prompt_image_paste_update in std::mem::take(&mut event_batch.prompt_image_paste_updates)
+        {
+            self.apply_prompt_image_paste_update(prompt_image_paste_update)
+                .await;
         }
 
         for (session_id, turn_applied_state) in event_batch.applied_turns {

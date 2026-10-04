@@ -340,7 +340,7 @@ fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
     let session = session_fixture();
 
     // Act
-    let footer_line = prompt_footer_line(&session, 2, ChatFocus::Input);
+    let footer_line = prompt_footer_line(&session, 2, ChatFocus::Input, false);
 
     // Assert
     assert_eq!(
@@ -369,6 +369,29 @@ fn test_prompt_footer_line_shows_highlighted_actions_and_attachment_count() {
 }
 
 #[test]
+fn test_prompt_footer_line_leads_with_loader_while_pasting_image() {
+    // Arrange
+    let session = session_fixture();
+
+    // Act
+    let footer_line = prompt_footer_line(&session, 1, ChatFocus::Input, true);
+
+    // Assert
+    assert!(
+        footer_line
+            .to_string()
+            .starts_with("▌▌▌ Pasting image... | Tab: focus | Enter: send")
+    );
+    assert!(footer_line.to_string().ends_with(" | 1 image ready"));
+    assert_eq!(
+        footer_line.spans[0].style,
+        Style::default()
+            .fg(style::palette::accent())
+            .add_modifier(Modifier::BOLD)
+    );
+}
+
+#[test]
 fn test_prompt_footer_line_uses_stage_label_for_new_sessions() {
     // Arrange
     let mut session = session_fixture();
@@ -376,7 +399,7 @@ fn test_prompt_footer_line_uses_stage_label_for_new_sessions() {
     session.is_draft = true;
 
     // Act
-    let footer_line = prompt_footer_line(&session, 0, ChatFocus::Input);
+    let footer_line = prompt_footer_line(&session, 0, ChatFocus::Input, false);
 
     // Assert
     assert!(footer_line.to_string().contains("Enter: stage draft"));
@@ -390,9 +413,9 @@ fn test_prompt_footer_line_shows_scroll_actions_while_chat_is_focused() {
     session.stats.diff_state = SessionDiffState::Empty;
 
     // Act
-    let unchanged_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
+    let unchanged_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat, false);
     session.stats.diff_state = SessionDiffState::Present;
-    let changed_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat);
+    let changed_footer_line = prompt_footer_line(&session, 0, ChatFocus::Chat, false);
 
     // Assert
     assert_eq!(

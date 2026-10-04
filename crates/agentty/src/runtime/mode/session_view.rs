@@ -995,7 +995,7 @@ async fn open_draft_prompt_with_pasted_image(
     )
     .await;
 
-    prompt::paste_image_into_active_prompt(app, &view_context.session_id).await;
+    prompt::paste_image_into_active_prompt(app, &view_context.session_id);
 }
 
 /// Opens the help overlay while preserving the currently viewed session state.

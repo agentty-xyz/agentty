@@ -21,12 +21,14 @@ use tokio::time::MissedTickBehavior;
 use tracing::warn;
 
 use crate::app::error::AppError;
+use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::review::FocusedReviewPersistenceRetry;
 use crate::app::session_diff::DeferredAutoReviewPersistenceRetry;
 use crate::app::{AppEvent, UpdateStatus, at_mention_task};
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection, ReasoningLevel};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::session::SessionId;
+use crate::infra::clipboard_image::{self, ClipboardImageClient};
 use crate::infra::review_deadline::ReviewDeadlineClient;
 use crate::infra::{file_index, version};
 
@@ -46,6 +48,10 @@ const VERSION_CHECK_INTERVAL_MS_ENV_VAR: &str = "AGENTTY_TEST_VERSION_CHECK_INTE
 
 /// Monotonic counter used to distinguish stale and current at-mention loads.
 static NEXT_AT_MENTION_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Monotonic counter used to distinguish stale prompt clipboard-image
+/// captures.
+static NEXT_PROMPT_IMAGE_PASTE_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Monotonic counter used to distinguish stale review-comment loads.
 static NEXT_REVIEW_COMMENT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -113,6 +119,16 @@ pub(super) struct SessionDiffTaskInput {
     pub(super) folder: PathBuf,
     pub(super) session_id: SessionId,
     pub(super) source: SessionDiffTaskSource,
+}
+
+/// Inputs needed to capture one clipboard image without blocking the
+/// foreground UI.
+pub(super) struct PromptImagePasteTaskInput {
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// One-based image placeholder number used in the persisted file name.
+    pub(super) attachment_number: usize,
+    pub(super) clipboard_image_client: Arc<dyn ClipboardImageClient>,
+    pub(super) session_id: SessionId,
 }
 
 /// Inputs needed to generate review assist text in the background.
@@ -195,6 +211,34 @@ impl TaskService {
         });
 
         request_id
+    }
+
+    /// Spawns one clipboard-image capture and returns its stale-safe request
+    /// id and task handle without waiting for clipboard or filesystem I/O.
+    pub(super) fn spawn_prompt_image_paste_task(
+        input: PromptImagePasteTaskInput,
+    ) -> (u64, JoinHandle<()>) {
+        let request_id = NEXT_PROMPT_IMAGE_PASTE_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        let capture_task = tokio::spawn(async move {
+            let result = input
+                .clipboard_image_client
+                .persist_clipboard_image(
+                    input.session_id.as_str().to_string(),
+                    input.attachment_number,
+                )
+                .await
+                .map(|persisted_image| persisted_image.local_image_path)
+                .map_err(|error| clipboard_image::normalize_clipboard_image_error(&error));
+            let _ = input.app_event_tx.send(AppEvent::PromptImagePasted {
+                update: PromptImagePasteUpdate {
+                    request_id,
+                    result,
+                    session_id: input.session_id,
+                },
+            });
+        });
+
+        (request_id, capture_task)
     }
 
     /// Publishes cached `@`-mention entries immediately or starts one

@@ -159,6 +159,41 @@ impl PromptComposerSubmission {
     }
 }
 
+/// Clipboard image capture still running for one prompt composer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PendingImagePaste {
+    /// Character offset where the paste shortcut was pressed, shifted across
+    /// later edits so the placeholder lands there once the capture completes.
+    ///
+    /// `None` after undo, redo, or prompt-history navigation replaces the
+    /// text the offset referred to; the placeholder then lands at the cursor.
+    pub anchor: Option<usize>,
+    /// Request id returned when the capture started.
+    pub request_id: u64,
+}
+
+impl PendingImagePaste {
+    /// Shifts the paste anchor across one text edit.
+    ///
+    /// Edits starting at or after the anchor leave it in place, so text typed
+    /// while the capture runs follows the image. Edits spanning the anchor
+    /// move it to the end of their replacement text.
+    fn apply_edit(&mut self, old_start: usize, old_end: usize, new_end: usize) {
+        let Some(anchor) = self.anchor else {
+            return;
+        };
+        if old_start >= anchor {
+            return;
+        }
+
+        self.anchor = Some(if old_end <= anchor {
+            anchor - (old_end - old_start) + (new_end - old_start)
+        } else {
+            new_end
+        });
+    }
+}
+
 /// UI state for pasted local-image attachments in prompt mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptAttachmentState {
@@ -169,6 +204,8 @@ pub struct PromptAttachmentState {
     pub attachments: Vec<PromptAttachment>,
     /// Next placeholder number that should be assigned to a pasted image.
     pub next_attachment_number: usize,
+    /// Clipboard image capture still running for this composer, when any.
+    pub pending_image_paste: Option<PendingImagePaste>,
 }
 
 impl PromptAttachmentState {
@@ -230,6 +267,9 @@ impl PromptAttachmentState {
         for attachment in &mut self.attachments {
             attachment.apply_edit(old_start, old_end, new_end);
         }
+        if let Some(pending_image_paste) = &mut self.pending_image_paste {
+            pending_image_paste.apply_edit(old_start, old_end, new_end);
+        }
 
         let (mut active, removed): (Vec<_>, Vec<_>) = std::mem::take(&mut self.attachments)
             .into_iter()
@@ -247,6 +287,7 @@ impl PromptAttachmentState {
     /// Restores attachment membership for the exact input revision reached
     /// through undo or redo.
     pub fn sync_after_history_restore(&mut self, input: &InputState) {
+        self.clear_pending_image_paste_anchor();
         let mut tracked_attachments = std::mem::take(&mut self.attachments);
         tracked_attachments.append(&mut self.archived_attachments);
         tracked_attachments.sort_by_key(|attachment| attachment.attachment_number);
@@ -263,6 +304,7 @@ impl PromptAttachmentState {
     /// Archives every current attachment while prompt-history navigation is
     /// showing a previously submitted text entry.
     pub fn archive_current(&mut self) {
+        self.clear_pending_image_paste_anchor();
         for attachment in &mut self.attachments {
             attachment.current_start = None;
         }
@@ -274,6 +316,7 @@ impl PromptAttachmentState {
     /// Restores draft attachment occurrences from `draft_revision` into the
     /// input's new current revision after prompt-history navigation.
     pub fn restore_draft_revision(&mut self, draft_revision: u64, input: &InputState) {
+        self.clear_pending_image_paste_anchor();
         let mut tracked_attachments = std::mem::take(&mut self.attachments);
         tracked_attachments.append(&mut self.archived_attachments);
         tracked_attachments.sort_by_key(|attachment| attachment.attachment_number);
@@ -308,12 +351,28 @@ impl PromptAttachmentState {
         unreachable
     }
 
-    /// Clears all tracked attachments and resets numbering back to the first
-    /// placeholder.
+    /// Returns whether a clipboard image capture is still running for this
+    /// composer.
+    #[must_use]
+    pub fn is_pasting_image(&self) -> bool {
+        self.pending_image_paste.is_some()
+    }
+
+    /// Drops the running capture's paste anchor after the input text was
+    /// replaced wholesale, so its placeholder falls back to the cursor.
+    fn clear_pending_image_paste_anchor(&mut self) {
+        if let Some(pending_image_paste) = &mut self.pending_image_paste {
+            pending_image_paste.anchor = None;
+        }
+    }
+
+    /// Clears all tracked attachments, abandons any running clipboard image
+    /// capture, and resets numbering back to the first placeholder.
     pub fn reset(&mut self) {
         self.archived_attachments.clear();
         self.attachments.clear();
         self.next_attachment_number = 1;
+        self.pending_image_paste = None;
     }
 }
 
@@ -325,6 +384,7 @@ impl Default for PromptAttachmentState {
             archived_attachments: Vec::new(),
             attachments: Vec::new(),
             next_attachment_number: 1,
+            pending_image_paste: None,
         }
     }
 }
@@ -753,6 +813,38 @@ pub fn insert_prompt_local_image(
     attachment_state.remember_current_revision(input);
     history_state.reset_navigation();
     slash_state.reset();
+}
+
+/// Inserts one pasted image placeholder at character offset `anchor` and
+/// keeps the cursor on the text it was on.
+///
+/// Background clipboard captures use this so the placeholder lands where the
+/// paste shortcut was pressed even after the user kept editing. A cursor at
+/// or after `anchor` moves past the placeholder.
+pub fn insert_prompt_local_image_at(
+    attachment_state: &mut PromptAttachmentState,
+    history_state: &mut PromptHistoryState,
+    input: &mut InputState,
+    slash_state: &mut PromptSlashState,
+    local_image_path: PathBuf,
+    anchor: usize,
+) {
+    let cursor = input.cursor;
+    let anchor = anchor.min(input.text().chars().count());
+    input.cursor = anchor;
+    insert_prompt_local_image(
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        local_image_path,
+    );
+    let placeholder_length = input.cursor - anchor;
+    input.cursor = if cursor < anchor {
+        cursor
+    } else {
+        cursor + placeholder_length
+    };
 }
 
 /// Applies one prompt deletion range, expanding it to whole image placeholders

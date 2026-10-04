@@ -389,9 +389,11 @@ for editing controls.
 
 <a id="usage-prompt-extras"></a> Paste a clipboard image with `Ctrl+V`, `Ctrl+Shift+V`,
 or `Alt+V`. From a draft session, these also open the composer. Each attached image
-appears as `[Image #n]`; typing that text manually does not attach a file. Unsupported
-clipboard backends show an inline error; Wayland image reads use `wl-paste` when
-available.
+appears as `[Image #n]`; typing that text manually does not attach a file. While the
+image is read, the composer footer shows `Pasting image...` and you can keep typing; the
+image lands where you pasted it. `Enter` and prompt-history navigation wait until the
+paste finishes. Unsupported clipboard backends show an inline error; Wayland image reads
+use `wl-paste` when available.
 
 Use `Ctrl+Z` to undo and `Ctrl+Y` or `Ctrl+Shift+Z` to redo. On macOS, use `Ctrl+Z`;
 your terminal may consume `Cmd+Z`. Prompt-history navigation preserves attached images.
