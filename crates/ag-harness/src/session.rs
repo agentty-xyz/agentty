@@ -120,6 +120,8 @@ struct CheckpointRow {
 struct ModelIdentityRow {
     model: Option<String>,
     provider: Option<String>,
+    registration_key: Option<String>,
+    registration_revision: Option<String>,
 }
 
 struct SessionMessageRow {
@@ -159,6 +161,7 @@ struct TurnSizeRow {
 pub struct SessionInfo {
     model: Option<String>,
     provider: Option<String>,
+    registration_identity: Option<ExecutionIdentity>,
 }
 
 impl SessionInfo {
@@ -166,13 +169,12 @@ impl SessionInfo {
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError`] when the database cannot be opened or the
-    /// session does not exist.
+    /// Returns [`SessionError`] when the database cannot be opened, the
+    /// session does not exist, or its stored registration is incomplete.
     pub async fn load(database_path: impl AsRef<Path>, id: &str) -> Result<Self, SessionError> {
         let database = Database::open(database_path.as_ref()).await?;
-        let (provider, model) = database.load_model_identity(id).await?;
 
-        Ok(Self { model, provider })
+        database.load_model_identity(id).await
     }
 
     /// Returns the stored model identifier, when the session model exposed it.
@@ -184,6 +186,13 @@ impl SessionInfo {
     /// it.
     pub fn provider(&self) -> Option<&str> {
         self.provider.as_deref()
+    }
+
+    /// Returns the stored model registration, or `None` for sessions created
+    /// from a direct model. Resume such sessions with a harness built from the
+    /// same registration.
+    pub fn registration_identity(&self) -> Option<&ExecutionIdentity> {
+        self.registration_identity.as_ref()
     }
 }
 
@@ -380,21 +389,25 @@ impl Database {
         })
     }
 
-    async fn load_model_identity(
-        &self,
-        id: &str,
-    ) -> Result<(Option<String>, Option<String>), SessionError> {
+    async fn load_model_identity(&self, id: &str) -> Result<SessionInfo, SessionError> {
         let row = sqlx::query_as!(
             ModelIdentityRow,
-            "SELECT provider, model FROM session WHERE id = ?",
+            "SELECT provider, model, registration_key, registration_revision FROM session WHERE \
+             id = ?",
             id
         )
         .fetch_optional(&self.pool)
         .await
         .session_context("load persistent session model identity")?
         .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        let registration_identity =
+            decode_registration_identity(id, row.registration_key, row.registration_revision)?;
 
-        Ok((row.provider, row.model))
+        Ok(SessionInfo {
+            model: row.model,
+            provider: row.provider,
+            registration_identity,
+        })
     }
 
     async fn load_turn_acquisition(
@@ -966,15 +979,8 @@ WHERE id = ?
         }
         let (checkpoint, latest_completed_turn, turns) =
             self.load_history(id, max_history_bytes).await?;
-        let registration_identity = match (row.registration_key, row.registration_revision) {
-            (None, None) => None,
-            (Some(key), Some(revision)) => Some(ExecutionIdentity::new(key, revision)?),
-            _ => {
-                return Err(SessionError::InvalidData {
-                    reason: format!("session `{id}` has incomplete registration identity"),
-                });
-            }
-        };
+        let registration_identity =
+            decode_registration_identity(id, row.registration_key, row.registration_revision)?;
 
         Ok(LoadedSession {
             checkpoint,
@@ -2283,6 +2289,20 @@ fn decode_max_history_bytes(id: &str, max_history_bytes: i64) -> Result<usize, S
     usize::try_from(max_history_bytes).map_err(|_| SessionError::InvalidData {
         reason: format!("session `{id}` has an invalid history byte limit"),
     })
+}
+
+fn decode_registration_identity(
+    id: &str,
+    key: Option<String>,
+    revision: Option<String>,
+) -> Result<Option<ExecutionIdentity>, SessionError> {
+    match (key, revision) {
+        (None, None) => Ok(None),
+        (Some(key), Some(revision)) => Ok(Some(ExecutionIdentity::new(key, revision)?)),
+        _ => Err(SessionError::InvalidData {
+            reason: format!("session `{id}` has incomplete registration identity"),
+        }),
+    }
 }
 
 async fn next_turn_position(

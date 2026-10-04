@@ -28,6 +28,21 @@ cargo run --locked -p ag-harness-cli -- \
   run muse-spark-1.3 --read-dir /path/to/repository
 ```
 
+## Chat commands
+
+Type `/` in the chat to list commands:
+
+- `/model` lists the known models, numbered, with the current model.
+- `/model <MODEL>` switches later turns of the session to a list number, a
+  `provider/model` pair, a known model ID, or another model ID from the current
+  provider. Completed history is kept, and resuming the session uses the new model.
+- `/help` shows the commands.
+
+Switching needs the target provider's credentials. `--base-url` applies only to the
+provider it was given for; other providers read their base URL environment variable.
+Sessions whose history contains provider reasoning cannot switch models. A model whose
+`provider/model` exceeds 256 bytes can start a session but cannot be a switch target.
+
 ## Defaults
 
 - Repository writes are disabled unless `--allow-write` is set.

@@ -2,18 +2,20 @@
 
 use std::borrow::Cow;
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, io};
 
 use ag_harness::lifecycle::LifecycleTraceObserver;
-use ag_harness::model::ReasoningEffort;
+use ag_harness::model::{ModelCapabilities, ModelRegistry, ModelRegistryError, ReasoningEffort};
 use ag_harness::provider::{ModelConfiguration, ModelConfigurationError, ModelProvider};
+use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
 use ag_harness::{
-    ComparisonBase, Harness, OutputSchema, Repository, Session, Tool, ToolPolicy, TurnLimits,
-    TurnOptions, TurnOutcome,
+    ComparisonBase, Harness, Model, OutputSchema, Repository, Session, Tool, ToolPolicy,
+    TurnLimits, TurnOptions, TurnOutcome,
 };
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
@@ -22,6 +24,15 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader};
 
+const CHAT_COMMAND_HELP: &str = concat!(
+    "commands:\n",
+    "  /model            list models\n",
+    "  /model <MODEL>    switch later turns to a list number, provider/model, or model ID\n",
+    "  /help             show commands\n"
+);
+/// Revision of the CLI's built-in model registrations. Sessions record it and
+/// require the same value on resume.
+const MODEL_REGISTRATION_REVISION: &str = "ag-harness-cli-1";
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a read-only repository harness. The read tool supports file, list, ",
     "search, diff, and show actions. For change review, call diff first when a comparison base is \
@@ -233,6 +244,157 @@ impl ChatMode {
     }
 }
 
+/// Built-in provider model used for chat turns.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelSelection {
+    model: String,
+    provider: ModelProvider,
+}
+
+impl ModelSelection {
+    /// Resolves a `/model` argument: a catalog number, `provider/model`, a
+    /// known model ID, or another model ID served by the current provider.
+    fn parse(target: &str, current: &Self) -> Result<Self, CliError> {
+        let unknown = || CliError::UnknownModel {
+            model: target.to_string(),
+        };
+        let catalog = Self::catalog();
+        if let Ok(number) = target.parse::<usize>() {
+            return number
+                .checked_sub(1)
+                .and_then(|index| catalog.get(index))
+                .cloned()
+                .ok_or_else(unknown);
+        }
+        if let Some((provider, model)) = target.split_once('/') {
+            let provider = provider.parse().map_err(|_| unknown())?;
+
+            return Ok(Self {
+                model: model.to_string(),
+                provider,
+            });
+        }
+
+        Ok(catalog
+            .into_iter()
+            .find(|selection| selection.model == target)
+            .unwrap_or_else(|| Self {
+                model: target.to_string(),
+                provider: current.provider,
+            }))
+    }
+
+    fn catalog() -> Vec<Self> {
+        ModelProvider::all()
+            .iter()
+            .flat_map(|provider| {
+                provider.known_models().iter().map(|model| Self {
+                    model: (*model).to_string(),
+                    provider: *provider,
+                })
+            })
+            .collect()
+    }
+
+    fn key(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
+
+    /// Returns the registration identity, or `None` when `provider/model`
+    /// exceeds the 256-byte identity limit.
+    fn identity(&self) -> Option<ExecutionIdentity> {
+        ExecutionIdentity::new(self.key(), MODEL_REGISTRATION_REVISION).ok()
+    }
+
+    fn registry(
+        identity: ExecutionIdentity,
+        client: impl Model + 'static,
+    ) -> Result<ModelRegistry, CliError> {
+        let mut registry = ModelRegistry::new();
+        registry.register(
+            identity,
+            client,
+            ModelCapabilities {
+                tool_calls: true,
+                ..ModelCapabilities::default()
+            },
+        )?;
+
+        Ok(registry)
+    }
+}
+
+/// Current chat model and the connector that builds clients for switches.
+struct ModelSwitcher<Connect> {
+    connect: Connect,
+    selection: ModelSelection,
+}
+
+impl<Connect, Client> ModelSwitcher<Connect>
+where
+    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Client: Model + 'static,
+{
+    /// Builds a harness for the current model. A registered harness records
+    /// its identity for resume; a direct harness resumes sessions stored
+    /// without one and serves models too long to register.
+    fn harness(&mut self, registered: bool) -> Result<Harness, CliError> {
+        let client = (self.connect)(&self.selection)?;
+        let Some(identity) = self.selection.identity().filter(|_| registered) else {
+            return Ok(Harness::new(client));
+        };
+        let key = identity.key().to_string();
+        let registry = ModelSelection::registry(identity, client)?;
+
+        Ok(Harness::from_registry(&registry, &key)?)
+    }
+
+    async fn switch(&mut self, session: &mut Session, target: &str) -> Result<(), CliError> {
+        let selection = ModelSelection::parse(target, &self.selection)?;
+        let identity = selection
+            .identity()
+            .ok_or_else(|| CliError::ModelKeyTooLong {
+                key: selection.key(),
+            })?;
+        let registry = ModelSelection::registry(identity, (self.connect)(&selection)?)?;
+        session.switch_model(&registry, &selection.key()).await?;
+        self.selection = selection;
+
+        Ok(())
+    }
+}
+
+/// Slash command entered in place of a chat prompt.
+#[derive(Debug, Eq, PartialEq)]
+enum ChatCommand {
+    Help,
+    ListModels,
+    SwitchModel(String),
+    Unknown(String),
+}
+
+impl ChatCommand {
+    /// Parses `prompt` as a command when its first word starts with `/` and
+    /// is not a path.
+    fn parse(prompt: &str) -> Option<Self> {
+        let prompt = prompt.trim();
+        let (name, argument) = prompt
+            .split_once(char::is_whitespace)
+            .map_or((prompt, ""), |(name, argument)| (name, argument.trim()));
+        let command = name.strip_prefix('/')?;
+        if command.contains('/') {
+            return None;
+        }
+
+        Some(match (command, argument) {
+            ("" | "help", _) => Self::Help,
+            ("model", "") => Self::ListModels,
+            ("model", model) => Self::SwitchModel(model.to_string()),
+            _ => Self::Unknown(name.to_string()),
+        })
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -334,12 +496,14 @@ where
             let session_id = args
                 .session
                 .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-            let client = model_client(
-                args.provider,
-                &args.model,
-                args.base_url.as_deref(),
-                &mut environment,
-            )?;
+            let mut models = ModelSwitcher {
+                connect: model_connector(args.provider, args.base_url, &mut environment),
+                selection: ModelSelection {
+                    model: args.model,
+                    provider: args.provider,
+                },
+            };
+            let harness = models.harness(true)?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
             let options = comparison_options(
                 &repository,
@@ -348,7 +512,7 @@ where
             )
             .await?;
             let (harness, system_prompt) = configured_harness(
-                client,
+                harness,
                 database,
                 repository,
                 args.allow_write,
@@ -365,7 +529,7 @@ where
 
             run_chat(
                 &mut session,
-                &args.model,
+                models,
                 args.prompt,
                 input,
                 output,
@@ -377,8 +541,11 @@ where
         Command::Resume(args) => {
             let info = SessionInfo::load(&database, &args.session).await?;
             let (provider, model) = stored_model_identity(&info)?;
-            let client =
-                model_client(provider, &model, args.base_url.as_deref(), &mut environment)?;
+            let mut models = ModelSwitcher {
+                connect: model_connector(provider, args.base_url, &mut environment),
+                selection: ModelSelection { model, provider },
+            };
+            let harness = models.harness(info.registration_identity().is_some())?;
             let repository = repository_or_default(args.read_dir, git_executable)?;
             let options = comparison_options(
                 &repository,
@@ -387,7 +554,7 @@ where
             )
             .await?;
             let (harness, _) = configured_harness(
-                client,
+                harness,
                 database,
                 repository,
                 args.allow_write,
@@ -400,7 +567,7 @@ where
 
             run_chat(
                 &mut session,
-                &model,
+                models,
                 args.prompt,
                 input,
                 output,
@@ -475,6 +642,22 @@ fn repository_from_path(root: &Path, path: Option<&OsStr>) -> Result<Repository,
     Err(CliError::GitExecutableNotFound)
 }
 
+/// Builds clients for the starting model and later `/model` switches. An
+/// explicit base URL applies only to the provider it was given for.
+fn model_connector(
+    provider: ModelProvider,
+    base_url: Option<String>,
+    environment: &mut impl FnMut(&str) -> Result<String, env::VarError>,
+) -> impl FnMut(&ModelSelection) -> Result<ag_harness::model::ModelClient, CliError> {
+    move |selection| {
+        let base_url = base_url
+            .as_deref()
+            .filter(|_| selection.provider == provider);
+
+        model_client(selection.provider, &selection.model, base_url, environment)
+    }
+}
+
 fn model_client(
     provider: ModelProvider,
     model: &str,
@@ -511,14 +694,14 @@ async fn comparison_options(
 }
 
 fn configured_harness(
-    client: ag_harness::model::ModelClient,
+    harness: Harness,
     database: PathBuf,
     repository: Repository,
     allow_write: bool,
     reasoning_effort: ReasoningEffort,
     trace: bool,
 ) -> (Harness, &'static str) {
-    let mut harness = Harness::new(client)
+    let mut harness = harness
         .database(database)
         .model_reasoning_effort(reasoning_effort)
         .repository(repository)
@@ -554,9 +737,9 @@ fn stored_model_identity_parts(
     Ok((provider, model))
 }
 
-async fn run_chat<Input, Output>(
+async fn run_chat<Connect, Client, Input, Output>(
     session: &mut Session,
-    requested_model: &str,
+    mut models: ModelSwitcher<Connect>,
     initial_prompt: Option<String>,
     mut input: Input,
     mut output: Output,
@@ -564,13 +747,18 @@ async fn run_chat<Input, Output>(
     options: TurnOptions,
 ) -> Result<(), CliError>
 where
+    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Client: Model + 'static,
     Input: AsyncBufRead + Unpin,
     Output: AsyncWrite + Unpin,
 {
     if mode == ChatMode::Interactive {
-        let requested_model = single_line_terminal_text(requested_model);
+        let requested_model = single_line_terminal_text(&models.selection.model);
         output
-            .write_all(format!("Chat with {requested_model}. Ctrl-D to exit.\n").as_bytes())
+            .write_all(
+                format!("Chat with {requested_model}. Type / for commands, Ctrl-D to exit.\n")
+                    .as_bytes(),
+            )
             .await?;
     }
 
@@ -584,12 +772,23 @@ where
         if prompt.trim().is_empty() {
             continue;
         }
-        match session.turn(prompt).options(options.clone()).await {
-            Ok(outcome) => write_outcome(&mut output, requested_model, &outcome).await?,
+        let result = match ChatCommand::parse(&prompt) {
+            Some(command) => run_command(command, session, &mut models, &mut output).await,
+            None => match session.turn(prompt).options(options.clone()).await {
+                Ok(outcome) => {
+                    write_outcome(&mut output, &models.selection.model, &outcome).await?;
+
+                    Ok(())
+                }
+                Err(error) => Err(error.into()),
+            },
+        };
+        match result {
+            Ok(()) => {}
             Err(error) if mode == ChatMode::Interactive => {
                 write_turn_error(&mut output, &error).await?;
             }
-            Err(error) if mode == ChatMode::OneShot => return Err(error.into()),
+            Err(error) if mode == ChatMode::OneShot => return Err(error),
             Err(error) => {
                 write_turn_error(&mut output, &error).await?;
                 turn_failed = true;
@@ -605,6 +804,42 @@ where
     } else {
         Ok(())
     }
+}
+
+async fn run_command<Connect, Client>(
+    command: ChatCommand,
+    session: &mut Session,
+    models: &mut ModelSwitcher<Connect>,
+    output: &mut (impl AsyncWrite + Unpin),
+) -> Result<(), CliError>
+where
+    Connect: FnMut(&ModelSelection) -> Result<Client, CliError>,
+    Client: Model + 'static,
+{
+    let text = match command {
+        ChatCommand::Help => CHAT_COMMAND_HELP.to_string(),
+        ChatCommand::ListModels => {
+            let current = models.selection.key();
+            let mut text = format!("current model: {}\n", single_line_terminal_text(&current));
+            for (index, selection) in ModelSelection::catalog().iter().enumerate() {
+                let _ = writeln!(text, "  {}. {}", index + 1, selection.key());
+            }
+            text.push_str("Type /model <MODEL> to switch.\n");
+
+            text
+        }
+        ChatCommand::SwitchModel(target) => {
+            models.switch(session, &target).await?;
+            let current = models.selection.key();
+
+            format!("model: {}\n", single_line_terminal_text(&current))
+        }
+        ChatCommand::Unknown(name) => return Err(CliError::UnknownCommand { name }),
+    };
+    output.write_all(text.as_bytes()).await?;
+    output.flush().await?;
+
+    Ok(())
 }
 
 async fn read_prompt<Input, Output>(
@@ -830,6 +1065,10 @@ enum CliError {
     Io(#[from] io::Error),
     #[error(transparent)]
     ModelConfiguration(ModelConfigurationError),
+    #[error("cannot switch to `{key}`; `provider/model` must fit in 256 bytes")]
+    ModelKeyTooLong { key: String },
+    #[error(transparent)]
+    ModelRegistry(#[from] ModelRegistryError),
     #[error(transparent)]
     OutputSchema(#[from] ag_harness::OutputSchemaError),
     #[error(transparent)]
@@ -840,6 +1079,10 @@ enum CliError {
     Telemetry(#[from] OtlpError),
     #[error(transparent)]
     Turn(#[from] ag_harness::TurnError),
+    #[error("unknown command `{name}`; type /help for commands")]
+    UnknownCommand { name: String },
+    #[error("unknown model `{model}`; type /model to list models")]
+    UnknownModel { model: String },
 }
 
 impl From<ModelConfigurationError> for CliError {
