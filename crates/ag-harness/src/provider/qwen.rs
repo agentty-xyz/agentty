@@ -1,6 +1,9 @@
 pub(crate) const DASHSCOPE_API_KEY_ENV: &str = "DASHSCOPE_API_KEY";
 pub(crate) const DASHSCOPE_BASE_URL_ENV: &str = "DASHSCOPE_BASE_URL";
 
+/// Qwen3.8 Max model identifier.
+pub const QWEN3_8_MAX: &str = "qwen3.8-max";
+
 /// Qwen Plus model identifier.
 pub const QWEN_PLUS: &str = "qwen-plus";
 

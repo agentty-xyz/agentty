@@ -27,8 +27,14 @@ fn catalog_exposes_every_provider_and_known_model() {
         ModelProvider::Muse.known_models(),
         &["muse-spark-1.3", "muse-spark-1.3-contributor"]
     );
-    assert_eq!(ModelProvider::Kimi.known_models(), &["kimi-k2.6"]);
-    assert_eq!(ModelProvider::Qwen.known_models(), &["qwen-plus"]);
+    assert_eq!(
+        ModelProvider::Kimi.known_models(),
+        &["kimi-k3", "kimi-k2.6"]
+    );
+    assert_eq!(
+        ModelProvider::Qwen.known_models(),
+        &["qwen3.8-max", "qwen-plus"]
+    );
     assert_eq!(
         ModelProvider::Muse.default_base_url(),
         Some("https://api.meta.ai/v1")

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use ag_harness::model::{ModelCapabilities, ModelClient, ModelRegistry};
 use ag_harness::provider::{
-    KIMI_K2_6, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, MuseConfig, QWEN_PLUS,
-    QwenConfig,
+    KIMI_K2_6, KIMI_K3, KimiConfig, MUSE_SPARK_1_3, MUSE_SPARK_1_3_CONTRIBUTOR, MuseConfig,
+    QWEN_PLUS, QWEN3_8_MAX, QwenConfig,
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
@@ -73,7 +73,7 @@ async fn test_kimi_k2_7_code_highspeed_images() -> Result<(), DynError> {
 #[tokio::test]
 #[ignore = "requires live Kimi credentials"]
 async fn test_kimi_k3_images() -> Result<(), DynError> {
-    vision::describes_images(kimi("kimi-k3")?, "kimi-k3").await
+    vision::describes_images(kimi(KIMI_K3)?, KIMI_K3).await
 }
 
 #[tokio::test]
@@ -93,7 +93,7 @@ async fn test_qwen_images() -> Result<(), DynError> {
         QWEN_PLUS,
         "qwen3.8-27b",
         "qwen3.8-flash",
-        "qwen3.8-max",
+        QWEN3_8_MAX,
         "qwen-vl-max",
         "qwen-vl-plus",
         "qwen3-vl-flash",

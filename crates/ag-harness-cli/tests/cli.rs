@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use std::{fs, io};
 
-use ag_harness::provider::ModelProvider;
+use ag_harness::provider::{KIMI_K2_6, ModelProvider, QWEN_PLUS};
 use ag_harness::tool::ToolDefinition;
 use assert_cmd::cargo::cargo_bin;
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
@@ -369,8 +369,10 @@ async fn kimi_custom_models_use_supported_reasoning_formats() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn provider_flags_select_kimi_and_qwen_wire_formats() {
     // Arrange and Act
-    for provider in [ModelProvider::Kimi, ModelProvider::Qwen] {
-        let model = provider.known_models()[0];
+    for (provider, model) in [
+        (ModelProvider::Kimi, KIMI_K2_6),
+        (ModelProvider::Qwen, QWEN_PLUS),
+    ] {
         let server = MockServer::start().await;
         let mut expected_request = json!({
             "messages": [
