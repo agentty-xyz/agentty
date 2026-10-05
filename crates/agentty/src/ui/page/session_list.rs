@@ -45,6 +45,8 @@ pub struct SessionListPage<'a> {
     pub sessions: &'a [Session],
     /// Table selection state tied to the raw session ordering.
     pub table_state: &'a mut TableState,
+    /// Full archive total when only a page of sessions is loaded.
+    archived_session_count: Option<usize>,
     /// Whether the archive pagination action is available.
     has_more_archived_sessions: bool,
     /// Latest session branch comparisons keyed by stable session id.
@@ -62,6 +64,7 @@ impl<'a> SessionListPage<'a> {
         wall_clock_unix_seconds: i64,
     ) -> Self {
         Self {
+            archived_session_count: None,
             default_reasoning_level,
             has_more_archived_sessions: false,
             sessions,
@@ -69,6 +72,14 @@ impl<'a> SessionListPage<'a> {
             table_state,
             wall_clock_unix_seconds,
         }
+    }
+
+    /// Sets the full archive total independently of the loaded rows.
+    #[must_use]
+    pub fn archived_session_count(mut self, count: usize) -> Self {
+        self.archived_session_count = Some(count);
+
+        self
     }
 
     /// Shows an actionable row below the loaded archive window.
@@ -262,6 +273,9 @@ impl Page for SessionListPage<'_> {
             self.session_git_statuses,
             self.wall_clock_unix_seconds,
         );
+        if let Some(total) = self.archived_session_count {
+            set_archive_session_count(&mut table_rows, total);
+        }
         if self.has_more_archived_sessions {
             table_rows.push(PreparedSessionRow::LoadMore);
         }
@@ -449,6 +463,38 @@ fn prepared_session_rows<'a>(
             )
         })
         .collect()
+}
+
+/// Updates the full archive total, retaining its heading when loaded rows
+/// have all been skipped by the loader.
+fn set_archive_session_count(rows: &mut Vec<PreparedSessionRow<'_>>, total: usize) {
+    if let Some(session_count) = rows.iter_mut().find_map(|row| match row {
+        PreparedSessionRow::GroupLabel {
+            group: SessionGroup::Archive,
+            session_count,
+        } => Some(session_count),
+        _ => None,
+    }) {
+        *session_count = total;
+
+        return;
+    }
+
+    if total == 0 {
+        return;
+    }
+
+    if let Some(PreparedSessionRow::Session {
+        adds_group_spacing, ..
+    }) = rows.last_mut()
+    {
+        *adds_group_spacing = true;
+    }
+
+    rows.push(PreparedSessionRow::GroupLabel {
+        group: SessionGroup::Archive,
+        session_count: total,
+    });
 }
 
 /// Converts one grouped row descriptor into a `ratatui` table row.

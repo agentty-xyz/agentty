@@ -450,6 +450,10 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         detail_session_id: Option<String>,
     ) -> Result<(Vec<SessionListRow>, bool), DbError>;
 
+    /// Counts all `Done` and `Canceled` sessions for one project, including
+    /// archived rows outside the loaded page.
+    async fn load_archived_session_count(&self, project_id: i64) -> Result<i64, DbError>;
+
     /// Loads transcript-scale detail for one session when it becomes active.
     async fn load_session_detail(
         &self,
@@ -1611,6 +1615,17 @@ ORDER BY session.updated_at DESC, session.created_at DESC, session.id
             .collect();
 
         Ok((rows, has_more_archived_sessions))
+    }
+
+    async fn load_archived_session_count(&self, project_id: i64) -> Result<i64, DbError> {
+        let count = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM session WHERE project_id = ? AND status IN ('Done', 'Canceled')",
+        )
+        .bind(project_id)
+        .fetch_one(&self.0)
+        .await?;
+
+        Ok(count)
     }
 
     async fn load_session_detail(

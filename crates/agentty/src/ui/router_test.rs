@@ -56,6 +56,7 @@ fn route_shared_context_finds_appendable_parent_for_selected_review_session() {
     table_state.select(Some(0));
     let shared = RouteSharedContext {
         active_project_id: 1,
+        archived_session_count: 0,
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::High,
@@ -126,6 +127,7 @@ fn render_list_tab(
     let mut table_state = TableState::default();
     let mut shared = RouteSharedContext {
         active_project_id: 1,
+        archived_session_count: 0,
         available_agent_clis: &available_agent_clis,
         current_tab,
         default_reasoning_level: ReasoningLevel::Max,
@@ -162,6 +164,7 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
     let mut table_state = TableState::default();
     let mut shared = RouteSharedContext {
         active_project_id: 1,
+        archived_session_count: 0,
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::High,
@@ -515,6 +518,7 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
     let mut table_state = TableState::default();
     let mut shared = RouteSharedContext {
         active_project_id: 1,
+        archived_session_count: 0,
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::default(),

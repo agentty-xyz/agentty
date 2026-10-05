@@ -53,12 +53,21 @@ pub(crate) struct SessionLoadInput<'a> {
     pub(crate) working_dir: &'a Path,
 }
 
-/// Loaded snapshots, activity, worktree availability, and archive continuation.
+/// Archive pagination metadata for the active project.
+#[derive(Default)]
+pub(crate) struct ArchivePageInfo {
+    /// Number of archived sessions across every page.
+    pub(crate) archived_session_count: usize,
+    /// Whether older archive rows remain outside the loaded page.
+    pub(crate) has_more_archived_sessions: bool,
+}
+
+/// Loaded snapshots, activity, worktree availability, and archive pagination.
 pub(crate) type LoadedSessionPage = (
     Vec<Session>,
     Vec<DailyActivity>,
     HashMap<SessionId, bool>,
-    bool,
+    ArchivePageInfo,
 );
 
 /// Mutable context threaded through the per-row session-load helper.
@@ -293,8 +302,7 @@ impl SessionManager {
     ///
     /// Returns loaded sessions, local-day activity counts aggregated from
     /// persisted session-creation activity history, cached worktree
-    /// availability keyed by session id, and whether older archive rows
-    /// remain.
+    /// availability keyed by session id, and archive pagination metadata.
     pub(crate) async fn load_sessions_with_fs_client(
         input: SessionLoadInput<'_>,
         handles: &mut HashMap<SessionId, SessionHandles>,
@@ -338,6 +346,10 @@ impl SessionManager {
                 archive_limit,
                 active_session_id.map(str::to_owned),
             )
+            .await?;
+        let archived_session_count = db
+            .sessions()
+            .load_archived_session_count(active_project_id)
             .await?;
         let activity_timestamps = db
             .activity()
@@ -386,7 +398,11 @@ impl SessionManager {
             sessions,
             stats_activity,
             session_worktree_availability,
-            has_more_archived_sessions,
+            ArchivePageInfo {
+                archived_session_count: usize::try_from(archived_session_count)
+                    .unwrap_or(usize::MAX),
+                has_more_archived_sessions,
+            },
         ))
     }
 
