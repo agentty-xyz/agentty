@@ -207,8 +207,22 @@ fn outcome_keeps_exit_output_and_each_failure_dimension() {
         assert_eq!(outcome.exit_code, None);
         assert_eq!(outcome.signal, Some(15));
         assert_eq!(outcome.termination, CommandTermination::Failed);
-        assert_eq!(outcome.stdout, "ok");
-        assert_eq!(outcome.stderr, "ba");
+        assert_eq!(
+            (
+                outcome.stdout.as_str(),
+                outcome.stdout_omitted_bytes,
+                outcome.stdout_tail.as_str(),
+            ),
+            ("ok", 0, "")
+        );
+        assert_eq!(
+            (
+                outcome.stderr.as_str(),
+                outcome.stderr_omitted_bytes,
+                outcome.stderr_tail.as_str(),
+            ),
+            ("b", 1, "d")
+        );
         assert!(outcome.truncated);
     }
 }

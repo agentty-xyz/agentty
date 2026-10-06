@@ -35,13 +35,29 @@ pub struct CommandOutcome {
     pub exit_code: Option<i32>,
     /// Main shell terminating signal, when observed.
     pub signal: Option<i32>,
-    /// Captured standard error, decoded with UTF-8 replacement.
+    /// Captured standard error, decoded with UTF-8 replacement; its start
+    /// when bytes were omitted.
     pub stderr: String,
-    /// Captured standard output, decoded with UTF-8 replacement.
+    /// Standard-error bytes omitted between `stderr` and `stderr_tail`.
+    #[serde(default)]
+    pub stderr_omitted_bytes: u64,
+    /// End of standard error, empty unless bytes were omitted.
+    #[serde(default)]
+    pub stderr_tail: String,
+    /// Captured standard output, decoded with UTF-8 replacement; its start
+    /// when bytes were omitted.
     pub stdout: String,
+    /// Standard-output bytes omitted between `stdout` and `stdout_tail`.
+    #[serde(default)]
+    pub stdout_omitted_bytes: u64,
+    /// End of standard output, empty unless bytes were omitted.
+    #[serde(default)]
+    pub stdout_tail: String,
     /// Overall completion reason, independent of the main shell exit.
     pub termination: CommandTermination,
-    /// Whether the combined capture budget discarded any bytes.
+    /// Whether the combined capture budget omitted any bytes. Records from
+    /// before head-and-tail capture kept only an arrival-order prefix and
+    /// report no omitted counts.
     pub truncated: bool,
 }
 

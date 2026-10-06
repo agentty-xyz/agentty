@@ -156,6 +156,9 @@ impl Drop for Cancel {
 }
 
 fn command_outcome(result: &ExecutionResult, cleanup_scope: CommandCleanupScope) -> CommandOutcome {
+    let stdout = result.output.stdout();
+    let stderr = result.output.stderr();
+
     CommandOutcome {
         cleanup_failed: result.cleanup_failure.is_some(),
         cleanup_scope,
@@ -176,8 +179,12 @@ fn command_outcome(result: &ExecutionResult, cleanup_scope: CommandCleanupScope)
         } else {
             None
         },
-        stdout: String::from_utf8_lossy(result.output.stdout()).into_owned(),
-        stderr: String::from_utf8_lossy(result.output.stderr()).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr.head).into_owned(),
+        stderr_omitted_bytes: stderr.omitted_bytes,
+        stderr_tail: String::from_utf8_lossy(&stderr.tail).into_owned(),
+        stdout: String::from_utf8_lossy(&stdout.head).into_owned(),
+        stdout_omitted_bytes: stdout.omitted_bytes,
+        stdout_tail: String::from_utf8_lossy(&stdout.tail).into_owned(),
         termination: match result.termination {
             Termination::Completed => CommandTermination::Completed,
             Termination::Deadline => CommandTermination::Deadline,
