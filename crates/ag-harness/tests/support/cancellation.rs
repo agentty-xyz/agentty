@@ -11,15 +11,15 @@ use ag_harness::lifecycle::TurnErrorType;
 use ag_harness::model::{
     ModelCompletion, ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
-use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
-    AcquiredTurn, LoadedSession, MemoryStore, NewSession, SessionStore, SqliteStore, StoreIdentity,
-    TurnOwner, WriteRecord, WriteStatus,
+    LoadedSession, MemoryStore, ModelSwitch, NewSession, Reservation, SessionStore, SqliteStore,
+    StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
-    TurnError, TurnInput, TurnLimits, TurnOptions, TurnOutcome,
+    TurnError, TurnLimits, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -180,56 +180,23 @@ impl SessionStore for Gate {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &ag_harness::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
-        self.store
-            .switch_model(id, generation, identity, metadata, capabilities)
-            .await
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
+        self.store.switch_model(id, switch).await
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        self.pause(Phase::Acquire).await;
-        let turn = self
-            .store
-            .begin_turn(store, id, input, options, generation)
-            .await?;
-        self.pause(Phase::AcquireAck).await;
-        Ok(turn)
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        if self.phase == Phase::AcquirePanic {
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        if admission.host_id().is_some() && self.phase == Phase::AcquirePanic {
             std::panic::resume_unwind(Box::new("injected host acquisition panic"));
         }
         self.pause(Phase::Acquire).await;
-        let turn = self
-            .store
-            .begin_request(store, id, input, options, request, generation)
-            .await?;
+        let reservation = self.store.reserve_turn(id, admission).await?;
         self.pause(Phase::AcquireAck).await;
 
-        Ok(turn)
+        Ok(reservation)
     }
 
     async fn load_request(

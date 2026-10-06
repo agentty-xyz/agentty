@@ -9,8 +9,8 @@ use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
 use crate::recovery::ExecutionIdentity;
 use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, ReservationObserver};
-use crate::store::{NewSession, SessionStore};
+use crate::session::{Database, LoadedSession, ReservationObserver};
+use crate::store::{AcquiredTurn, ModelSwitch, NewSession, SessionStore};
 
 struct Validated {
     entered: Notify,
@@ -27,12 +27,53 @@ impl ReservationObserver for Validated {
         }
     }
 
-    async fn committed(&self) {}
+    async fn committed(&self) -> Result<(), SessionError> {
+        Ok(())
+    }
 }
 
 #[tokio::test]
 async fn switch_revalidates_history_completed_during_validation() {
     // Arrange
+    let reserve_successor = false;
+
+    // Act
+    let (result, loaded) = switch_across_concurrent_unsupported_history(reserve_successor).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(SessionError::UnsupportedModelHistory { .. })
+    ));
+    assert_eq!(loaded.model_generation, 0);
+    assert_eq!(
+        loaded.provider_session_id.as_deref(),
+        Some("old-continuation")
+    );
+}
+
+#[tokio::test]
+async fn switch_reports_unsupported_history_before_a_concurrent_successor_turn() {
+    // Arrange
+    let reserve_successor = true;
+
+    // Act
+    let (result, loaded) = switch_across_concurrent_unsupported_history(reserve_successor).await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(SessionError::UnsupportedModelHistory { .. })
+    ));
+    assert_eq!(loaded.model_generation, 0);
+}
+
+/// Completes a turn with unsupported reasoning while a model switch waits
+/// between history validation and its writer transaction, optionally
+/// reserving an active successor turn before the switch resumes.
+async fn switch_across_concurrent_unsupported_history(
+    reserve_successor: bool,
+) -> (Result<i64, SessionError>, LoadedSession) {
     let mut database = Database::open_in_memory().await.expect("database");
     let observer = Arc::new(Validated {
         entered: Notify::new(),
@@ -45,33 +86,32 @@ async fn switch_revalidates_history_completed_during_validation() {
         .create_session(&NewSession::new("switch", schema()), None, 1024)
         .await
         .expect("session");
-    let acquired = store
-        .begin_turn(
-            Arc::clone(&store),
-            "switch",
-            &TurnInput::from("first"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("acquire");
+    let acquired = AcquiredTurn::begin(
+        Arc::clone(&store),
+        "switch",
+        &TurnInput::from("first"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("acquire");
     let switching = {
         let store = Arc::clone(&store);
         tokio::spawn(async move {
             store
                 .switch_model(
                     "switch",
-                    0,
-                    &ExecutionIdentity::new("b", "1").expect("identity"),
-                    None,
-                    ModelCapabilities::default(),
+                    &ModelSwitch::new(
+                        ExecutionIdentity::new("b", "1").expect("identity"),
+                        None,
+                        ModelCapabilities::default(),
+                        0,
+                    ),
                 )
                 .await
         })
     };
     observer.entered.notified().await;
-
-    // Act
     store
         .complete_turn(
             acquired.owner(),
@@ -83,18 +123,24 @@ async fn switch_revalidates_history_completed_during_validation() {
         )
         .await
         .expect("complete");
+    let _successor = if reserve_successor {
+        Some(
+            AcquiredTurn::begin(
+                Arc::clone(&store),
+                "switch",
+                &TurnInput::from("second"),
+                &turn_options(),
+                0,
+            )
+            .await
+            .expect("successor"),
+        )
+    } else {
+        None
+    };
     observer.release.notify_one();
     let result = switching.await.expect("switch task");
-
-    // Assert
-    assert!(matches!(
-        result,
-        Err(SessionError::UnsupportedModelHistory { .. })
-    ));
     let loaded = store.load_session("switch").await.expect("load");
-    assert_eq!(loaded.model_generation, 0);
-    assert_eq!(
-        loaded.provider_session_id.as_deref(),
-        Some("old-continuation")
-    );
+
+    (result, loaded)
 }

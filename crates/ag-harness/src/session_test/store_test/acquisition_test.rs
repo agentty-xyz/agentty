@@ -1,14 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use super::support::{AcquisitionGate, CommitGate};
 use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, NewSession, SessionError};
-use crate::store::SessionStore;
+use crate::session::{Database, NewSession, ReservationObserver, SessionError};
+use crate::store::{AcquiredTurn, SessionStore};
 
 #[tokio::test]
 async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
@@ -26,15 +27,14 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
     });
     database.reservation_observer = gate.clone();
     let task = tokio::spawn(async move {
-        database
-            .begin_turn(
-                Arc::new(database.clone()),
-                "session",
-                &TurnInput::from("lost"),
-                &turn_options(),
-                0,
-            )
-            .await
+        AcquiredTurn::begin(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from("lost"),
+            &turn_options(),
+            0,
+        )
+        .await
     });
     gate.entered.notified().await;
 
@@ -46,17 +46,29 @@ async fn abandoned_acquisition_acknowledgement_is_recovered_across_reopen() {
             .expect("cancelled acquisition")
             .is_cancelled()
     );
+    gate.release.notify_one();
     let database = Database::open(&path).await.expect("reopen");
-    let mut replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while sqlx::query_scalar::<_, String>("SELECT status FROM session_turn")
+            .fetch_one(&database.pool)
+            .await
+            .expect("abandoned turn state")
+            != "interrupted"
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("acknowledged reservation is interrupted");
+    let mut replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
     replacement
         .guard
         .complete(&[], None)
@@ -95,29 +107,27 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
     .expect("deferred commit failure");
 
     // Act
-    let result = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("rejected"),
-            &turn_options(),
-            0,
-        )
-        .await;
+    let result = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("rejected"),
+        &turn_options(),
+        0,
+    )
+    .await;
     sqlx::query("DROP TRIGGER reject_commit")
         .execute(&database.pool)
         .await
         .expect("remove fault");
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement");
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
     let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session_turn")
         .fetch_one(&database.pool)
         .await
@@ -133,6 +143,62 @@ async fn failed_acquisition_commit_never_leaves_a_reservation() {
     ));
     assert_eq!(replacement.guard.owner().turn_position, 0);
     assert_eq!(count, 1);
+}
+
+struct FailedAcknowledgment;
+
+#[async_trait]
+impl ReservationObserver for FailedAcknowledgment {
+    async fn committed(&self) -> Result<(), SessionError> {
+        Err(SessionError::InvalidData {
+            reason: "injected acknowledgment failure".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn failed_acknowledgment_of_a_durable_commit_interrupts_the_reservation() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    database
+        .create_session(&NewSession::new("session", schema()), None, 100_000)
+        .await
+        .expect("session");
+    let mut failing = database.clone();
+    failing.reservation_observer = Arc::new(FailedAcknowledgment);
+
+    // Act
+    let result = AcquiredTurn::begin(
+        Arc::new(failing),
+        "session",
+        &TurnInput::from("unacknowledged"),
+        &turn_options(),
+        0,
+    )
+    .await;
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
+    let states = sqlx::query_as::<_, (i64, String)>(
+        "SELECT turn_position, status FROM session_turn ORDER BY turn_position",
+    )
+    .fetch_all(&database.pool)
+    .await
+    .expect("turns");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::InvalidData { .. })));
+    assert_eq!(replacement.guard.owner().turn_position, 1);
+    assert_eq!(
+        states,
+        vec![(0, "interrupted".into()), (1, "running".into())]
+    );
 }
 
 #[tokio::test]
@@ -151,15 +217,14 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
     let mut gated = database.clone();
     gated.reservation_observer = gate.clone();
     let task = tokio::spawn(async move {
-        gated
-            .begin_turn(
-                Arc::new(gated.clone()),
-                "session",
-                &TurnInput::from("abandoned"),
-                &turn_options(),
-                0,
-            )
-            .await
+        AcquiredTurn::begin(
+            Arc::new(gated.clone()),
+            "session",
+            &TurnInput::from("abandoned"),
+            &turn_options(),
+            0,
+        )
+        .await
     });
     gate.entered.notified().await;
 
@@ -184,16 +249,15 @@ async fn cancelled_waiter_retains_reservation_until_commit_and_cleanup_settle() 
     .await
     .expect("retained committer cleans up");
     database.reservation_observer = Arc::new(());
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement");
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
 
     // Assert
     assert_eq!(replacement.guard.owner().turn_position, 1);
@@ -215,15 +279,14 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
     database.reservation_observer = gate.clone();
     let gated = database.clone();
     let task = tokio::spawn(async move {
-        gated
-            .begin_turn(
-                Arc::new(gated.clone()),
-                "session",
-                &TurnInput::from("failed"),
-                &turn_options(),
-                0,
-            )
-            .await
+        AcquiredTurn::begin(
+            Arc::new(gated.clone()),
+            "session",
+            &TurnInput::from("failed"),
+            &turn_options(),
+            0,
+        )
+        .await
     });
     gate.entered.notified().await;
 
@@ -231,21 +294,24 @@ async fn reservation_task_failure_is_reported_without_leaving_an_active_turn() {
     gate.release.notify_one();
     let result = task.await.expect("waiter");
     database.reservation_observer = Arc::new(());
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement");
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
 
     // Assert
-    assert!(
-        matches!(result, Err(SessionError::InvalidData { reason }) if reason.contains("reservation task failed"))
-    );
+    assert!(matches!(
+        result,
+        Err(SessionError::Store {
+            operation: "acquire session turn",
+            ..
+        })
+    ));
     assert_eq!(replacement.guard.owner().turn_position, 0);
 }
 
@@ -264,15 +330,14 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
     let mut gated = database.clone();
     gated.reservation_observer = gate.clone();
     let task = tokio::spawn(async move {
-        gated
-            .begin_turn(
-                Arc::new(gated.clone()),
-                "session",
-                &TurnInput::from("expired"),
-                &turn_options(),
-                0,
-            )
-            .await
+        AcquiredTurn::begin(
+            Arc::new(gated.clone()),
+            "session",
+            &TurnInput::from("expired"),
+            &turn_options(),
+            0,
+        )
+        .await
     });
     gate.entered.notified().await;
 
@@ -282,16 +347,15 @@ async fn expired_acquisition_acknowledgement_never_returns_an_executable_turn() 
     tokio::time::resume();
     gate.release.notify_one();
     let result = task.await.expect("acquisition");
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement");
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement");
 
     // Assert
     assert!(matches!(result, Err(SessionError::OwnershipLost { .. })));

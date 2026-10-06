@@ -24,8 +24,8 @@ use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostT
 use crate::repository::Repository;
 use crate::reservation;
 use crate::schema_contract::OutputSchema;
-use crate::session::{AcquiredTurn, Database, LoadedSession, NewSession, SessionError};
-use crate::store::SessionStore;
+use crate::session::{Database, LoadedSession, NewSession, SessionError};
+use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
 use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;

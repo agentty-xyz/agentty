@@ -4,7 +4,7 @@ use crate::TurnInput;
 use crate::bash::CommandIntent;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::reservation::{AdmittedStore, admit};
-use crate::store::{NewSession, SessionStore};
+use crate::store::{AcquiredTurn, ModelSwitch, NewSession, SessionStore};
 use crate::store_conformance_test::{lifecycle, options, schema, stores};
 
 #[tokio::test]
@@ -24,15 +24,17 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
         decorated
             .switch_model(
                 "session",
-                0,
-                &crate::recovery::ExecutionIdentity::new("next", "1").expect("identity"),
-                None,
-                crate::model::ModelCapabilities {
-                    context_budget: None,
-                    image_input: false,
-                    native_continuation: true,
-                    tool_calls: true,
-                },
+                &ModelSwitch::new(
+                    crate::recovery::ExecutionIdentity::new("next", "1").expect("identity"),
+                    None,
+                    crate::model::ModelCapabilities {
+                        context_budget: None,
+                        image_input: false,
+                        native_continuation: true,
+                        tool_calls: true,
+                    },
+                    0,
+                ),
             )
             .await
             .expect("switch through decorator");
@@ -72,17 +74,16 @@ async fn admission_decorator_forwards_host_recovery() {
             HostRequest::from_configuration("id".into(), serde_json::json!({})).expect("request");
 
         // Act
-        let turn = decorated
-            .begin_request(
-                Arc::clone(&decorated),
-                "session",
-                &TurnInput::from("prompt"),
-                &options(),
-                &request,
-                0,
-            )
-            .await
-            .expect("turn");
+        let turn = AcquiredTurn::begin_request(
+            Arc::clone(&decorated),
+            "session",
+            &TurnInput::from("prompt"),
+            &options(),
+            &request,
+            0,
+        )
+        .await
+        .expect("turn");
         let record = decorated
             .load_request("session", "id")
             .await
@@ -111,16 +112,15 @@ async fn admission_decorator_preserves_command_owner_and_unknown_outcome() {
             .create_session(&NewSession::new("commands", schema()), None, 1024)
             .await
             .expect("session");
-        let mut turn = decorated
-            .begin_turn(
-                Arc::clone(&decorated),
-                "commands",
-                &TurnInput::from("run"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("turn");
+        let mut turn = AcquiredTurn::begin(
+            Arc::clone(&decorated),
+            "commands",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
         let intent = CommandIntent {
             call_id: "call".into(),
             command: "effect".into(),

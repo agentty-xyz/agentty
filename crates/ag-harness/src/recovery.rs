@@ -90,6 +90,16 @@ pub enum HostTurnAcquisition {
     Recorded(HostTurnRecord),
 }
 
+impl HostTurnAcquisition {
+    /// Unwraps a plain turn's reservation; only host requests are recorded.
+    pub(crate) fn into_acquired(self) -> Result<AcquiredTurn, SessionError> {
+        match self {
+            Self::Acquired(acquired) => Ok(acquired),
+            Self::Recorded(_) => Err(SessionError::HostTurnConflict),
+        }
+    }
+}
+
 /// Snapshot of a host request and its known write and command effects.
 /// Pending records remain unknown; this is not proof that effects have stopped.
 #[derive(Clone, Debug, Eq, PartialEq)]

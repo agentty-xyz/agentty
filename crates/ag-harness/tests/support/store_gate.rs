@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ag_harness::model::{ModelMessage, ModelMetadata};
-use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use ag_harness::recovery::HostTurnRecord;
 use ag_harness::store::{
-    AcquiredTurn, LoadedSession, NewSession, SessionStore, StoreIdentity, TurnOwner, WriteRecord,
+    LoadedSession, ModelSwitch, NewSession, Reservation, SessionStore, StoreIdentity,
+    TurnAdmission, TurnOwner, WriteRecord,
 };
-use ag_harness::{SessionError, TurnError, TurnInput, TurnOptions, TurnOutcome};
+use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -18,11 +19,13 @@ pub(crate) struct Gate {
     pub(crate) after_commit: bool,
     pub(crate) entered: Notify,
     pub(crate) fail_cleanup: AtomicBool,
+    pub(crate) identity: StoreIdentity,
     pub(crate) interrupted: Notify,
     pub(crate) panic_acquire: AtomicBool,
     pub(crate) panic_switch: bool,
     pub(crate) pause_switch: bool,
     pub(crate) release: Notify,
+    pub(crate) reserve_session: Option<String>,
     pub(crate) store: Arc<dyn SessionStore>,
 }
 
@@ -32,11 +35,13 @@ impl Gate {
             after_commit,
             entered: Notify::new(),
             fail_cleanup: AtomicBool::new(false),
+            identity: store.identity().clone(),
             interrupted: Notify::new(),
             panic_acquire: AtomicBool::new(false),
             panic_switch: false,
             pause_switch: false,
             release: Notify::new(),
+            reserve_session: None,
             store,
         }
     }
@@ -50,7 +55,7 @@ impl Gate {
 #[async_trait]
 impl SessionStore for Gate {
     fn identity(&self) -> &StoreIdentity {
-        self.store.identity()
+        &self.identity
     }
 
     async fn create_session(
@@ -74,67 +79,41 @@ impl SessionStore for Gate {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &ag_harness::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         if self.panic_switch {
             std::panic::resume_unwind(Box::new("injected switch panic"));
         }
         if self.pause_switch && !self.after_commit {
             self.pause().await;
         }
-        let result = self
-            .store
-            .switch_model(id, generation, identity, metadata, capabilities)
-            .await;
+        let result = self.store.switch_model(id, switch).await;
         if self.pause_switch && self.after_commit {
             self.pause().await;
         }
         result
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        let id = self.reserve_session.as_deref().unwrap_or(id);
+        if admission.host_id().is_some() {
+            return self.store.reserve_turn(id, admission).await;
+        }
         if self.panic_acquire.load(Ordering::SeqCst) {
             std::panic::resume_unwind(Box::new("injected acquisition panic"));
         }
         if !self.after_commit {
             self.pause().await;
         }
-        let acquired = self
-            .store
-            .begin_turn(store, id, input, options, generation)
-            .await?;
+        let reserved = self.store.reserve_turn(id, admission).await?;
         if self.after_commit {
             self.pause().await;
         }
 
-        Ok(acquired)
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.store
-            .begin_request(store, id, input, options, request, generation)
-            .await
+        Ok(reserved)
     }
 
     async fn load_request(

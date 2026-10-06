@@ -9,7 +9,7 @@ use ag_harness::model::{
     ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
-use ag_harness::store::{SessionStore, WriteStatus};
+use ag_harness::store::{AcquiredTurn, SessionStore, WriteStatus};
 use ag_harness::tool::{ToolCall, ToolDefinition};
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnError, TurnInput};
 use async_trait::async_trait;
@@ -310,16 +310,15 @@ async fn switching_models_applies_the_target_budget_to_whole_tool_groups() {
 async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
     let call = ToolCall::from_json("call-1".to_string(), "read", r#"{"path":"name.txt"}"#, None)
         .expect("tool call");
-    let tool_turn = store
-        .begin_turn(
-            Arc::clone(store),
-            "groups",
-            &TurnInput::from("seed tool"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("seed tool turn");
+    let tool_turn = AcquiredTurn::begin(
+        Arc::clone(store),
+        "groups",
+        &TurnInput::from("seed tool"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("seed tool turn");
     let write = store
         .write_intent(
             tool_turn.owner(),
@@ -351,16 +350,15 @@ async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
         )
         .await
         .expect("complete tool turn");
-    let text_turn = store
-        .begin_turn(
-            Arc::clone(store),
-            "groups",
-            &TurnInput::from("seed text"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("seed text turn");
+    let text_turn = AcquiredTurn::begin(
+        Arc::clone(store),
+        "groups",
+        &TurnInput::from("seed text"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("seed text turn");
     store
         .complete_turn(
             text_turn.owner(),

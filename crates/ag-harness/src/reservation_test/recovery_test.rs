@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use crate::effect::Effects;
 use crate::reservation::{self, abandon, recover_session, retained_store};
-use crate::session::AcquiredTurn;
-use crate::store::{MemoryStore, NewSession, SessionStore};
+use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore};
 use crate::store_conformance_test::{options, schema, stores};
 use crate::{SessionError, TurnInput};
 
@@ -22,16 +21,15 @@ async fn acquire(store: &Arc<dyn SessionStore>, prompt: &str) -> AcquiredTurn {
 
 /// Reserves directly through the store, without process-local admission.
 async fn reserve(store: &Arc<dyn SessionStore>, prompt: &str) -> AcquiredTurn {
-    store
-        .begin_turn(
-            Arc::clone(store),
-            "session",
-            &TurnInput::from(prompt),
-            &options(),
-            0,
-        )
-        .await
-        .expect("turn should be reserved")
+    AcquiredTurn::begin(
+        Arc::clone(store),
+        "session",
+        &TurnInput::from(prompt),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn should be reserved")
 }
 
 async fn create_session(store: &Arc<dyn SessionStore>) {
@@ -51,15 +49,14 @@ async fn acquisition_recovers_abandoned_owners_for_every_store() {
         let owner = abandoned.owner().clone();
         drop(abandoned);
         abandon(owner.clone(), Arc::clone(&store));
-        let direct = store
-            .begin_turn(
-                Arc::clone(&store),
-                "session",
-                &TurnInput::from("direct"),
-                &options(),
-                0,
-            )
-            .await;
+        let direct = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "session",
+            &TurnInput::from("direct"),
+            &options(),
+            0,
+        )
+        .await;
 
         // Act
         let replacement = acquire(&store, "replacement").await;

@@ -9,7 +9,7 @@ use std::time::Duration;
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
 use ag_harness::model::{ModelCompletion, ModelRequest, ModelResponse};
 use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnStatus};
-use ag_harness::store::{NewSession, SessionStore, SqliteStore, WriteStatus};
+use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, SqliteStore, WriteStatus};
 use ag_harness::{
     Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
     TurnOptions,
@@ -283,8 +283,8 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
         // Act
         let input = TurnInput::from("hello");
         let (left, right) = tokio::join!(
-            store.begin_request(Arc::clone(&store), "race", &input, &options, &request, 0),
-            store.begin_request(Arc::clone(&store), "race", &input, &options, &request, 0)
+            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0),
+            AcquiredTurn::begin_request(Arc::clone(&store), "race", &input, &options, &request, 0)
         );
         let ((HostTurnAcquisition::Acquired(acquired), HostTurnAcquisition::Recorded(duplicate))
         | (HostTurnAcquisition::Recorded(duplicate), HostTurnAcquisition::Acquired(acquired))) =
@@ -325,16 +325,15 @@ async fn backend_duplicate_acquisition_is_atomic_and_recovers_pending_effects() 
         changed["fingerprint"] = json!("changed");
         let changed: HostRequest = serde_json::from_value(changed).expect("request");
         assert!(matches!(
-            store
-                .begin_request(
-                    Arc::clone(&store),
-                    "race",
-                    &TurnInput::from("changed"),
-                    &options,
-                    &changed,
-                    0
-                )
-                .await,
+            AcquiredTurn::begin_request(
+                Arc::clone(&store),
+                "race",
+                &TurnInput::from("changed"),
+                &options,
+                &changed,
+                0
+            )
+            .await,
             Err(SessionError::HostTurnConflict)
         ));
         assert!(matches!(

@@ -75,6 +75,7 @@ mod gated_store_test;
 #[path = "../tests/support/repository.rs"]
 mod repository_fixture;
 
+mod admission;
 pub mod bash;
 mod cancellation;
 #[cfg(test)]

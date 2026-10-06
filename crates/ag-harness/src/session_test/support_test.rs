@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -18,7 +19,7 @@ use crate::session::{
     StoreIdentity, TimestampSource, TurnOwner, connect_options, next_turn_position,
     system_timestamp_source,
 };
-use crate::store::SessionStore;
+use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 
 pub(super) struct SessionTimestampsRow {
@@ -92,16 +93,15 @@ pub(super) fn turn(prompt: &str, answer: &str) -> Vec<ModelMessage> {
 }
 
 pub(super) async fn complete_native_turn(database: &Database, provider_session_id: &str) {
-    let mut acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("first"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let mut acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("first"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     database
         .complete_turn(
             "session-a",
@@ -395,6 +395,7 @@ pub(super) struct ReservationCommitControl {
     pub(super) commit_seen: std::sync::atomic::AtomicBool,
     pub(super) pause_once: std::sync::atomic::AtomicBool,
     commit_notification: Notify,
+    release: Notify,
 }
 
 impl ReservationCommitControl {
@@ -403,7 +404,12 @@ impl ReservationCommitControl {
             commit_seen: std::sync::atomic::AtomicBool::new(false),
             pause_once: std::sync::atomic::AtomicBool::new(true),
             commit_notification: Notify::new(),
+            release: Notify::new(),
         }
+    }
+
+    pub(super) fn release(&self) {
+        self.release.notify_one();
     }
 
     pub(super) async fn wait_for_commit(&self) {
@@ -429,11 +435,32 @@ impl ReservationCommitControl {
 
 #[async_trait]
 impl ReservationObserver for ReservationCommitControl {
-    async fn committed(&self) {
+    async fn committed(&self) -> Result<(), SessionError> {
         if self.pause_after_commit() {
-            std::future::pending::<()>().await;
+            self.release.notified().await;
         }
+
+        Ok(())
     }
+}
+
+/// Waits until the turn at `turn_position` is recorded as interrupted.
+pub(super) async fn wait_for_interrupted_turn(database: &Database, turn_position: i64) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while sqlx::query_scalar::<_, String>(
+            "SELECT status FROM session_turn WHERE turn_position = ?",
+        )
+        .bind(turn_position)
+        .fetch_one(&database.pool)
+        .await
+        .expect("cancelled turn state should load")
+            != "interrupted"
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("acknowledged reservation should be interrupted");
 }
 
 pub(super) fn turn_options() -> crate::TurnOptions {

@@ -2,17 +2,18 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::model::{ModelMessage, ModelMetadata};
-use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus};
+use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    AcquiredTurn, LoadedSession, NewSession, SessionCheckpoint, SessionStore, StoreIdentity,
-    StoredTurnOptions, TurnOwner, WriteRecord, WriteStatus,
+    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
+    SessionCheckpoint, SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
+    WriteStatus,
 };
-use ag_harness::{SessionError, TurnError, TurnInput, TurnOptions, TurnOutcome};
+use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Notify;
@@ -39,6 +40,17 @@ struct Record {
 }
 
 impl Record {
+    fn admission_state(&self, host_id: Option<&str>) -> AdmissionState {
+        AdmissionState {
+            active_turn: self.owner.is_some(),
+            latest_options: self.snapshot.clone(),
+            model_generation: self.loaded.model_generation,
+            provider_session_id: self.loaded.provider_session_id.clone(),
+            request: host_id.and_then(|host_id| self.request(host_id)),
+            unresolved_commands: false,
+        }
+    }
+
     fn set_status(&mut self, owner: &TurnOwner, status: HostTurnStatus) {
         if let Some(record) = self
             .requests
@@ -129,79 +141,6 @@ impl Record {
 }
 
 impl ExternalStore {
-    fn acquire(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: Option<&HostRequest>,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        let mut sessions = self.sessions.lock().expect("sessions");
-        let session = sessions
-            .get_mut(id)
-            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
-        session.recover();
-        if let Some(request) = request
-            && let Some(record) = session.request(request.id())
-        {
-            record.check_request(request)?;
-
-            return Ok(HostTurnAcquisition::Recorded(record));
-        }
-        if session.loaded.model_generation != generation {
-            return Err(SessionError::StaleModel { id: id.to_string() });
-        }
-        if session.owner.is_some() {
-            return Err(SessionError::Busy { id: id.to_string() });
-        }
-        let compatible = session
-            .snapshot
-            .as_deref()
-            .map(StoredTurnOptions::decode)
-            .transpose()?
-            .is_some_and(|previous| previous.continuation_compatible(options));
-        let continuation = session
-            .loaded
-            .provider_session_id
-            .clone()
-            .filter(|_| compatible);
-        let position = session.next_turn;
-        let owner = TurnOwner::new(
-            self.identity.clone(),
-            id.to_string(),
-            position,
-            position.to_le_bytes().to_vec(),
-        );
-        let deadline = Instant::now() + self.initial_lease;
-        let acquired = AcquiredTurn::new(
-            store,
-            owner.clone(),
-            deadline,
-            session.bounded().turns,
-            continuation.clone(),
-        )?
-        .with_checkpoint(session.loaded.checkpoint.clone());
-        if let Some(request) = request {
-            session.requests.push(HostTurnRecord {
-                commands: Vec::new(),
-                model: Some(session.loaded.recorded_model()),
-                request: request.clone(),
-                status: HostTurnStatus::InProgress,
-                turn_position: position,
-                writes: Vec::new(),
-            });
-        }
-        session.next_turn += 1;
-        session.owner = Some((owner, deadline));
-        session.pending = vec![input.clone().into_user_message()];
-        session.snapshot = Some(StoredTurnOptions::encode(options));
-        session.loaded.provider_session_id = continuation;
-
-        acquired.activate().map(HostTurnAcquisition::Acquired)
-    }
-
     fn complete(
         &self,
         owner: &TurnOwner,
@@ -300,103 +239,65 @@ impl SessionStore for ExternalStore {
         Ok(session.bounded())
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &ag_harness::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: ag_harness::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
-        if session.loaded.model_generation != generation {
-            return Err(SessionError::StaleModel { id: id.to_string() });
-        }
-        if session.owner.is_some() {
-            return Err(SessionError::Busy { id: id.to_string() });
-        }
-        for message in session.loaded.turns.iter().flatten() {
-            match message {
-                ModelMessage::AssistantToolCall(_)
-                | ModelMessage::AssistantToolCalls(_)
-                | ModelMessage::ToolResult { .. }
-                    if !capabilities.tool_calls =>
-                {
-                    return Err(SessionError::UnsupportedModelHistory {
-                        reason: "tool history",
-                    });
-                }
-                ModelMessage::AssistantReasoning { .. } => {
-                    return Err(SessionError::UnsupportedModelHistory {
-                        reason: "provider reasoning",
-                    });
-                }
-                ModelMessage::AssistantToolCall(call) if call.reasoning_content().is_some() => {
-                    return Err(SessionError::UnsupportedModelHistory {
-                        reason: "provider reasoning",
-                    });
-                }
-                ModelMessage::AssistantToolCalls(calls)
-                    if calls.iter().any(|call| call.reasoning_content().is_some()) =>
-                {
-                    return Err(SessionError::UnsupportedModelHistory {
-                        reason: "provider reasoning",
-                    });
-                }
-                ModelMessage::UserInput(input)
-                    if input.has_images() && !capabilities.image_input =>
-                {
-                    return Err(SessionError::UnsupportedModelHistory {
-                        reason: "image history",
-                    });
-                }
-                _ => {}
-            }
-        }
-        let next = generation
-            .checked_add(1)
-            .ok_or_else(|| SessionError::InvalidData {
-                reason: "generation overflow".into(),
-            })?;
+        switch.check_history(session.loaded.turns.iter().flatten())?;
+        let next = switch.admit(id, &session.admission_state(None))?;
         session.loaded.model_generation = next;
-        session.loaded.registration_identity = Some(identity.clone());
-        session.loaded.provider = metadata.as_ref().map(|value| value.provider().to_string());
-        session.loaded.model = metadata.as_ref().map(|value| value.model().to_string());
+        session.loaded.registration_identity = Some(switch.identity().clone());
+        session.loaded.provider = switch.metadata().map(|value| value.provider().to_string());
+        session.loaded.model = switch.metadata().map(|value| value.model().to_string());
         session.loaded.provider_session_id = None;
         Ok(next)
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        let HostTurnAcquisition::Acquired(turn) =
-            self.acquire(store, id, input, options, None, generation)?
-        else {
-            std::panic::resume_unwind(Box::new("legacy acquisition"))
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions
+            .get_mut(id)
+            .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
+        session.recover();
+        let turn = match admission.admit(id, session.admission_state(admission.host_id()))? {
+            Admission::Recorded(record) => return Ok(Reservation::Recorded(record)),
+            Admission::Reserve(turn) => turn,
         };
+        let position = session.next_turn;
+        let owner = TurnOwner::new(
+            self.identity.clone(),
+            id.to_string(),
+            position,
+            position.to_le_bytes().to_vec(),
+        );
+        let deadline = Instant::now() + self.initial_lease;
+        if let Some(request) = turn.request() {
+            session.requests.push(HostTurnRecord {
+                commands: Vec::new(),
+                model: Some(session.loaded.recorded_model()),
+                request: request.clone(),
+                status: HostTurnStatus::InProgress,
+                turn_position: position,
+                writes: Vec::new(),
+            });
+        }
+        let bounded = session.bounded();
+        session.next_turn += 1;
+        session.owner = Some((owner.clone(), deadline));
+        session.pending = vec![turn.message().clone()];
+        session.snapshot = Some(turn.options().to_string());
+        session.loaded.provider_session_id = turn.continuation().map(str::to_string);
 
-        Ok(turn)
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, id, input, options, Some(request), generation)
+        Ok(Reservation::Reserved(
+            ReservedTurn::new(turn, owner, deadline, bounded.turns)
+                .with_checkpoint(bounded.checkpoint),
+        ))
     }
 
     async fn publish_checkpoint(

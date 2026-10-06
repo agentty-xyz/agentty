@@ -5,7 +5,8 @@
 //! about a reservation: the admission lock, the host-request acquisition lock,
 //! and owners whose cleanup has not yet been acknowledged. Every acquisition
 //! and model switch recovers those owners before admission, for every store
-//! adapter.
+//! adapter. Stores only record admission decisions; [`AcquiredTurn`] is the
+//! one place a reservation becomes a lease.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -18,12 +19,14 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
+use crate::admission::{ModelSwitch, Reservation, ReservedTurn, TurnAdmission};
 use crate::cancellation::{Settlement, SettlementLease};
+use crate::compaction::SessionCheckpoint;
 use crate::effect::Effects;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
-use crate::session::{AcquiredTurn, LoadedSession, NewSession, StoreIdentity, TurnOwner};
+use crate::session::{LoadedSession, NewSession, StoreIdentity, TurnOwner};
 use crate::store::{SessionStore, WriteRecord};
 use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
 
@@ -42,17 +45,15 @@ pub(crate) async fn switch_model(
 ) -> Result<i64, SessionError> {
     recover_session(store.identity(), &id).await?;
     let admission = admit(store.identity(), &id)?;
+    let switch = ModelSwitch::new(
+        registration.identity().clone(),
+        registration.metadata(),
+        registration.history_capabilities(),
+        generation,
+    );
     tokio::spawn(async move {
         let _admission = admission;
-        store
-            .switch_model(
-                &id,
-                generation,
-                registration.identity(),
-                registration.metadata(),
-                registration.history_capabilities(),
-            )
-            .await
+        store.switch_model(&id, &switch).await
     })
     .await
     .map_err(|source| SessionError::Store {
@@ -61,9 +62,9 @@ pub(crate) async fn switch_model(
     })?
 }
 
-/// Reserves a turn under admission. The store finishes acquisition even when
-/// the caller disappears; the returned guard then interrupts the abandoned
-/// owner without running a model.
+/// Reserves a turn under admission. The reservation finishes even when the
+/// caller disappears; the acquired turn then interrupts the abandoned owner
+/// without running a model.
 pub(crate) async fn acquire(
     store: Arc<dyn SessionStore>,
     selection: (String, i64),
@@ -74,22 +75,11 @@ pub(crate) async fn acquire(
 ) -> Result<AcquiredTurn, SessionError> {
     let (session_id, generation) = selection;
     let store = AdmittedStore::admit(store, &session_id, settlement, &effects).await?;
-    tokio::spawn(async move {
-        store
-            .begin_turn(
-                Arc::clone(&store),
-                &session_id,
-                &input,
-                &options,
-                generation,
-            )
-            .await
-    })
-    .await
-    .map_err(|source| SessionError::Store {
-        operation: "acquire session turn",
-        source: Box::new(source),
-    })?
+    let admission = TurnAdmission::new(input, options, None, generation);
+
+    reserve(store, session_id, admission, None, "acquire session turn")
+        .await?
+        .into_acquired()
 }
 
 /// Returns a recorded host request, or reserves a turn bound to it under
@@ -120,25 +110,16 @@ pub(crate) async fn acquire_request(
         return Ok(HostTurnAcquisition::Recorded(record));
     }
     let store = AdmittedStore::admit(store, &session_id, settlement, &effects).await?;
-    tokio::spawn(async move {
-        let _acquisition = acquisition;
+    let admission = TurnAdmission::new(input, options, Some(request), generation);
 
-        store
-            .begin_request(
-                Arc::clone(&store),
-                &session_id,
-                &input,
-                &options,
-                &request,
-                generation,
-            )
-            .await
-    })
+    reserve(
+        store,
+        session_id,
+        admission,
+        Some(acquisition),
+        "acquire host request",
+    )
     .await
-    .map_err(|source| SessionError::Store {
-        operation: "acquire host request",
-        source: Box::new(source),
-    })?
 }
 
 /// Retries cleanup of one abandoned owner through its retained store handle.
@@ -158,6 +139,142 @@ pub(crate) fn lease_deadline() -> Instant {
     // Stored timestamps round down to seconds; never promise the fractional
     // second.
     Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs() - 1)
+}
+
+/// A reserved turn whose lease the harness owns. Dropping it interrupts only
+/// its owner. The Tokio runtime must remain driven until cleanup completes;
+/// persistence settlement does not settle filesystem effects.
+pub struct AcquiredTurn {
+    pub(crate) checkpoint: Option<SessionCheckpoint>,
+    pub(crate) guard: TurnGuard,
+    pub(crate) provider_session_id: Option<String>,
+    pub(crate) turns: Vec<Vec<ModelMessage>>,
+}
+
+impl AcquiredTurn {
+    /// Reserves a turn through `store` under the harness admission rules and
+    /// starts lease renewal. Reservation finishes even when this future is
+    /// dropped; the abandoned turn is then interrupted without running a
+    /// model.
+    ///
+    /// # Errors
+    /// Returns the store's admission or persistence error,
+    /// [`SessionError::OwnershipLost`] when the lease expired before
+    /// acknowledgment, or [`SessionError::InvalidData`] when the store returns
+    /// an owner for another store or session.
+    pub async fn begin(
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        input: &TurnInput,
+        options: &TurnOptions,
+        generation: i64,
+    ) -> Result<Self, SessionError> {
+        let admission = TurnAdmission::new(input.clone(), options.clone(), None, generation);
+
+        reserve(
+            store,
+            session_id.to_string(),
+            admission,
+            None,
+            "acquire session turn",
+        )
+        .await?
+        .into_acquired()
+    }
+
+    /// Returns the request recorded under `request`'s host ID, or reserves a
+    /// turn bound to it like [`Self::begin`].
+    ///
+    /// # Errors
+    /// Returns [`SessionError::HostTurnConflict`] when the host ID records a
+    /// different request, and otherwise the errors of [`Self::begin`].
+    pub async fn begin_request(
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        input: &TurnInput,
+        options: &TurnOptions,
+        request: &HostRequest,
+        generation: i64,
+    ) -> Result<HostTurnAcquisition, SessionError> {
+        let admission = TurnAdmission::new(
+            input.clone(),
+            options.clone(),
+            Some(request.clone()),
+            generation,
+        );
+
+        reserve(
+            store,
+            session_id.to_string(),
+            admission,
+            None,
+            "acquire host request",
+        )
+        .await
+    }
+
+    /// Returns the reservation identity used for backend lifecycle operations.
+    pub fn owner(&self) -> &TurnOwner {
+        self.guard.owner()
+    }
+
+    /// Arms owner-scoped cleanup, then starts renewal; an expired
+    /// acknowledgment is interrupted rather than made executable. An owner
+    /// bound to another store or session is rejected unarmed, since its
+    /// cleanup would be filed under the wrong session.
+    fn arm(
+        store: Arc<dyn SessionStore>,
+        session_id: &str,
+        reserved: ReservedTurn,
+    ) -> Result<Self, SessionError> {
+        let ReservedTurn {
+            checkpoint,
+            deadline,
+            owner,
+            turn,
+            turns,
+        } = reserved;
+        if owner.store_identity() != store.identity() || owner.session_id() != session_id {
+            return Err(SessionError::InvalidData {
+                reason: "reserved owner belongs to another store or session".into(),
+            });
+        }
+        let mut guard = TurnGuard::new(store, owner, deadline);
+        guard.activate()?;
+
+        Ok(Self {
+            checkpoint,
+            guard,
+            provider_session_id: turn.continuation().map(str::to_string),
+            turns,
+        })
+    }
+}
+
+/// Runs one store reservation to completion even if the caller disappears,
+/// holding `retained` until it settles.
+async fn reserve(
+    store: Arc<dyn SessionStore>,
+    session_id: String,
+    admission: TurnAdmission,
+    retained: Option<OwnedMutexGuard<()>>,
+    operation: &'static str,
+) -> Result<HostTurnAcquisition, SessionError> {
+    tokio::spawn(async move {
+        let _retained = retained;
+
+        match store.reserve_turn(&session_id, &admission).await? {
+            Reservation::Reserved(reserved) => {
+                AcquiredTurn::arm(store, &session_id, reserved).map(HostTurnAcquisition::Acquired)
+            }
+            Reservation::Recorded(record) => Ok(HostTurnAcquisition::Recorded(record)),
+        }
+    })
+    .await
+    .map_err(|source| SessionError::Store {
+        operation,
+        source: Box::new(source),
+    })?
 }
 
 /// Owned journal access scoped to the turn that acquired it.
@@ -233,8 +350,8 @@ impl TurnGuard {
         }
     }
 
-    /// Retain cleanup responsibility before committing a reservation. Activate
-    /// only after the commit is acknowledged within the confirmed deadline.
+    /// Takes cleanup responsibility for an acknowledged reservation. Activate
+    /// it before the confirmed deadline to make the turn executable.
     pub(crate) fn new(
         database: Arc<dyn SessionStore>,
         owner: TurnOwner,
@@ -611,44 +728,16 @@ impl SessionStore for AdmittedStore {
         self.store.load_session(id).await
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &crate::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
-        self.store
-            .switch_model(id, generation, identity, metadata, capabilities)
-            .await
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
+        self.store.switch_model(id, switch).await
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        self.store
-            .begin_turn(store, id, input, options, generation)
-            .await
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.store
-            .begin_request(store, id, input, options, request, generation)
-            .await
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        self.store.reserve_turn(id, admission).await
     }
 
     async fn publish_checkpoint(

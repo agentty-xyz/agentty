@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::TurnInput;
 use crate::session::{Database, NewSession};
-use crate::store::{SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 use crate::store_conformance_test::{options, schema};
 
 async fn create_session(database: &Database) {
@@ -18,17 +18,16 @@ async fn journal_handle_retains_temporary_database_and_turn_ownership() {
     // Arrange
     let database = Database::open_in_memory().await.expect("database");
     create_session(&database).await;
-    let mut guard = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("write"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("turn")
-        .guard;
+    let mut guard = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("write"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn")
+    .guard;
     let journal = guard.write_journal();
     let renewal_task = guard.renewal_task.take().expect("renewal task");
     guard.disarm();

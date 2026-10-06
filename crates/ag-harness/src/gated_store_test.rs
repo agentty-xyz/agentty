@@ -6,19 +6,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_harness::TurnOutcome;
-use ag_harness::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use ag_harness::recovery::HostTurnRecord;
 use async_trait::async_trait;
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::TurnError;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::session::{
-    AcquiredTurn, Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
+use crate::session::{Database, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
+use crate::store::{
+    AcquiredTurn, ModelSwitch, Reservation, SessionStore, TurnAdmission, WriteRecord,
 };
-use crate::store::{SessionStore, WriteRecord};
 use crate::store_conformance_test::{options, schema};
-use crate::{TurnError, TurnOptions};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PauseAt {
@@ -63,16 +63,15 @@ impl GatedStore {
             .await
             .expect("session");
         let backend: Arc<dyn SessionStore> = store.clone();
-        let acquired = backend
-            .begin_turn(
-                Arc::clone(&backend),
-                "session",
-                &TurnInput::from("prompt"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("turn");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&backend),
+            "session",
+            &TurnInput::from("prompt"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
 
         (store, acquired)
     }
@@ -117,44 +116,16 @@ impl SessionStore for GatedStore {
             .await
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &crate::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
-        self.database
-            .switch_model(id, generation, identity, metadata, capabilities)
-            .await
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
+        self.database.switch_model(id, switch).await
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        self.database
-            .begin_turn(store, id, input, options, generation)
-            .await
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.database
-            .begin_request(store, id, input, options, request, generation)
-            .await
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        self.database.reserve_turn(id, admission).await
     }
 
     async fn load_request(

@@ -11,7 +11,7 @@ use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTer
 use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
-use crate::store::{MemoryStore, NewSession, SessionStore, SqliteStore};
+use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore};
 use crate::store_conformance_test::{options, schema};
 use crate::{OutputSchema, ToolPolicy, TurnInput, TurnLimits, TurnOptions, reservation};
 
@@ -140,16 +140,15 @@ async fn reconciliation_releases_retained_store_and_control_after_caller_drop() 
         .create_session(&NewSession::new("retained", schema), None, 1024)
         .await
         .expect("session");
-    let acquired = store
-        .begin_turn(
-            Arc::clone(&store),
-            "retained",
-            &TurnInput::from("run"),
-            &options,
-            0,
-        )
-        .await
-        .expect("turn");
+    let acquired = AcquiredTurn::begin(
+        Arc::clone(&store),
+        "retained",
+        &TurnInput::from("run"),
+        &options,
+        0,
+    )
+    .await
+    .expect("turn");
     let journal = acquired.guard.write_journal();
     let id = journal
         .command_intent(&CommandIntent {
@@ -312,16 +311,15 @@ async fn reconciling_one_owner_does_not_release_another_owner() {
             .create_session(&NewSession::new("scoped", schema()), None, 1024)
             .await
             .expect("session");
-        let turn = store
-            .begin_turn(
-                Arc::clone(&store),
-                "scoped",
-                &TurnInput::from("run"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("turn");
+        let turn = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "scoped",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
         let journal = turn.guard.write_journal();
         let id = journal
             .command_intent(&CommandIntent {

@@ -7,7 +7,7 @@ use tempfile::tempdir;
 use super::support::{create_version_one_database, schema, turn_options};
 use crate::input::TurnInput;
 use crate::session::{Database, NewSession, SessionError};
-use crate::store::SessionStore as _;
+use crate::store::{AcquiredTurn, SessionStore as _};
 use crate::turn_options_snapshot::StoredTurnOptions;
 use crate::{OutputSchema, TurnError};
 
@@ -22,16 +22,15 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
     let options = turn_options();
 
     // Act
-    let mut first = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("failed"),
-            &options,
-            0,
-        )
-        .await
-        .expect("reservation");
+    let mut first = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("failed"),
+        &options,
+        0,
+    )
+    .await
+    .expect("reservation");
     let running: (String, String) =
         sqlx::query_as("SELECT status, turn_options FROM session_turn WHERE turn_position = 0")
             .fetch_one(database.pool())
@@ -46,16 +45,15 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
         .await
         .expect("failed turn");
     first.guard.disarm();
-    let second = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("interrupted"),
-            &options,
-            0,
-        )
-        .await
-        .expect("second reservation");
+    let second = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("interrupted"),
+        &options,
+        0,
+    )
+    .await
+    .expect("second reservation");
     drop(second);
     database
         .load_session("session")
@@ -99,16 +97,15 @@ async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuratio
         .load_session("session-a")
         .await
         .expect("legacy session");
-    let acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("new"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("new turn");
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("new"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("new turn");
     let native: Option<String> =
         sqlx::query_scalar("SELECT provider_session_id FROM session WHERE id = 'session-a'")
             .fetch_one(database.pool())
@@ -130,16 +127,15 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
         .create_session(&NewSession::new("session", schema()), None, 4096)
         .await
         .expect("session");
-    let mut first = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("first"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("reservation");
+    let mut first = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("first"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("reservation");
     database
         .complete_turn(
             "session",
@@ -185,17 +181,16 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
             .await
             .err()
             .expect("reopen error");
-        let reserved = database
-            .begin_turn(
-                Arc::new(database.clone()),
-                "session",
-                &TurnInput::from("second"),
-                &turn_options(),
-                0,
-            )
-            .await
-            .err()
-            .expect("reservation error");
+        let reserved = AcquiredTurn::begin(
+            Arc::new(database.clone()),
+            "session",
+            &TurnInput::from("second"),
+            &turn_options(),
+            0,
+        )
+        .await
+        .err()
+        .expect("reservation error");
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_turn")
             .fetch_one(database.pool())
             .await
@@ -233,16 +228,15 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .create_session(&NewSession::new("session", schema()), None, 4096)
         .await
         .expect("session");
-    let mut first = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("first"),
-            &options,
-            0,
-        )
-        .await
-        .expect("first turn");
+    let mut first = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("first"),
+        &options,
+        0,
+    )
+    .await
+    .expect("first turn");
     database
         .complete_turn(
             "session",
@@ -268,16 +262,15 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .load_session("session")
         .await
         .expect("legacy history");
-    let acquired = reopened
-        .begin_turn(
-            Arc::new(reopened.clone()),
-            "session",
-            &TurnInput::from("next"),
-            &options,
-            0,
-        )
-        .await
-        .expect("next turn");
+    let acquired = AcquiredTurn::begin(
+        Arc::new(reopened.clone()),
+        "session",
+        &TurnInput::from("next"),
+        &options,
+        0,
+    )
+    .await
+    .expect("next turn");
     let snapshot: String =
         sqlx::query_scalar("SELECT turn_options FROM session_turn WHERE turn_position = 1")
             .fetch_one(reopened.pool())

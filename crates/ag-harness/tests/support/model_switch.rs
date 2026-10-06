@@ -7,7 +7,7 @@ use ag_harness::model::{
     ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
-use ag_harness::store::{NewSession, SqliteStore};
+use ag_harness::store::{AcquiredTurn, ModelSwitch, NewSession, SqliteStore};
 use ag_harness::tool::ToolCall;
 use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
@@ -212,16 +212,15 @@ async fn switch_rejections_preserve_selection_and_continuation() {
             session.switch_model(&registry, "missing").await,
             Err(SessionError::Registry(_))
         ));
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "switch",
-                &TurnInput::from("active"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("acquire");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "switch",
+            &TurnInput::from("active"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("acquire");
         assert!(matches!(
             session.switch_model(&registry, "b").await,
             Err(SessionError::Busy { .. })
@@ -300,16 +299,15 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
                 )
                 .await
                 .expect("create");
-            let acquired = store
-                .begin_turn(
-                    Arc::clone(&store),
-                    &id,
-                    &TurnInput::from("original"),
-                    &options(),
-                    0,
-                )
-                .await
-                .expect("acquire");
+            let acquired = AcquiredTurn::begin(
+                Arc::clone(&store),
+                &id,
+                &TurnInput::from("original"),
+                &options(),
+                0,
+            )
+            .await
+            .expect("acquire");
             store
                 .complete_turn(acquired.owner(), messages, Some("old"))
                 .await
@@ -351,6 +349,81 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
 }
 
 #[tokio::test]
+async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
+    // Arrange
+    for store in stores().await {
+        store
+            .create_session(&NewSession::new("precedence", schema()), None, 1024)
+            .await
+            .expect("session");
+        let completed = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "precedence",
+            &TurnInput::from("first"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("acquire");
+        store
+            .complete_turn(
+                completed.owner(),
+                &[ModelMessage::AssistantReasoning {
+                    content: "answer".into(),
+                    reasoning_content: "provider state".into(),
+                }],
+                None,
+            )
+            .await
+            .expect("complete");
+        drop(completed);
+        let active = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "precedence",
+            &TurnInput::from("active"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("active");
+        let switch = |generation| {
+            ModelSwitch::new(
+                ExecutionIdentity::new("b", "1").expect("identity"),
+                None,
+                ModelCapabilities::default(),
+                generation,
+            )
+        };
+
+        // Act
+        let stale = store.switch_model("precedence", &switch(1)).await;
+        let busy = store.switch_model("precedence", &switch(0)).await;
+
+        // Assert
+        assert!(matches!(
+            stale,
+            Err(SessionError::UnsupportedModelHistory { .. })
+        ));
+        assert!(matches!(
+            busy,
+            Err(SessionError::UnsupportedModelHistory { .. })
+        ));
+        store
+            .complete_turn(active.owner(), &[], None)
+            .await
+            .expect("complete active");
+        assert_eq!(
+            store
+                .load_session("precedence")
+                .await
+                .expect("load")
+                .model_generation,
+            0
+        );
+    }
+}
+
+#[tokio::test]
 async fn switches_validate_image_history_against_target_capabilities() {
     // Arrange
     for store in stores().await {
@@ -366,16 +439,15 @@ async fn switches_validate_image_history_against_target_capabilities() {
             )
             .await
             .expect("create");
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "images",
-                &image_input("look", b"payload", "closely"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("acquire");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "images",
+            &image_input("look", b"payload", "closely"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("acquire");
         store
             .complete_turn(
                 acquired.owner(),
@@ -624,9 +696,10 @@ async fn independent_store_admission_checks_generation_atomically() {
                 .await
                 .expect("session");
             let turn_options = options();
-            let switch = store.switch_model(&id, 0, &identity, None, capabilities);
+            let selection = ModelSwitch::new(identity.clone(), None, capabilities, 0);
+            let switch = store.switch_model(&id, &selection);
             let input = TurnInput::from("prompt");
-            let acquire = store.begin_turn(Arc::clone(&store), &id, &input, &turn_options, 0);
+            let acquire = AcquiredTurn::begin(Arc::clone(&store), &id, &input, &turn_options, 0);
 
             // Act
             let (switched, acquired) = if switch_first {
@@ -752,16 +825,15 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
                 name: "read".into(),
             },
         ];
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "tool-history",
-                &TurnInput::from("original"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("acquire");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "tool-history",
+            &TurnInput::from("original"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("acquire");
         store
             .complete_turn(acquired.owner(), &messages, Some("a-continuation"))
             .await
@@ -826,10 +898,12 @@ async fn switch_errors_do_not_admit_partial_selection() {
             store
                 .switch_model(
                     "missing",
-                    0,
-                    &ExecutionIdentity::new("b", "1").expect("identity"),
-                    None,
-                    ModelCapabilities::default()
+                    &ModelSwitch::new(
+                        ExecutionIdentity::new("b", "1").expect("identity"),
+                        None,
+                        ModelCapabilities::default(),
+                        0,
+                    )
                 )
                 .await,
             Err(SessionError::NotFound { .. })
