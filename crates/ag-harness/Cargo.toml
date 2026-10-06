@@ -49,7 +49,7 @@ hex.workspace = true
 opentelemetry.workspace = true
 rustix = { workspace = true, features = ["stdio", "thread"] }
 serde.workspace = true
-serde_json = { workspace = true, features = ["arbitrary_precision"] }
+serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true

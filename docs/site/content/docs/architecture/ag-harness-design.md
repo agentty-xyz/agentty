@@ -173,8 +173,6 @@ Planned, not shipped. Each step lands as its own change, in this order:
 1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
    required `ContextBudget` bound a turn, which fails typed once the next request no
    longer fits.
-1. **Workspace `arbitrary_precision`** — `serde_json/arbitrary_precision` is enabled
-   once in the root manifest, so tested and shipped builds match.
 1. **Narrow the `SessionStore` seam** — stores expose atomic record operations, and the
    harness applies the admission rules and builds the lease once instead of in every
    adapter.
