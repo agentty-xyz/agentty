@@ -164,26 +164,42 @@ OpenTelemetry without storing prompts or tool output in telemetry.
 
 ## Next iterations
 
-1. **Agentty runtime adapters** — durable `AgentChannel` and ephemeral `OneShotClient`
-   adapters over the shared turn engine, with Agentty-owned comparison baselines and
-   permission mapping.
-1. **Feature-gated product surface** — off-by-default Harness selection, capability
-   checks, and deterministic Agentty end-to-end coverage.
-1. **Narrow the `SessionStore` seam** — stores expose atomic record operations over
-   plain data, and the harness applies the admission rules (generation, busy state,
-   command fence, continuation compatibility, history budget) once, inside each store's
-   transaction. It also builds `AcquiredTurn` and its lease on its own side of the seam.
-   Today every adapter repeats those rules and constructs the lease guard itself. That
-   is also why the reservation lifecycle still binds admission through a forwarding
-   store handle.
-1. **One settlement tracker behind `TurnControl`** — replace the separate persistence,
-   effect, and command trackers with one phased tracker. It would expose a single
-   settlement report and retry that enforce phase order in code rather than in rustdoc.
-   This is a breaking public change.
-1. **The acquired turn owns request projection and commit** — the acquired turn builds
-   its model request and commits its outcome itself, so the rule that the store records
-   the user input as message `0` never leaves one module. Host-request and plain turns
-   become commit variants instead of flags.
-1. **Shared lifecycle correlation for observers** — one correlator pairs turn and tool
-   start/finish events for both `LifecycleTraceObserver` and `LifecycleMetrics`, instead
-   of each observer rebuilding pending maps from the raw event stream.
+Planned, not shipped. Each step lands as its own change, in this order:
+
+1. **Trace context** — started turns attach the caller's OpenTelemetry context, so
+   harness spans nest under the host's span.
+1. **Bash output head and tail** — each stream keeps its start and end within the
+   existing capture budget and reports the omitted bytes.
+1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
+   required `ContextBudget` bound a turn, which fails typed once the next request no
+   longer fits.
+1. **Workspace `arbitrary_precision`** — `serde_json/arbitrary_precision` is enabled
+   once in the root manifest, so tested and shipped builds match.
+1. **Narrow the `SessionStore` seam** — stores expose atomic record operations, and the
+   harness applies the admission rules and builds the lease once instead of in every
+   adapter.
+1. **The acquired turn owns request projection and commit** — host-request and plain
+   turns become commit variants instead of flags.
+1. **Stopped-turn replay** — each finished tool exchange persists under the turn owner.
+   Failed and interrupted turns replay with a stop note, never as completed history; one
+   too large for the history budget replays only its input and note.
+1. **One settlement tracker behind `TurnControl`** — one phased tracker replaces the
+   persistence, effect, and command trackers. This breaking change lands before Agentty
+   depends on it.
+1. **Agentty `AgentKind::Harness`** — one release behind Agentty's existing boundaries:
+   - A native backend beside the CLI and app-server transports provides a durable
+     `AgentChannel` and the one-shot path. The harness session shares the Agentty
+     session ID and is canonical; a missing database restarts from Agentty's replay
+     transcript.
+   - `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
+     inherits Agentty's full environment except the `MODEL_*`, `KIMI_*`, and
+     `DASHSCOPE_*` provider key and URL variables. Like Codex full access, and unlike
+     Claude, `bash` does not keep the main checkout read-only.
+   - API keys come from environment variables; the harness is available when any
+     provider key is set. Each session's database lives under the Agentty data root,
+     outside the session worktree, so session commits and worktree cleanup never include
+     it; session deletion removes it explicitly.
+   - Deterministic `FeatureTest` coverage uses a scripted provider.
+
+Later: proactive compaction, and one correlator shared by `LifecycleTraceObserver` and
+`LifecycleMetrics`.
