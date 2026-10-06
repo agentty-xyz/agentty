@@ -162,14 +162,14 @@ character, and the length, never the content itself.
 
 Lifecycle observers receive content-free turn, model-request, and tool events; the host
 chooses exporters. `LifecycleMetrics` and `LifecycleTraceObserver` project the stream to
-OpenTelemetry without storing prompts or tool output in telemetry.
+OpenTelemetry without storing prompts or tool output in telemetry. Awaited and started
+turns alike run under the caller's OpenTelemetry context, so harness spans nest under
+the host's span; a started turn keeps the context current at its first poll.
 
 ## Next iterations
 
 Planned, not shipped. Each step lands as its own change, in this order:
 
-1. **Trace context** — started turns attach the caller's OpenTelemetry context, so
-   harness spans nest under the host's span.
 1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
    required `ContextBudget` bound a turn, which fails typed once the next request no
    longer fits.
