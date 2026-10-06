@@ -178,8 +178,6 @@ pub enum LifecycleEventKind {
 pub enum ModelResponseType {
     /// Terminal, schema-validated structured output.
     Output,
-    /// Native continuation was unavailable and the request was replayed.
-    ResumeUnavailable,
     /// An intermediate native tool request.
     ToolCall,
 }
@@ -188,7 +186,6 @@ impl fmt::Display for ModelResponseType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Output => formatter.write_str("output"),
-            Self::ResumeUnavailable => formatter.write_str("resume unavailable"),
             Self::ToolCall => formatter.write_str("tool call"),
         }
     }
@@ -206,8 +203,6 @@ pub enum TurnErrorType {
     Tool,
     /// A requested tool was denied by policy.
     ToolDenied,
-    /// The turn exceeded its configured tool-call limit.
-    ToolCallLimit,
     /// Mandatory request content exceeded the model's context budget.
     ContextBudget,
     /// A repository-scoped tool was enabled without a repository root.
@@ -226,7 +221,6 @@ impl TurnErrorType {
             Self::Model(error_type) => error_type.as_str(),
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
             Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
-            Self::ToolCallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
@@ -243,8 +237,6 @@ impl TurnErrorType {
 pub enum ToolErrorType {
     /// The turn future was dropped during tool execution.
     Cancelled,
-    /// The configured per-turn tool-call limit was reached.
-    CallLimit,
     /// The allowed tool failed while executing or encoding its result.
     Execution,
 }
@@ -254,7 +246,6 @@ impl ToolErrorType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
-            Self::CallLimit => crate::telemetry::ERROR_TOOL_CALL_LIMIT,
             Self::Execution => crate::telemetry::ERROR_TOOL_EXECUTION,
         }
     }

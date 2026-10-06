@@ -19,10 +19,11 @@ use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, Qw
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::{
     Harness, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy, TurnError,
-    TurnLimits, TurnOptions,
+    TurnOptions,
 };
 use serde_json::{Value, json};
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::{DynError, vision};
 
 const MODEL_API_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -128,11 +129,10 @@ fn rounds() -> usize {
         .unwrap_or(2)
 }
 
-fn capabilities(budget: Option<ContextBudget>) -> ModelCapabilities {
+fn capabilities(budget: ContextBudget) -> ModelCapabilities {
     ModelCapabilities {
         context_budget: budget,
         image_input: true,
-        native_continuation: false,
         tool_calls: true,
     }
 }
@@ -231,7 +231,7 @@ async fn switch_roundtrip(from: Provider, to: Provider) -> Result<String, DynErr
         registry.register(
             ExecutionIdentity::new(provider.name(), "1")?,
             provider.client()?,
-            capabilities(None),
+            capabilities(unbounded_context_budget()),
         )?;
     }
     let directory = tempfile::tempdir()?;
@@ -396,9 +396,7 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
     registry.register(
         ExecutionIdentity::new(provider.name(), "budget-1")?,
         provider.client()?,
-        capabilities(Some(ContextBudget::new(
-            NonZeroU64::new(budget).ok_or("budget")?,
-        ))),
+        capabilities(ContextBudget::new(NonZeroU64::new(budget).ok_or("budget")?)),
     )?;
     let directory = tempfile::tempdir()?;
     let harness = Harness::from_registry(&registry, provider.name())?
@@ -566,9 +564,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     registry.register(
         ExecutionIdentity::new(provider.name(), "compact-1")?,
         provider.client()?,
-        capabilities(Some(ContextBudget::new(
-            NonZeroU64::new(budget).ok_or("budget")?,
-        ))),
+        capabilities(ContextBudget::new(NonZeroU64::new(budget).ok_or("budget")?)),
     )?;
     let directory = tempfile::tempdir()?;
     let database = directory.path().join("compact.db");
@@ -736,12 +732,10 @@ struct BashStep {
 }
 
 fn bash_options(executor: Executor, step: &BashStep) -> Result<TurnOptions, DynError> {
-    Ok(TurnOptions::new(
-        stdout_schema()?,
-        ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::new(NonZeroUsize::new(2).ok_or("limit")?),
+    Ok(
+        TurnOptions::new(stdout_schema()?, ToolPolicy::default().allow(Tool::Bash))
+            .with_bash(executor.config(step.timeout, step.capture)?),
     )
-    .with_bash(executor.config(step.timeout, step.capture)?))
 }
 
 fn bash_prompt(command: &str) -> String {
@@ -793,7 +787,7 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
     std::fs::write(root.join("input.txt"), "seed=42\n")?;
     std::fs::create_dir(root.join("output"))?;
     let database = root.join("bash.db");
-    let harness = Harness::new(provider.client()?)
+    let harness = Harness::new(provider.client()?, unbounded_context_budget())
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
         .execution_identity(ExecutionIdentity::new("live-bash", "1")?)
         .database(&database);
@@ -876,7 +870,7 @@ async fn bash_workspace(provider: Provider, executor: Executor) -> Result<String
 
     // Durable recovery: the records survive reopen and none blocks admission.
     drop(session);
-    let reopened = Harness::new(provider.client()?)
+    let reopened = Harness::new(provider.client()?, unbounded_context_budget())
         .repository(Repository::new(&root, GIT_EXECUTABLE)?)
         .execution_identity(ExecutionIdentity::new("live-bash", "1")?)
         .database(&database)
@@ -950,15 +944,11 @@ async fn test_bash_unsandboxed_executor() -> Result<(), DynError> {
 // ---------------------------------------------------------------------------
 
 async fn image_host_request(provider: Provider) -> Result<String, DynError> {
-    let harness = Harness::new(provider.client()?)
+    let harness = Harness::new(provider.client()?, unbounded_context_budget())
         .execution_identity(ExecutionIdentity::new("live-image", "1")?)
         .max_history_bytes(NonZeroUsize::new(4 * 1024 * 1024).ok_or("history")?)
         .store(Arc::new(ag_harness::store::MemoryStore::new()));
-    let options = TurnOptions::new(
-        vision::color_schema()?,
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(vision::color_schema()?, ToolPolicy::default());
     let mut session = harness
         .session("images", vision::color_schema()?)
         .create()

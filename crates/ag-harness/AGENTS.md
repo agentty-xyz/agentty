@@ -22,7 +22,7 @@ tools, independent of Agentty UI and orchestration.
   containing worktree; comparisons additionally require a host-selected, pinned
   `ComparisonBase`.
 - Keep turn options explicit. Per-turn overrides must not silently replace session
-  defaults, and configuration changes must invalidate incompatible continuations.
+  defaults.
 
 ## Invariants
 

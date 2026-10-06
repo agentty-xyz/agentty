@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::store_conformance_test::{schema, stores};
 
 /// Model that answers ordinary turns and, when it sees the compaction system
@@ -82,8 +83,7 @@ impl Model for CompactingModel {
         if !Self::is_generation(&request) {
             return Ok(ModelCompletion::from_response(ModelResponse::Output(
                 json!({"answer": self.name}),
-            ))
-            .with_provider_session_id(format!("{}-continuation", self.name)));
+            )));
         }
         self.generations.fetch_add(1, Ordering::SeqCst);
         if *self.pause.lock().expect("pause") {
@@ -120,7 +120,7 @@ impl Model for CompactingModel {
     }
 }
 
-fn registry(model: Arc<CompactingModel>, budget: Option<ContextBudget>) -> ModelRegistry {
+fn registry(model: Arc<CompactingModel>, budget: ContextBudget) -> ModelRegistry {
     let mut registry = ModelRegistry::new();
     let name = model.name;
     registry
@@ -130,7 +130,6 @@ fn registry(model: Arc<CompactingModel>, budget: Option<ContextBudget>) -> Model
             ModelCapabilities {
                 context_budget: budget,
                 image_input: false,
-                native_continuation: true,
                 tool_calls: true,
             },
         )
@@ -169,7 +168,7 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("keeper", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "keeper")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -213,8 +212,6 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
             "summary replaces covered turns"
         );
         assert!(!user_texts(third).iter().any(|text| text == "first"));
-        // A checkpointed session replays projected history, never continuation.
-        assert_eq!(third.provider_session_id(), None);
     }
 }
 
@@ -224,7 +221,7 @@ async fn repeated_compaction_extends_coverage_without_gaps() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("repeat", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "repeat")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -266,7 +263,7 @@ async fn stale_publication_is_rejected_after_a_concurrent_turn() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("stale", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "stale")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -329,7 +326,7 @@ async fn generation_failure_preserves_a_usable_prior_checkpoint() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("resilient", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "resilient")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -389,7 +386,7 @@ async fn cancelled_generation_publishes_nothing() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("cancel", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "cancel")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -488,9 +485,8 @@ async fn model_switch_keeps_checkpoints_and_journals_intact() {
 
 fn capabilities() -> ModelCapabilities {
     ModelCapabilities {
-        context_budget: None,
+        context_budget: unbounded_context_budget(),
         image_input: false,
-        native_continuation: true,
         tool_calls: true,
     }
 }
@@ -502,7 +498,7 @@ async fn bounded_generation_falls_back_to_recent_turns_under_budget() {
         // every uncovered turn into the source at once.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("bounded", &requests);
-        let registry = registry(Arc::clone(&model), Some(budget(4_000)));
+        let registry = registry(Arc::clone(&model), budget(4_000));
         let harness = Harness::from_registry(&registry, "bounded")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -541,7 +537,7 @@ async fn compaction_without_completed_turns_is_a_noop() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("idle", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "idle")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -570,7 +566,7 @@ async fn bounded_generation_drops_the_oldest_turns_from_an_oversized_source() {
         // admits, so generation keeps only the newest turns that fit.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("trimming", &requests);
-        let registry = registry(Arc::clone(&model), Some(budget(500)));
+        let registry = registry(Arc::clone(&model), budget(500));
         let harness = Harness::from_registry(&registry, "trimming")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -618,7 +614,7 @@ async fn heavy_summary_is_dropped_from_projection_and_rejected_as_a_source() {
         // Arrange: a published summary heavier than the whole request budget.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("heavy", &requests);
-        let registry = registry(Arc::clone(&model), Some(budget(500)));
+        let registry = registry(Arc::clone(&model), budget(500));
         let harness = Harness::from_registry(&registry, "heavy")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -668,7 +664,7 @@ async fn compaction_reports_turn_lifecycle_events() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("observed", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let kinds = Arc::new(Mutex::new(Vec::new()));
         let harness = Harness::from_registry(&registry, "observed")
             .expect("harness")
@@ -721,7 +717,7 @@ async fn compaction_requires_a_current_handle() {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("fenced", &requests);
-        let registry = registry(Arc::clone(&model), None);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
         let harness = Harness::from_registry(&registry, "fenced")
             .expect("harness")
             .store(Arc::clone(&store));

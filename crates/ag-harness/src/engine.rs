@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::bash::{BashArguments, BashError};
 use crate::context;
@@ -16,14 +16,14 @@ use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
 use crate::turn::{
-    ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOptions, TurnOutcome,
-    TurnReport, sanitize_report_text, sanitized_completion_metadata,
+    ModelRequestActivity, ToolActivity, TurnError, TurnOptions, TurnOutcome, TurnReport,
+    sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
-    pub(crate) context_budget: Option<context::ContextBudget>,
+    pub(crate) context_budget: context::ContextBudget,
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
@@ -40,77 +40,43 @@ impl Engine<'_> {
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
         journal: Option<WriteJournal>,
-    ) -> Result<(TurnOutcome, Vec<ModelMessage>, Option<String>), TurnError> {
+    ) -> Result<(TurnOutcome, Vec<ModelMessage>), TurnError> {
         let started_at = Instant::now();
         let (mut request, tools) = self.prepare_request(request, journal)?;
-        let mut completed_tool_calls = 0_usize;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut tool_calls = Vec::new();
 
         loop {
-            let (
-                response,
-                activities,
-                provider_session_id,
-                native_resume_rejected,
-                reasoning_content,
-            ) = self
+            let (response, activity, reasoning_content) = self
                 .complete_model_request(&request, model_request_index, turn_id)
                 .await?;
-            if native_resume_rejected || provider_session_id.is_some() {
-                request.set_provider_session_id(provider_session_id);
-            }
-            model_request_index = model_request_index
-                .saturating_add(u64::try_from(activities.len()).unwrap_or(u64::MAX));
-            model_requests.extend(activities);
+            model_request_index = model_request_index.saturating_add(1);
+            model_requests.push(activity);
 
             match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls);
 
-                    let provider_session_id = request.provider_session_id().map(str::to_string);
-
-                    return Ok((
-                        TurnOutcome::new(output, report),
-                        request.into_messages(),
-                        provider_session_id,
-                    ));
+                    return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
                 ModelResponse::ToolCall(call) => {
-                    let (result, activity) = self
-                        .execute_tool_call(&call, &tools, completed_tool_calls, turn_id)
-                        .await?;
+                    let (result, activity) = self.execute_tool_call(&call, &tools, turn_id).await?;
                     request.record_tool_result(call, result);
                     tool_calls.push(activity);
-                    completed_tool_calls += 1;
                 }
                 ModelResponse::ToolCalls(calls) => {
                     if calls.is_empty() {
                         return Err(ModelError::MissingToolCall.into());
                     }
                     ensure_unique_tool_call_ids(&calls)?;
-                    if calls.len()
-                        > self
-                            .options
-                            .limits()
-                            .max_tool_calls()
-                            .get()
-                            .saturating_sub(completed_tool_calls)
-                    {
-                        return Err(TurnError::ToolCallLimit {
-                            limit: self.options.limits().max_tool_calls().get(),
-                        });
-                    }
                     let mut results = Vec::with_capacity(calls.len());
                     for call in &calls {
-                        let (result, activity) = self
-                            .execute_tool_call(call, &tools, completed_tool_calls, turn_id)
-                            .await?;
+                        let (result, activity) =
+                            self.execute_tool_call(call, &tools, turn_id).await?;
                         results.push(result);
                         tool_calls.push(activity);
-                        completed_tool_calls += 1;
                     }
                     request.record_tool_results(calls, results);
                 }
@@ -118,9 +84,7 @@ impl Engine<'_> {
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits fails typed here instead of
             // overflowing the provider context.
-            if let Some(budget) = self.context_budget {
-                context::admit_grown_request(self.context_estimator, budget, &request)?;
-            }
+            context::admit_grown_request(self.context_estimator, self.context_budget, &request)?;
         }
     }
 
@@ -205,83 +169,7 @@ impl Engine<'_> {
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
-    ) -> Result<
-        (
-            ModelResponse,
-            Vec<ModelRequestActivity>,
-            Option<String>,
-            bool,
-            Option<String>,
-        ),
-        TurnError,
-    > {
-        let native_resume = request.provider_session_id().is_some();
-        match self
-            .complete_model_attempt(request.clone(), model_request_index, turn_id)
-            .await
-        {
-            Ok((response, activity, provider_session_id, reasoning_content)) => Ok((
-                response,
-                vec![activity],
-                provider_session_id,
-                false,
-                reasoning_content,
-            )),
-            Err(ModelAttemptError {
-                duration,
-                error: ModelError::ResumeUnavailable,
-            }) if native_resume => {
-                let rejected_activity = ModelRequestActivity::new(
-                    None,
-                    duration,
-                    crate::lifecycle::ModelResponseType::ResumeUnavailable,
-                );
-                let mut replay_request = request.clone();
-                replay_request.set_provider_session_id(None);
-                let replay_index = model_request_index.saturating_add(1);
-                match self
-                    .complete_model_attempt(replay_request, replay_index, turn_id)
-                    .await
-                {
-                    Ok((response, replay_activity, provider_session_id, reasoning_content)) => {
-                        Ok((
-                            response,
-                            vec![rejected_activity, replay_activity],
-                            provider_session_id,
-                            true,
-                            reasoning_content,
-                        ))
-                    }
-                    Err(failure) => Err(ResumeFailure::Replay {
-                        source: failure.error,
-                    }
-                    .into_model_error()
-                    .into()),
-                }
-            }
-            Err(failure) if native_resume => Err(ResumeFailure::Native {
-                source: failure.error,
-            }
-            .into_model_error()
-            .into()),
-            Err(failure) => Err(failure.error.into()),
-        }
-    }
-
-    async fn complete_model_attempt(
-        &self,
-        request: ModelRequest,
-        model_request_index: u64,
-        turn_id: Option<LifecycleId>,
-    ) -> Result<
-        (
-            ModelResponse,
-            ModelRequestActivity,
-            Option<String>,
-            Option<String>,
-        ),
-        ModelAttemptError,
-    > {
+    ) -> Result<(ModelResponse, ModelRequestActivity, Option<String>), ModelError> {
         let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
@@ -291,17 +179,14 @@ impl Engine<'_> {
             Some(model_lifecycle) => model_lifecycle.scope(operation).await,
             None => operation.await,
         };
-        let (response, completion, provider_session_id, reasoning_content) = match completion {
+        let (response, completion, reasoning_content) = match completion {
             Ok(completion) => completion.into_parts(),
             Err(error) => {
                 if let Some(model_lifecycle) = model_lifecycle {
                     model_lifecycle.failed(error.error_type(), error.http_status());
                 }
 
-                return Err(ModelAttemptError {
-                    duration: started_at.elapsed(),
-                    error,
-                });
+                return Err(error);
             }
         };
         if let Some(output) = response.output()
@@ -312,10 +197,7 @@ impl Engine<'_> {
                 model_lifecycle.failed(error.error_type(), error.http_status());
             }
 
-            return Err(ModelAttemptError {
-                duration: started_at.elapsed(),
-                error,
-            });
+            return Err(error);
         }
         let response_type = response.response_type();
         let activity = ModelRequestActivity::new(
@@ -327,14 +209,13 @@ impl Engine<'_> {
             model_lifecycle.completed(completion, response_type);
         }
 
-        Ok((response, activity, provider_session_id, reasoning_content))
+        Ok((response, activity, reasoning_content))
     }
 
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
         tools: &Tools,
-        completed_tool_calls: usize,
         turn_id: Option<LifecycleId>,
     ) -> Result<(String, ToolActivity), TurnError> {
         let mut tool_lifecycle =
@@ -363,15 +244,6 @@ impl Engine<'_> {
                 name: call.name().to_string(),
             });
         };
-        if completed_tool_calls >= self.options.limits().max_tool_calls().get() {
-            if let Some(tool_lifecycle) = tool_lifecycle {
-                tool_lifecycle.failed(ToolErrorType::CallLimit);
-            }
-
-            return Err(TurnError::ToolCallLimit {
-                limit: self.options.limits().max_tool_calls().get(),
-            });
-        }
         if let Some(tool_lifecycle) = tool_lifecycle.as_mut() {
             tool_lifecycle.started();
         }
@@ -427,11 +299,6 @@ enum ToolExecution<'a> {
     Bash(&'a BashTool, &'a BashArguments),
     Read(&'a ReadTool, &'a ReadArguments),
     Write(&'a WriteTool, &'a WriteArguments),
-}
-
-struct ModelAttemptError {
-    duration: Duration,
-    error: ModelError,
 }
 
 async fn execute_tool(

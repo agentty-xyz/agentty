@@ -1,14 +1,12 @@
-use std::io;
 use std::time::Duration;
 
 use serde_json::json;
 
 use super::{
-    HistoryActivity, ModelRequestActivity, ResumeFailure, ToolActivity, TurnError, TurnOutcome,
-    TurnReport,
+    HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome, TurnReport,
 };
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
-use crate::model::{CompletionMetadata, CompletionUsage, ModelError, ModelErrorType};
+use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::tool::ReadAction;
 
 #[test]
@@ -166,42 +164,6 @@ fn tool_activity_display_formats_every_outcome_safely() {
     assert_eq!(rejected_write.duration(), Duration::from_millis(4));
     assert_eq!(rejected_write.name(), "write");
     assert_eq!(rejected_write.path(), "src/main.rs");
-}
-
-#[test]
-fn resume_failure_preserves_request_context_and_http_status() {
-    // Arrange
-    let request_error = |status| {
-        ModelError::classified_request(
-            ModelErrorType::Provider,
-            Some(status),
-            io::Error::other("provider request failed").into(),
-        )
-    };
-    let failures = [
-        ResumeFailure::Native {
-            source: request_error(429),
-        },
-        ResumeFailure::Replay {
-            source: request_error(503),
-        },
-    ];
-
-    // Act
-    let errors = failures.map(ResumeFailure::into_model_error);
-
-    // Assert
-    assert_eq!(errors[0].http_status(), Some(429));
-    assert_eq!(errors[1].http_status(), Some(503));
-    assert!(
-        errors[0]
-            .to_string()
-            .starts_with("model request failed: native provider continuation failed:")
-    );
-    assert!(errors[1].to_string().starts_with(
-        "model request failed: native provider continuation was unavailable and history replay \
-         failed:"
-    ));
 }
 
 #[test]

@@ -13,17 +13,27 @@ use crate::{Model, TurnInput};
 /// These describe the configured implementation; they do not enable features or
 /// replace provider request validation. Text and locally validated structured
 /// output are required by the model contract.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ModelCapabilities {
-    /// Approximate request budget enabling model-aware context projection.
-    pub context_budget: Option<ContextBudget>,
+    /// Approximate request budget bounding every provider request.
+    pub context_budget: ContextBudget,
     /// Whether the adapter accepts image-bearing user input and history.
     pub image_input: bool,
-    /// Whether the adapter can resume provider-native continuation identifiers.
-    pub native_continuation: bool,
     /// Whether the adapter supports native tool calls and normalized tool
     /// history.
     pub tool_calls: bool,
+}
+
+impl ModelCapabilities {
+    /// Declares a text-only adapter without native tool calls under the
+    /// required request budget.
+    pub fn new(context_budget: ContextBudget) -> Self {
+        Self {
+            context_budget,
+            image_input: false,
+            tool_calls: false,
+        }
+    }
 }
 
 /// Immutable registration retained by harnesses independently of the registry.

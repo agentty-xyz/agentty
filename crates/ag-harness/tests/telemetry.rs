@@ -1,6 +1,9 @@
 //! Integration coverage for `ag-harness` OpenTelemetry projections.
 #![cfg(test)]
 
+#[path = "support/context_budget.rs"]
+mod context_budget_fixture;
+
 mod support;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,9 +16,7 @@ use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTra
 use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest, ModelResponse};
 use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolDefinition;
-use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions,
-};
+use ag_harness::{Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnOptions};
 use async_trait::async_trait;
 use opentelemetry::context::FutureExt as _;
 use opentelemetry::trace::{TraceContextExt as _, Tracer as _};
@@ -49,6 +50,8 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, Notify};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+use crate::context_budget_fixture::unbounded_context_budget;
 
 const OTLP_CONTRACT_FIXTURE_ENV: &str = "AG_HARNESS_RUN_OTLP_CONTRACT_FIXTURE";
 const OTLP_CONTRACT_TEST: &str = "exports_otlp_metric_contract_and_flushes_on_shutdown";
@@ -1436,14 +1439,10 @@ async fn started_turns_nest_under_the_caller_span() {
         .with_simple_exporter(exporter.clone())
         .build();
     global::set_tracer_provider(tracer_provider.clone());
-    let harness = Harness::new(SummaryModel)
+    let harness = Harness::new(SummaryModel, unbounded_context_budget())
         .store(Arc::new(MemoryStore::new()))
         .with_lifecycle_observer(LifecycleTraceObserver::new());
-    let options = TurnOptions::new(
-        lifecycle_schema(),
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    );
+    let options = TurnOptions::new(lifecycle_schema(), ToolPolicy::default());
     let mut session = harness
         .session("traced-session", lifecycle_schema())
         .create()
@@ -1745,7 +1744,7 @@ fn lifecycle_harness(server: &MockServer, repository: &std::path::Path) -> Harne
 
     let repository = support::repository::repository_with_host_git(repository);
 
-    Harness::new(PolicyDenialModel { client })
+    Harness::new(PolicyDenialModel { client }, unbounded_context_budget())
         .repository(repository)
         .allow(Tool::Read)
         .with_lifecycle_observer(observers)

@@ -62,8 +62,7 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
             SessionStore::complete_turn(
                 &database,
                 candidate,
-                &[ModelMessage::Assistant("discard".into())],
-                None
+                &[ModelMessage::Assistant("discard".into())]
             )
             .await,
             Err(SessionError::OwnershipLost { .. })

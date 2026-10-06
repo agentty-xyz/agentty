@@ -12,6 +12,9 @@ Structured LLM turns with deny-by-default tools and durable sessions.
 ## Quickstart
 
 ```rust
+use std::num::NonZeroU64;
+
+use ag_harness::model::ContextBudget;
 use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
 use ag_harness::{Harness, OutputSchema};
 use serde_json::json;
@@ -21,20 +24,24 @@ let schema = OutputSchema::new(json!({
     "properties": { "summary": { "type": "string" } },
     "required": ["summary"],
 }))?;
-let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?);
+let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
+    .with_reserved_output(16_384)?;
+let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?, budget);
 
 let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 println!("{}", outcome.output()["summary"]);
 ```
 
-`run_once` keeps no history. For a conversation, use a session.
+Every harness needs a `ContextBudget`: the approximate request weight the model's
+context window allows, in roughly token-sized units. `run_once` keeps no history. For a
+conversation, use a session.
 
 ## Sessions
 
 ```rust
 use ag_harness::{Harness, Repository, Tool};
 
-let harness = Harness::new(model)
+let harness = Harness::new(model, budget)
     .database("harness.db")
     .repository(Repository::new(".", git_executable)?)
     .allow(Tool::Read);
@@ -51,9 +58,10 @@ let mut session = harness.resume("review-42").await?;
 let outcome = session.send("Now focus on error handling").await?;
 ```
 
-Resuming replays completed turns only; failed and interrupted turns stay visible in the
-store but never re-enter model context. Sessions run concurrently, with one active turn
-per session. The library never picks a database location for you.
+Every request replays the most recent completed turns that fit the context budget; the
+provider never holds conversation state. Failed and interrupted turns stay visible in
+the store but never re-enter model context. Sessions run concurrently, with one active
+turn per session. The library never picks a database location for you.
 
 ## Turns
 
@@ -63,14 +71,14 @@ and chain what you need before awaiting it:
 ```rust
 let outcome = session
     .turn("Review against main")
-    .options(TurnOptions::new(schema, ToolPolicy::default().allow(Tool::Read), limits))
+    .options(TurnOptions::new(schema, ToolPolicy::default().allow(Tool::Read)))
     .host_id("request-7")
     .await?;
 ```
 
 | Need                                    | Chain                                       |
 | --------------------------------------- | ------------------------------------------- |
-| Different schema, tools, or limits      | `.options(TurnOptions::new(...))`           |
+| Different schema or tools               | `.options(TurnOptions::new(...))`           |
 | Safe retries under a host request ID    | `.host_id(id)`, later `session.recover(id)` |
 | Cancellation and settlement observation | `.start()` instead of `.await`              |
 | A one-shot turn with explicit options   | `harness.turn(input, options)`              |
@@ -83,6 +91,9 @@ let outcome = session
 - **`start()` returns a `ControlledTurn`.** Its `control()` can `cancel()` the turn and
   then wait on `settled()`, `effects_settled()`, and `commands_settled()` independently
   of the caller's future.
+- **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn:
+  once tool traffic grows the next request past the budget, the turn fails with
+  `TurnError::ContextBudgetExceeded`.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.
@@ -142,16 +153,15 @@ models.register(
     ExecutionIdentity::new("review-model", "config-v1")?,
     Muse::from_env(MUSE_SPARK_1_3)?,
     ModelCapabilities {
-        context_budget: None,
         image_input: true,
-        native_continuation: false,
         tool_calls: true,
+        ..ModelCapabilities::new(budget)
     },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
 ```
 
-- Capabilities are host declarations, not detection. A declared `ContextBudget` keeps
+- Capabilities are host declarations, not detection. The required `ContextBudget` keeps
   the most recent whole turns that fit and fails before any provider call when mandatory
   content cannot fit. `TurnReport::history` says what was replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.

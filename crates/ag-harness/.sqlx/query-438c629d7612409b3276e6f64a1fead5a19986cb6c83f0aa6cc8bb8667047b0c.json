@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT model_generation AS \"model_generation!: i64\", provider,\n       model,\n       registration_key,\n       registration_revision,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       provider_session_id,\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT model_generation AS \"model_generation!: i64\", provider,\n       model,\n       registration_key,\n       registration_revision,\n       output_schema,\n       system_prompt,\n       max_history_bytes AS \"max_history_bytes!: i64\",\n       (SELECT turn_options FROM session_turn\n        WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS \"turn_options?: String\"\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
@@ -92,19 +92,8 @@
         }
       },
       {
-        "name": "provider_session_id",
-        "ordinal": 8,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "session",
-            "name": "provider_session_id"
-          }
-        }
-      },
-      {
         "name": "turn_options?: String",
-        "ordinal": 9,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -126,9 +115,8 @@
       false,
       true,
       false,
-      true,
       true
     ]
   },
-  "hash": "3d8f41c667ec289f939af1cd72497c24c3a3053d77f58d4be3d149ff5379532b"
+  "hash": "438c629d7612409b3276e6f64a1fead5a19986cb6c83f0aa6cc8bb8667047b0c"
 }

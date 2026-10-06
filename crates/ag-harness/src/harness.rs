@@ -27,10 +27,13 @@ use crate::schema_contract::OutputSchema;
 use crate::session::{Database, LoadedSession, NewSession, SessionError};
 use crate::store::{AcquiredTurn, SessionStore};
 use crate::tool::Tool;
-use crate::turn::{HistoryActivity, TurnError, TurnLimits, TurnOptions, TurnOutcome};
+use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
+/// Former default per-turn tool-call limit, still hashed into host-request
+/// fingerprints so requests recorded before its removal stay recognizable.
+const LEGACY_FINGERPRINT_MAX_TOOL_CALLS: usize = 8;
 
 /// Durable, resumable sequence of model turns.
 ///
@@ -43,7 +46,6 @@ pub struct Session {
     history: SessionHistory,
     id: String,
     model_generation: i64,
-    provider_session_id: Option<String>,
     schema: OutputSchema,
     system_prompt: Option<String>,
 }
@@ -51,11 +53,12 @@ pub struct Session {
 impl Session {
     /// Selects a registered model for subsequent turns of an idle session.
     ///
-    /// Clears native continuation and fences older handles, including when
-    /// switching back to a previous registration. Historical provider reasoning
-    /// is not portable and causes an explicit rejection. Ordinary completed
-    /// messages and tool groups remain intact. Recovery lookup remains usable
-    /// on stale handles; new execution requires a fresh handle.
+    /// Adopts the registration's context budget and fences older handles,
+    /// including when switching back to a previous registration. Historical
+    /// provider reasoning is not portable and causes an explicit rejection.
+    /// Ordinary completed messages and tool groups remain intact. Recovery
+    /// lookup remains usable on stale handles; new execution requires a fresh
+    /// handle.
     ///
     /// # Errors
     /// Returns an error for an unknown key, active turn or unsettled effect,
@@ -79,6 +82,7 @@ impl Session {
         )
         .await?;
         self.harness.model = registration.model();
+        self.harness.context_budget = registration.capabilities().context_budget;
         if self.harness.execution_identity.is_none()
             || self
                 .harness
@@ -92,7 +96,6 @@ impl Session {
         }
         self.harness.model_registration = Some(registration);
         self.model_generation = generation;
-        self.provider_session_id = None;
 
         Ok(())
     }
@@ -174,7 +177,7 @@ impl Session {
             return Ok(None);
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
-        let options = TurnOptions::new(schema, ToolPolicy::default(), self.harness.limits);
+        let options = TurnOptions::new(schema, ToolPolicy::default());
         let input = self.compaction_input(&loaded, &options)?;
         let outcome = self.harness.run_compaction(input, &options).await?;
         let checkpoint = SessionCheckpoint::new(
@@ -187,7 +190,6 @@ impl Session {
         self.database
             .publish_checkpoint(&self.id, &checkpoint)
             .await?;
-        self.provider_session_id = None;
         self.checkpoint = Some(checkpoint.clone());
 
         Ok(Some(checkpoint))
@@ -211,12 +213,9 @@ impl Session {
         loop {
             let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
             let input = TurnInput::text(source);
-            let Some(budget) = self.harness.context_budget() else {
-                return Ok(input);
-            };
             match context::admit_mandatory_content(
                 self.harness.context_estimator.as_ref(),
-                budget,
+                self.harness.context_budget,
                 Some(compaction::GENERATION_INSTRUCTIONS),
                 &input,
                 options,
@@ -267,8 +266,8 @@ impl Session {
     /// [`SessionTurn::start`] to keep a cancellation control.
     ///
     /// Without [`SessionTurn::options`] the turn resolves the stored session
-    /// schema and the captured permission and tool-limit defaults afresh;
-    /// earlier explicit overrides are not inherited.
+    /// schema and the captured permission defaults afresh; earlier explicit
+    /// overrides are not inherited.
     pub fn turn(&mut self, input: impl Into<TurnInput>) -> SessionTurn<'_> {
         SessionTurn {
             host_id: None,
@@ -297,7 +296,6 @@ impl Session {
             history: SessionHistory::new(self.history.max_bytes),
             id: self.id.clone(),
             model_generation: self.model_generation,
-            provider_session_id: None,
             schema: self.schema.clone(),
             system_prompt: self.system_prompt.clone(),
         }
@@ -342,13 +340,15 @@ impl Session {
         } else {
             json!(input.joined_text())
         };
+        // Removed settings keep their former defaults so requests recorded
+        // before their removal stay recognizable.
         let mut configuration = json!({
             "version": 1,
             "input": input_identity,
             "options": {
                 "schema": options.schema().value(),
                 "permissions": options.tool_policy(),
-                "max_tool_calls": options.limits().max_tool_calls(),
+                "max_tool_calls": LEGACY_FINGERPRINT_MAX_TOOL_CALLS,
                 "comparison": options.comparison_base().map(crate::ComparisonBase::identity),
             },
             "repository": repository,
@@ -362,7 +362,7 @@ impl Session {
             let capabilities = registration.capabilities();
             configuration["model_registration"] = json!({
                 "identity": registration.identity(),
-                "native_continuation": capabilities.native_continuation,
+                "native_continuation": false,
                 "tool_calls": capabilities.tool_calls,
             });
             // Only image-bearing requests depend on this capability; adding
@@ -429,26 +429,24 @@ impl Session {
         control: Option<&TurnControl>,
         request: Option<&HostRequest>,
     ) -> Result<TurnOutcome, SessionError> {
-        self.harness.check_input_capability(&input)?;
-        // A declared context budget supersedes the byte-based image rejection:
-        // images are weighed by the estimator during mandatory admission.
-        if self.harness.context_budget().is_none() {
-            self.check_image_history_budget(&input)?;
+        // Recorded requests return before checks that only gate new
+        // execution; the context budget is not part of their fingerprint.
+        if let Some(request) = request
+            && let Some(record) =
+                reservation::recorded_request(self.database.as_ref(), &self.id, request).await?
+        {
+            return record.into_outcome();
         }
-        let available_history_weight = self
-            .harness
-            .context_budget()
-            .map(|budget| {
-                context::admit_mandatory_content(
-                    self.harness.context_estimator.as_ref(),
-                    budget,
-                    self.system_prompt.as_deref(),
-                    &input,
-                    options,
-                )
-            })
-            .transpose()
-            .map_err(SessionError::from)?;
+        self.harness.check_input_capability(&input)?;
+        let available_history_weight = context::admit_mandatory_content(
+            self.harness.context_estimator.as_ref(),
+            self.harness.context_budget,
+            self.system_prompt.as_deref(),
+            &input,
+            options,
+        )
+        .map_err(SessionError::from)?;
+        self.check_image_history_budget(&input)?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
         let acquisition = self.acquire_turn(&input, options, control, request, &effects);
@@ -460,7 +458,6 @@ impl Session {
         let AcquiredTurn {
             checkpoint,
             mut guard,
-            provider_session_id,
             turns,
         } = match acquired {
             HostTurnAcquisition::Acquired(acquired) => acquired,
@@ -473,7 +470,6 @@ impl Session {
         }
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(turns);
-        self.provider_session_id = provider_session_id;
         let (request, retained_messages, history) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
@@ -489,10 +485,9 @@ impl Session {
             }
             result = engine.run(request, turn_id, Some(journal)) => result,
         };
-        let (mut outcome, mut messages, provider_session_id) = match result {
+        let (mut outcome, mut messages) = match result {
             Ok(result) => result,
             Err(error) => {
-                self.provider_session_id = None;
                 let persistence = guard.fail(&error).await;
                 if let Err(persistence) = persistence {
                     guard.mark_interrupted();
@@ -509,20 +504,15 @@ impl Session {
         outcome.set_history(history);
         let turn = messages.split_off(retained_messages);
         let persistence = if host_request {
-            guard
-                .complete_request(&turn[1..], provider_session_id.as_deref(), &outcome)
-                .await
+            guard.complete_request(&turn[1..], &outcome).await
         } else {
-            guard
-                .complete(&turn[1..], provider_session_id.as_deref())
-                .await
+            guard.complete(&turn[1..]).await
         };
         if let Err(error) = persistence {
             guard.mark_interrupted();
 
             return Err(error);
         }
-        self.provider_session_id = provider_session_id;
         self.history.push(turn);
 
         Ok(outcome)
@@ -536,7 +526,7 @@ impl Session {
         &self,
         input: TurnInput,
         options: &TurnOptions,
-        available_history_weight: Option<u64>,
+        available_history_weight: u64,
     ) -> (ModelRequest, usize, HistoryActivity) {
         let estimator = self.harness.context_estimator.as_ref();
         let checkpoint_message = self
@@ -544,29 +534,21 @@ impl Session {
             .as_ref()
             .map(SessionCheckpoint::history_message);
         let loaded_turns = self.history.turns().len();
-        let (checkpoint_message, mut messages, evicted_turns) = match available_history_weight {
-            Some(available_weight) => {
-                // The summary is admitted ahead of recent turns; when even it
-                // cannot fit, projection falls back to recent history alone.
-                let (checkpoint_message, remaining_weight) = match checkpoint_message {
-                    Some(message) => {
-                        let weight = estimator.message_weight(&message);
-                        if weight <= available_weight {
-                            (Some(message), available_weight - weight)
-                        } else {
-                            (None, available_weight)
-                        }
-                    }
-                    None => (None, available_weight),
-                };
-
-                let (messages, evicted_turns) =
-                    context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
-
-                (checkpoint_message, messages, evicted_turns)
+        // The summary is admitted ahead of recent turns; when even it cannot
+        // fit, projection falls back to recent history alone.
+        let (checkpoint_message, remaining_weight) = match checkpoint_message {
+            Some(message) => {
+                let weight = estimator.message_weight(&message);
+                if weight <= available_history_weight {
+                    (Some(message), available_history_weight - weight)
+                } else {
+                    (None, available_history_weight)
+                }
             }
-            None => (checkpoint_message, self.history.messages(), 0),
+            None => (None, available_history_weight),
         };
+        let (mut messages, evicted_turns) =
+            context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
         let history = HistoryActivity::new(
             checkpoint_message.is_some(),
             evicted_turns,
@@ -579,27 +561,14 @@ impl Session {
             messages.insert(0, ModelMessage::System(system_prompt.clone()));
         }
         let retained_messages = messages.len();
-        let mut request = ModelRequest::with_history(messages, input, options.schema().clone());
-        // A continuation's provider-side conversation can hold turns that the
-        // byte replay budget already evicted from loading, so a budgeted
-        // registration always replays the projected normalized history. A
-        // checkpointed session replays for the same reason: the provider-side
-        // conversation retains covered turns instead of the summary.
-        request.set_provider_session_id(
-            if available_history_weight.is_some() || self.checkpoint.is_some() {
-                None
-            } else {
-                self.provider_session_id.clone()
-            },
-        );
+        let request = ModelRequest::with_history(messages, input, options.schema().clone());
 
         (request, retained_messages, history)
     }
 
-    /// Rejects image input that the replay budget would evict immediately,
+    /// Rejects image-bearing input the history budget would evict at once,
     /// together with every earlier turn, instead of losing context silently.
-    /// Registrations with a declared context budget skip this byte check and
-    /// weigh images through mandatory-content admission instead.
+    /// Context-budget admission bounds request weight, not retained bytes.
     fn check_image_history_budget(&self, input: &TurnInput) -> Result<(), SessionError> {
         let input_bytes = input.retained_bytes();
         if input.has_images() && input_bytes > self.history.max_bytes {
@@ -699,7 +668,6 @@ impl SessionBuilder {
             history,
             id: config.id().to_string(),
             model_generation: 0,
-            provider_session_id: None,
             schema: config.schema().clone(),
             system_prompt: config.system_prompt().map(str::to_string),
         })
@@ -719,13 +687,6 @@ impl SessionHistory {
             max_bytes,
             turns: VecDeque::new(),
         }
-    }
-
-    pub(crate) fn messages(&self) -> Vec<ModelMessage> {
-        self.turns
-            .iter()
-            .flat_map(|turn| turn.iter().cloned())
-            .collect()
     }
 
     pub(crate) fn turns(&self) -> &VecDeque<Vec<ModelMessage>> {
@@ -776,10 +737,9 @@ impl<'a> SessionTurn<'a> {
     /// Runs the turn with exactly these options instead of the session
     /// defaults, without changing the defaults.
     ///
-    /// Schema, permission, or comparison changes discard native continuation
-    /// and replay completed history. Permission downgrades retain earlier tool
-    /// results. Options are persisted before execution; completion is reported
-    /// only after the resulting messages are committed.
+    /// Permission downgrades retain earlier tool results. Options are persisted
+    /// before execution; completion is reported only after the resulting
+    /// messages are committed.
     pub fn options(mut self, options: TurnOptions) -> Self {
         self.options = Some(options);
 
@@ -911,13 +871,13 @@ impl<'a> IntoFuture for OneShotTurn<'a> {
 /// Session builders and resumed sessions capture this configuration; later
 /// reconfiguration affects only newly obtained handles.
 pub struct Harness {
+    context_budget: ContextBudget,
     context_estimator: Arc<dyn ContextEstimator>,
     database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
     execution_identity: Option<ExecutionIdentity>,
     file_system: Arc<dyn FileSystem>,
     lifecycle: LifecycleEmitter,
-    limits: TurnLimits,
     max_history_bytes: usize,
     model: Arc<dyn Model>,
     model_reasoning_effort: Option<ReasoningEffort>,
@@ -929,8 +889,11 @@ pub struct Harness {
 
 impl Harness {
     /// Creates a deny-by-default harness backed by the local filesystem.
-    pub fn new(model: impl Model + 'static) -> Self {
-        Self::from_shared_model(Arc::new(model))
+    ///
+    /// `context_budget` bounds every provider request of every turn; declare
+    /// it from the model's context window.
+    pub fn new(model: impl Model + 'static, context_budget: ContextBudget) -> Self {
+        Self::from_shared_model(Arc::new(model), context_budget)
     }
 
     /// Creates a harness using a registered model and its execution identity.
@@ -944,7 +907,10 @@ impl Harness {
     /// Returns [`ModelRegistryError::UnknownKey`] for an unregistered key.
     pub fn from_registry(registry: &ModelRegistry, key: &str) -> Result<Self, ModelRegistryError> {
         let registration = registry.resolve(key)?.clone();
-        let mut harness = Self::from_shared_model(registration.model());
+        let mut harness = Self::from_shared_model(
+            registration.model(),
+            registration.capabilities().context_budget,
+        );
         harness.execution_identity = Some(registration.identity().clone());
         harness.model_registration = Some(registration);
 
@@ -1033,14 +999,6 @@ impl Harness {
         self
     }
 
-    /// Overrides the maximum number of native calls allowed in one turn.
-    #[must_use]
-    pub fn max_tool_calls(mut self, max_tool_calls: NonZeroUsize) -> Self {
-        self.limits = TurnLimits::new(max_tool_calls);
-
-        self
-    }
-
     /// Overrides the retained chat-history payload budget.
     ///
     /// Complete oldest turns are evicted when the budget is exceeded, so
@@ -1062,12 +1020,10 @@ impl Harness {
 
     /// Replaces the approximate content estimator used by context projection.
     ///
-    /// Projection activates when the effective registration declares a
-    /// [`ContextBudget`] in its capabilities: requests keep the most recent
-    /// complete turns that fit the remaining weight, and mandatory content
-    /// that cannot fit fails with [`TurnError::ContextBudgetExceeded`] before
-    /// acquisition. Estimates are deterministic approximations, never exact
-    /// provider token counts.
+    /// Requests keep the most recent complete turns that fit the effective
+    /// [`ContextBudget`], and mandatory content that cannot fit fails with
+    /// [`TurnError::ContextBudgetExceeded`] before acquisition. Estimates are
+    /// deterministic approximations, never exact provider token counts.
     #[must_use]
     pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
         self.context_estimator = Arc::new(estimator);
@@ -1079,12 +1035,12 @@ impl Harness {
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
     /// images. Shorthand for `self.turn(input, defaults).await`, where the
-    /// defaults come from [`Self::allow`] and [`Self::max_tool_calls`].
+    /// default permissions come from [`Self::allow`].
     ///
     /// # Errors
     ///
     /// Returns [`TurnError`] when the model fails, requests a denied tool,
-    /// exceeds the call limit, or a requested repository operation fails.
+    /// exceeds the context budget, or a requested repository operation fails.
     pub async fn run_once(
         &self,
         input: impl Into<TurnInput>,
@@ -1095,10 +1051,9 @@ impl Harness {
 
     /// Configures one turn with exactly `options` and no stored history.
     ///
-    /// Options replace the harness schema, permission, and tool-limit
-    /// defaults; an empty policy denies all tools. This never opens a store.
-    /// Await the result to run it, or call [`OneShotTurn::start`] to keep a
-    /// cancellation control.
+    /// Options replace the harness schema and permission defaults; an empty
+    /// policy denies all tools. This never opens a store. Await the result to
+    /// run it, or call [`OneShotTurn::start`] to keep a cancellation control.
     pub fn turn(&self, input: impl Into<TurnInput>, options: TurnOptions) -> OneShotTurn<'_> {
         OneShotTurn {
             harness: self,
@@ -1146,21 +1101,20 @@ impl Harness {
             history,
             id: id.to_string(),
             model_generation: loaded.model_generation,
-            provider_session_id: loaded.provider_session_id,
             schema: loaded.schema,
             system_prompt: loaded.system_prompt,
         })
     }
 
-    fn from_shared_model(model: Arc<dyn Model>) -> Self {
+    fn from_shared_model(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
         Self {
+            context_budget,
             context_estimator: Arc::new(HeuristicContextEstimator),
             database: Arc::new(OnceCell::new()),
             database_path: None,
             execution_identity: None,
             file_system: Arc::new(LocalFileSystem),
             lifecycle: LifecycleEmitter::default(),
-            limits: TurnLimits::default(),
             max_history_bytes: DEFAULT_MAX_HISTORY_BYTES,
             model,
             model_reasoning_effort: None,
@@ -1178,15 +1132,13 @@ impl Harness {
         effects: Effects,
     ) -> Result<TurnOutcome, TurnError> {
         self.check_input_capability(&input)?;
-        if let Some(budget) = self.context_budget() {
-            context::admit_mandatory_content(
-                self.context_estimator.as_ref(),
-                budget,
-                None,
-                &input,
-                &options,
-            )?;
-        }
+        context::admit_mandatory_content(
+            self.context_estimator.as_ref(),
+            self.context_budget,
+            None,
+            &input,
+            &options,
+        )?;
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.schema().clone());
         let turn = self.lifecycle.start_turn();
@@ -1202,7 +1154,7 @@ impl Harness {
             }
         }
 
-        result.map(|(outcome, _, _)| outcome)
+        result.map(|(outcome, _)| outcome)
     }
 
     /// Runs one bounded, tool-free summarization turn for checkpoint
@@ -1230,18 +1182,18 @@ impl Harness {
             }
         }
 
-        result.map(|(outcome, _, _)| outcome)
+        result.map(|(outcome, _)| outcome)
     }
 
     fn snapshot(&self) -> Self {
         Self {
+            context_budget: self.context_budget,
             context_estimator: Arc::clone(&self.context_estimator),
             database: Arc::clone(&self.database),
             database_path: self.database_path.clone(),
             execution_identity: self.execution_identity.clone(),
             file_system: Arc::clone(&self.file_system),
             lifecycle: self.lifecycle.clone(),
-            limits: self.limits,
             max_history_bytes: self.max_history_bytes,
             model: Arc::clone(&self.model),
             model_reasoning_effort: self.model_reasoning_effort,
@@ -1308,12 +1260,6 @@ impl Harness {
         Ok(())
     }
 
-    fn context_budget(&self) -> Option<ContextBudget> {
-        self.model_registration
-            .as_ref()
-            .and_then(|registration| registration.capabilities().context_budget)
-    }
-
     fn check_input_capability(&self, input: &TurnInput) -> Result<(), TurnError> {
         self.model.validate_input(input)?;
         if input.has_images()
@@ -1329,12 +1275,12 @@ impl Harness {
     }
 
     fn default_options(&self, schema: OutputSchema) -> TurnOptions {
-        TurnOptions::new(schema, self.policy, self.limits)
+        TurnOptions::new(schema, self.policy)
     }
 
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
         Engine {
-            context_budget: self.context_budget(),
+            context_budget: self.context_budget,
             context_estimator: self.context_estimator.as_ref(),
             effects: Effects::default(),
             file_system: &self.file_system,

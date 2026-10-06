@@ -4,18 +4,22 @@ use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io::IsTerminal as _;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, io};
 
 use ag_harness::lifecycle::LifecycleTraceObserver;
-use ag_harness::model::{ModelCapabilities, ModelRegistry, ModelRegistryError, ReasoningEffort};
+use ag_harness::model::{
+    ContextBudget, ContextBudgetError, ModelCapabilities, ModelRegistry, ModelRegistryError,
+    ReasoningEffort,
+};
 use ag_harness::provider::{ModelConfiguration, ModelConfigurationError, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SessionInfo;
 use ag_harness::{
     ComparisonBase, Harness, Model, OutputSchema, Repository, Session, Tool, ToolPolicy,
-    TurnLimits, TurnOptions, TurnOutcome,
+    TurnOptions, TurnOutcome,
 };
 use ag_telemetry::otlp::{OtlpError, OtlpExport, Service};
 use clap::builder::{PossibleValuesParser, TypedValueParser};
@@ -30,6 +34,12 @@ const CHAT_COMMAND_HELP: &str = concat!(
     "  /model <MODEL>    switch later turns to a list number, provider/model, or model ID\n",
     "  /help             show commands\n"
 );
+/// Approximate request weight assumed for every chat model. The built-in
+/// catalog declares no context windows, so this assumes a conservative
+/// 128k-token window.
+const CONTEXT_WINDOW_WEIGHT: NonZeroU64 = NonZeroU64::MIN.saturating_add(128_000 - 1);
+/// Approximate weight kept free for the model's response.
+const RESERVED_OUTPUT_WEIGHT: u64 = 16_384;
 /// Revision of the CLI's built-in model registrations. Sessions record it and
 /// require the same value on resume.
 const MODEL_REGISTRATION_REVISION: &str = "ag-harness-cli-1";
@@ -316,11 +326,15 @@ impl ModelSelection {
             client,
             ModelCapabilities {
                 tool_calls: true,
-                ..ModelCapabilities::default()
+                ..ModelCapabilities::new(Self::context_budget()?)
             },
         )?;
 
         Ok(registry)
+    }
+
+    fn context_budget() -> Result<ContextBudget, ContextBudgetError> {
+        ContextBudget::new(CONTEXT_WINDOW_WEIGHT).with_reserved_output(RESERVED_OUTPUT_WEIGHT)
     }
 }
 
@@ -341,7 +355,7 @@ where
     fn harness(&mut self, registered: bool) -> Result<Harness, CliError> {
         let client = (self.connect)(&self.selection)?;
         let Some(identity) = self.selection.identity().filter(|_| registered) else {
-            return Ok(Harness::new(client));
+            return Ok(Harness::new(client, ModelSelection::context_budget()?));
         };
         let key = identity.key().to_string();
         let registry = ModelSelection::registry(identity, client)?;
@@ -683,7 +697,7 @@ async fn comparison_options(
     if allow_write {
         policy = policy.allow(Tool::Write);
     }
-    let options = TurnOptions::new(chat_schema()?, policy, TurnLimits::default());
+    let options = TurnOptions::new(chat_schema()?, policy);
 
     match revision {
         Some(revision) => {
@@ -1049,6 +1063,8 @@ fn chat_schema() -> Result<OutputSchema, CliError> {
 enum CliError {
     #[error(transparent)]
     ComparisonBase(#[from] ag_harness::ComparisonBaseError),
+    #[error(transparent)]
+    ContextBudget(#[from] ContextBudgetError),
     #[error("--base-url or {name} is required")]
     BaseUrlRequired { name: &'static str },
     #[error("one or more chat turns failed")]

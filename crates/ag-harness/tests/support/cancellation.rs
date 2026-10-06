@@ -19,7 +19,7 @@ use ag_harness::store::{
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
-    TurnError, TurnLimits, TurnOptions, TurnOutcome,
+    TurnError, TurnOptions, TurnOutcome,
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -27,6 +27,7 @@ use tokio::io::AsyncRead;
 use tokio::sync::Notify;
 use tokio::time::{Instant, timeout};
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::repository_fixture::repository_with_host_git;
 use crate::store_conformance_test::ExternalStore;
 
@@ -35,7 +36,7 @@ fn schema() -> OutputSchema {
 }
 
 fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+    TurnOptions::new(schema(), ToolPolicy::default())
 }
 
 async fn bounded<T>(future: impl Future<Output = T>) -> T {
@@ -214,12 +215,11 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
         self.pause(Phase::Complete).await;
         self.store
-            .complete_request(owner, messages, continuation, outcome)
+            .complete_request(owner, messages, outcome)
             .await?;
         self.pause(Phase::CompleteAck).await;
 
@@ -235,12 +235,9 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
         self.pause(Phase::Complete).await;
-        self.store
-            .complete_turn(owner, messages, continuation)
-            .await?;
+        self.store.complete_turn(owner, messages).await?;
         self.pause(Phase::CompleteAck).await;
         Ok(())
     }
@@ -315,7 +312,7 @@ async fn stores() -> Vec<Arc<dyn SessionStore>> {
 async fn cancellation_before_poll_and_unstarted_drop_do_not_execute() {
     // Arrange
     let probe = Arc::new(Probe::default());
-    let harness = Harness::new(TestModel(Arc::clone(&probe)));
+    let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget());
     let turn = harness.turn("wait", options()).start();
     let control = turn.control();
 
@@ -349,7 +346,7 @@ async fn one_shot_cancellation_drop_success_and_panic_settle_without_storage() {
     // Arrange
     for prompt in ["wait", "ok", "panic"] {
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe)));
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget());
         let mut turn = Box::pin(harness.turn(prompt, options()).start());
         let control = turn.control();
 
@@ -380,7 +377,8 @@ async fn abandoned_acquisition_keeps_admission_and_never_executes() {
         for phase in [Phase::Acquire, Phase::AcquireAck] {
             let gate = Arc::new(Gate::new(Arc::clone(&store), phase));
             let probe = Arc::new(Probe::default());
-            let harness = Harness::new(TestModel(Arc::clone(&probe))).store(gate.clone());
+            let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
+                .store(gate.clone());
             let id = if phase == Phase::Acquire {
                 "before"
             } else {
@@ -435,7 +433,8 @@ async fn terminal_acknowledgment_survives_cancellation_and_caller_drop() {
         {
             let gate = Arc::new(Gate::new(Arc::clone(&store), phase));
             let probe = Arc::new(Probe::default());
-            let harness = Harness::new(TestModel(probe)).store(gate.clone());
+            let harness =
+                Harness::new(TestModel(probe), unbounded_context_budget()).store(gate.clone());
             let id = index.to_string();
             let mut session = harness
                 .session(&id, schema())
@@ -494,7 +493,8 @@ async fn cleanup_failure_is_observable_and_retry_is_owner_scoped() {
         let gate = Arc::new(Gate::new(store, Phase::None));
         gate.fail_cleanup.store(true, Ordering::SeqCst);
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe))).store(gate.clone());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
+            .store(gate.clone());
         let mut session = harness
             .session("session", schema())
             .create()
@@ -542,7 +542,8 @@ async fn provider_drop_is_prompt_while_cleanup_stalls() {
     for store in stores().await {
         let gate = Arc::new(Gate::new(store, Phase::Cleanup));
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe))).store(gate.clone());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
+            .store(gate.clone());
         let mut session = harness
             .session("session", schema())
             .create()
@@ -617,11 +618,7 @@ impl FileSystem for DeferredReplacement {
 }
 
 fn write_options() -> TurnOptions {
-    TurnOptions::new(
-        schema(),
-        ToolPolicy::default().allow(Tool::Write),
-        TurnLimits::default(),
-    )
+    TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write))
 }
 
 async fn effects_pending(control: &TurnControl) {
@@ -640,14 +637,17 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
         let entered = Arc::new(Notify::new());
         let finished = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-            .store(store)
-            .repository(repository_with_host_git(root.path()))
-            .file_system(DeferredReplacement {
-                entered: Arc::clone(&entered),
-                finished: Arc::clone(&finished),
-                release: Arc::clone(&release),
-            });
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(store)
+        .repository(repository_with_host_git(root.path()))
+        .file_system(DeferredReplacement {
+            entered: Arc::clone(&entered),
+            finished: Arc::clone(&finished),
+            release: Arc::clone(&release),
+        });
         let mut session = harness
             .session("write", schema())
             .create()
@@ -729,7 +729,7 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
         let release = Arc::new(Notify::new());
         let gate = Arc::new(Gate::new(store, Phase::Outcome));
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
             .store(gate.clone())
             .execution_identity(
                 ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
@@ -824,9 +824,12 @@ async fn cancelled_intent_does_not_start_replacement() {
     for store in stores().await {
         let root = tempfile::tempdir().expect("repository");
         let gate = Arc::new(Gate::new(store, Phase::Intent));
-        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-            .store(gate.clone())
-            .repository(repository_with_host_git(root.path()));
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(gate.clone())
+        .repository(repository_with_host_git(root.path()));
         let mut session = harness
             .session("intent", schema())
             .create()
@@ -865,14 +868,17 @@ async fn dropped_ordinary_turn_retains_replacement_and_admission() {
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
         let gate = Arc::new(Gate::new(store, Phase::Outcome));
-        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-            .store(gate.clone())
-            .repository(repository_with_host_git(root.path()))
-            .file_system(DeferredReplacement {
-                entered: entered.clone(),
-                finished: Arc::new(Notify::new()),
-                release: release.clone(),
-            });
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(gate.clone())
+        .repository(repository_with_host_git(root.path()))
+        .file_system(DeferredReplacement {
+            entered: entered.clone(),
+            finished: Arc::new(Notify::new()),
+            release: release.clone(),
+        });
         let mut session = harness
             .session("ordinary", schema())
             .create()
@@ -924,9 +930,12 @@ async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() 
         let root = tempfile::tempdir().expect("repository");
         let gate = Arc::new(Gate::new(store, Phase::Outcome));
         gate.fail_outcome.store(true, Ordering::SeqCst);
-        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-            .store(gate.clone())
-            .repository(repository_with_host_git(root.path()));
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(gate.clone())
+        .repository(repository_with_host_git(root.path()));
         let mut session = harness
             .session("outcome", schema())
             .create()
@@ -973,13 +982,16 @@ async fn one_shot_drop_retains_effect_completion() {
     let root = tempfile::tempdir().expect("repository");
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-        .repository(repository_with_host_git(root.path()))
-        .file_system(DeferredReplacement {
-            entered: entered.clone(),
-            finished: Arc::new(Notify::new()),
-            release: release.clone(),
-        });
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .repository(repository_with_host_git(root.path()))
+    .file_system(DeferredReplacement {
+        entered: entered.clone(),
+        finished: Arc::new(Notify::new()),
+        release: release.clone(),
+    });
     let mut turn = Box::pin(harness.turn("write", write_options()).start());
     let control = turn.control();
     tokio::select! {
@@ -1014,7 +1026,11 @@ async fn stalled_renewal_and_terminal_persistence_keep_hard_deadlines() {
             Duration::from_secs(2),
         ));
         let gate = Arc::new(Gate::new(store, phase));
-        let harness = Harness::new(TestModel(Arc::new(Probe::default()))).store(gate.clone());
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(gate.clone());
         let mut session = harness
             .session("deadline", schema())
             .create()
@@ -1043,7 +1059,8 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
     let root = tempfile::tempdir().expect("database directory");
     let path = root.path().join("session.db");
     let probe = Arc::new(Probe::default());
-    let harness = Harness::new(TestModel(Arc::clone(&probe))).database(&path);
+    let harness =
+        Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget()).database(&path);
     let mut session = harness
         .session("session", schema())
         .create()
@@ -1131,10 +1148,13 @@ async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission()
             let root = tempfile::tempdir().expect("repository");
             let gate = Arc::new(Gate::new(store.clone(), Phase::None));
             gate.fail_outcome.store(true, Ordering::SeqCst);
-            let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-                .store(gate)
-                .repository(repository_with_host_git(root.path()))
-                .file_system(BrokenReplacement { panic });
+            let harness = Harness::new(
+                TestModel(Arc::new(Probe::default())),
+                unbounded_context_budget(),
+            )
+            .store(gate)
+            .repository(repository_with_host_git(root.path()))
+            .file_system(BrokenReplacement { panic });
             let id = if panic { "panic-write" } else { "failed-write" };
             let mut session = harness
                 .session(id, schema())
@@ -1194,14 +1214,17 @@ async fn lease_loss_settles_persistence_before_retained_replacement() {
     let root = tempfile::tempdir().expect("repository");
     let entered = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
-    let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-        .store(gate)
-        .repository(repository_with_host_git(root.path()))
-        .file_system(DeferredReplacement {
-            entered: entered.clone(),
-            finished: Arc::new(Notify::new()),
-            release: release.clone(),
-        });
+    let harness = Harness::new(
+        TestModel(Arc::new(Probe::default())),
+        unbounded_context_budget(),
+    )
+    .store(gate)
+    .repository(repository_with_host_git(root.path()))
+    .file_system(DeferredReplacement {
+        entered: entered.clone(),
+        finished: Arc::new(Notify::new()),
+        release: release.clone(),
+    });
     let mut session = harness
         .session("lease-write", schema())
         .create()
@@ -1246,9 +1269,12 @@ async fn successful_controlled_writes_acknowledge_both_boundaries() {
     // Arrange
     for store in stores().await {
         let root = tempfile::tempdir().expect("repository");
-        let harness = Harness::new(TestModel(Arc::new(Probe::default())))
-            .store(store)
-            .repository(repository_with_host_git(root.path()));
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(store)
+        .repository(repository_with_host_git(root.path()));
         let mut session = harness
             .session("success-write", schema())
             .create()
@@ -1286,7 +1312,7 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
         {
             let gate = Arc::new(Gate::new(Arc::clone(&store), phase));
             let probe = Arc::new(Probe::default());
-            let harness = Harness::new(TestModel(Arc::clone(&probe)))
+            let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
                 .store(gate.clone())
                 .execution_identity(
                     ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
@@ -1363,7 +1389,7 @@ async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
     for store in crate::store_conformance_test::stores().await {
         let gate = Arc::new(Gate::new(store, Phase::Acquire));
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
             .store(gate.clone())
             .execution_identity(
                 ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),
@@ -1411,7 +1437,7 @@ async fn host_acquisition_panic_releases_admission_without_execution() {
     for store in crate::store_conformance_test::stores().await {
         let gate = Arc::new(Gate::new(store, Phase::AcquirePanic));
         let probe = Arc::new(Probe::default());
-        let harness = Harness::new(TestModel(Arc::clone(&probe)))
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
             .store(gate)
             .execution_identity(
                 ag_harness::recovery::ExecutionIdentity::new("model", "1").expect("identity"),

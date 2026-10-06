@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::{AdmissionState, ModelSwitch, NewTurn, TurnAdmission};
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
 use crate::policy::ToolPolicy;
@@ -9,13 +10,12 @@ use crate::recovery::{
 };
 use crate::schema_contract::OutputSchema;
 use crate::store::{Admission, StoredTurnOptions};
-use crate::{SessionError, Tool, TurnLimits, TurnOptions};
+use crate::{SessionError, Tool, TurnOptions};
 
 fn options(tool_policy: ToolPolicy) -> TurnOptions {
     TurnOptions::new(
         OutputSchema::new(json!({"type": "object"})).expect("schema"),
         tool_policy,
-        TurnLimits::default(),
     )
 }
 
@@ -128,7 +128,7 @@ fn turn_admission_requires_current_generation_and_an_idle_session() {
 }
 
 #[test]
-fn admitted_turn_keeps_continuation_only_for_compatible_options() {
+fn admitted_turn_records_the_selected_options_whatever_the_latest_options() {
     // Arrange
     let selected = options(ToolPolicy::default());
     let admission = TurnAdmission::new(
@@ -139,26 +139,24 @@ fn admitted_turn_keeps_continuation_only_for_compatible_options() {
     );
     let state = |latest_options: Option<String>| AdmissionState {
         latest_options,
-        provider_session_id: Some("continuation".into()),
         ..AdmissionState::default()
     };
-    let incompatible = StoredTurnOptions::encode(&options(ToolPolicy::default().allow(Tool::Read)));
+    let changed = StoredTurnOptions::encode(&options(ToolPolicy::default().allow(Tool::Read)));
 
     // Act
-    let compatible = admit(
-        &admission,
-        state(Some(StoredTurnOptions::encode(&selected))),
-    );
-    let changed = admit(&admission, state(Some(incompatible)));
-    let first = admit(&admission, state(None));
+    let admitted = [
+        Some(StoredTurnOptions::encode(&selected)),
+        Some(changed),
+        None,
+    ]
+    .map(|latest_options| admit(&admission, state(latest_options)));
 
     // Assert
-    assert_eq!(compatible.continuation(), Some("continuation"));
-    assert_eq!(compatible.message(), &ModelMessage::User("prompt".into()));
-    assert_eq!(compatible.options(), StoredTurnOptions::encode(&selected));
-    assert_eq!(compatible.request(), Some(&request("new")));
-    assert_eq!(changed.continuation(), None);
-    assert_eq!(first.continuation(), None);
+    for turn in &admitted {
+        assert_eq!(turn.message(), &ModelMessage::User("prompt".into()));
+        assert_eq!(turn.options(), StoredTurnOptions::encode(&selected));
+        assert_eq!(turn.request(), Some(&request("new")));
+    }
 }
 
 #[test]
@@ -185,7 +183,7 @@ fn undecodable_latest_options_reject_admission() {
 #[test]
 fn model_switch_requires_an_idle_current_selection_and_advances_it() {
     // Arrange
-    let switch = switch(2, ModelCapabilities::default());
+    let switch = switch(2, ModelCapabilities::new(unbounded_context_budget()));
     let busy = AdmissionState {
         active_turn: true,
         model_generation: 2,
@@ -213,7 +211,7 @@ fn model_switch_requires_an_idle_current_selection_and_advances_it() {
 #[test]
 fn model_switch_rejects_history_the_target_cannot_replay() {
     // Arrange
-    let switch = switch(0, ModelCapabilities::default());
+    let switch = switch(0, ModelCapabilities::new(unbounded_context_budget()));
     let portable = [ModelMessage::User("prompt".into())];
     let reasoning = [ModelMessage::AssistantReasoning {
         content: "{}".into(),

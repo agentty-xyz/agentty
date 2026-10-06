@@ -10,6 +10,7 @@ use ag_harness::{
 use serde_json::{Value, json};
 
 use crate::DynError;
+use crate::context_budget_fixture::unbounded_context_budget;
 
 const RED_PNG: &[u8] = include_bytes!("red.png");
 const BLUE_JPEG: &[u8] = include_bytes!("blue.jpg");
@@ -62,7 +63,8 @@ pub(crate) async fn describes_images(
     client: ModelClient,
     provider_name: &str,
 ) -> Result<(), DynError> {
-    let harness = Harness::new(client).store(Arc::new(MemoryStore::new()));
+    let harness =
+        Harness::new(client, unbounded_context_budget()).store(Arc::new(MemoryStore::new()));
 
     let one_shot = harness
         .run_once(colored_images(REPORT)?, color_schema()?)
@@ -85,7 +87,7 @@ pub(crate) async fn rejects_images(
     client: ModelClient,
     provider_name: &str,
 ) -> Result<(), DynError> {
-    let harness = Harness::new(client);
+    let harness = Harness::new(client, unbounded_context_budget());
 
     let rejected = harness
         .run_once(colored_images(REPORT)?, color_schema()?)

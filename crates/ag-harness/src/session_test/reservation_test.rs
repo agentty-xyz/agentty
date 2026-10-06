@@ -6,7 +6,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 use tempfile::tempdir;
 
 use super::support::{
-    ReservationCommitControl, acquire, active_turn_owner, allow_interrupts, complete_native_turn,
+    ReservationCommitControl, acquire, active_turn_owner, allow_interrupts, complete_first_turn,
     reject_interrupts, schema, turn, turn_options, wait_for_interrupted_turn,
 };
 use crate::gated_store_test::{GatedStore, PauseAt};
@@ -422,7 +422,7 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
-    complete_native_turn(&database, "native-session").await;
+    complete_first_turn(&database).await;
     let store = Arc::new(GatedStore::new(database.clone(), PauseAt::Completion));
     let abandoned = AcquiredTurn::begin(
         store.clone(),
@@ -456,7 +456,6 @@ ORDER BY turn_position
 
     // Assert
     assert_eq!(replacement.guard.owner().turn_position, 2);
-    assert!(replacement.provider_session_id.is_none());
     assert_eq!(
         turns,
         vec![
@@ -498,7 +497,7 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_ownership_loss
 
     // Act
     let error = database
-        .complete_turn("session-a", turn_position, &[], None)
+        .complete_turn("session-a", turn_position, &[])
         .await
         .expect_err("non-running turn should fail");
     let repeated_failure = database
@@ -534,7 +533,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
-    complete_native_turn(&database, "native-session").await;
+    complete_first_turn(&database).await;
     let mut abandoned = AcquiredTurn::begin(
         Arc::new(database.clone()),
         "session-a",
@@ -545,14 +544,6 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     .await
     .expect("turn should begin");
     abandoned.guard.disarm();
-    let active = database
-        .load_session("session-a")
-        .await
-        .expect("active session should load");
-    assert_eq!(
-        active.provider_session_id.as_deref(),
-        Some("native-session")
-    );
     now.store(10 + TURN_LEASE_SECONDS + 1, Ordering::SeqCst);
 
     // Act
@@ -580,8 +571,6 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
 
     // Assert
     assert_eq!(loaded.turns, vec![turn("first", "first")]);
-    assert!(loaded.provider_session_id.is_none());
-    assert!(replacement.provider_session_id.is_none());
     assert_eq!(status, "interrupted");
     assert_eq!(
         replacement.guard.owner().turn_position,
@@ -590,7 +579,7 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
 }
 
 #[tokio::test]
-async fn interruption_rolls_back_when_clearing_continuation_fails() {
+async fn interruption_rolls_back_when_the_session_update_fails() {
     for expired in [false, true] {
         // Arrange
         let database = Database::open_in_memory()
@@ -600,7 +589,7 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .create_session(&NewSession::new("session-a", schema()), None, 100_000)
             .await
             .expect("session should be created");
-        complete_native_turn(&database, "native-session").await;
+        complete_first_turn(&database).await;
         let mut acquired = AcquiredTurn::begin(
             Arc::new(database.clone()),
             "session-a",
@@ -619,10 +608,10 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .expect("lease should expire");
         sqlx::query(
             r"
-CREATE TRIGGER reject_continuation_clear
-BEFORE UPDATE OF provider_session_id ON session
+CREATE TRIGGER reject_session_update
+BEFORE UPDATE OF updated_at ON session
 BEGIN
-    SELECT RAISE(ABORT, 'injected continuation failure');
+    SELECT RAISE(ABORT, 'injected session failure');
 END
 ",
         )
@@ -647,25 +636,21 @@ END
 
             result.is_err()
         };
-        let state = sqlx::query_as::<_, (String, Option<String>)>(
-            "SELECT status, provider_session_id FROM session_turn JOIN session ON session.id = \
-             session_id WHERE turn_position = 1",
+        let status = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM session_turn WHERE turn_position = 1",
         )
         .fetch_one(&database.pool)
         .await
-        .expect("state should load");
+        .expect("status should load");
 
         // Assert
         assert!(failed);
-        assert_eq!(
-            state,
-            ("running".to_string(), Some("native-session".to_string()))
-        );
+        assert_eq!(status, "running");
     }
 }
 
 #[tokio::test]
-async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
+async fn delayed_or_unowned_cleanup_preserves_the_turn_outcome() {
     // Arrange
     let database = Database::open_in_memory()
         .await
@@ -674,7 +659,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
-    complete_native_turn(&database, "native-session").await;
+    complete_first_turn(&database).await;
     let mut acquired = AcquiredTurn::begin(
         Arc::new(database.clone()),
         "session-a",
@@ -708,12 +693,7 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .await
         .expect("session should load");
     database
-        .complete_turn(
-            "session-a",
-            acquired.guard.owner().turn_position,
-            &[],
-            Some("replacement-session"),
-        )
+        .complete_turn("session-a", acquired.guard.owner().turn_position, &[])
         .await
         .expect("turn should complete");
     let mut transaction = database
@@ -734,12 +714,6 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(
-        active.provider_session_id.as_deref(),
-        Some("native-session")
-    );
-    assert_eq!(
-        completed.provider_session_id.as_deref(),
-        Some("replacement-session")
-    );
+    assert_eq!(active.turns.len(), 1);
+    assert_eq!(completed.turns.len(), 2);
 }

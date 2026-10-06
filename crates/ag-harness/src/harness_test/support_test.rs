@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncRead;
 use tokio::sync::Notify;
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleId, ModelResponseType};
@@ -32,59 +33,6 @@ pub(super) fn model() -> MockModel {
     model
 }
 
-pub(super) fn resume_fallback_model() -> MockModel {
-    let mut model = model();
-    let mut sequence = Sequence::new();
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id().is_none())
-        .returning(|_| {
-            Ok(response_without_metadata(ModelResponse::Output(json!({
-                "summary": "first"
-            })))
-            .with_provider_session_id("native-session"))
-        });
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id() == Some("native-session"))
-        .returning(|_| Err(ModelError::ResumeUnavailable));
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| {
-            request.provider_session_id().is_none()
-                && request.messages()
-                    == [
-                        ModelMessage::User("first".to_string()),
-                        ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
-                        ModelMessage::User("second".to_string()),
-                    ]
-        })
-        .returning(|_| {
-            Ok(response_without_metadata(ModelResponse::Output(json!({
-                "summary": "second"
-            })))
-            .with_provider_session_id("replacement-session"))
-        });
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id() == Some("replacement-session"))
-        .returning(|_| {
-            Ok(response_without_metadata(ModelResponse::Output(json!({
-                "summary": "third"
-            }))))
-        });
-
-    model
-}
-
 pub(super) fn object_schema() -> OutputSchema {
     OutputSchema::new(json!({
         "type": "object",
@@ -96,14 +44,14 @@ pub(super) fn object_schema() -> OutputSchema {
 }
 
 pub(super) fn read_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
-    Harness::new(model)
+    Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
         .allow(Tool::Read)
         .file_system(file_system)
 }
 
 pub(super) fn write_harness(model: impl Model + 'static, file_system: MockFileSystem) -> Harness {
-    Harness::new(model)
+    Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
         .allow(Tool::Write)
         .file_system(file_system)
@@ -168,26 +116,20 @@ impl Model for SlowModel {
     }
 }
 
-pub(super) struct ContinuationInterruptionModel {
+pub(super) struct InterruptionModel {
     pub(super) call_count: AtomicUsize,
     pub(super) dropped: Arc<Notify>,
     pub(super) started: Arc<Notify>,
 }
 
 #[async_trait]
-impl Model for ContinuationInterruptionModel {
+impl Model for InterruptionModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         match self.call_count.fetch_add(1, Ordering::SeqCst) {
-            0 => {
-                assert!(request.provider_session_id().is_none());
-
-                Ok(response_without_metadata(ModelResponse::Output(json!({
-                    "summary": "first"
-                })))
-                .with_provider_session_id("native-session"))
-            }
+            0 => Ok(response_without_metadata(ModelResponse::Output(json!({
+                "summary": "first"
+            })))),
             1 => {
-                assert_eq!(request.provider_session_id(), Some("native-session"));
                 let _drop_notifier = RequestDropNotifier {
                     dropped: Arc::clone(&self.dropped),
                 };
@@ -195,7 +137,6 @@ impl Model for ContinuationInterruptionModel {
                 std::future::pending().await
             }
             _ => {
-                assert!(request.provider_session_id().is_none());
                 assert_eq!(
                     request.messages(),
                     [
@@ -207,8 +148,7 @@ impl Model for ContinuationInterruptionModel {
 
                 Ok(response_without_metadata(ModelResponse::Output(json!({
                     "summary": "recovered"
-                })))
-                .with_provider_session_id("replacement-session"))
+                }))))
             }
         }
     }

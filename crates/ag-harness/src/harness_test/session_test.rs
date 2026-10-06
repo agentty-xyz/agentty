@@ -7,11 +7,12 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::support::{
-    model, object_schema, read_call, response_without_metadata, resume_fallback_model,
-    send_with_resumed_session, turn_started_id, wait_for_stored_turn_state,
+    model, object_schema, read_call, response_without_metadata, send_with_resumed_session,
+    turn_started_id, wait_for_stored_turn_state,
 };
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::{Harness, SessionHistory, retained_bytes};
-use crate::lifecycle::{LifecycleEventKind, ModelResponseType, TurnErrorType};
+use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::session::{Database, SessionError};
 use crate::turn::TurnError;
@@ -47,7 +48,8 @@ async fn session_retains_successful_conversation_history() {
         }))))
     });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("session-a", object_schema())
         .create()
@@ -82,12 +84,10 @@ async fn stale_session_handles_acquire_current_canonical_state() {
                 request.messages(),
                 &[ModelMessage::User("first question".to_string())]
             );
-            assert_eq!(request.provider_session_id(), None);
 
             return Ok(response_without_metadata(ModelResponse::Output(json!({
                 "summary": "first answer"
-            })))
-            .with_provider_session_id("native-session"));
+            }))));
         }
         assert_eq!(
             request.messages(),
@@ -97,14 +97,14 @@ async fn stale_session_handles_acquire_current_canonical_state() {
                 ModelMessage::User("second question".to_string()),
             ]
         );
-        assert_eq!(request.provider_session_id(), Some("native-session"));
 
         Ok(response_without_metadata(ModelResponse::Output(json!({
             "summary": "second answer"
         }))))
     });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut first = harness
         .session("session-a", object_schema())
         .create()
@@ -155,7 +155,8 @@ async fn session_sends_the_system_prompt_on_every_turn() {
         }))))
     });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("session-a", object_schema())
         .system_prompt("read-only instructions")
@@ -202,7 +203,15 @@ fn chat_history_evicts_complete_tool_turns() {
     history.push(latest_turn.clone());
 
     // Assert
-    assert_eq!(history.messages(), latest_turn);
+    assert_eq!(
+        history
+            .turns()
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>(),
+        latest_turn
+    );
     assert!(history.bytes <= max_bytes);
 }
 
@@ -247,7 +256,7 @@ async fn session_applies_the_configured_history_budget() {
         }
     });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .database(directory.path().join("harness.db"))
         .max_history_bytes(NonZeroUsize::new(50).expect("history budget should be nonzero"));
     let mut session = harness
@@ -297,7 +306,8 @@ async fn sequential_resumed_handles_reload_completed_canonical_history() {
         }))))
     });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut first_handle = harness
         .session("session-a", object_schema())
         .create()
@@ -348,7 +358,8 @@ async fn session_does_not_replay_a_failed_turn() {
             }))))
         });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("session-a", object_schema())
         .create()
@@ -374,7 +385,7 @@ async fn session_does_not_replay_a_failed_turn() {
 }
 
 #[tokio::test]
-async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
+async fn session_replays_only_completed_turns_after_a_failed_turn() {
     // Arrange
     let mut model = model();
     let mut sequence = Sequence::new();
@@ -382,18 +393,15 @@ async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
         .expect_complete()
         .times(1)
         .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id().is_none())
         .returning(|_| {
             Ok(response_without_metadata(ModelResponse::Output(json!({
                 "summary": "first"
-            })))
-            .with_provider_session_id("native-session"))
+            }))))
         });
     model
         .expect_complete()
         .times(1)
         .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id() == Some("native-session"))
         .returning(|_| {
             Err(ModelError::SchemaViolation {
                 path: "/summary".to_string(),
@@ -405,13 +413,12 @@ async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
         .times(1)
         .in_sequence(&mut sequence)
         .withf(|request| {
-            request.provider_session_id().is_none()
-                && request.messages()
-                    == [
-                        ModelMessage::User("first".to_string()),
-                        ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
-                        ModelMessage::User("retry".to_string()),
-                    ]
+            request.messages()
+                == [
+                    ModelMessage::User("first".to_string()),
+                    ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
+                    ModelMessage::User("retry".to_string()),
+                ]
         })
         .returning(|_| {
             Ok(response_without_metadata(ModelResponse::Output(json!({
@@ -419,7 +426,8 @@ async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
             }))))
         });
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("session-a", object_schema())
         .create()
@@ -455,147 +463,6 @@ async fn session_invalidates_provider_resume_state_after_a_failed_turn() {
 }
 
 #[tokio::test]
-async fn session_accounts_for_resume_fallback_and_persists_its_continuation() {
-    // Arrange
-    let directory = tempdir().expect("temporary directory should be created");
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let observed_events = Arc::clone(&events);
-    let harness = Harness::new(resume_fallback_model())
-        .database(directory.path().join("harness.db"))
-        .with_lifecycle_observer(move |event| {
-            observed_events
-                .lock()
-                .expect("event recorder should not be poisoned")
-                .push(event);
-        });
-    let mut session = harness
-        .session("session-a", object_schema())
-        .create()
-        .await
-        .expect("session should be created");
-    session
-        .send("first")
-        .await
-        .expect("first turn should succeed");
-    drop(session);
-    let mut session = harness
-        .resume("session-a")
-        .await
-        .expect("session should resume");
-
-    // Act
-    let outcome = session
-        .send("second")
-        .await
-        .expect("history replay should succeed");
-    drop(session);
-    let mut session = harness
-        .resume("session-a")
-        .await
-        .expect("session should resume with replacement continuation");
-    let third = session
-        .send("third")
-        .await
-        .expect("replacement continuation should succeed");
-
-    // Assert
-    assert_eq!(outcome.output(), &json!({"summary": "second"}));
-    assert_eq!(outcome.report().model_requests().len(), 2);
-    assert_eq!(
-        outcome.report().model_requests()[0].response_type(),
-        ModelResponseType::ResumeUnavailable
-    );
-    assert_eq!(
-        outcome.report().model_requests()[1].response_type(),
-        ModelResponseType::Output
-    );
-    assert_eq!(third.output(), &json!({"summary": "third"}));
-    let events = events
-        .lock()
-        .expect("event recorder should not be poisoned");
-    assert!(matches!(
-        events[5].kind(),
-        LifecycleEventKind::ModelRequestStarted {
-            request_index: 0,
-            ..
-        }
-    ));
-    assert!(matches!(
-        events[6].kind(),
-        LifecycleEventKind::ModelRequestFailed {
-            error_type: ModelErrorType::Provider,
-            ..
-        }
-    ));
-    assert!(matches!(
-        events[7].kind(),
-        LifecycleEventKind::ModelRequestStarted {
-            request_index: 1,
-            ..
-        }
-    ));
-    assert!(matches!(
-        events[8].kind(),
-        LifecycleEventKind::ModelRequestCompleted {
-            response_type: ModelResponseType::Output,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn session_preserves_structured_failure_after_native_resume_fallback() {
-    // Arrange
-    let mut model = model();
-    let mut sequence = Sequence::new();
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .returning(|_| {
-            Ok(response_without_metadata(ModelResponse::Output(json!({
-                "summary": "first"
-            })))
-            .with_provider_session_id("native-session"))
-        });
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id() == Some("native-session"))
-        .returning(|_| Err(ModelError::ResumeUnavailable));
-    model
-        .expect_complete()
-        .times(1)
-        .in_sequence(&mut sequence)
-        .withf(|request| request.provider_session_id().is_none())
-        .returning(|_| Err(ModelError::ResponseBodyTooLarge));
-    let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model).database(directory.path().join("harness.db"));
-    let mut session = harness
-        .session("session-a", object_schema())
-        .create()
-        .await
-        .expect("session should be created");
-    session
-        .send("first")
-        .await
-        .expect("first turn should succeed");
-
-    // Act
-    let error = session
-        .send("second")
-        .await
-        .expect_err("history replay should fail");
-
-    // Assert
-    assert!(matches!(
-        &error,
-        SessionError::Turn(TurnError::Model(ModelError::ResponseBodyTooLarge))
-    ));
-}
-
-#[tokio::test]
 async fn building_handles_and_running_once_leave_storage_uninitialized() {
     // Arrange
     let mut model = model();
@@ -609,7 +476,8 @@ async fn building_handles_and_running_once_leave_storage_uninitialized() {
     tokio::fs::write(&parent, "not a directory")
         .await
         .expect("blocking file");
-    let harness = Harness::new(model).database(parent.join("harness.db"));
+    let harness =
+        Harness::new(model, unbounded_context_budget()).database(parent.join("harness.db"));
 
     // Act
     let builder = harness.session("pending", object_schema());
@@ -642,7 +510,8 @@ async fn building_handles_and_running_once_leave_storage_uninitialized() {
 async fn concurrent_session_creation_and_resume_share_one_database_pool() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(model()).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model(), unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let first = harness.session("first", object_schema());
     let second = harness.session("second", object_schema());
     let database = Arc::clone(&harness.database);
@@ -690,7 +559,8 @@ async fn database_initialization_retries_after_failure_and_resets_on_reconfigura
     tokio::fs::write(&parent, "not a directory")
         .await
         .expect("blocking file should exist");
-    let harness = Harness::new(model()).database(parent.join("harness.db"));
+    let harness =
+        Harness::new(model(), unbounded_context_budget()).database(parent.join("harness.db"));
     let first = harness.session("first", object_schema());
     let retry = harness.session("first", object_schema());
     let pending = harness.session("pending", object_schema());
@@ -750,7 +620,7 @@ async fn completion_persistence_failure_interrupts_the_session_turn() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let observed_events = Arc::clone(&events);
     let harness = Arc::new(
-        Harness::new(model)
+        Harness::new(model, unbounded_context_budget())
             .database(&database_path)
             .with_lifecycle_observer(move |event| {
                 observed_events
@@ -829,7 +699,7 @@ async fn session_error_preserves_model_and_failure_persistence_errors() {
         .returning(|_| Err(ModelError::InvalidResponse));
     let events = Arc::new(Mutex::new(Vec::new()));
     let observed_events = Arc::clone(&events);
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .database(&database_path)
         .with_lifecycle_observer(move |event| {
             observed_events

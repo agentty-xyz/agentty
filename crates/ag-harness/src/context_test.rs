@@ -12,7 +12,7 @@ use crate::model::{ModelMessage, ModelRequest};
 use crate::policy::ToolPolicy;
 use crate::schema_contract::OutputSchema;
 use crate::tool::{Tool, ToolCall, ToolDefinition};
-use crate::turn::{TurnError, TurnLimits, TurnOptions};
+use crate::turn::{TurnError, TurnOptions};
 
 struct FixedEstimator;
 
@@ -33,7 +33,7 @@ fn budget(max_request_weight: u64) -> ContextBudget {
 fn options_with(tool_policy: ToolPolicy) -> TurnOptions {
     let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
 
-    TurnOptions::new(schema, tool_policy, TurnLimits::default())
+    TurnOptions::new(schema, tool_policy)
 }
 
 #[test]

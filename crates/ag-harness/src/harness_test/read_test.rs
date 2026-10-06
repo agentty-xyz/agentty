@@ -14,6 +14,7 @@ use super::support::{
     response_with_metadata, response_without_metadata,
 };
 use crate::context::{ContextBudget, ContextEstimator};
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType};
@@ -38,7 +39,8 @@ async fn applies_reasoning_effort_to_every_model_call() {
                 "summary": "quick"
             }))))
         });
-    let harness = Harness::new(model).model_reasoning_effort(ReasoningEffort::Low);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .model_reasoning_effort(ReasoningEffort::Low);
 
     // Act
     let output = harness
@@ -130,7 +132,7 @@ async fn completes_repository_inspection_round_trip() {
             "summary": "listed"
         }))))
     });
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture(env!("CARGO_MANIFEST_DIR")))
         .allow(Tool::Read);
 
@@ -290,7 +292,7 @@ async fn returns_correctable_repository_inspection_rejection_to_model() {
             "summary": "recovered"
         }))))
     });
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture(env!("CARGO_MANIFEST_DIR")))
         .allow(Tool::Read);
 
@@ -605,11 +607,8 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
             ExecutionIdentity::new("budgeted", "1").expect("identity"),
             model,
             ModelCapabilities {
-                context_budget: Some(ContextBudget::new(
-                    NonZeroU64::new(15).expect("nonzero budget"),
-                )),
+                context_budget: ContextBudget::new(NonZeroU64::new(15).expect("nonzero budget")),
                 image_input: false,
-                native_continuation: false,
                 tool_calls: true,
             },
         )

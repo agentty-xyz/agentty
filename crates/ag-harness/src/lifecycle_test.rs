@@ -38,7 +38,7 @@ fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
             Some(turn_id),
         )
         .expect("tool should be observed")
-        .failed(ToolErrorType::CallLimit);
+        .failed(ToolErrorType::Execution);
     drop(
         emitter
             .request_tool(
@@ -53,17 +53,13 @@ fn emit_tool_terminal_events(emitter: &LifecycleEmitter, turn_id: LifecycleId) {
 #[test]
 fn model_response_types_have_stable_display_names() {
     // Arrange
-    let response_types = [
-        ModelResponseType::Output,
-        ModelResponseType::ResumeUnavailable,
-        ModelResponseType::ToolCall,
-    ];
+    let response_types = [ModelResponseType::Output, ModelResponseType::ToolCall];
 
     // Act
     let display_names = response_types.map(|response_type| response_type.to_string());
 
     // Assert
-    assert_eq!(display_names, ["output", "resume unavailable", "tool call"]);
+    assert_eq!(display_names, ["output", "tool call"]);
 }
 
 fn recording_emitter() -> (LifecycleEmitter, Arc<Mutex<Vec<LifecycleEvent>>>) {
@@ -355,7 +351,7 @@ fn emits_ordered_terminal_events_for_every_operation() {
     assert!(matches!(
         events[18].kind(),
         LifecycleEventKind::ToolFailed {
-            error_type: ToolErrorType::CallLimit,
+            error_type: ToolErrorType::Execution,
             ..
         }
     ));

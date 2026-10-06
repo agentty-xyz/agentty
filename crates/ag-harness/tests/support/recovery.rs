@@ -1,24 +1,25 @@
 //! Host request conformance exercised externally and in source coverage.
 
 use std::future::pending;
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_harness::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleObserver};
-use ag_harness::model::{ModelCompletion, ModelRequest, ModelResponse};
+use ag_harness::model::{ContextBudget, ModelCompletion, ModelRequest, ModelResponse};
 use ag_harness::recovery::{ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnStatus};
 use ag_harness::store::{AcquiredTurn, NewSession, SessionStore, SqliteStore, WriteStatus};
 use ag_harness::{
-    Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
-    TurnOptions,
+    Harness, Model, ModelError, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::store_conformance_test::{options, schema, stores};
 
 #[derive(Clone, Default)]
@@ -65,7 +66,7 @@ impl Model for TestModel {
 }
 
 fn harness(store: Arc<dyn SessionStore>, probe: &Arc<Probe>) -> Harness {
-    Harness::new(TestModel(Arc::clone(probe)))
+    Harness::new(TestModel(Arc::clone(probe)), unbounded_context_budget())
         .execution_identity(
             ExecutionIdentity::new("test-model-and-filesystem", "1").expect("identity"),
         )
@@ -396,6 +397,58 @@ async fn sqlite_reopen_recovers_original_outcomes_after_history_eviction() {
 }
 
 #[tokio::test]
+async fn recorded_retries_return_before_context_budget_admission() {
+    // Arrange
+    for store in stores().await {
+        let probe = Arc::new(Probe::default());
+        let mut session = harness(Arc::clone(&store), &probe)
+            .session("session", schema())
+            .create()
+            .await
+            .expect("session");
+        let original = session
+            .turn("hello")
+            .options(options())
+            .host_id("id")
+            .await
+            .expect("original");
+        let tight = Harness::new(
+            TestModel(Arc::clone(&probe)),
+            ContextBudget::new(NonZeroU64::MIN),
+        )
+        .execution_identity(
+            ExecutionIdentity::new("test-model-and-filesystem", "1").expect("identity"),
+        )
+        .store(store);
+        let mut session = tight.resume("session").await.expect("resume");
+
+        // Act
+        let retry = session
+            .turn("hello")
+            .options(options())
+            .host_id("id")
+            .await
+            .expect("recorded outcome");
+        let new_request = session
+            .turn("hello")
+            .options(options())
+            .host_id("new")
+            .await;
+
+        // Assert
+        assert_eq!(original, retry);
+        assert!(matches!(
+            new_request,
+            Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
+                budget: 1,
+                ..
+            }))
+        ));
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
 async fn effective_configuration_changes_conflict_and_identity_is_required() {
     // Arrange
     for store in stores().await {
@@ -413,7 +466,8 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
             .host_id("id")
             .await
             .expect("original");
-        let unidentified = Harness::new(TestModel(Arc::clone(&probe))).store(Arc::clone(&store));
+        let unidentified = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
+            .store(Arc::clone(&store));
         let revised = self::harness(Arc::clone(&store), &probe).execution_identity(
             ExecutionIdentity::new("test-model-and-filesystem", "2").expect("identity"),
         );
@@ -421,11 +475,7 @@ async fn effective_configuration_changes_conflict_and_identity_is_required() {
             .model_reasoning_effort(ag_harness::model::ReasoningEffort::High);
 
         // Act / Assert
-        let changed = TurnOptions::new(
-            schema(),
-            ToolPolicy::default().allow(Tool::Read),
-            TurnLimits::default(),
-        );
+        let changed = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Read));
         assert!(matches!(
             session.turn("hello").options(changed).host_id("id").await,
             Err(SessionError::HostTurnConflict)
@@ -495,11 +545,7 @@ async fn retry_of_completed_write_returns_original_report_without_touching_files
             .create()
             .await
             .expect("session");
-        let options = TurnOptions::new(
-            schema(),
-            ToolPolicy::default().allow(Tool::Write),
-            TurnLimits::default(),
-        );
+        let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
 
         // Act
         let original = session

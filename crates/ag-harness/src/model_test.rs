@@ -585,8 +585,7 @@ fn completion_exposes_normalized_metadata_and_response() {
         Some(usage),
     );
     let response = ModelResponse::Output(json!({ "name": "Ada" }));
-    let completion = ModelCompletion::new(metadata, response.clone())
-        .with_provider_session_id("provider-session-1");
+    let completion = ModelCompletion::new(metadata, response.clone());
 
     // Act
     let completion_metadata = completion
@@ -603,7 +602,6 @@ fn completion_exposes_normalized_metadata_and_response() {
         Some("fingerprint-1")
     );
     assert_eq!(completion_metadata.usage(), Some(&usage));
-    assert_eq!(completion.provider_session_id(), Some("provider-session-1"));
     assert_eq!(usage.cache_hit_tokens(), Some(5));
     assert_eq!(usage.cache_miss_tokens(), Some(8));
     assert_eq!(usage.input_tokens(), Some(13));
@@ -714,7 +712,6 @@ fn classifies_model_errors_with_stable_telemetry_values() {
             },
             ModelErrorType::InvalidResponse,
         ),
-        (ModelError::ResumeUnavailable, ModelErrorType::Provider),
         (
             ModelError::ResponseBodyTooLarge,
             ModelErrorType::ResponseTooLarge,

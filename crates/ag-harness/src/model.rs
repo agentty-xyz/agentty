@@ -2,8 +2,8 @@
 //!
 //! Implement [`Model`] to plug in any provider, or use the built-in clients in
 //! [`crate::provider`]. [`ModelRegistry`] selects models by stable host keys
-//! with declared [`ModelCapabilities`], and [`ContextBudget`] enables
-//! model-aware history projection.
+//! with declared [`ModelCapabilities`], whose required [`ContextBudget`]
+//! bounds every request through model-aware history projection.
 
 use std::collections::HashSet;
 use std::error::Error;
@@ -68,8 +68,7 @@ pub trait Model: Send + Sync {
         Ok(())
     }
 
-    /// Completes one model request with optional provider metadata and
-    /// continuation state.
+    /// Completes one model request with optional provider metadata.
     ///
     /// # Errors
     ///
@@ -517,7 +516,6 @@ pub struct ModelRequest {
     messages: Vec<ModelMessage>,
     model_reasoning_effort: Option<ReasoningEffort>,
     prompt: String,
-    provider_session_id: Option<String>,
     schema: OutputSchema,
     tools: Vec<tool::ToolDefinition>,
 }
@@ -546,7 +544,6 @@ impl ModelRequest {
             messages,
             model_reasoning_effort: None,
             prompt,
-            provider_session_id: None,
             schema,
             tools: Vec::new(),
         }
@@ -573,12 +570,6 @@ impl ModelRequest {
     /// Returns the current input's text content, excluding image blocks.
     pub fn prompt(&self) -> &str {
         &self.prompt
-    }
-
-    /// Returns the opaque provider conversation identifier to resume, when
-    /// native continuation is available.
-    pub fn provider_session_id(&self) -> Option<&str> {
-        self.provider_session_id.as_deref()
     }
 
     /// Returns the schema that the response must match.
@@ -615,10 +606,6 @@ impl ModelRequest {
 
     pub(crate) fn mark_lifecycle_observed(&mut self) {
         self.lifecycle_observed = true;
-    }
-
-    pub(crate) fn set_provider_session_id(&mut self, provider_session_id: Option<String>) {
-        self.provider_session_id = provider_session_id;
     }
 
     pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
@@ -802,7 +789,6 @@ impl ModelMessage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelCompletion {
     metadata: Option<CompletionMetadata>,
-    provider_session_id: Option<String>,
     reasoning_content: Option<String>,
     response: ModelResponse,
 }
@@ -812,7 +798,6 @@ impl ModelCompletion {
     pub fn new(metadata: CompletionMetadata, response: ModelResponse) -> Self {
         Self {
             metadata: Some(metadata),
-            provider_session_id: None,
             reasoning_content: None,
             response,
         }
@@ -822,18 +807,9 @@ impl ModelCompletion {
     pub fn from_response(response: ModelResponse) -> Self {
         Self {
             metadata: None,
-            provider_session_id: None,
             reasoning_content: None,
             response,
         }
-    }
-
-    /// Attaches the opaque provider session identifier returned by this turn.
-    #[must_use]
-    pub fn with_provider_session_id(mut self, provider_session_id: impl Into<String>) -> Self {
-        self.provider_session_id = Some(provider_session_id.into());
-
-        self
     }
 
     pub(crate) fn with_reasoning_content(mut self, reasoning_content: Option<String>) -> Self {
@@ -847,11 +823,6 @@ impl ModelCompletion {
         self.metadata.as_ref()
     }
 
-    /// Returns the opaque provider session identifier for the next turn.
-    pub fn provider_session_id(&self) -> Option<&str> {
-        self.provider_session_id.as_deref()
-    }
-
     /// Returns the provider-neutral model response.
     pub fn response(&self) -> &ModelResponse {
         &self.response
@@ -862,20 +833,8 @@ impl ModelCompletion {
         self.response
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        ModelResponse,
-        Option<CompletionMetadata>,
-        Option<String>,
-        Option<String>,
-    ) {
-        (
-            self.response,
-            self.metadata,
-            self.provider_session_id,
-            self.reasoning_content,
-        )
+    pub(crate) fn into_parts(self) -> (ModelResponse, Option<CompletionMetadata>, Option<String>) {
+        (self.response, self.metadata, self.reasoning_content)
     }
 }
 
@@ -946,9 +905,6 @@ pub enum ModelError {
     /// The provider returned a successful response without assistant content.
     #[error("model returned no response content")]
     InvalidResponse,
-    /// The provider could not restore the requested native session.
-    #[error("provider session is unavailable")]
-    ResumeUnavailable,
     /// The provider stopped before completing the model response.
     #[error("model response is incomplete: {reason}")]
     IncompleteResponse {
@@ -1041,7 +997,6 @@ impl ModelError {
             Self::InvalidResponse | Self::IncompleteResponse { .. } => {
                 ModelErrorType::InvalidResponse
             }
-            Self::ResumeUnavailable => ModelErrorType::Provider,
             Self::ResponseBodyTooLarge | Self::ResponseContentTooLarge => {
                 ModelErrorType::ResponseTooLarge
             }

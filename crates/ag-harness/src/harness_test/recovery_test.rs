@@ -1,28 +1,30 @@
-use std::num::NonZeroUsize;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use serde_json::json;
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::harness::tests::support::{model, response_without_metadata};
-use crate::model::{MockModel, ModelCapabilities, ModelError, ModelRegistry, ModelResponse};
+use crate::model::{
+    ContextBudget, MockModel, ModelCapabilities, ModelError, ModelRegistry, ModelResponse,
+};
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
 use crate::store_conformance_test::{image_input, png_image};
 use crate::{
-    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnLimits,
-    TurnOptions,
+    InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
 
 #[tokio::test]
 async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_schema() {
     // Arrange
-    let harness = Harness::new(model())
+    let harness = Harness::new(model(), unbounded_context_budget())
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object","properties":{"first":{"type":"string"},"second":{"type":"string"}}})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("session", schema)
         .create()
@@ -34,7 +36,7 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
 
     // Act / Assert
     let reordered = OutputSchema::new(serde_json::from_str(r#"{"properties":{"second":{"type":"string"},"first":{"type":"string"}},"type":"object"}"#).expect("json")).expect("schema");
-    let reordered = TurnOptions::new(reordered, ToolPolicy::default(), TurnLimits::default());
+    let reordered = TurnOptions::new(reordered, ToolPolicy::default());
     assert_eq!(
         request,
         session
@@ -45,17 +47,10 @@ async fn recovery_fingerprint_covers_effective_configuration_and_canonicalizes_s
         TurnOptions::new(
             OutputSchema::new(json!({"type":"object"})).expect("schema"),
             ToolPolicy::default(),
-            TurnLimits::default(),
         ),
         TurnOptions::new(
             options.schema().clone(),
             ToolPolicy::default().allow(Tool::Read),
-            TurnLimits::default(),
-        ),
-        TurnOptions::new(
-            options.schema().clone(),
-            ToolPolicy::default(),
-            TurnLimits::new(NonZeroUsize::MIN),
         ),
     ] {
         assert_ne!(
@@ -106,9 +101,8 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model(),
                 ModelCapabilities {
-                    context_budget: None,
+                    context_budget: unbounded_context_budget(),
                     image_input: image_capable,
-                    native_continuation: false,
                     tool_calls: false,
                 },
             )
@@ -116,11 +110,11 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
 
         registry.resolve("registered").expect("resolve").clone()
     };
-    let harness = Harness::new(model())
+    let harness = Harness::new(model(), unbounded_context_budget())
         .store(Arc::new(MemoryStore::new()))
         .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
     let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-    let options = TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("session", schema)
         .create()
@@ -198,6 +192,49 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
 }
 
 #[tokio::test]
+async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
+    // Arrange
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("registered", "1").expect("identity"),
+            model(),
+            ModelCapabilities::new(unbounded_context_budget()),
+        )
+        .expect("register");
+    let registration = registry.resolve("registered").expect("resolve").clone();
+    let harness = Harness::new(model(), unbounded_context_budget())
+        .store(Arc::new(MemoryStore::new()))
+        .execution_identity(ExecutionIdentity::new("injected", "v1").expect("identity"));
+    let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
+    let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
+    let mut session = harness
+        .session("session", schema)
+        .create()
+        .await
+        .expect("session");
+
+    // Act
+    let unregistered = session
+        .host_request("id".into(), &TurnInput::from("input"), &options)
+        .expect("unregistered request");
+    session.harness.model_registration = Some(registration);
+    let registered = session
+        .host_request("id".into(), &TurnInput::from("input"), &options)
+        .expect("registered request");
+
+    // Assert
+    assert_eq!(
+        unregistered.fingerprint(),
+        "v1:4da118733f1dc225fd3d6836bafb287d27bb611b81af0f03202074545abef38e"
+    );
+    assert_eq!(
+        registered.fingerprint(),
+        "v1:60d02cbde3eee3f8aea370b7c97b13abcba7b33ee707fb21a99f77e44825f0a0"
+    );
+}
+
+#[tokio::test]
 async fn registered_capability_gates_image_input_before_execution() {
     // Arrange
     let harness = |image_capable: bool, model: MockModel| {
@@ -207,9 +244,8 @@ async fn registered_capability_gates_image_input_before_execution() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model,
                 ModelCapabilities {
-                    context_budget: None,
+                    context_budget: unbounded_context_budget(),
                     image_input: image_capable,
-                    native_continuation: false,
                     tool_calls: false,
                 },
             )
@@ -254,11 +290,10 @@ async fn registered_capability_gates_image_input_before_execution() {
 }
 
 #[tokio::test]
-async fn image_input_beyond_the_history_budget_fails_before_execution() {
+async fn image_input_beyond_the_context_budget_fails_before_execution() {
     // Arrange
-    let harness = Harness::new(model())
-        .store(Arc::new(MemoryStore::new()))
-        .max_history_bytes(NonZeroUsize::new(64).expect("budget"));
+    let budget = ContextBudget::new(NonZeroU64::new(64).expect("budget"));
+    let harness = Harness::new(model(), budget).store(Arc::new(MemoryStore::new()));
     let mut session = harness
         .session(
             "budget",
@@ -269,14 +304,16 @@ async fn image_input_beyond_the_history_budget_fails_before_execution() {
         .expect("session");
 
     // Act
-    let rejected = session.send(image_input("look", &[0; 64], "closely")).await;
+    let rejected = session
+        .send(image_input("look", &[0; 512], "closely"))
+        .await;
 
     // Assert
     assert!(matches!(
         rejected,
-        Err(SessionError::ImageInputExceedsHistory {
-            max_history_bytes: 64,
+        Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
+            budget: 64,
             ..
-        })
+        }))
     ));
 }

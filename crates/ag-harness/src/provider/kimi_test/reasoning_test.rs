@@ -6,6 +6,7 @@ use super::support::{
     kimi, kimi_model, mount_tool_response, person_schema, person_schema_value, read_request,
     read_tool_wire,
 };
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::{model, schema_contract};
@@ -171,8 +172,8 @@ async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
         .mount(&server)
         .await;
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness =
-        Harness::new(kimi_model(&server, "kimi-k3")).database(directory.path().join("harness.db"));
+    let harness = Harness::new(kimi_model(&server, "kimi-k3"), unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("kimi-k3-reasoning", person_schema())
         .create()
@@ -266,7 +267,8 @@ async fn preserves_terminal_k2_6_reasoning_for_next_session_turn() {
         .mount(&server)
         .await;
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(kimi(&server)).database(directory.path().join("harness.db"));
+    let harness = Harness::new(kimi(&server), unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut session = harness
         .session("kimi-k2.6-reasoning", person_schema())
         .create()

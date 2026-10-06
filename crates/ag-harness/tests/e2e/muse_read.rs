@@ -8,6 +8,7 @@ use ag_harness::{Harness, OutputSchema, Repository, Tool};
 use serde_json::json;
 
 use crate::DynError;
+use crate::context_budget_fixture::unbounded_context_budget;
 
 const GIT_EXECUTABLE_ENV: &str = "AG_HARNESS_GIT_EXECUTABLE";
 const PROMPT: &str = concat!(
@@ -46,7 +47,7 @@ async fn inspect_manifest(model: Muse, git_executable: PathBuf) -> Result<(), Dy
         "additionalProperties": false
     }))?;
     let repository = Repository::new(env!("CARGO_MANIFEST_DIR"), git_executable)?;
-    let output = Harness::new(model)
+    let output = Harness::new(model, unbounded_context_budget())
         .repository(repository)
         .allow(Tool::Read)
         .run_once(PROMPT, schema)

@@ -16,7 +16,7 @@ use crate::store::{
     WriteStatus,
 };
 use crate::store_conformance_test::{harness, options, schema};
-use crate::{ComparisonBase, ModelError, SessionError, TurnError, TurnInput};
+use crate::{ModelError, SessionError, TurnError, TurnInput};
 
 #[tokio::test]
 async fn clones_share_state_independent_stores_and_one_shot_are_isolated() {
@@ -128,7 +128,7 @@ async fn creation_and_unknown_owner_errors_leave_state_unchanged() {
         .await
         .expect("idempotent missing cleanup");
     let empty = TurnOwner::new(store.identity().clone(), "session".to_string(), 0, vec![0]);
-    assert!(store.complete_turn(&empty, &[], None).await.is_err());
+    assert!(store.complete_turn(&empty, &[]).await.is_err());
     store
         .interrupt(&empty)
         .await
@@ -162,7 +162,7 @@ async fn foreign_owners_cannot_mutate() {
         turn.owner().token().to_vec(),
     );
     assert!(store.renew(&foreign).await.is_err());
-    assert!(store.complete_turn(&foreign, &[], None).await.is_err());
+    assert!(store.complete_turn(&foreign, &[]).await.is_err());
     assert!(
         store
             .fail_turn(&foreign, &TurnError::Model(ModelError::InvalidResponse))
@@ -274,7 +274,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
         .await
         .expect("turn");
         store
-            .complete_turn(turn.owner(), &[], Some("native"))
+            .complete_turn(turn.owner(), &[])
             .await
             .expect("complete");
     }
@@ -366,66 +366,10 @@ async fn allocation_exhaustion_and_invalid_snapshots_never_reserve() {
         Vec::<WriteRecord>::new()
     );
     store
-        .complete_turn(turn.owner(), &[], Some("native"))
+        .complete_turn(turn.owner(), &[])
         .await
         .expect("complete");
-    store
-        .lock()
-        .sessions
-        .get_mut("session")
-        .expect("session")
-        .turns[0]
-        .options = "invalid".to_string();
-    assert!(
-        AcquiredTurn::begin(
-            store.clone(),
-            "session",
-            &TurnInput::from("invalid snapshot"),
-            &options(),
-            0
-        )
-        .await
-        .is_err()
-    );
     assert_eq!(store.lock().sessions["session"].turns.len(), 1);
-}
-
-#[tokio::test]
-async fn comparison_compatibility_matches_sqlite_without_live_repository_access() {
-    // Arrange
-    for store in crate::store_conformance_test::stores().await {
-        store
-            .create_session(&NewSession::new("comparison", schema()), None, 100)
-            .await
-            .expect("create");
-        let selected =
-            options().with_comparison_base(ComparisonBase::fixture("removed-repository"));
-        let changed =
-            options().with_comparison_base(ComparisonBase::fixture("different-repository"));
-
-        // Act / Assert
-        for (current, expected) in [
-            (&selected, None),
-            (&selected, Some("native")),
-            (&changed, None),
-            (&options(), None),
-        ] {
-            let turn = AcquiredTurn::begin(
-                store.clone(),
-                "comparison",
-                &TurnInput::from("prompt"),
-                current,
-                0,
-            )
-            .await
-            .expect("acquire");
-            assert_eq!(turn.provider_session_id.as_deref(), expected);
-            store
-                .complete_turn(turn.owner(), &[], Some("native"))
-                .await
-                .expect("complete");
-        }
-    }
 }
 
 #[tokio::test]
@@ -446,7 +390,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                 .await
                 .expect("first");
             store
-                .complete_turn(first.owner(), &[], Some("native"))
+                .complete_turn(first.owner(), &[])
                 .await
                 .expect("complete first");
             let old = AcquiredTurn::begin(store.clone(), "expiry", &expired_input, &options(), 0)
@@ -460,7 +404,7 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
             // Act
             expire();
             assert!(store.renew(old.owner()).await.is_err());
-            assert!(store.complete_turn(old.owner(), &[], None).await.is_err());
+            assert!(store.complete_turn(old.owner(), &[]).await.is_err());
             assert!(
                 store
                     .fail_turn(old.owner(), &TurnError::Model(ModelError::InvalidResponse))
@@ -481,20 +425,13 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
                     .is_err()
             );
             if recover_on_load {
-                assert_eq!(
-                    store
-                        .load_session("expiry")
-                        .await
-                        .expect("recover")
-                        .provider_session_id,
-                    None
-                );
+                store.load_session("expiry").await.expect("recover");
             }
             let next = AcquiredTurn::begin(store.clone(), "expiry", &next_input, &options(), 0)
                 .await
                 .expect("recover acquisition");
             store
-                .complete_turn(next.owner(), &[], Some("successor"))
+                .complete_turn(next.owner(), &[])
                 .await
                 .expect("complete successor");
             store.interrupt(old.owner()).await.expect("stale interrupt");
@@ -509,7 +446,6 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
 
             // Assert
             let loaded = store.load_session("expiry").await.expect("history");
-            assert_eq!(loaded.provider_session_id.as_deref(), Some("successor"));
             assert_eq!(loaded.turns.len(), 2);
             assert_ne!(old.owner(), next.owner());
             assert_eq!(
@@ -593,7 +529,7 @@ async fn host_recovery_requires_atomic_terminal_output() {
     };
 
     // Act
-    let result = store.complete_turn(turn.owner(), &[], None).await;
+    let result = store.complete_turn(turn.owner(), &[]).await;
     let record = store
         .load_request("host", "id")
         .await

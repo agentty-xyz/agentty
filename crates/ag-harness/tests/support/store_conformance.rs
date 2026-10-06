@@ -21,7 +21,7 @@ use ag_harness::store::{
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
-    SessionError, ToolPolicy, TurnError, TurnInput, TurnLimits, TurnOptions,
+    SessionError, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };
 use async_trait::async_trait;
 pub(crate) use backend::ExternalStore;
@@ -29,12 +29,14 @@ pub(crate) use gate::Gate;
 use serde_json::json;
 use tokio::sync::Notify;
 
+use crate::context_budget_fixture::unbounded_context_budget;
+
 pub(crate) fn schema() -> OutputSchema {
     OutputSchema::new(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})).expect("schema")
 }
 
 pub(crate) fn options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+    TurnOptions::new(schema(), ToolPolicy::default())
 }
 
 pub(crate) fn png_image(payload: &[u8]) -> ImageContent {
@@ -75,17 +77,19 @@ impl Model for Echo {
         let answer = request.prompt().to_string();
         self.requests.lock().expect("requests").push(request);
 
-        Ok(
-            ModelCompletion::from_response(ModelResponse::Output(json!({"answer":answer})))
-                .with_provider_session_id("continuation"),
-        )
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({"answer":answer}),
+        )))
     }
 }
 
 pub(crate) fn harness(store: Arc<dyn SessionStore>) -> Harness {
-    Harness::new(Echo {
-        requests: Arc::default(),
-    })
+    Harness::new(
+        Echo {
+            requests: Arc::default(),
+        },
+        unbounded_context_budget(),
+    )
     .store(store)
 }
 
@@ -249,11 +253,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .await
         .expect("intent");
     store
-        .complete_turn(
-            &owner,
-            &[ModelMessage::Assistant("answer".to_string())],
-            Some("native"),
-        )
+        .complete_turn(&owner, &[ModelMessage::Assistant("answer".to_string())])
         .await
         .expect("complete");
     store
@@ -296,14 +296,6 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         )
         .await
         .expect("fail");
-    assert!(
-        store
-            .load_session("session")
-            .await
-            .expect("failed")
-            .provider_session_id
-            .is_none()
-    );
     assert_eq!(
         store
             .load_session("session")
@@ -341,7 +333,6 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
             .complete_turn(
                 acquired.owner(),
                 &[ModelMessage::Assistant("described".to_string())],
-                None,
             )
             .await
             .expect("complete");
@@ -381,7 +372,6 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
                 .complete_turn(
                     acquired.owner(),
                     &[ModelMessage::Assistant(format!("{turn}-answer"))],
-                    None,
                 )
                 .await
                 .expect("complete");
@@ -473,7 +463,7 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .expect("idempotent retry");
             let active_conflict = store.finish_write(turn.owner(), write, !applied).await;
             store
-                .complete_turn(turn.owner(), &[], None)
+                .complete_turn(turn.owner(), &[])
                 .await
                 .expect("complete");
             let successor = AcquiredTurn::begin(
@@ -694,10 +684,13 @@ async fn short_and_shortened_leases_renew_through_real_turn_completion() {
         ));
         let entered = Arc::new(Notify::new());
         let release = Arc::new(Notify::new());
-        let mut session = Harness::new(GatedModel {
-            entered: Arc::clone(&entered),
-            release: Arc::clone(&release),
-        })
+        let mut session = Harness::new(
+            GatedModel {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+            },
+            unbounded_context_budget(),
+        )
         .store(store.clone())
         .session("lease", schema())
         .create()
@@ -750,10 +743,13 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
         Duration::ZERO,
     ));
     let entered = Arc::new(Notify::new());
-    let mut session = Harness::new(GatedModel {
-        entered: Arc::clone(&entered),
-        release: Arc::new(Notify::new()),
-    })
+    let mut session = Harness::new(
+        GatedModel {
+            entered: Arc::clone(&entered),
+            release: Arc::new(Notify::new()),
+        },
+        unbounded_context_budget(),
+    )
     .store(store.clone())
     .session("expired", schema())
     .create()
@@ -780,9 +776,12 @@ async fn real_turns_resume_and_preserve_captured_store_and_options() {
     // Arrange
     for store in stores().await {
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let original = Harness::new(Echo {
-            requests: Arc::clone(&requests),
-        })
+        let original = Harness::new(
+            Echo {
+                requests: Arc::clone(&requests),
+            },
+            unbounded_context_budget(),
+        )
         .store(Arc::clone(&store));
         let builder = original
             .session("capture", schema())
@@ -823,13 +822,16 @@ async fn real_turns_resume_and_preserve_captured_store_and_options() {
 }
 
 #[tokio::test]
-async fn bounded_history_and_continuation_policy_are_shared() {
+async fn bounded_history_policy_is_shared() {
     // Arrange
     for store in stores().await {
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let harness = Harness::new(Echo {
-            requests: Arc::clone(&requests),
-        })
+        let harness = Harness::new(
+            Echo {
+                requests: Arc::clone(&requests),
+            },
+            unbounded_context_budget(),
+        )
         .store(Arc::clone(&store))
         .max_history_bytes(std::num::NonZeroUsize::new(50).expect("budget"));
         let mut session = harness
@@ -841,25 +843,10 @@ async fn bounded_history_and_continuation_policy_are_shared() {
         // Act
         session.send("one").await.expect("first");
         session.send("two").await.expect("second");
-        let mut changed_schema = schema().value().clone();
-        changed_schema["description"] = json!("Changed contract");
-        let changed = TurnOptions::new(
-            OutputSchema::new(changed_schema).expect("changed schema"),
-            ToolPolicy::default(),
-            TurnLimits::default(),
-        );
-        session
-            .turn("three")
-            .options(changed)
-            .await
-            .expect("changed");
+        session.send("three").await.expect("third");
 
         // Assert
-        {
-            let requests = requests.lock().expect("requests");
-            assert_eq!(requests[1].provider_session_id(), Some("continuation"));
-            assert_eq!(requests[2].provider_session_id(), None);
-        }
+        assert_eq!(requests.lock().expect("requests").len(), 3);
         let loaded = store.load_session("bounded").await.expect("bounded");
         assert!(
             loaded
@@ -918,11 +905,7 @@ async fn expired_reservation_acknowledgment_is_interrupted_before_execution() {
         StoreIdentity::new("backend", "key")
     );
     assert_ne!(StoreIdentity::unique(), StoreIdentity::unique());
-    assert!(
-        StoredTurnOptions::decode(&StoredTurnOptions::encode(&options()))
-            .expect("snapshot")
-            .continuation_compatible(&options())
-    );
+    assert!(StoredTurnOptions::decode(&StoredTurnOptions::encode(&options())).is_ok());
 }
 
 #[tokio::test]
@@ -944,9 +927,12 @@ async fn reservations_owned_by_another_store_or_session_never_execute() {
         ] {
             gate.release.notify_one();
             let requests: Arc<Mutex<Vec<ModelRequest>>> = Arc::default();
-            let mut session = Harness::new(Echo {
-                requests: Arc::clone(&requests),
-            })
+            let mut session = Harness::new(
+                Echo {
+                    requests: Arc::clone(&requests),
+                },
+                unbounded_context_budget(),
+            )
             .store(Arc::new(gate))
             .session(session_id, schema())
             .create()
@@ -983,9 +969,12 @@ async fn separate_handles_share_admission_and_different_sessions_progress() {
     // Arrange
     for store in stores().await {
         let entered = Arc::new(Notify::new());
-        let first = Harness::new(BlockingModel {
-            entered: Arc::clone(&entered),
-        })
+        let first = Harness::new(
+            BlockingModel {
+                entered: Arc::clone(&entered),
+            },
+            unbounded_context_budget(),
+        )
         .store(Arc::clone(&store));
         let mut session = first
             .session("shared", schema())
@@ -1032,9 +1021,12 @@ async fn abandoned_acquisition_retains_admission_and_never_executes() {
             let gate = Arc::new(Gate::new(Arc::clone(&store), after_commit));
             gate.fail_cleanup.store(true, Ordering::SeqCst);
             let requests = Arc::new(Mutex::new(Vec::new()));
-            let first = Harness::new(Echo {
-                requests: Arc::clone(&requests),
-            })
+            let first = Harness::new(
+                Echo {
+                    requests: Arc::clone(&requests),
+                },
+                unbounded_context_budget(),
+            )
             .store(gate.clone());
             let mut session = first.session(&id, schema()).create().await.expect("create");
             let task = tokio::spawn(async move { session.send("abandoned").await });
@@ -1238,9 +1230,8 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
         store.interrupt(turn.owner()).await.expect("stop owner");
         let identity = ag_harness::recovery::ExecutionIdentity::new("next", "1").expect("identity");
         let capabilities = ag_harness::model::ModelCapabilities {
-            context_budget: None,
+            context_budget: unbounded_context_budget(),
             image_input: false,
-            native_continuation: false,
             tool_calls: true,
         };
 

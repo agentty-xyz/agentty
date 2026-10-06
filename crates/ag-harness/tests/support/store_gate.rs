@@ -128,12 +128,9 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.store
-            .complete_request(owner, messages, continuation, outcome)
-            .await
+        self.store.complete_request(owner, messages, outcome).await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -144,11 +141,8 @@ impl SessionStore for Gate {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.store
-            .complete_turn(owner, messages, continuation)
-            .await
+        self.store.complete_turn(owner, messages).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

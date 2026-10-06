@@ -41,7 +41,6 @@ pub(crate) const ERROR_PROVIDER: &str = "provider_error";
 pub(crate) const ERROR_REQUEST: &str = "request_error";
 pub(crate) const ERROR_RESPONSE_TOO_LARGE: &str = "response_too_large";
 pub(crate) const ERROR_TRANSPORT: &str = "transport_error";
-pub(crate) const ERROR_TOOL_CALL_LIMIT: &str = "tool_call_limit";
 pub(crate) const ERROR_TOOL_DENIED: &str = "tool_denied";
 pub(crate) const ERROR_TOOL_EXECUTION: &str = "tool_execution_error";
 pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";

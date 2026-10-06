@@ -16,6 +16,7 @@ use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::store_conformance_test::{options, schema, stores};
 
 struct CountingModel {
@@ -56,7 +57,7 @@ fn registry(key: &str, revision: &str, calls: &Arc<AtomicUsize>) -> ModelRegistr
                 calls: Arc::clone(calls),
                 name: "first",
             },
-            ModelCapabilities::default(),
+            ModelCapabilities::new(unbounded_context_budget()),
         )
         .expect("registration");
 
@@ -69,9 +70,8 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut registry = registry("primary", "1", &calls);
     let capabilities = ModelCapabilities {
-        context_budget: None,
+        context_budget: unbounded_context_budget(),
         image_input: false,
-        native_continuation: true,
         tool_calls: true,
     };
     registry
@@ -132,7 +132,7 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
             .model_registration()
             .expect("registration")
             .capabilities(),
-        ModelCapabilities::default()
+        ModelCapabilities::new(unbounded_context_budget())
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -195,9 +195,8 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
                     name: "first",
                 },
                 ModelCapabilities {
-                    context_budget: None,
+                    context_budget: unbounded_context_budget(),
                     image_input: false,
-                    native_continuation: false,
                     tool_calls: true,
                 },
             )
@@ -306,9 +305,8 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
         let metadata = client.metadata().clone();
         let mut registry = ModelRegistry::new();
         let capabilities = ModelCapabilities {
-            context_budget: None,
+            context_budget: unbounded_context_budget(),
             image_input: false,
-            native_continuation: false,
             tool_calls: true,
         };
         registry
@@ -336,10 +334,13 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
 async fn direct_construction_keeps_optional_identity_and_executes_unchanged() {
     // Arrange
     let calls = Arc::new(AtomicUsize::new(0));
-    let harness = Harness::new(CountingModel {
-        calls: Arc::clone(&calls),
-        name: "direct",
-    });
+    let harness = Harness::new(
+        CountingModel {
+            calls: Arc::clone(&calls),
+            name: "direct",
+        },
+        unbounded_context_budget(),
+    );
 
     // Act
     let outcome = harness
@@ -372,20 +373,20 @@ async fn shared_and_boxed_models_register_and_retain_the_original_instance() {
         .register_shared(
             ExecutionIdentity::new("shared", "1").expect("identity"),
             Arc::clone(&shared),
-            ModelCapabilities::default(),
+            ModelCapabilities::new(unbounded_context_budget()),
         )
         .expect("shared registration");
     registry
         .register_shared(
             ExecutionIdentity::new("boxed", "1").expect("identity"),
             Arc::from(boxed),
-            ModelCapabilities::default(),
+            ModelCapabilities::new(unbounded_context_budget()),
         )
         .expect("boxed registration");
     let duplicate = registry.register_shared(
         ExecutionIdentity::new("shared", "2").expect("identity"),
         Arc::clone(&shared),
-        ModelCapabilities::default(),
+        ModelCapabilities::new(unbounded_context_budget()),
     );
     let shared_harness = Harness::from_registry(&registry, "shared").expect("harness");
     let boxed_harness = Harness::from_registry(&registry, "boxed").expect("harness");
@@ -437,14 +438,14 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 .register_shared(
                     ExecutionIdentity::new("primary", "1").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::default(),
+                    ModelCapabilities::new(unbounded_context_budget()),
                 )
                 .expect("registration");
             registry
                 .register_shared(
                     ExecutionIdentity::new("other", "1").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::default(),
+                    ModelCapabilities::new(unbounded_context_budget()),
                 )
                 .expect("registration");
             let harness = Harness::from_registry(&registry, "primary")
@@ -470,16 +471,19 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 .register_shared(
                     ExecutionIdentity::new("primary", "2").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::default(),
+                    ModelCapabilities::new(unbounded_context_budget()),
                 )
                 .expect("revised registration");
             let revised = Harness::from_registry(&revised, "primary")
                 .expect("harness")
                 .store(Arc::clone(&store));
-            let direct = Harness::new(AnonymousModel(CountingModel {
-                calls: Arc::clone(&calls),
-                name: "direct",
-            }))
+            let direct = Harness::new(
+                AnonymousModel(CountingModel {
+                    calls: Arc::clone(&calls),
+                    name: "direct",
+                }),
+                unbounded_context_budget(),
+            )
             .store(Arc::clone(&store));
             for different in [other, revised, direct] {
                 let error = different
@@ -498,7 +502,6 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
             // Assert
             assert_eq!(after.registration_identity, before.registration_identity);
             assert_eq!(after.turns, before.turns);
-            assert_eq!(after.provider_session_id, before.provider_session_id);
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             harness
                 .resume(id)
@@ -517,10 +520,13 @@ async fn direct_sessions_cannot_be_silently_adopted_by_a_registration() {
     for store in stores().await {
         // Arrange
         let calls = Arc::new(AtomicUsize::new(0));
-        let direct = Harness::new(AnonymousModel(CountingModel {
-            calls: Arc::clone(&calls),
-            name: "first",
-        }))
+        let direct = Harness::new(
+            AnonymousModel(CountingModel {
+                calls: Arc::clone(&calls),
+                name: "first",
+            }),
+            unbounded_context_budget(),
+        )
         .store(Arc::clone(&store));
         direct
             .session("direct", schema())
