@@ -137,6 +137,22 @@ impl OneShotClient for RealOneShotClient {
     }
 }
 
+/// Drains transport activity concurrently, including when no sink is requested.
+fn bridge_activity(
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<crate::app_server::AppServerStreamEvent>,
+    sender: Option<tokio::sync::mpsc::UnboundedSender<ag_contracts::ActivityEvent>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = receiver.recv().await {
+            if let crate::app_server::AppServerStreamEvent::Activity(activity) = event
+                && let Some(sender) = &sender
+            {
+                let _ = sender.send(activity);
+            }
+        }
+    })
+}
+
 /// Executes an isolated app-server prompt in an owned cleanup task.
 /// Dropping the caller signals cancellation without dropping the provider turn;
 /// cooperative callers await this future until provider shutdown completes.
@@ -238,7 +254,8 @@ async fn execute_one_shot_app_server_turns(
         return Err("[Stopped] Agent run canceled".to_string());
     }
     let protocol_profile = request.request_kind.protocol_profile();
-    let (stream_tx, _stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (stream_tx, stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let activity_bridge = bridge_activity(stream_rx, request.activity_tx.clone());
     let turn_request = AppServerTurnRequest {
         execution_policy: request.execution_policy.clone(),
         provider_call_budget: request.provider_call_budget.clone(),
@@ -264,7 +281,9 @@ async fn execute_one_shot_app_server_turns(
         app_server_client.run_turn(turn_request, stream_tx)
     }
     .await
-    .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"))?;
+    .map_err(|error| format!("Failed to execute one-shot app-server turn: {error}"));
+    let _ = activity_bridge.await;
+    let turn_result = turn_result?;
     if cancellation.is_cancelled() {
         return Err("[Stopped] Agent run canceled".to_string());
     }
@@ -400,7 +419,8 @@ async fn attempt_one_shot_app_server_repair(
     let protocol_profile = request.request_kind.protocol_profile();
     let repair_prompt = build_protocol_repair_prompt(parse_error, malformed_response)?;
 
-    let (repair_stream_tx, _repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (repair_stream_tx, repair_stream_rx) = tokio::sync::mpsc::unbounded_channel();
+    let activity_bridge = bridge_activity(repair_stream_rx, request.activity_tx.clone());
     let repair_turn_request = AppServerTurnRequest {
         execution_policy: request.execution_policy.clone(),
         provider_call_budget: request.provider_call_budget.clone(),
@@ -425,7 +445,9 @@ async fn attempt_one_shot_app_server_repair(
         app_server_client.run_turn(repair_turn_request, repair_stream_tx)
     }
     .await
-    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"))?;
+    .map_err(|error| format!("{parse_error}\nrepair transport failed: {error}"));
+    let _ = activity_bridge.await;
+    let repair_result = repair_result?;
 
     let response = parse_one_shot_response(&repair_result.assistant_message, protocol_profile)
         .map_err(|error| {
@@ -476,6 +498,12 @@ async fn execute_one_shot_command(
         speed_mode: request.speed_mode,
     };
     let observer = OneShotCliObserver {
+        activity: Mutex::new(super::activity::ActivityObserver::new(move |activity| {
+            if let Some(sender) = &request.activity_tx {
+                let _ = sender.send(activity);
+            }
+        })),
+        kind: agent_kind,
         child_pid: request.child_pid,
     };
     let output =
@@ -545,6 +573,8 @@ fn clear_child_pid_slot(child_pid: Option<&Mutex<Option<u32>>>) {
 
 /// Bridges shared CLI PID observations into the one-shot accounting slot.
 struct OneShotCliObserver {
+    activity: Mutex<super::activity::ActivityObserver>,
+    kind: AgentKind,
     child_pid: Option<Arc<Mutex<Option<u32>>>>,
 }
 
@@ -559,7 +589,12 @@ impl CliExecutionObserver for OneShotCliObserver {
         }
     }
 
-    fn stdout_line(&self, _line: &str) {}
+    fn stdout_line(&self, line: &str) {
+        self.activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe_line(self.kind, line);
+    }
 }
 
 #[cfg(test)]

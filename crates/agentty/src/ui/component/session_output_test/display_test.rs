@@ -977,3 +977,58 @@ fn test_output_lines_use_generic_in_progress_loader() {
     assert!(text.contains("Working..."));
     assert!(text.contains(Icon::TachyonLoader.as_str()));
 }
+
+#[test]
+fn activity_footers_follow_each_answer_and_invalidate_cached_layout() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    session.transcript = Some(SessionTranscript::new(vec![
+        SessionMessage::new(0, SessionMessageKind::UserPrompt, "First prompt"),
+        SessionMessage::new(1, SessionMessageKind::AssistantAnswer, "First answer"),
+        SessionMessage::new(
+            2,
+            SessionMessageKind::ActivitySummary,
+            "Tools: Read ×2\nSkills: review ×1",
+        ),
+        SessionMessage::new(3, SessionMessageKind::UserPrompt, "Second prompt"),
+        SessionMessage::new(4, SessionMessageKind::AssistantAnswer, "Second answer"),
+    ]));
+    let cache = SessionOutputLayoutCache::default();
+    let area = Rect::new(0, 0, 60, 30);
+
+    // Act
+    let before = SessionOutput::rendered_layout(&session, area, line_context(), None, Some(&cache));
+    session
+        .transcript
+        .as_mut()
+        .expect("test fixture should succeed")
+        .append_message(
+            SessionMessageKind::ActivitySummary,
+            "Tools: **literal** ×1 (1 failed)",
+        );
+    let after = SessionOutput::rendered_layout(&session, area, line_context(), None, Some(&cache));
+    let text = output_lines(&session, area, line_context(), None)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let narrow = super::super::activity_summary_lines(
+        "Tools: a_very_long_tool_name ×1\nSkills: review ×1",
+        12,
+    );
+
+    // Assert
+    assert!(!Arc::ptr_eq(&before.lines, &after.lines));
+    let positions = [
+        "First answer",
+        "Tools: Read ×2",
+        "Skills: review ×1",
+        "Second prompt",
+        "Second answer",
+        "Tools: **literal** ×1",
+    ]
+    .map(|label| text.find(label).expect(label));
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(narrow.iter().all(|line| line.width() <= 12));
+}

@@ -304,10 +304,12 @@ pub struct TurnRequest {
 /// Incremental event emitted during one agent turn.
 ///
 /// Events are sent through an [`mpsc::UnboundedSender`] as the turn
-/// progresses, enabling transient loader updates without appending partial turn
-/// output into the persisted transcript.
+/// progresses, enabling transient loader updates and structured activity
+/// delivery without appending partial answers into the persisted transcript.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TurnEvent {
+    /// Provider-observed tool or skill lifecycle snapshot.
+    Activity(crate::ActivityEvent),
     /// A streamed thinking/planning or tool-status fragment shown in the
     /// transient loader.
     ThoughtDelta(String),

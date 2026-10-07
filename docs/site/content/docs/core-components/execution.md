@@ -121,3 +121,18 @@ adapter use and agent CLI launches out of production code outside the execution 
 
 See [Module Map](@/docs/architecture/module-map.md) for ownership and
 [Runtime Flow](@/docs/architecture/runtime-flow.md) for orchestration and recovery.
+
+## Observed Activity
+
+`TurnEvent::Activity` carries tool and explicit skill lifecycle snapshots through the
+existing worker stream. Call identity combines an attempt ID with the provider operation
+ID, so retries and protocol repairs remain distinct. Snapshots include category, bounded
+name, optional parent ID, observation time, status, and reported exit code. Unfinished
+calls settle as interrupted when their attempt ends; this does not imply tool rollback.
+
+Codex app-server and Claude CLI adapters publish activity independently of telemetry.
+Only explicit Claude `Skill` calls identify skill usage. Raw arguments and output are
+excluded. Each attempt retains at most 512 operations; the host footer retains at most
+2048 calls per turn. These are bounded observations, not an exhaustive audit log.
+Utility callers may supply `OneShotRequest::activity_tx` through `RunClient::submit` to
+receive the same events, including repairs. Hosts own persistence and rendering.

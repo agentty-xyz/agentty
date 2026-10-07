@@ -53,6 +53,9 @@ impl AppServerAgentChannel {
                         first_activity = false;
                     }
                     match event {
+                        AppServerStreamEvent::Activity(activity) => {
+                            let _ = events.send(TurnEvent::Activity(activity));
+                        }
                         AppServerStreamEvent::PidUpdate(pid) => {
                             let _ = events.send(TurnEvent::PidUpdate(pid));
                         }
@@ -239,9 +242,9 @@ struct AppServerParsedTurnResult {
 /// so the user can see that schema repair is in progress. The parse error is
 /// deliberately excluded: thought updates render as live loader lines, and the
 /// error carries provider diagnostics that must not reach the UI.
-/// Repair streams forward PID changes while withholding provider diagnostics;
-/// the final repair response replaces the tracked PID before parsing its
-/// output.
+/// Repair streams forward activity and PID changes while withholding
+/// diagnostics; the final repair response replaces the tracked PID before
+/// parsing its output.
 async fn parse_or_repair_app_server_response(
     kind: AgentKind,
     response: &crate::app_server::AppServerTurnResponse,
@@ -306,8 +309,14 @@ async fn parse_or_repair_app_server_response(
 
                 tokio::spawn(async move {
                     while let Some(event) = repair_stream_rx.recv().await {
-                        if let AppServerStreamEvent::PidUpdate(pid) = event {
-                            let _ = events.send(TurnEvent::PidUpdate(pid));
+                        match event {
+                            AppServerStreamEvent::PidUpdate(pid) => {
+                                let _ = events.send(TurnEvent::PidUpdate(pid));
+                            }
+                            AppServerStreamEvent::Activity(activity) => {
+                                let _ = events.send(TurnEvent::Activity(activity));
+                            }
+                            _ => {}
                         }
                     }
                 })

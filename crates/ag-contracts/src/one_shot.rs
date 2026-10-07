@@ -11,6 +11,8 @@ use crate::{AgentRequestKind, PermissionMode, ReasoningLevel, SessionStats, Spee
 /// output.
 #[derive(Clone, Debug)]
 pub struct OneShotRequest {
+    /// Optional live activity sink, including retries and protocol repairs.
+    pub activity_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::ActivityEvent>>,
     /// Optional PID slot for resource accounting while a prompt is running.
     /// Subprocess lifetime and cancellation belong to the runtime adapter.
     pub child_pid: Option<Arc<Mutex<Option<u32>>>>,

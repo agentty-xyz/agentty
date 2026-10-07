@@ -388,7 +388,10 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         assert_eq!(*child_pid.lock().expect("retained runtime PID"), Some(4242));
         let replay_text = transcript.lock().expect("transcript lock").replay_text();
         if assist_fails {
-            assert!(replay_text.is_none());
+            assert_eq!(
+                replay_text.as_deref(),
+                Some("[Error] Agent assistance failed.")
+            );
         } else {
             assert_eq!(replay_text.as_deref(), Some("Fixed the commit failure\n\n"));
         }

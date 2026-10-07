@@ -12,6 +12,7 @@ use askama::Template;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use super::activity::TurnActivity;
 use crate::app::assist::{
     AssistContext, AssistPolicy, FailureTracker, append_assist_header, format_detail_lines,
     run_agent_assist,
@@ -620,6 +621,7 @@ impl SessionTaskService {
         );
         let submission = run_client
             .submit(ag_contracts::OneShotRequest {
+                activity_tx: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -1100,6 +1102,7 @@ impl SessionTaskService {
         let (submission, _) = crate::app::diff_prompt::submit(
             run_client,
             ag_contracts::OneShotRequest {
+                activity_tx: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -1140,8 +1143,8 @@ impl SessionTaskService {
         ))
     }
 
-    /// Executes one isolated assist prompt and appends the normalized answer
-    /// text to the session transcript.
+    /// Executes one isolated assist prompt and appends its answer or failure
+    /// notice followed by observed activity to the session transcript.
     ///
     /// # Errors
     /// Returns an error when the one-shot prompt fails or returns invalid
@@ -1173,8 +1176,10 @@ impl SessionTaskService {
         // cleanup must not clear the retained chat runtime's accounting root.
         let assist_child_pid =
             (!ag_worker::uses_persistent_session(session_agent.kind())).then_some(child_pid);
-        let assist_submission = run_client
-            .submit(ag_contracts::OneShotRequest {
+        let (activity_tx, activity_rx) = mpsc::unbounded_channel();
+        let (assist_submission, activity) = tokio::join!(
+            run_client.submit(ag_contracts::OneShotRequest {
+                activity_tx: Some(activity_tx),
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (session_agent.kind()).to_string(),
@@ -1186,25 +1191,33 @@ impl SessionTaskService {
                 request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level: crate::domain::agent::ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
-            })
-            .await?;
-
-        let answer_text = assist_submission.response.to_answer_display_text();
-        if !answer_text.trim().is_empty() {
+            }),
+            TurnActivity::collect(activity_rx),
+        );
+        let (answer_kind, answer_text) = Self::assist_response_message(&assist_submission);
+        let activity_summary = activity.summary();
+        for (kind, raw_content) in [
+            (answer_kind, answer_text.as_str()),
+            (
+                SessionMessageKind::ActivitySummary,
+                activity_summary.as_str(),
+            ),
+        ] {
+            if raw_content.trim().is_empty() {
+                continue;
+            }
             Self::append_session_transcript_message(
                 &transcript,
                 &db,
                 &app_event_tx,
                 &session_update_versions,
                 &id,
-                SessionTranscriptMessageAppend {
-                    kind: SessionMessageKind::AssistantAnswer,
-                    raw_content: &answer_text,
-                },
+                SessionTranscriptMessageAppend { kind, raw_content },
             )
             .await;
         }
 
+        let assist_submission = assist_submission?;
         if let Err(error) = db
             .sessions()
             .update_session_stats(&id, &assist_submission.stats)
@@ -1235,6 +1248,23 @@ impl SessionTaskService {
         }
 
         Ok(())
+    }
+
+    /// Identifies the attempt's output before its activity footer. Callers
+    /// retain the detailed error for their overall workflow failure notice.
+    fn assist_response_message(
+        submission: &Result<ag_contracts::OneShotSubmission, ag_contracts::OneShotError>,
+    ) -> (SessionMessageKind, String) {
+        match submission {
+            Ok(submission) => (
+                SessionMessageKind::AssistantAnswer,
+                submission.response.to_answer_display_text(),
+            ),
+            Err(_) => (
+                SessionMessageKind::WorkflowNotice,
+                TranscriptNotice::Error.format_line("Agent assistance failed."),
+            ),
+        }
     }
 
     /// Applies a status transition to memory and database when valid.

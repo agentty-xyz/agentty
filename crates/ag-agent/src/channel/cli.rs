@@ -16,9 +16,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::cli::error;
-use crate::agent::cli::execution::{
-    self, CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver,
-};
+use crate::agent::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
 use crate::agent::{self as agent, AgentBackend, BuildCommandRequest};
 
 /// [`AgentChannel`] adapter that spawns one CLI subprocess per agent turn.
@@ -90,10 +88,28 @@ impl Drop for CliTurnLease {
 
 /// Bridges raw CLI execution observations into session turn events.
 struct CliTurnObserver {
+    activity: Mutex<agent::activity::ActivityObserver>,
     /// Session event sink receiving PID and thought updates.
     events: mpsc::UnboundedSender<TurnEvent>,
     /// Provider family used to classify streamed stdout lines.
     kind: AgentKind,
+    /// Whether ordinary loader text may be forwarded for this attempt.
+    show_progress: bool,
+}
+
+impl CliTurnObserver {
+    fn new(events: mpsc::UnboundedSender<TurnEvent>, kind: AgentKind, show_progress: bool) -> Self {
+        let activity_events = events.clone();
+
+        Self {
+            activity: Mutex::new(agent::activity::ActivityObserver::new(move |activity| {
+                let _ = activity_events.send(TurnEvent::Activity(activity));
+            })),
+            events,
+            kind,
+            show_progress,
+        }
+    }
 }
 
 impl CliExecutionObserver for CliTurnObserver {
@@ -102,6 +118,13 @@ impl CliExecutionObserver for CliTurnObserver {
     }
 
     fn stdout_line(&self, line: &str) {
+        self.activity
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .observe_line(self.kind, line);
+        if !self.show_progress {
+            return;
+        }
         let Some((text, is_response_content)) = agent::parse_stream_output_line(self.kind, line)
         else {
             return;
@@ -194,10 +217,7 @@ impl AgentChannel for CliAgentChannel {
                 .map_err(|error| AgentError::Backend(error.to_string()))?;
                 let mut build_request = build_command_request(&req, &prompt_text);
                 build_request.replay_transcript = replay.text.as_deref();
-                let observer = CliTurnObserver {
-                    events: events.clone(),
-                    kind,
-                };
+                let observer = CliTurnObserver::new(events.clone(), kind, true);
                 let output = execution::execute_cli_command(
                     backend.as_ref(),
                     kind,
@@ -294,7 +314,7 @@ async fn parse_or_repair_cli_response(
                 build_protocol_repair_prompt(&parse_error, content).map_err(AgentError::Backend)?;
 
             let repair_content =
-                execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt)
+                execute_cli_repair_turn(backend.as_ref(), kind, req, &repair_prompt, events)
                     .await
                     .map_err(|error| {
                         AgentError::Backend(format!(
@@ -328,15 +348,15 @@ const REPAIR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(
 ///
 /// This helper strips down the full turn-execution pipeline to the minimum
 /// needed for repair: command build, spawn, stdout/stderr collection, and
-/// provider response parsing. No streaming, PID tracking, or signal
-/// handling is performed because the repair is a transparent one-shot
-/// correction, not a user-visible turn. A [`REPAIR_TURN_TIMEOUT`] guard
-/// ensures a stuck process does not block the parent turn indefinitely.
+/// provider response parsing. Activity and PID updates remain in the parent
+/// turn stream. A [`REPAIR_TURN_TIMEOUT`] guard ensures a stuck process does
+/// not block the parent turn indefinitely.
 async fn execute_cli_repair_turn(
     backend: &dyn AgentBackend,
     kind: AgentKind,
     request: &TurnRequest,
     repair_prompt: &str,
+    events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<String, String> {
     let prompt_payload = TurnPrompt::from_agent_data(repair_prompt.to_string());
     let build_request = BuildCommandRequest {
@@ -353,7 +373,7 @@ async fn execute_cli_repair_turn(
         request_kind: &request.request_kind,
         speed_mode: request.speed_mode,
     };
-    execute_cli_repair_command(backend, kind, build_request, REPAIR_TURN_TIMEOUT).await
+    execute_cli_repair_command(backend, kind, build_request, REPAIR_TURN_TIMEOUT, events).await
 }
 
 /// Executes one prepared repair command with an explicit deadline.
@@ -362,16 +382,13 @@ async fn execute_cli_repair_command(
     kind: AgentKind,
     build_request: BuildCommandRequest<'_>,
     timeout: std::time::Duration,
+    events: &mpsc::UnboundedSender<TurnEvent>,
 ) -> Result<String, String> {
-    let output = execution::execute_cli_command(
-        backend,
-        kind,
-        build_request,
-        &CollectingCliObserver,
-        Some(timeout),
-    )
-    .await
-    .map_err(|error| format!("repair {error}"))?;
+    let observer = CliTurnObserver::new(events.clone(), kind, false);
+    let output =
+        execution::execute_cli_command(backend, kind, build_request, &observer, Some(timeout))
+            .await
+            .map_err(|error| format!("repair {error}"))?;
 
     match output.exit_status {
         CliExitStatus::NonZero(exit_code) => {

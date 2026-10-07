@@ -609,6 +609,13 @@ fn append_transcript_messages(
                 append_user_prompt(lines, &message.content, inner_width, markdown_render_cache);
             }
             SessionMessageKind::AgentPrompt => {}
+            SessionMessageKind::ActivitySummary => {
+                append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+                lines.extend(super::component::session_output::activity_summary_lines(
+                    &message.content,
+                    inner_width,
+                ));
+            }
             SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
                 append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
             }

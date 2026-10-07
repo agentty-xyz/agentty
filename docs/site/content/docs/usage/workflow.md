@@ -404,6 +404,13 @@ completion and multiline editing.
 
 Provider failures show a short error and captured output where available.
 
+Codex and Claude responses, including commit and rebase recovery assistance, include a
+usage footer when tool activity was observed. `Tools` lists invocation counts and failed
+or interrupted calls; `Skills` lists explicit Claude skill invocations. Footers remain
+attached to their responses in saved history, including failed recovery attempts.
+Reading a skill file does not establish invocation. Providers without activity reporting
+and older saved responses have no footer. Raw tool arguments and output are not shown.
+
 ## Session Sizes
 
 <a id="usage-session-size"></a> Sizes reflect changed lines and refresh after each turn:

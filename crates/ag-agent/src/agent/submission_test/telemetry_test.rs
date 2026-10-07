@@ -133,6 +133,7 @@ async fn owned_submission_tasks_preserve_utility_parents_through_repair_and_clea
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: "repository".into(),

@@ -14,6 +14,11 @@ repair propagation, and process-reuse compatibility without live model backends.
 tests establish policy delivery; actual provider enforcement still depends on the
 installed harness and its supported controls.
 
+Activity tests inject provider JSON and worker events to cover lifecycle deduplication,
+retry identity, utility forwarding, and transcript persistence without live providers. A
+`FeatureTest` PTY scenario covers saved usage footers. Live backend event availability
+still depends on the installed CLI version.
+
 <!-- more -->
 
 ## Testability and Boundaries

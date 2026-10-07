@@ -32,6 +32,7 @@ impl RunClient for DeadlineFixture {
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: PathBuf::from("."),

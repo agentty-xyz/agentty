@@ -42,6 +42,7 @@ async fn public_worker_composition_records_project_utility_failure() {
     // Act
     let result = client
         .submit(OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: "repository".into(),

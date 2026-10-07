@@ -994,6 +994,28 @@ impl Component for SessionOutput<'_> {
     }
 }
 
+/// Wraps usage as plain text, clipping identities wider than the viewport.
+pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
+    summary
+        .lines()
+        .flat_map(|line| {
+            ag_tui_text::text_util::wrap_styled_line(
+                vec![ratatui::text::Span::styled(
+                    line.to_string(),
+                    ratatui::style::Style::default().fg(style::palette::text_muted()),
+                )],
+                width,
+            )
+            .into_iter()
+            .map(move |mut line| {
+                line.spans =
+                    ag_tui_text::text_util::truncate_spans_with_ellipsis(line.spans, width);
+                line
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[path = "session_output_test.rs"]
 mod tests;

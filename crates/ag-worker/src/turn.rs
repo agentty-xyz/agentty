@@ -35,6 +35,8 @@ impl SessionRunClient {
     }
 
     /// Executes a turn under worker cancellation and runtime cleanup.
+    /// Activity snapshots are forwarded unchanged through `events`; hosts own
+    /// their projection and persistence alongside the final response.
     /// Cancellation drops the turn before allowing up to five seconds for
     /// adapter shutdown. Before a turn starts, cleanup admission may delay
     /// the interruption result; its five-second timer starts after admission.

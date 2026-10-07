@@ -48,10 +48,7 @@ fn test_map_cli_turn_execution_error_preserves_error_categories() {
 fn test_cli_turn_observer_ignores_blank_progress_text() {
     // Arrange
     let (events, mut event_receiver) = mpsc::unbounded_channel();
-    let observer = CliTurnObserver {
-        events,
-        kind: AgentKind::Codex,
-    };
+    let observer = CliTurnObserver::new(events, AgentKind::Codex, true);
 
     // Act
     observer.stdout_line(r#"{"type":"item.updated","item":{"type":"reasoning","text":"   "}}"#);
@@ -457,4 +454,67 @@ async fn test_run_turn_surfaces_only_loader_updates_for_strict_protocol_provider
     }
     assert!(saw_loader_update, "loader updates should be streamed live");
     assert_eq!(result.assistant_message.to_display_text(), "final answer");
+}
+
+#[tokio::test]
+async fn claude_cli_activity_reports_skill_and_interrupted_tool() {
+    // Arrange
+    let directory = tempdir().expect("test fixture should succeed");
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().returning(|_| {
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(r#"printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"one","name":"Skill","input":{"skill":"review"}},{"type":"tool_use","id":"two","name":"Read"}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"one"}]}}' '{"type":"result","result":"{\"answer\":\"done\",\"questions\":[]}"}'"#);
+        Ok(command)
+    });
+    let channel = CliAgentChannel::with_backend(Arc::new(backend), AgentKind::Claude);
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+
+    // Act
+    channel
+        .run_turn(
+            "session".into(),
+            make_turn_request(directory.path().into()),
+            sender,
+        )
+        .await
+        .expect("test fixture should succeed");
+    let mut activities = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        if let TurnEvent::Activity(event) = event {
+            activities.push(event);
+        }
+    }
+
+    // Assert
+    assert_eq!(activities.len(), 4);
+    assert_eq!(activities[0].kind, ag_contracts::ActivityKind::Skill);
+    assert_eq!(activities[0].name, "review");
+    assert_eq!(
+        activities[2].status,
+        ag_contracts::ActivityStatus::Completed
+    );
+    assert_eq!(
+        activities[3].status,
+        ag_contracts::ActivityStatus::Interrupted
+    );
+}
+
+#[test]
+fn repair_activity_is_forwarded_without_private_loader_text() {
+    // Arrange
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let observer = CliTurnObserver::new(sender, AgentKind::Claude, false);
+
+    // Act
+    observer.stdout_line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Read"},{"type":"text","text":"private repair text"}]}}"#);
+    drop(observer);
+    let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|event| matches!(event, TurnEvent::Activity(_)))
+    );
 }

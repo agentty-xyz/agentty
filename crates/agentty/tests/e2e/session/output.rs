@@ -1050,3 +1050,83 @@ async fn session_view_compact_mermaid_output() -> E2eResult {
 
     Ok(())
 }
+
+/// Usage footers remain paired with answers and failures in saved history.
+#[tokio::test]
+async fn test_session_activity_footers() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_activity_footers")
+        .with_terminal_size(100, 40)
+        .setup(|env| {
+            Box::pin(async move {
+                common::seed_session(
+                    env,
+                    SessionSeed::regular("activity-0001", "claude-opus-5-5", "main", "Review")
+                        .with_title("Activity history"),
+                )
+                .await?;
+                std::fs::create_dir_all(env.agentty_root.join("wt").join("activity"))?;
+                let database = common::open_database(env).await?;
+                for (kind, text) in [
+                    (SessionMessageKind::UserPrompt, "First prompt"),
+                    (SessionMessageKind::AssistantAnswer, "First answer"),
+                    (
+                        SessionMessageKind::ActivitySummary,
+                        "Tools: Read ×2\nSkills: review ×1",
+                    ),
+                    (SessionMessageKind::UserPrompt, "Second prompt"),
+                    (
+                        SessionMessageKind::WorkflowNotice,
+                        "[Error] Agent assistance failed.",
+                    ),
+                    (
+                        SessionMessageKind::ActivitySummary,
+                        "Tools: Bash ×1 (1 failed)",
+                    ),
+                ] {
+                    database
+                        .sessions()
+                        .append_session_message("activity-0001", kind, text)
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Tools: Bash", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    for text in [
+                        "First answer",
+                        "Tools: Read ×2",
+                        "Skills: review ×1",
+                        "[Error] Agent assistance failed.",
+                        "Tools: Bash ×1 (1 failed)",
+                    ] {
+                        assertion::assert_text_in_region(frame, text, &full);
+                    }
+                    let text = frame.all_text();
+                    let positions = [
+                        "First answer",
+                        "Tools: Read",
+                        "Skills: review",
+                        "[Error] Agent assistance failed.",
+                        "Tools: Bash",
+                    ]
+                    .map(|label| text.find(label).expect(label));
+                    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}

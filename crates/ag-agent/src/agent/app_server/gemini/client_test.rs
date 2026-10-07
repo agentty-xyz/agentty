@@ -229,6 +229,7 @@ async fn pooled_gemini_repair_retains_process_and_context_until_the_next_submiss
         FixtureGeminiProvider,
     >::new())));
     let request = OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: folder.path().into(),

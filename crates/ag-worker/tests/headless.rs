@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt,
-    ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, MockAgentChannel,
+    PermissionMode, PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
+    TurnEvent, TurnRequest, TurnResult,
 };
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_worker::{
@@ -422,4 +423,50 @@ async fn worker_configuration_rejects_unsupported_controls_before_provider_launc
             .to_string()
             .contains("does not support the requested subagent concurrency")
     );
+}
+
+#[tokio::test]
+async fn session_worker_forwards_structured_activity_unchanged() {
+    // Arrange
+    let event = ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        id: "call".into(),
+        kind: ActivityKind::Skill,
+        name: "review".into(),
+        observed_at: std::time::SystemTime::UNIX_EPOCH,
+        parent_id: Some("parent".into()),
+        status: ActivityStatus::Completed,
+    };
+    let expected = event.clone();
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .once()
+        .return_once(move |_, _, sender| {
+            Box::pin(async move {
+                sender
+                    .send(TurnEvent::Activity(event))
+                    .expect("test fixture should succeed");
+                Ok(TurnResult {
+                    assistant_message: AgentResponse::plain("done"),
+                    context_reset: false,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    provider_conversation_id: None,
+                })
+            })
+        });
+    let client = SessionRunClient::from_channel("session".into(), Arc::new(channel));
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+
+    // Act
+    client
+        .submit(turn_request(), sender, CancellationToken::new())
+        .await
+        .expect("test fixture should succeed");
+
+    // Assert
+    assert_eq!(receiver.recv().await, Some(TurnEvent::Activity(expected)));
+    assert!(receiver.recv().await.is_none());
 }

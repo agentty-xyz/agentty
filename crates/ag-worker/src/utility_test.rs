@@ -190,6 +190,7 @@ fn fixture(
 
 fn request() -> OneShotRequest {
     OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: "repository".into(),
@@ -822,4 +823,45 @@ async fn forced_shutdown_releases_uncooperative_runs_without_waiting_for_persist
         Some(&RunState::Running),
         "startup recovery owns unfinished records after forced exit"
     );
+}
+
+#[tokio::test]
+async fn utility_forwards_activity_sink_to_runtime() {
+    // Arrange
+    let (worker, _, mut calls) = fixture(1);
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let mut input = request();
+    input.activity_tx = Some(sender);
+    let event = ag_contracts::ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        id: "call".into(),
+        kind: ag_contracts::ActivityKind::Tool,
+        name: "Read".into(),
+        observed_at: std::time::SystemTime::UNIX_EPOCH,
+        parent_id: None,
+        status: ag_contracts::ActivityStatus::Completed,
+    };
+
+    // Act
+    let submission = tokio::spawn({
+        let worker = Arc::clone(&worker);
+        async move { worker.submit(input).await }
+    });
+    let call = calls.recv().await.expect("runtime call");
+    call.request
+        .activity_tx
+        .expect("activity sink")
+        .send(event.clone())
+        .expect("send activity");
+    call.result.send(Ok(result())).expect("finish runtime");
+    submission
+        .await
+        .expect("submission task")
+        .expect("successful utility");
+    worker.shutdown().await;
+
+    // Assert
+    assert_eq!(receiver.recv().await, Some(event));
+    assert!(receiver.recv().await.is_none());
 }

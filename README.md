@@ -27,6 +27,9 @@ one focused terminal workflow.
 
 ______________________________________________________________________
 
+Codex and Claude session answers include saved tool-usage counts; explicit Claude skill
+invocations appear alongside them.
+
 ## Installation
 
 ### npm (recommended, supports auto-update)
