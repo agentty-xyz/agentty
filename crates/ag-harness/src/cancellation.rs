@@ -4,6 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use opentelemetry::context::FutureExt as _;
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -15,7 +16,8 @@ use crate::{ModelError, TurnError, TurnOutcome, reservation};
 ///
 /// Poll or await this value to start execution. Dropping it requests
 /// cancellation; keep its [`Self::control`] to observe persistence and effect
-/// settlement.
+/// settlement. The OpenTelemetry context current at the first poll stays
+/// attached to the turn, so harness spans nest under the caller's span.
 #[must_use = "turns do not start until polled"]
 pub struct ControlledTurn<'a, E> {
     control: TurnControl,
@@ -46,13 +48,18 @@ impl<'a, E: From<TurnError> + Send + 'static> ControlledTurn<'a, E> {
                 return Err(TurnError::Cancelled.into());
             }
             let worker = make(worker_control.clone());
-            let mut task = tokio::spawn(async move {
-                let result = worker.await;
-                drop(lease);
-                drop(effects);
+            // The spawned worker runs outside the caller's poll, so it carries
+            // the caller's OpenTelemetry context for the turn span's parent.
+            let mut task = tokio::spawn(
+                async move {
+                    let result = worker.await;
+                    drop(lease);
+                    drop(effects);
 
-                result
-            });
+                    result
+                }
+                .with_current_context(),
+            );
             tokio::select! {
                 biased;
                 result = &mut task => result.map_err(|error| {

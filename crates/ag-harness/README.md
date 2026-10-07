@@ -174,7 +174,8 @@ conformance suite is in `tests/support/store_conformance.rs`.
 
 `Harness::with_lifecycle_observer` receives turn, model, and tool events that never
 contain prompts or output. `lifecycle::LifecycleMetrics` and
-`lifecycle::LifecycleTraceObserver` export them to OpenTelemetry.
+`lifecycle::LifecycleTraceObserver` export them to OpenTelemetry. Turn spans nest under
+the caller's OpenTelemetry context, including for `.start()`ed turns.
 
 ## Where things live
 

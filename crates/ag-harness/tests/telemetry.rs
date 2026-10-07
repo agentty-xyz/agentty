@@ -10,11 +10,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_harness::lifecycle::{LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver};
-use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest};
+use ag_harness::model::{ModelClient, ModelCompletion, ModelMetadata, ModelRequest, ModelResponse};
+use ag_harness::store::MemoryStore;
 use ag_harness::tool::ToolDefinition;
-use ag_harness::{Harness, Model, ModelError, OutputSchema, Tool};
+use ag_harness::{
+    Harness, Model, ModelError, OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions,
+};
 use async_trait::async_trait;
-use opentelemetry::{KeyValue, global};
+use opentelemetry::context::FutureExt as _;
+use opentelemetry::trace::{TraceContextExt as _, Tracer as _};
+use opentelemetry::{Context, KeyValue, global};
 use opentelemetry_otlp::{MetricExporter, Protocol, SpanExporter, WithExportConfig};
 use opentelemetry_proto::tonic::common::v1::{
     AnyValue as ProtoAnyValue, KeyValue as ProtoKeyValue, any_value,
@@ -35,7 +40,9 @@ use opentelemetry_sdk::metrics::data::{
 use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider, Temporality,
 };
-use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider};
+use opentelemetry_sdk::trace::{
+    BatchConfigBuilder, BatchSpanProcessor, InMemorySpanExporter, SdkTracerProvider,
+};
 use serde_json::json;
 use support::otlp::{OtlpCollector, OtlpPayload, OtlpRequest};
 use tokio::process::Command;
@@ -107,6 +114,17 @@ impl Model for PolicyDenialModel {
         self.client
             .complete(request.with_tool(ToolDefinition::write()))
             .await
+    }
+}
+
+struct SummaryModel;
+
+#[async_trait]
+impl Model for SummaryModel {
+    async fn complete(&self, _request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({"summary": "done"}),
+        )))
     }
 }
 
@@ -1407,6 +1425,68 @@ async fn records_client_metrics_after_late_provider_installation_for_all_outcome
     assert_eq!(metrics.len(), 2);
     assert_duration_metric(&metrics);
     assert_token_usage_metric(&metrics);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn started_turns_nest_under_the_caller_span() {
+    // Arrange
+    let _guard = TELEMETRY_TEST_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let tracer_provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(tracer_provider.clone());
+    let harness = Harness::new(SummaryModel)
+        .store(Arc::new(MemoryStore::new()))
+        .with_lifecycle_observer(LifecycleTraceObserver::new());
+    let options = TurnOptions::new(
+        lifecycle_schema(),
+        ToolPolicy::default(),
+        TurnLimits::default(),
+    );
+    let mut session = harness
+        .session("traced-session", lifecycle_schema())
+        .create()
+        .await
+        .expect("session should be created");
+    let host_context = Context::current_with_span(global::tracer("host").start("host.request"));
+
+    // Act
+    session
+        .turn("durable turn")
+        .start()
+        .with_context(host_context.clone())
+        .await
+        .expect("started session turn should succeed");
+    harness
+        .turn("one-shot turn", options)
+        .start()
+        .with_context(host_context.clone())
+        .await
+        .expect("started one-shot turn should succeed");
+    host_context.span().end();
+    tracer_provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let host_span = host_context.span().span_context().clone();
+    let turn_spans = spans
+        .iter()
+        .filter(|span| span.name == "invoke_agent")
+        .collect::<Vec<_>>();
+    assert_eq!(turn_spans.len(), 2);
+    for turn_span in turn_spans {
+        assert_eq!(turn_span.parent_span_id, host_span.span_id());
+        assert_eq!(turn_span.span_context.trace_id(), host_span.trace_id());
+    }
+
+    tracer_provider
+        .shutdown()
+        .expect("test tracer provider should shut down");
 }
 
 async fn run_otlp_metric_contract_fixture() {
