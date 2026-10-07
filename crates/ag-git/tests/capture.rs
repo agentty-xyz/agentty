@@ -4,9 +4,54 @@ use std::error::Error;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 use ag_git::{DiffFile, GitClient, RealGitClient};
 use tempfile::{TempDir, tempdir};
+
+#[tokio::test]
+async fn captured_diff_detects_same_size_edits_with_racy_index_timestamps()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = changed_source_repository()?;
+    let repository = directory.path();
+    let source_path = repository.join("src/source file.rs");
+    let index_path = repository.join(".git/index");
+    run_git(repository, &["config", "core.trustctime", "false"])?;
+    run_git(repository, &["config", "core.checkstat", "minimal"])?;
+    fs::write(&source_path, "context\n\nold();\n\ntail\n")?;
+    let source = fs::File::options().write(true).open(&source_path)?;
+    source.set_times(
+        fs::FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(60)),
+    )?;
+    run_git(repository, &["add", "src/source file.rs"])?;
+    let modified = source.metadata()?.modified()?;
+    fs::File::options()
+        .write(true)
+        .open(&index_path)?
+        .set_times(fs::FileTimes::new().set_modified(modified))?;
+    fs::write(&source_path, "context\n\nnew();\n\ntail\n")?;
+    source.set_times(fs::FileTimes::new().set_modified(modified))?;
+    let index_before = fs::read(&index_path)?;
+    let client = RealGitClient;
+
+    // Act
+    let changed = client
+        .diff_changed_files(repository.to_path_buf(), "main".into())
+        .await?;
+    let captured = client.diff(repository.to_path_buf(), "main".into()).await?;
+
+    // Assert
+    assert_eq!(changed, ["src/source file.rs"]);
+    let files = DiffFile::parse(&captured);
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].source_ranges("new();", false), [(3, 3)]);
+    assert_eq!(files[0].source_ranges("old();", true), [(3, 3)]);
+    assert_eq!(fs::read(&index_path)?, index_before);
+    assert_eq!(fs::metadata(&index_path)?.modified()?, modified);
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn captured_diff_overrides_blank_context_color_and_configurable_prefixes()

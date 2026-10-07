@@ -1530,7 +1530,7 @@ fn test_session_command_kind_values() {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     };
@@ -1544,7 +1544,7 @@ fn test_session_command_kind_values() {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     };
@@ -1558,7 +1558,7 @@ fn test_session_command_kind_values() {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     };
@@ -1572,7 +1572,7 @@ fn test_session_command_kind_values() {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     };
@@ -1587,7 +1587,7 @@ fn test_session_command_kind_values() {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     };

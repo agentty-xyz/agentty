@@ -40,7 +40,7 @@ async fn test_run_agent_assist_uses_injected_run_client() {
         git_client: Arc::new(MockGitClient::new()),
         id: "session-id".to_string(),
         run_client: Arc::new(run_client),
-        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         session_update_versions: Arc::default(),
         transcript: Arc::clone(&transcript),
     };

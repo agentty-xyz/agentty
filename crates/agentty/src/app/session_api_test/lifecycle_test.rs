@@ -191,7 +191,7 @@ async fn runtime_backend_inherits_launch_settings_for_regular_and_draft_sessions
     // Assert
     assert_eq!(
         inherited_session.settings.agent,
-        ag_session::AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5)
+        ag_session::AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55)
     );
     assert_eq!(
         inherited_session.settings.reasoning_level,

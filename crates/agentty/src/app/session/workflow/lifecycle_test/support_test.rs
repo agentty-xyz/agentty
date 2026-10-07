@@ -89,7 +89,7 @@ pub(super) fn title_generation_task_input(
         run_client,
         requires_provisional_title: true,
         reasoning_level: ReasoningLevel::Low,
-        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         session_id: SessionId::from("session-id"),
         speed_mode: SpeedMode::Normal,
         tracked_generation: None,
@@ -136,7 +136,7 @@ pub(super) fn test_session(
     crate::test_support::SessionFixtureBuilder::new()
         .agent(crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Claude,
-            AgentModel::ClaudeSonnet5,
+            AgentModel::ClaudeSonnet55,
         ))
         .folder(PathBuf::from("/tmp/session"))
         .transcript(output)

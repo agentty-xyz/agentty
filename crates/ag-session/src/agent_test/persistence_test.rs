@@ -24,7 +24,8 @@ fn test_retired_replacement_maps_only_retired_ids() {
         ("claude-opus-4-8", AgentModel::ClaudeOpus55),
         ("claude-opus-4-6", AgentModel::ClaudeOpus55),
         ("claude-opus-4-7", AgentModel::ClaudeOpus55),
-        ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
+        ("claude-sonnet-4-6", AgentModel::ClaudeSonnet55),
+        ("claude-sonnet-5", AgentModel::ClaudeSonnet55),
         ("gpt-5.5", AgentModel::Gpt61Sol),
         ("gpt-5.4-mini", AgentModel::Gpt6Luna),
         ("gpt-5.4", AgentModel::Gpt61Sol),
@@ -43,6 +44,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
         "gemini-3.5-flash-lite",
         "claude-fable-5-1",
         "claude-opus-5-5",
+        "claude-sonnet-5-5",
         "gpt-6.1-sol",
     ]
     .map(AgentModel::retired_replacement);
@@ -55,7 +57,7 @@ fn test_retired_replacement_maps_only_retired_ids() {
     );
     assert_eq!(persisted_parses, retired_ids.map(|(_, model)| Ok(model)));
     assert!(selectable_parses.iter().all(Result::is_err));
-    assert_eq!(current_replacements, [None; 6]);
+    assert_eq!(current_replacements, [None; 7]);
     assert_eq!(unknown_replacement, None);
 }
 
@@ -70,6 +72,7 @@ fn test_parse_persisted_handles_supported_and_retired_models() {
     let parsed_opus_47 = AgentModel::parse_persisted("claude-opus-4-7");
     let parsed_sonnet_46 = AgentModel::parse_persisted("claude-sonnet-4-6");
     let parsed_sonnet_5 = AgentModel::parse_persisted("claude-sonnet-5");
+    let parsed_sonnet_55 = AgentModel::parse_persisted("claude-sonnet-5-5");
     let parsed_gpt_54_mini = AgentModel::parse_persisted("gpt-5.4-mini");
     let parsed_gpt_54 = AgentModel::parse_persisted("gpt-5.4");
     let parsed_gemini_38_flash = AgentModel::parse_persisted("gemini-3.8-flash");
@@ -86,8 +89,9 @@ fn test_parse_persisted_handles_supported_and_retired_models() {
     // Assert
     assert_eq!(parsed_opus_46, Ok(AgentModel::ClaudeOpus55));
     assert_eq!(parsed_opus_47, Ok(AgentModel::ClaudeOpus55));
-    assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet5));
-    assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet5));
+    assert_eq!(parsed_sonnet_46, Ok(AgentModel::ClaudeSonnet55));
+    assert_eq!(parsed_sonnet_5, Ok(AgentModel::ClaudeSonnet55));
+    assert_eq!(parsed_sonnet_55, Ok(AgentModel::ClaudeSonnet55));
     assert_eq!(parsed_gpt_54_mini, Ok(AgentModel::Gpt6Luna));
     assert_eq!(parsed_gpt_54, Ok(AgentModel::Gpt61Sol));
     assert_eq!(parsed_gemini_38_flash, Ok(AgentModel::Gemini38Flash));
@@ -226,9 +230,9 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
         ),
         (
             Some(" "),
-            "claude-sonnet-5",
+            "claude-sonnet-5-5",
             AgentKind::Claude,
-            AgentModel::ClaudeSonnet5,
+            AgentModel::ClaudeSonnet55,
         ),
     ];
 

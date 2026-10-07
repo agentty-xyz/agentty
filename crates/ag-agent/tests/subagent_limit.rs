@@ -20,7 +20,7 @@ fn native_subagent_limits_apply_to_new_resumed_and_utility_sessions() {
 
     for (kind, model) in [
         (AgentKind::Codex, model_fixture::CODEX_MODEL_ID),
-        (AgentKind::Claude, "claude-sonnet-5"),
+        (AgentKind::Claude, "claude-sonnet-5-5"),
     ] {
         let backend = create_backend(kind);
         for request_kind in &request_kinds {
