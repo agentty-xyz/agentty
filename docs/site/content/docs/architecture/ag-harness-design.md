@@ -122,7 +122,9 @@ All tools are denied by default; per-turn policy enables them explicitly.
   inside a container or VM. Workspace reads are the default; writes, external reads,
   environment values, and host-information exposure require explicit grants. Git
   metadata stays read-only, networking is denied, and unsupported policy fails closed on
-  enforcing executors.
+  enforcing executors. Output shares one capture budget: each stream keeps its start and
+  end, a short stream cedes its unused share, and the outcome reports the bytes omitted
+  from each stream.
 
 Repository tools receive a validated `Repository` with a trusted Git executable outside
 the containing worktree; the library never searches `PATH`.
@@ -168,8 +170,6 @@ Planned, not shipped. Each step lands as its own change, in this order:
 
 1. **Trace context** — started turns attach the caller's OpenTelemetry context, so
    harness spans nest under the host's span.
-1. **Bash output head and tail** — each stream keeps its start and end within the
-   existing capture budget and reports the omitted bytes.
 1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
    required `ContextBudget` bound a turn, which fails typed once the next request no
    longer fits.

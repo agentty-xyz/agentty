@@ -188,8 +188,12 @@ async fn external_store_without_command_support_fails_closed() {
         execution_failure: None,
         exit_code: Some(0),
         signal: None,
-        stdout: String::new(),
         stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
+        stdout: String::new(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
         termination: CommandTermination::Completed,
         truncated: false,
     };

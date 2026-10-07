@@ -42,7 +42,11 @@ fn outcome(cleanup_failed: bool) -> CommandOutcome {
         exit_code: Some(0),
         signal: None,
         stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
         stdout: String::new(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
         termination: CommandTermination::Completed,
         truncated: false,
     }

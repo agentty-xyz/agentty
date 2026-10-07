@@ -15,10 +15,36 @@ fn outcome() -> CommandOutcome {
         exit_code: Some(0),
         signal: None,
         stderr: String::new(),
+        stderr_omitted_bytes: 0,
+        stderr_tail: String::new(),
         stdout: "observed".into(),
+        stdout_omitted_bytes: 0,
+        stdout_tail: String::new(),
         termination: CommandTermination::Completed,
         truncated: false,
     }
+}
+
+#[test]
+fn prefix_only_outcomes_recorded_before_head_and_tail_capture_still_decode() {
+    // Arrange
+    let recorded = json!({
+        "cleanup_failed": false,
+        "cleanup_scope": "process_group_best_effort",
+        "execution_failure": null,
+        "exit_code": 0,
+        "signal": null,
+        "stderr": "",
+        "stdout": "observed",
+        "termination": "completed",
+        "truncated": false,
+    });
+
+    // Act
+    let decoded: CommandOutcome = serde_json::from_value(recorded).expect("legacy outcome");
+
+    // Assert
+    assert_eq!(decoded, outcome());
 }
 
 #[tokio::test]

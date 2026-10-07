@@ -14,7 +14,7 @@
 //! failure; there is no rollback. Aggregate memory, process-count, and disk
 //! quotas are outside this contract.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -351,47 +351,116 @@ impl Limits {
     }
 }
 
-/// One shared byte budget, spent in arrival order across both binary streams.
-/// After exhaustion callers continue draining; discarded bytes mark truncation.
+/// One combined byte budget shared by both binary streams. Each stream keeps a
+/// bounded start and end while callers keep draining; once the totals are
+/// known, a stream shorter than its half of the budget cedes the rest to the
+/// other, and each stream's allocation is split between its start and end.
 #[derive(Debug, Eq, PartialEq)]
 pub(super) struct Output {
-    remaining: usize,
-    stderr: Vec<u8>,
-    stdout: Vec<u8>,
-    truncated: bool,
+    capture_bytes: usize,
+    stderr: StreamCapture,
+    stdout: StreamCapture,
 }
 
 impl Output {
     pub(super) fn new(limits: Limits) -> Self {
         Self {
-            remaining: limits.capture_bytes(),
-            stderr: Vec::new(),
-            stdout: Vec::new(),
-            truncated: false,
+            capture_bytes: limits.capture_bytes(),
+            stderr: StreamCapture::default(),
+            stdout: StreamCapture::default(),
         }
     }
 
     pub(super) fn capture(&mut self, stream: OutputStream, bytes: &[u8]) {
-        let retained = bytes.len().min(self.remaining);
         let destination = match stream {
             OutputStream::Stdout => &mut self.stdout,
             OutputStream::Stderr => &mut self.stderr,
         };
-        destination.extend_from_slice(&bytes[..retained]);
-        self.remaining -= retained;
-        self.truncated |= retained < bytes.len();
+        destination.capture(bytes, self.capture_bytes);
     }
 
-    pub(super) fn stdout(&self) -> &[u8] {
-        &self.stdout
+    pub(super) fn stdout(&self) -> RetainedStream {
+        let (stdout, _) = self.allocation();
+
+        self.stdout.retain(stdout)
     }
 
-    pub(super) fn stderr(&self) -> &[u8] {
-        &self.stderr
+    pub(super) fn stderr(&self) -> RetainedStream {
+        let (_, stderr) = self.allocation();
+
+        self.stderr.retain(stderr)
     }
 
     pub(super) fn truncated(&self) -> bool {
-        self.truncated
+        self.stdout.total.saturating_add(self.stderr.total) > self.capture_bytes as u64
+    }
+
+    /// Splits the budget into `(stdout, stderr)` byte allocations.
+    fn allocation(&self) -> (usize, usize) {
+        let budget = self.capture_bytes;
+        let stdout = self.stdout.bounded_total(budget);
+        let stderr = self.stderr.bounded_total(budget);
+        let stderr = stderr.min(budget - stdout.min(budget.div_ceil(2)));
+
+        (stdout.min(budget - stderr), stderr)
+    }
+}
+
+/// The retained start and end of one stream and the bytes omitted between
+/// them. `tail` is empty unless bytes were omitted.
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct RetainedStream {
+    pub(super) head: Vec<u8>,
+    pub(super) omitted_bytes: u64,
+    pub(super) tail: Vec<u8>,
+}
+
+/// The first half and a rolling last half of one stream's budget-sized
+/// window, so any allocation within the budget can be retained once the
+/// stream ends.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct StreamCapture {
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total: u64,
+}
+
+impl StreamCapture {
+    fn capture(&mut self, bytes: &[u8], capture_bytes: usize) {
+        self.total = self.total.saturating_add(bytes.len() as u64);
+        let head = bytes.len().min(capture_bytes.div_ceil(2) - self.head.len());
+        self.head.extend_from_slice(&bytes[..head]);
+        let window = capture_bytes / 2;
+        let rest = &bytes[head..];
+        let rest = &rest[rest.len().saturating_sub(window)..];
+        let overflow = (self.tail.len() + rest.len()).saturating_sub(window);
+        self.tail.drain(..overflow);
+        self.tail.extend(rest);
+    }
+
+    fn bounded_total(&self, budget: usize) -> usize {
+        usize::try_from(self.total).map_or(budget, |total| total.min(budget))
+    }
+
+    fn retain(&self, allocation: usize) -> RetainedStream {
+        let window = self.head.iter().chain(&self.tail).copied();
+        if self.total <= allocation as u64 {
+            return RetainedStream {
+                head: window.collect(),
+                omitted_bytes: 0,
+                tail: Vec::new(),
+            };
+        }
+        let head = allocation.div_ceil(2);
+        let tail = allocation - head;
+
+        RetainedStream {
+            head: self.head[..head].to_vec(),
+            omitted_bytes: self.total - allocation as u64,
+            tail: window
+                .skip(self.head.len() + self.tail.len() - tail)
+                .collect(),
+        }
     }
 }
 

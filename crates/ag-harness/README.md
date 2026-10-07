@@ -110,9 +110,10 @@ There is never a silent fallback.
 
 The workspace is read-only unless you grant `with_write`. External reads (`with_read`),
 environment values (`with_environment`), and host details (`with_host_information`) are
-explicit too. Networking is always denied. Command intents are recorded before spawning;
-await `commands_settled()` (and `retry_commands()` after failures) so unresolved
-commands never block new turns silently.
+explicit too. Networking is always denied. Long output keeps each stream's start and end
+within the capture budget, with the omitted byte counts on the `CommandOutcome`. Command
+intents are recorded before spawning; await `commands_settled()` (and `retry_commands()`
+after failures) so unresolved commands never block new turns silently.
 
 ## Models
 

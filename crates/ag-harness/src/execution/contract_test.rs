@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use super::{
     Execution, ExecutionAccess, ExecutionCommand, ExecutionControl, ExecutionError,
     ExecutionPolicy, ExecutionResult, Executor, Grants, Limits, MainExit, Output, OutputStream,
-    PreparedExecution, Termination, ValidationError,
+    PreparedExecution, RetainedStream, Termination, ValidationError,
 };
 
 #[test]
@@ -376,52 +376,75 @@ fn deadline_is_fixed_from_injected_time_and_rejects_zero_and_overflow() {
 }
 
 #[test]
-fn capture_budget_is_shared_binary_and_truncation_is_sticky() {
+fn output_within_the_shared_budget_is_retained_whole_and_binary() {
     // Arrange
-    let mut output = Output::new(limits(5));
+    let mut output = Output::new(limits(6));
 
     // Act
     output.capture(OutputStream::Stderr, &[0, 255]);
-    output.capture(OutputStream::Stdout, b"abc");
+    output.capture(OutputStream::Stdout, b"ab");
+    output.capture(OutputStream::Stdout, b"cd");
 
     // Assert
-    assert_eq!(output.stderr(), &[0, 255]);
-    assert_eq!(output.stdout(), b"abc");
+    assert_eq!(output.stderr(), retained(&[0, 255], 0, b""));
+    assert_eq!(output.stdout(), retained(b"abcd", 0, b""));
     assert!(!output.truncated());
+}
+
+#[test]
+fn long_stream_keeps_its_start_and_end_and_counts_omitted_bytes() {
+    // Arrange
+    let mut output = Output::new(limits(6));
 
     // Act
-    output.capture(OutputStream::Stderr, b"discarded");
-    output.capture(OutputStream::Stdout, b"");
+    output.capture(OutputStream::Stdout, b"abc");
+    output.capture(OutputStream::Stdout, b"defgh");
+    output.capture(OutputStream::Stdout, b"ij");
 
     // Assert
-    assert_eq!(output.stderr(), &[0, 255]);
-    assert_eq!(output.stdout(), b"abc");
+    assert_eq!(output.stdout(), retained(b"abc", 4, b"hij"));
+    assert_eq!(output.stderr(), retained(b"", 0, b""));
     assert!(output.truncated());
 }
 
 #[test]
-fn partial_chunks_and_zero_budget_retain_only_the_shared_prefix() {
+fn short_stream_cedes_its_share_and_long_streams_split_the_budget() {
     // Arrange
-    let mut partial = Output::new(limits(3));
+    let mut ceded = Output::new(limits(6));
+    let mut split = Output::new(limits(5));
+
+    // Act
+    ceded.capture(OutputStream::Stdout, b"a");
+    ceded.capture(OutputStream::Stderr, b"bcdefghij");
+    split.capture(OutputStream::Stderr, b"abcdefghij");
+    split.capture(OutputStream::Stdout, b"0123456789");
+
+    // Assert
+    assert_eq!(ceded.stdout(), retained(b"a", 0, b""));
+    assert_eq!(ceded.stderr(), retained(b"bcd", 4, b"ij"));
+    assert_eq!(split.stdout(), retained(b"01", 7, b"9"));
+    assert_eq!(split.stderr(), retained(b"a", 8, b"j"));
+    assert!(ceded.truncated());
+    assert!(split.truncated());
+}
+
+#[test]
+fn zero_budget_omits_every_byte() {
+    // Arrange
     let mut zero = Output::new(limits(0));
 
     // Act
-    partial.capture(OutputStream::Stdout, b"a");
-    partial.capture(OutputStream::Stderr, b"bcd");
     zero.capture(OutputStream::Stderr, b"");
 
     // Assert
-    assert_eq!(partial.stdout(), b"a");
-    assert_eq!(partial.stderr(), b"bc");
-    assert!(partial.truncated());
     assert!(!zero.truncated());
 
     // Act
     zero.capture(OutputStream::Stdout, b"dropped");
 
     // Assert
-    assert_eq!(zero.stdout(), b"");
-    assert_eq!(zero.stderr(), b"");
+    assert_eq!(zero.stdout(), retained(b"", 7, b""));
+    assert_eq!(zero.stderr(), retained(b"", 0, b""));
     assert!(zero.truncated());
 }
 
@@ -457,7 +480,7 @@ fn result_dimensions_do_not_overwrite_each_other() {
                 assert_eq!(result.main_exit, main_exit);
                 assert_eq!(result.termination, termination);
                 assert_eq!(result.cleanup_failure, cleanup_failure);
-                assert_eq!(result.output.stdout(), b"ou");
+                assert_eq!(result.output.stdout(), retained(b"o", 1, b"t"));
                 assert!(result.output.truncated());
             }
         }
@@ -556,6 +579,14 @@ fn command() -> ExecutionCommand {
 
 fn limits(bytes: usize) -> Limits {
     Limits::new(Instant::now(), Duration::from_secs(1), bytes).expect("valid limits")
+}
+
+fn retained(head: &[u8], omitted_bytes: u64, tail: &[u8]) -> RetainedStream {
+    RetainedStream {
+        head: head.to_vec(),
+        omitted_bytes,
+        tail: tail.to_vec(),
+    }
 }
 
 #[derive(Default)]

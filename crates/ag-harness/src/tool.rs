@@ -65,7 +65,8 @@ impl ToolDefinition {
         Self {
             description: "Run Bash inside the host sandbox. Workspace reads are allowed; writes \
                           require host grants. Network access is denied. Output and duration are \
-                          bounded. Applied writes are not rolled back."
+                          bounded; long output keeps each stream's start and end. Applied writes \
+                          are not rolled back."
                 .into(),
             name: "bash",
             parameters: json!({"type":"object", "properties":{"command":{"type":"string","minLength":1,"maxLength":65536}}, "required":["command"], "additionalProperties":false}),

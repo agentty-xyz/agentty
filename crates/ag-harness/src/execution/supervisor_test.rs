@@ -15,7 +15,7 @@ use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, Execution, ExecutionCommand, ExecutionControl, ExecutionError,
     ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream, PreparedExecution,
-    ProcessEvent, Termination,
+    ProcessEvent, RetainedStream, Termination,
 };
 
 #[test]
@@ -107,8 +107,22 @@ async fn completion_requires_main_exit_both_eofs_and_quiescence() {
     // Assert
     assert_eq!(result.termination, Termination::Completed);
     assert_eq!(result.main_exit, MainExit::Code(7));
-    assert_eq!(result.output.stdout(), &[0, 255]);
-    assert_eq!(result.output.stderr(), b"err");
+    assert_eq!(
+        result.output.stdout(),
+        RetainedStream {
+            head: vec![0, 255],
+            omitted_bytes: 0,
+            tail: Vec::new(),
+        }
+    );
+    assert_eq!(
+        result.output.stderr(),
+        RetainedStream {
+            head: b"er".to_vec(),
+            omitted_bytes: 2,
+            tail: b"r".to_vec(),
+        }
+    );
     assert!(result.output.truncated());
     assert_eq!(result.execution_failure, None);
     assert_eq!(result.cleanup_failure, None);
@@ -245,7 +259,14 @@ async fn event_failure_keeps_main_exit_and_truncated_output_with_unconfirmed_cle
         result.cleanup_failure,
         Some(ExecutionError::CleanupUnconfirmed)
     );
-    assert_eq!(result.output.stderr(), b"diag");
+    assert_eq!(
+        result.output.stderr(),
+        RetainedStream {
+            head: b"di".to_vec(),
+            omitted_bytes: 6,
+            tail: b"ic".to_vec(),
+        }
+    );
     assert!(result.output.truncated());
     assert_eq!(fixture.state.cleaning.load(Ordering::SeqCst), 2);
     assert_eq!(control.cleanup().await, Ok(()));
@@ -293,7 +314,9 @@ async fn output_flood_drains_after_capture_exhaustion_without_blocking_cancellat
 
     // Assert
     assert_eq!(result.termination, Termination::Cancelled);
-    assert_eq!(result.output.stdout(), &[255; 3]);
+    let stdout = result.output.stdout();
+    assert_eq!((stdout.head, stdout.tail), (vec![255; 2], vec![255]));
+    assert!(stdout.omitted_bytes > 0);
     assert!(result.output.truncated());
     assert_eq!(result.cleanup_failure, None);
     assert!(fixture.state.released.load(Ordering::SeqCst));
@@ -315,7 +338,9 @@ async fn output_flood_obeys_deadline_without_an_active_result_consumer() {
 
     // Assert
     assert_eq!(result.termination, Termination::Deadline);
-    assert_eq!(result.output.stdout(), b"");
+    let stdout = result.output.stdout();
+    assert!(stdout.head.is_empty() && stdout.tail.is_empty());
+    assert!(stdout.omitted_bytes > 0);
     assert!(result.output.truncated());
     assert_eq!(control.cleanup().await, Ok(()));
 }
@@ -608,7 +633,9 @@ async fn discarded_output_is_drained_through_normal_completion() {
 
     // Assert
     assert_eq!(result.termination, Termination::Completed);
-    assert_eq!(result.output.stdout(), &[255]);
+    let stdout = result.output.stdout();
+    assert_eq!((stdout.head, stdout.tail), (vec![255], Vec::new()));
+    assert!(stdout.omitted_bytes > 0);
     assert!(result.output.truncated());
     assert_eq!(control.cleanup().await, Ok(()));
 }

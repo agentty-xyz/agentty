@@ -6,7 +6,7 @@ use super::fixture::{CONFORMANCE_EXECUTORS, Workspace, wait_file};
 #[cfg(target_os = "macos")]
 use super::fixture::{Descendant, NativeFixture};
 #[tokio::test]
-async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() {
+async fn main_exit_waits_for_attached_descendants_and_keeps_each_stream_head_and_tail() {
     for selected in CONFORMANCE_EXECUTORS {
         // Arrange
         let workspace = Workspace::new();
@@ -33,8 +33,21 @@ async fn main_exit_waits_for_attached_descendants_and_combines_capture_budget() 
         );
         assert!(result.truncated, "{selected:?}: {result:?}");
         assert_eq!(
-            result.stdout.len() + result.stderr.len(),
-            17,
+            (
+                result.stdout.as_str(),
+                result.stdout_omitted_bytes,
+                result.stdout_tail.as_str(),
+            ),
+            ("12345", 11, "7890"),
+            "{selected:?}: {result:?}"
+        );
+        assert_eq!(
+            (
+                result.stderr.as_str(),
+                result.stderr_omitted_bytes,
+                result.stderr_tail.as_str(),
+            ),
+            ("abcd", 18, "wxyz"),
             "{selected:?}: {result:?}"
         );
         assert_eq!(
@@ -186,8 +199,19 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
         assert!(!result.cleanup_failed, "{selected:?}: {result:?}");
         assert!(result.truncated, "{selected:?}: {result:?}");
         assert_eq!(
-            result.stdout.len() + result.stderr.len(),
+            result.stdout.len()
+                + result.stdout_tail.len()
+                + result.stderr.len()
+                + result.stderr_tail.len(),
             37,
+            "{selected:?}: {result:?}"
+        );
+        assert!(
+            result.stdout.starts_with("output-f") && result.stderr.starts_with("stderr-f"),
+            "{selected:?}: {result:?}"
+        );
+        assert!(
+            result.stdout_omitted_bytes > 0 && result.stderr_omitted_bytes > 0,
             "{selected:?}: {result:?}"
         );
     }
