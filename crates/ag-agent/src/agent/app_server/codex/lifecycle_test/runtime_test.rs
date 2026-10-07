@@ -33,7 +33,7 @@ async fn codex_turn_processing_traces_only_operations_from_the_active_turn_and_t
             .with_simple_exporter(exporter.clone())
             .build(),
     );
-    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
     // Act
     Span::root("agent.attempt", Vec::new()).scope(async {
@@ -76,6 +76,18 @@ async fn codex_turn_processing_traces_only_operations_from_the_active_turn_and_t
             .contains(&KeyValue::new("agentty.outcome", "completed"))
     );
     assert!(!format!("{spans:?}").contains("private"));
+    let activities = std::iter::from_fn(|| stream_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::app_server::AppServerStreamEvent::Activity(activity) => Some(activity),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(activities.len(), 2);
+    assert_eq!(activities[0].id, "call-1");
+    assert_eq!(
+        activities[1].status,
+        ag_contracts::ActivityStatus::Completed
+    );
 }
 
 #[tokio::test]

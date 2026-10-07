@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,19 +47,7 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
         crate::test_support::set_session_status_for_test(&mut app, "deletion", Status::Review);
         let folder = app.sessions.sessions()[0].folder.clone();
         let client = app.services.session_run_client("deletion");
-        let request = OneShotRequest {
-            execution_policy: ag_contracts::ExecutionPolicy::default(),
-            child_pid: None,
-            folder: folder.clone(),
-            harness: "codex".into(),
-            model: "model".into(),
-            permission_mode: PermissionMode::AutoEdit,
-            prompt: "review".into(),
-            provider_call_budget: None,
-            reasoning_level: ReasoningLevel::default(),
-            request_kind: AgentRequestKind::UtilityPrompt,
-            speed_mode: SpeedMode::default(),
-        };
+        let request = utility_request(folder.clone());
         let late_request = request.clone();
         let late_client = client.clone();
         let run = tokio::spawn(async move { client.submit(request).await });
@@ -115,6 +104,23 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
             .await
             .expect("terminal utility");
         assert_eq!(status, "canceled");
+    }
+}
+
+fn utility_request(folder: PathBuf) -> OneShotRequest {
+    OneShotRequest {
+        activity_tx: None,
+        execution_policy: ag_contracts::ExecutionPolicy::default(),
+        child_pid: None,
+        folder,
+        harness: "codex".into(),
+        model: "model".into(),
+        permission_mode: PermissionMode::AutoEdit,
+        prompt: "review".into(),
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::default(),
+        request_kind: AgentRequestKind::UtilityPrompt,
+        speed_mode: SpeedMode::default(),
     }
 }
 

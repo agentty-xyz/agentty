@@ -27,6 +27,8 @@ pub(crate) type BorrowedAppServerFuture<'scope, T> =
 /// agent output and progress updates to the UI.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppServerStreamEvent {
+    /// Provider-observed tool or skill lifecycle snapshot.
+    Activity(ag_contracts::ActivityEvent),
     /// Runtime process available before executing a turn or retry.
     PidUpdate(Option<u32>),
     /// Assistant text received while a turn is running.

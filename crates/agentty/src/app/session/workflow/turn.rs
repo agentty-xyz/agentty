@@ -239,7 +239,7 @@ pub(super) async fn run_channel_turn(
     )
     .await;
 
-    let _ = consumer.await;
+    let activity = consumer.await.unwrap_or_default();
 
     let turn_result =
         add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
@@ -251,6 +251,7 @@ pub(super) async fn run_channel_turn(
                 turn_metadata,
                 personality_persistence,
                 turn_result,
+                &activity,
             ),
             |error| match error {
                 SessionError::StoppedByUser(_) => Outcome::Canceled,
@@ -379,6 +380,7 @@ async fn finalize_turn_setup_failure(
         turn_metadata,
         post_turn::TurnPersonalityPersistence::default(),
         Err(AgentError::Backend(error.to_string())),
+        &super::activity::TurnActivity::default(),
     )
     .await;
     post_turn::finalize_channel_turn(&finalizer_context, &result).await;
@@ -650,6 +652,8 @@ pub(super) async fn load_session_speed_mode(
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
 ///
+/// - [`TurnEvent::Activity`]: reduces snapshots into the returned usage
+///   summary.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
 /// - [`TurnEvent::PidUpdate`]: writes the new PID into `child_pid`.
@@ -660,11 +664,13 @@ pub(super) async fn consume_turn_events(
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     session_id: SessionId,
     child_pid: Arc<Mutex<Option<u32>>>,
-) {
+) -> super::activity::TurnActivity {
+    let mut activity = super::activity::TurnActivity::default();
     let mut active_progress: Option<String> = None;
 
     while let Some(event) = event_rx.recv().await {
         match event {
+            TurnEvent::Activity(event) => activity.observe(event),
             TurnEvent::ThoughtDelta(thought) => {
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
@@ -674,6 +680,7 @@ pub(super) async fn consume_turn_events(
                     child_pid.as_ref(),
                     thought,
                     &session_id,
+                    &mut activity,
                 );
                 if active_progress.as_deref() == Some(thought.as_str()) {
                     continue;
@@ -695,6 +702,8 @@ pub(super) async fn consume_turn_events(
     if active_progress.take().is_some() {
         SessionTaskService::clear_session_progress(&app_event_tx, &session_id);
     }
+
+    activity
 }
 
 /// Coalesces immediately ready turn progress events before app-event enqueue.
@@ -708,6 +717,7 @@ fn coalesce_ready_turn_progress_events(
     child_pid: &Mutex<Option<u32>>,
     initial_thought: String,
     session_id: &SessionId,
+    activity: &mut super::activity::TurnActivity,
 ) -> String {
     let mut latest_thought = initial_thought;
     let mut coalesced_events = 0;
@@ -719,6 +729,7 @@ fn coalesce_ready_turn_progress_events(
 
         coalesced_events += 1;
         match event {
+            TurnEvent::Activity(event) => activity.observe(event),
             TurnEvent::ThoughtDelta(thought) => {
                 if let Some(thought) = normalize_thinking_stream_text(&thought) {
                     latest_thought = thought;

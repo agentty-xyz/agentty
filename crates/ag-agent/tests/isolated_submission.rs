@@ -10,7 +10,8 @@ use ag_agent::{
     AppServerTurnResponse, RealOneShotClient,
 };
 use ag_contracts::{
-    AgentRequestKind, OneShotClient, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, OneShotClient, OneShotRequest,
+    PermissionMode, ReasoningLevel, SpeedMode,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -26,7 +27,7 @@ impl AppServerClient for RestartOnlyServer {
     fn run_turn(
         &self,
         request: AppServerTurnRequest,
-        _stream: mpsc::UnboundedSender<AppServerStreamEvent>,
+        stream: mpsc::UnboundedSender<AppServerStreamEvent>,
     ) -> AppServerFuture<Result<AppServerTurnResponse, AppServerError>> {
         let malformed = {
             let mut events = self
@@ -38,6 +39,16 @@ impl AppServerClient for RestartOnlyServer {
         };
         Box::pin(async move {
             assert!(request.provider_conversation_id.is_none());
+            let _ = stream.send(AppServerStreamEvent::Activity(ActivityEvent {
+                attempt_id: if malformed { "initial" } else { "final" }.into(),
+                exit_code: None,
+                id: "call".into(),
+                kind: ActivityKind::Tool,
+                name: "lookup".into(),
+                observed_at: std::time::SystemTime::UNIX_EPOCH,
+                parent_id: None,
+                status: ActivityStatus::Completed,
+            }));
             Ok(AppServerTurnResponse {
                 assistant_message: if malformed {
                     "malformed"
@@ -172,6 +183,7 @@ async fn pooled_repair_falls_back_to_custom_clients_without_an_intermediate_shut
 
 fn review_request() -> OneShotRequest {
     OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: ".".into(),
@@ -184,4 +196,34 @@ fn review_request() -> OneShotRequest {
         request_kind: AgentRequestKind::FocusedReview,
         speed_mode: SpeedMode::Normal,
     }
+}
+
+#[tokio::test]
+async fn isolated_activity_includes_protocol_repair_before_returning() {
+    // Arrange
+    let server = Arc::new(RestartOnlyServer {
+        malformed_initial: true,
+        ..RestartOnlyServer::default()
+    });
+    let client = RealOneShotClient::pooled(Some(server));
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let mut request = review_request();
+    request.activity_tx = Some(sender);
+
+    // Act
+    client
+        .submit(request)
+        .await
+        .expect("test fixture should succeed");
+    client.close().await;
+    let mut events = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        events.push(event);
+    }
+
+    // Assert
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].attempt_id, "initial");
+    assert_eq!(events[1].attempt_id, "final");
+    assert!(events.iter().all(|event| event.name == "lookup"));
 }

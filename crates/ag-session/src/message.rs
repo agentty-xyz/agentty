@@ -7,6 +7,9 @@ use rustc_hash::FxHasher;
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionMessageKind {
+    /// Observed tool and skill usage, displayed but excluded from provider
+    /// replay.
+    ActivitySummary,
     /// Raw user prompt text without TUI prompt markers or transcript padding.
     UserPrompt,
     /// Generated agent-facing prompt retained for replay but hidden from chat.
@@ -21,6 +24,7 @@ impl SessionMessageKind {
     /// Returns the stable database string for this message kind.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ActivitySummary => "activity_summary",
             Self::UserPrompt => "user_prompt",
             Self::AgentPrompt => "agent_prompt",
             Self::AssistantAnswer => "assistant_answer",
@@ -54,6 +58,7 @@ impl FromStr for SessionMessageKind {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "activity_summary" => Ok(Self::ActivitySummary),
             "user_prompt" => Ok(Self::UserPrompt),
             "agent_prompt" => Ok(Self::AgentPrompt),
             "assistant_answer" => Ok(Self::AssistantAnswer),
@@ -113,6 +118,7 @@ impl SessionMessage {
     /// Appends this message to a formatted transcript display buffer.
     fn append_display_text(&self, output: &mut String) {
         match self.kind {
+            SessionMessageKind::ActivitySummary => {}
             SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
                 Self::append_user_prompt_display_text(output, &self.content);
             }
@@ -334,7 +340,9 @@ pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String
         SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
             normalized_user_prompt_content(content)
         }
-        SessionMessageKind::AssistantAnswer => normalized_message_content(content),
+        SessionMessageKind::AssistantAnswer | SessionMessageKind::ActivitySummary => {
+            normalized_message_content(content)
+        }
         SessionMessageKind::WorkflowNotice => content.to_string(),
     }
 }

@@ -348,3 +348,58 @@ async fn test_run_turn_app_server_suppresses_streamed_assistant_messages() {
         );
     }
 }
+
+#[tokio::test]
+async fn activity_stream_preserves_snapshots_during_normal_and_repair_turns() {
+    // Arrange
+    let mut client = MockAppServerClient::new();
+    let mut attempt = 0;
+    client
+        .expect_run_turn()
+        .times(2)
+        .returning(move |_, sender| {
+            attempt += 1;
+            let current = attempt;
+            Box::pin(async move {
+                sender
+                    .send(AppServerStreamEvent::Activity(
+                        ag_contracts::ActivityEvent {
+                            attempt_id: current.to_string(),
+                            exit_code: Some(0),
+                            id: "call".into(),
+                            kind: ag_contracts::ActivityKind::Tool,
+                            name: "lookup".into(),
+                            observed_at: std::time::SystemTime::UNIX_EPOCH,
+                            parent_id: None,
+                            status: ag_contracts::ActivityStatus::Completed,
+                        },
+                    ))
+                    .expect("test fixture should succeed");
+                Ok(make_ok_response(if current == 1 {
+                    "malformed"
+                } else {
+                    r#"{"answer":"fixed","questions":[]}"#
+                }))
+            })
+        });
+    let channel = AppServerAgentChannel::new(Arc::new(client), AgentKind::Codex);
+    let (sender, mut receiver) = mpsc::unbounded_channel();
+
+    // Act
+    channel
+        .run_turn("session".into(), make_turn_request(), sender)
+        .await
+        .expect("test fixture should succeed");
+    let mut activities = Vec::new();
+    while let Some(event) = receiver.recv().await {
+        if let TurnEvent::Activity(event) = event {
+            activities.push(event);
+        }
+    }
+
+    // Assert
+    assert_eq!(activities.len(), 2);
+    assert_eq!(activities[0].attempt_id, "1");
+    assert_eq!(activities[1].attempt_id, "2");
+    assert!(activities.iter().all(|activity| activity.name == "lookup"));
+}

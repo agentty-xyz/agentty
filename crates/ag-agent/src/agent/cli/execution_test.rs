@@ -21,11 +21,19 @@ use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::agent::backend::{AgentBackendError, BuildCommandRequest, MockAgentBackend};
 use crate::agent::cli::execution::{
-    CliExecutionError, CliExecutionObserver, CliExitStatus, CollectingCliObserver,
-    ProcessGroupGuard, capture_stderr, capture_stdout, execute_cli_command, finish_cli_execution,
-    require_pipe,
+    CliExecutionError, CliExecutionObserver, CliExitStatus, ProcessGroupGuard, capture_stderr,
+    capture_stdout, execute_cli_command, finish_cli_execution, require_pipe,
 };
 use crate::telemetry::TRACER_PROVIDER_LOCK;
+
+/// Observer used by callers that only need the collected raw output.
+pub(crate) struct CollectingCliObserver;
+
+impl CliExecutionObserver for CollectingCliObserver {
+    fn pid_updated(&self, _child_pid: Option<u32>) {}
+
+    fn stdout_line(&self, _line: &str) {}
+}
 
 /// Observer that records all streaming callbacks for assertions.
 struct RecordingObserver {

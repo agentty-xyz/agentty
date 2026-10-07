@@ -585,6 +585,7 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
 
 /// Mutable state carried across Codex app-server turn events.
 struct CodexTurnEventLoopState {
+    activity: agent::activity::ActivityObserver,
     active_phase: Option<String>,
     active_turn_id: Option<String>,
     assistant_messages: Vec<String>,
@@ -605,6 +606,12 @@ impl CodexTurnEventLoopState {
         thread_id: &str,
     ) -> Self {
         Self {
+            activity: {
+                let stream_tx = stream_tx.clone();
+                agent::activity::ActivityObserver::new(move |activity| {
+                    let _ = stream_tx.send(AppServerStreamEvent::Activity(activity));
+                })
+            },
             active_phase: None,
             active_turn_id: None,
             assistant_messages: Vec::new(),
@@ -693,6 +700,7 @@ impl CodexTurnEventLoopState {
         {
             self.operation_trace
                 .observe(AgentKind::Codex, response_value);
+            self.activity.observe(AgentKind::Codex, response_value);
         }
         stream_turn_content_from_response(
             response_value,
@@ -749,6 +757,7 @@ impl CodexTurnEventLoopState {
         {
             self.operation_trace
                 .observe_codex_completed_turn(response_value);
+            self.activity.codex_completed_turn(response_value);
         }
         let completed_assistant_message = stream_parser::extract_turn_completed_agent_message(
             response_value,

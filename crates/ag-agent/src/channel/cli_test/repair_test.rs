@@ -73,9 +73,15 @@ async fn test_execute_cli_repair_turn_reports_non_zero_exit() {
     });
 
     // Act
-    let error = execute_cli_repair_turn(&backend, AgentKind::Codex, &request, "repair")
-        .await
-        .expect_err("repair command should fail");
+    let error = execute_cli_repair_turn(
+        &backend,
+        AgentKind::Codex,
+        &request,
+        "repair",
+        &tokio::sync::mpsc::unbounded_channel().0,
+    )
+    .await
+    .expect_err("repair command should fail");
 
     // Assert
     assert_eq!(error, "repair process exited with code 7");
@@ -95,9 +101,15 @@ async fn test_execute_cli_repair_turn_reports_signal() {
     });
 
     // Act
-    let error = execute_cli_repair_turn(&backend, AgentKind::Codex, &request, "repair")
-        .await
-        .expect_err("repair command should be interrupted");
+    let error = execute_cli_repair_turn(
+        &backend,
+        AgentKind::Codex,
+        &request,
+        "repair",
+        &tokio::sync::mpsc::unbounded_channel().0,
+    )
+    .await
+    .expect_err("repair command should be interrupted");
 
     // Assert
     assert_eq!(error, "repair process was interrupted by signal 9");
@@ -139,6 +151,7 @@ async fn test_execute_cli_repair_turn_cleans_up_stdin_writer_after_timeout() {
         AgentKind::Claude,
         build_request,
         Duration::from_millis(20),
+        &tokio::sync::mpsc::unbounded_channel().0,
     )
     .await
     .expect_err("repair command should time out");

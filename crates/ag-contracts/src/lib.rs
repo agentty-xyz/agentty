@@ -2,6 +2,7 @@
 //! Implementations own provider routing and resource cleanup; hosts own
 //! scheduling.
 
+mod activity;
 mod contract;
 mod execution_policy;
 mod input_size;
@@ -11,6 +12,7 @@ mod provider_call_budget;
 mod reasoning;
 mod session;
 
+pub use activity::{ActivityEvent, ActivityKind, ActivityStatus};
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;
 pub use contract::{

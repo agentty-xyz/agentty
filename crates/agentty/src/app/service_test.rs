@@ -23,6 +23,7 @@ use crate::app::{AppEvent, UpdateStatus};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, SessionId, SessionStats};
 use crate::infra::clock::Clock;
+use crate::infra::db::Database;
 use crate::test_support::{FixedClock, TestSubscriber};
 
 #[path = "service_shutdown_test.rs"]
@@ -555,9 +556,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
                 })
             }
         });
-        let db = crate::infra::db::Database::open_in_memory()
-            .await
-            .expect("database");
+        let db = Database::open_in_memory().await.expect("database");
         app.services.run_worker = Arc::new(RunWorker::with_client(
             Arc::new(RealOneShotClient::new(Some(Arc::new(provider)))),
             db.runs(),
@@ -567,6 +566,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
         app.services.run_client = app.services.run_worker.clone();
         let client = app.services.run_client();
         let request = OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             child_pid: None,
             folder: directory.path().into(),
@@ -898,6 +898,7 @@ async fn production_worker_reuses_isolated_review_runtime_and_closes_it() {
         crate::test_support::test_app_clients().with_app_server_client_override(Arc::new(provider));
     let (app, directory) = crate::test_support::new_test_app_with_clients(clients).await;
     let request = OneShotRequest {
+        activity_tx: None,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
         child_pid: None,
         folder: directory.path().into(),

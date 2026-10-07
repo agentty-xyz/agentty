@@ -49,6 +49,8 @@ fn test_one_shot_cli_observer_updates_child_pid_slot() {
     // Arrange
     let child_pid = Arc::new(Mutex::new(None));
     let observer = OneShotCliObserver {
+        activity: Mutex::new(crate::agent::activity::ActivityObserver::new(|_| {})),
+        kind: AgentKind::Claude,
         child_pid: Some(Arc::clone(&child_pid)),
     };
 
@@ -80,6 +82,7 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Codex).to_string(),
@@ -101,47 +104,65 @@ async fn test_submit_one_shot_with_backend_reports_signal_interruption() {
 }
 
 #[tokio::test]
-/// Verifies one-shot execution returns the parsed structured answer.
+/// Verifies one-shot execution returns the parsed structured answer whether or
+/// not the caller requests activity delivery.
 async fn test_submit_one_shot_with_backend_returns_protocol_response() {
-    // Arrange
-    let temp_directory = tempdir().expect("failed to create temp dir");
-    let mut backend = MockAgentBackend::new();
-    backend.expect_build_command().returning(|request| {
-        assert!(matches!(
-            request.request_kind,
-            AgentRequestKind::UtilityPrompt
-        ));
-        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        assert_eq!(request.prompt, "Generate title");
+    for collect_activity in [true, false] {
+        // Arrange
+        let temp_directory = tempdir().expect("failed to create temp dir");
+        let (activity_tx, mut activity_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut backend = MockAgentBackend::new();
+        backend.expect_build_command().returning(|request| {
+            assert!(matches!(
+                request.request_kind,
+                AgentRequestKind::UtilityPrompt
+            ));
+            assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
+            assert_eq!(request.prompt, "Generate title");
 
-        Ok(mock_shell_command(r#"{"answer":"Generated title"}"#, "", 0))
-    });
+            Ok(mock_shell_command(
+                concat!(
+                    r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"call","name":"Read"}]}}"#, "\n",
+                    r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"call"}]}}"#, "\n",
+                    r#"{"type":"result","result":"{\"answer\":\"Generated title\"}"}"#,
+                ), "", 0))
+        });
 
-    // Act
-    let response = submit_one_shot_with_backend(
-        &backend,
-        OneShotRequest {
-            execution_policy: ag_contracts::ExecutionPolicy::default(),
-            provider_call_budget: None,
-            harness: (AgentKind::Claude).to_string(),
-            child_pid: None,
-            folder: temp_directory.path().to_path_buf(),
-            model: AgentModel::ClaudeSonnet5.as_str().to_string(),
-            permission_mode: PermissionMode::ReadOnly,
-            prompt: "Generate title".to_string(),
-            request_kind: AgentRequestKind::UtilityPrompt,
-            reasoning_level: ReasoningLevel::default(),
-            speed_mode: SpeedMode::Normal,
-        },
-    )
-    .await
-    .expect("one-shot prompt should succeed");
+        // Act
+        let response = submit_one_shot_with_backend(
+            &backend,
+            OneShotRequest {
+                activity_tx: collect_activity.then_some(activity_tx),
+                execution_policy: ag_contracts::ExecutionPolicy::default(),
+                provider_call_budget: None,
+                harness: (AgentKind::Claude).to_string(),
+                child_pid: None,
+                folder: temp_directory.path().to_path_buf(),
+                model: AgentModel::ClaudeSonnet5.as_str().to_string(),
+                permission_mode: PermissionMode::ReadOnly,
+                prompt: "Generate title".to_string(),
+                request_kind: AgentRequestKind::UtilityPrompt,
+                reasoning_level: ReasoningLevel::default(),
+                speed_mode: SpeedMode::Normal,
+            },
+        )
+        .await
+        .expect("one-shot prompt should succeed");
 
-    // Assert
-    assert_eq!(
-        response.response.answers(),
-        vec!["Generated title".to_string()]
-    );
+        // Assert
+        let events = std::iter::from_fn(|| activity_rx.try_recv().ok()).collect::<Vec<_>>();
+        if collect_activity {
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0].name, "Read");
+            assert_eq!(events[1].status, ag_contracts::ActivityStatus::Completed);
+        } else {
+            assert_eq!(events, [] as [ag_contracts::ActivityEvent; 0]);
+        }
+        assert_eq!(
+            response.response.answers(),
+            vec!["Generated title".to_string()]
+        );
+    }
 }
 
 #[tokio::test]
@@ -170,6 +191,7 @@ async fn test_submit_one_shot_with_backend_writes_large_stdin_concurrently() {
         submit_one_shot_with_backend(
             &backend,
             OneShotRequest {
+                activity_tx: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
                 harness: (AgentKind::Claude).to_string(),
@@ -210,6 +232,7 @@ async fn test_submit_one_shot_with_backend_writes_prompt_to_stdin() {
     let response = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -255,6 +278,7 @@ async fn test_submit_one_shot_with_backend_preserves_exit_error_after_broken_pip
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),
@@ -299,6 +323,7 @@ async fn test_submit_one_shot_with_backend_surfaces_claude_auth_guidance() {
     let error = submit_one_shot_with_backend(
         &backend,
         OneShotRequest {
+            activity_tx: None,
             execution_policy: ag_contracts::ExecutionPolicy::default(),
             provider_call_budget: None,
             harness: (AgentKind::Claude).to_string(),

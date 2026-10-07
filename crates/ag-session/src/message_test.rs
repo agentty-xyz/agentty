@@ -304,3 +304,25 @@ fn test_stored_message_content_normalizes_assistant_spacing() {
         "hello"
     );
 }
+
+#[test]
+fn activity_summary_is_durable_but_excluded_from_replay() {
+    // Arrange
+    let mut transcript = SessionTranscript::default();
+    let kind: SessionMessageKind = "activity_summary".parse().expect("activity kind");
+
+    // Act
+    transcript.append_message(SessionMessageKind::AssistantAnswer, "Answer");
+    transcript.append_message(kind, " Tools: Read ×1\n");
+
+    // Assert
+    assert_eq!(kind.as_str(), "activity_summary");
+    assert!(!kind.is_conversation_message());
+    assert!(!kind.is_prompt());
+    assert_eq!(transcript.messages()[1].content, "Tools: Read ×1");
+    assert_eq!(transcript.replay_text().as_deref(), Some("Answer\n\n"));
+    assert_eq!(
+        transcript.conversation_replay_text(),
+        transcript.replay_text()
+    );
+}

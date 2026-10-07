@@ -287,6 +287,7 @@ pub(super) async fn apply_worker_turn_result(
         turn_metadata,
         TurnPersonalityPersistence::default(),
         turn_result,
+        &crate::app::session::workflow::activity::TurnActivity::default(),
     )
     .await
 }

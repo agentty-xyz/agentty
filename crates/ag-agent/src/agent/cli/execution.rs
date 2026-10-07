@@ -23,15 +23,6 @@ pub(crate) trait CliExecutionObserver: Send + Sync {
     fn stdout_line(&self, line: &str);
 }
 
-/// Observer used by callers that only need the collected raw output.
-pub(crate) struct CollectingCliObserver;
-
-impl CliExecutionObserver for CollectingCliObserver {
-    fn pid_updated(&self, _child_pid: Option<u32>) {}
-
-    fn stdout_line(&self, _line: &str) {}
-}
-
 /// Classified process termination state independent of caller policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CliExitStatus {

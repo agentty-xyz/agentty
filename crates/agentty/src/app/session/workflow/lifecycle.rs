@@ -3274,6 +3274,7 @@ impl SessionManager {
         for attempt in 1..=SESSION_TITLE_GENERATION_MAX_ATTEMPTS {
             let result = run_client
                 .submit(ag_contracts::OneShotRequest {
+                    activity_tx: None,
                     execution_policy: ag_contracts::ExecutionPolicy::default(),
                     provider_call_budget: None,
                     harness: (session_agent.kind()).to_string(),

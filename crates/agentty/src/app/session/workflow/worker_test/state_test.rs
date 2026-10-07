@@ -1,7 +1,10 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, MockAgentChannel, TurnEvent, TurnResult};
+use ag_contracts::{
+    ActivityEvent, ActivityKind, ActivityStatus, AgentRequestKind, MockAgentChannel, TurnEvent,
+    TurnResult,
+};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
@@ -137,16 +140,13 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     mock_channel
         .expect_run_turn()
         .once()
-        .returning(|_session_id, _req, _events| {
-            Box::pin(async {
+        .returning(|_session_id, _req, events| {
+            Box::pin(async move {
+                events
+                    .send(TurnEvent::Activity(activity_event()))
+                    .expect("test fixture should succeed");
                 Ok(TurnResult {
-                    assistant_message: AgentResponse {
-                        answer: "done".to_string(),
-                        questions: Vec::new(),
-                        review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
-                    },
+                    assistant_message: AgentResponse::plain("done"),
                     context_reset: false,
                     input_tokens: 0,
                     output_tokens: 0,
@@ -224,6 +224,18 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     assert!(output_text.contains("[Main Checkout Warning]"));
     assert!(output_text.contains("tracked-file status changed"));
     assert!(output_text.contains("done"));
+    let store = db.sessions();
+    let messages = store
+        .load_session_messages("sess1")
+        .await
+        .expect("messages");
+    let answer_index = messages
+        .iter()
+        .position(|message| message.kind == "assistant_answer")
+        .expect("test fixture should succeed");
+    assert_eq!(messages[answer_index + 1].kind, "activity_summary");
+    assert_eq!(messages[answer_index + 1].content, "Tools: Read ×1");
+    assert!(!output_text.contains("Tools:"));
 }
 
 #[test]
@@ -284,4 +296,47 @@ async fn test_fail_unfinished_operations_from_previous_run_returns_operation_upd
     assert!(matches!(result, Err(SessionError::Db(_))));
     assert_eq!(sessions[0].status, "Review");
     assert!(operation_is_unfinished);
+}
+
+fn activity_event() -> ActivityEvent {
+    ActivityEvent {
+        attempt_id: "attempt".into(),
+        exit_code: None,
+        id: "call".into(),
+        kind: ActivityKind::Tool,
+        name: "Read".into(),
+        observed_at: std::time::SystemTime::UNIX_EPOCH,
+        parent_id: None,
+        status: ActivityStatus::Completed,
+    }
+}
+
+#[tokio::test]
+async fn test_consume_activity_survives_progress_coalescing() {
+    // Arrange
+    let (sender, receiver) = mpsc::unbounded_channel();
+    sender
+        .send(TurnEvent::Activity(activity_event()))
+        .expect("test fixture should succeed");
+    sender
+        .send(TurnEvent::ThoughtDelta("thinking".into()))
+        .expect("test fixture should succeed");
+    let mut second = activity_event();
+    second.id = "second".into();
+    sender
+        .send(TurnEvent::Activity(second))
+        .expect("test fixture should succeed");
+    drop(sender);
+
+    // Act
+    let activity = consume_turn_events(
+        receiver,
+        mpsc::unbounded_channel().0,
+        "session".into(),
+        Arc::new(Mutex::new(None)),
+    )
+    .await;
+
+    // Assert
+    assert_eq!(activity.summary(), "Tools: Read ×2\n");
 }

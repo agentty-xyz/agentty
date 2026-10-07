@@ -56,6 +56,14 @@ of application and terminal events, renders an immutable snapshot, and waits for
 work. It owns presentation state and shared render caches. Event-driven refresh is
 primary; periodic polling provides recovery from missed updates.
 
+Activity snapshots follow the same worker/runtime event path as progress. The session
+host reduces them by attempt and operation identity, then stores a display-only usage
+message immediately after the final answer or failure notice. These messages participate
+in render-cache invalidation and saved history, but are excluded from provider replay.
+Commit and rebase assistance collect utility activity concurrently and save the same
+usage footer immediately after their displayed answer or attempt failure notice, before
+propagating failures to the overall workflow.
+
 ## Session Channel Composition
 
 Composition injects `SessionRunFactory`, which returns a worker-owned

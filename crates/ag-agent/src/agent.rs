@@ -3,6 +3,7 @@
 //! This module feeds the curated crate-root API while keeping provider
 //! command builders, parsers, and transport policy descriptors private.
 
+pub(crate) mod activity;
 mod antigravity;
 pub(crate) mod app_server;
 mod availability;
