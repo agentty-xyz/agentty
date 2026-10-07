@@ -16,7 +16,7 @@ base64.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 serde.workspace = true
-serde_json = { workspace = true, features = ["arbitrary_precision"] }
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
