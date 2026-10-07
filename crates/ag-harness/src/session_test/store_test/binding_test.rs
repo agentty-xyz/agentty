@@ -9,39 +9,8 @@ use super::support::{AcquisitionGate, CommitGate};
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::session::tests::support::{schema, turn_options};
-use crate::session::{Database, NewSession, ReservationObserver, SessionError};
-use crate::store::{SessionStore, WriteStatus};
-
-#[tokio::test]
-async fn acquisition_rejects_a_different_backing_store_before_reserving() {
-    // Arrange
-    let database = Database::open_in_memory().await.expect("database");
-    database
-        .create_session(&NewSession::new("session", schema()), None, 100_000)
-        .await
-        .expect("session");
-    let other = Arc::new(Database::open_in_memory().await.expect("other store"));
-
-    // Act
-    let result = database
-        .begin_turn(
-            other,
-            "session",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await;
-    let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM session_turn")
-        .fetch_one(&database.pool)
-        .await
-        .expect("reservation count");
-
-    // Assert
-    assert!(matches!(result, Err(SessionError::InvalidData { reason })
-        if reason == "acquisition store has a different backing identity"));
-    assert_eq!(count, 0);
-}
+use crate::session::{Database, NewSession, ReservationObserver};
+use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 
 #[tokio::test]
 async fn acquired_journal_and_cleanup_dispatch_through_the_decorator() {
@@ -105,15 +74,14 @@ async fn cancelled_acquisition_retains_the_decorator_before_and_after_commit() {
             .await
             .expect("session");
         let task = tokio::spawn(async move {
-            backend
-                .begin_turn(
-                    Arc::clone(&backend),
-                    "session",
-                    &TurnInput::from("prompt"),
-                    &turn_options(),
-                    0,
-                )
-                .await
+            AcquiredTurn::begin(
+                Arc::clone(&backend),
+                "session",
+                &TurnInput::from("prompt"),
+                &turn_options(),
+                0,
+            )
+            .await
         });
         entered.notified().await;
 

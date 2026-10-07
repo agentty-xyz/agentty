@@ -13,7 +13,7 @@ use crate::session::tests::support::{
     acquire, allow_interrupts, reject_interrupts, schema, turn_options,
 };
 use crate::session::{Database, NewSession, SessionError, StoreIdentity};
-use crate::store::{SessionStore, WriteStatus};
+use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
 
 #[tokio::test]
 async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle() {
@@ -30,16 +30,15 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
         .create_session(&NewSession::new("session", schema()), None, 100_000)
         .await
         .expect("session");
-    let mut acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn");
+    let mut acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn");
     acquired.guard.disarm();
     let owner = acquired.guard.owner().clone();
     let journal = acquired.guard.write_journal();
@@ -116,15 +115,14 @@ async fn failed_drop_cleanup_remains_registered_for_owner_scoped_recovery() {
     drop(acquired);
     store.interrupted.notified().await;
     allow_interrupts(&store.database).await;
-    let direct = store
-        .begin_turn(
-            store.clone(),
-            "session",
-            &TurnInput::from("direct"),
-            &turn_options(),
-            0,
-        )
-        .await;
+    let direct = AcquiredTurn::begin(
+        store.clone(),
+        "session",
+        &TurnInput::from("direct"),
+        &turn_options(),
+        0,
+    )
+    .await;
 
     // Act
     let replacement = acquire(store.clone(), "session", "replacement")

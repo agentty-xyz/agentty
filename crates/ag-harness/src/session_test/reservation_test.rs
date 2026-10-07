@@ -7,17 +7,16 @@ use tempfile::tempdir;
 
 use super::support::{
     ReservationCommitControl, acquire, active_turn_owner, allow_interrupts, complete_native_turn,
-    reject_interrupts, schema, turn, turn_options,
+    reject_interrupts, schema, turn, turn_options, wait_for_interrupted_turn,
 };
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
-use crate::model::{ModelError, ModelMessage};
+use crate::model::ModelError;
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::session::{
-    Database, EncodedMessage, NewSession, Reservation, SessionError, TimestampSource,
-    connect_options, interrupt_owned_turn,
+    Database, NewSession, SessionError, TimestampSource, connect_options, interrupt_owned_turn,
 };
-use crate::store::SessionStore as _;
+use crate::store::{AcquiredTurn, SessionStore as _, TurnAdmission};
 use crate::turn::TurnError;
 
 #[tokio::test]
@@ -79,17 +78,16 @@ async fn beginning_a_turn_for_a_missing_session_reports_not_found() {
         .expect("database should open");
 
     // Act
-    let error = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "missing",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .err()
-        .expect("missing session should fail");
+    let error = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "missing",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .err()
+    .expect("missing session should fail");
 
     // Assert
     assert!(matches!(error, SessionError::NotFound { .. }));
@@ -119,17 +117,16 @@ END
     .expect("trigger should be created");
 
     // Act
-    let error = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .err()
-        .expect("database failure should be preserved");
+    let error = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .err()
+    .expect("database failure should be preserved");
 
     // Assert
     assert!(matches!(error, SessionError::QueryContext { .. }));
@@ -155,17 +152,16 @@ async fn beginning_a_turn_does_not_reserve_when_history_loading_fails() {
         .expect("history should be corrupted");
 
     // Act
-    let error = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("new prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .err()
-        .expect("invalid history should fail acquisition");
+    let error = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("new prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .err()
+    .expect("invalid history should fail acquisition");
     let active_turns = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM session_turn WHERE status IN ('pending', 'running')",
     )
@@ -203,16 +199,15 @@ async fn beginning_a_turn_calculates_the_lease_when_reserving() {
         .expect("session should be created");
 
     // Act
-    let acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     let row = sqlx::query_as::<_, (String, i64, i64, i64)>(
         r"
 SELECT status, lease_expires_at, created_at, updated_at
@@ -248,19 +243,11 @@ async fn reserving_a_turn_rejects_a_stale_acquisition_snapshot() {
         .append_turn("session-a", &turn("question", "answer"))
         .await
         .expect("turn should be appended");
-    let message = EncodedMessage::from_message(&ModelMessage::User("prompt".to_string()))
-        .expect("message should encode");
+    let admission = TurnAdmission::new(TurnInput::from("prompt"), turn_options(), None, 0);
 
     // Act
     let reserved = database
-        .reserve_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &message,
-            &acquisition,
-            &turn_options(),
-            None,
-        )
+        .try_reserve("session-a", acquisition, &admission)
         .await
         .expect("reservation should be checked");
     let active_turns = sqlx::query_scalar::<_, i64>(
@@ -271,7 +258,7 @@ async fn reserving_a_turn_rejects_a_stale_acquisition_snapshot() {
     .expect("active turn count should load");
 
     // Assert
-    assert!(matches!(reserved, Reservation::Retry));
+    assert!(reserved.is_none());
     assert_eq!(active_turns, 0);
 }
 
@@ -293,19 +280,11 @@ async fn reserving_a_turn_for_a_removed_session_reports_not_found() {
         .execute(&database.pool)
         .await
         .expect("session should be removed");
-    let message = EncodedMessage::from_message(&ModelMessage::User("prompt".to_string()))
-        .expect("message should encode");
+    let admission = TurnAdmission::new(TurnInput::from("prompt"), turn_options(), None, 0);
 
     // Act
     let result = database
-        .reserve_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &message,
-            &acquisition,
-            &turn_options(),
-            None,
-        )
+        .try_reserve("session-a", acquisition, &admission)
         .await;
 
     // Assert
@@ -316,13 +295,15 @@ async fn reserving_a_turn_for_a_removed_session_reports_not_found() {
 async fn cancelling_turn_acquisition_leaves_no_active_turn() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
-    let database = Database::open(&directory.path().join("harness.db"))
+    let mut database = Database::open(&directory.path().join("harness.db"))
         .await
         .expect("database should open");
     database
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
+    let commit_control = Arc::new(ReservationCommitControl::paused());
+    database.reservation_observer = commit_control.clone();
     let mut blocker = database
         .pool
         .begin()
@@ -336,7 +317,7 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
     // Act
     let cancellation = tokio::time::timeout(
         Duration::from_millis(50),
-        database.begin_turn(
+        AcquiredTurn::begin(
             Arc::new(database.clone()),
             "session-a",
             &TurnInput::from("cancelled"),
@@ -349,24 +330,26 @@ async fn cancelling_turn_acquisition_leaves_no_active_turn() {
         .rollback()
         .await
         .expect("blocking transaction should roll back");
-    let acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement turn should begin immediately");
+    commit_control.wait_for_commit().await;
+    commit_control.release();
+    wait_for_interrupted_turn(&database, 0).await;
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement turn should begin immediately");
 
     // Assert
     assert!(cancellation.is_err());
-    assert_eq!(acquired.guard.owner().turn_position, 0);
+    assert_eq!(acquired.guard.owner().turn_position, 1);
 }
 
 #[tokio::test]
-async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
+async fn cancelling_after_commit_recovers_the_owned_turn_once_acknowledged() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
     let database_path = directory.path().join("harness.db");
@@ -387,19 +370,20 @@ async fn cancelling_after_commit_recovers_the_owned_turn_immediately() {
     // Act
     let cancelled_database = database.clone();
     let cancellation = tokio::spawn(async move {
-        cancelled_database
-            .begin_turn(
-                Arc::new(cancelled_database.clone()),
-                "session-a",
-                &TurnInput::from("cancelled"),
-                &turn_options(),
-                0,
-            )
-            .await
+        AcquiredTurn::begin(
+            Arc::new(cancelled_database.clone()),
+            "session-a",
+            &TurnInput::from("cancelled"),
+            &turn_options(),
+            0,
+        )
+        .await
     });
     commit_control.wait_for_commit().await;
     cancellation.abort();
     let cancelled = cancellation.await;
+    commit_control.release();
+    wait_for_interrupted_turn(&replacement_database, 0).await;
     let acquired = acquire(
         Arc::new(replacement_database.clone()),
         "session-a",
@@ -440,16 +424,15 @@ async fn registered_cancelled_owner_preserves_its_reason_during_recovery() {
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
     let store = Arc::new(GatedStore::new(database.clone(), PauseAt::Completion));
-    let abandoned = store
-        .begin_turn(
-            store.clone(),
-            "session-a",
-            &TurnInput::from("abandoned"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let abandoned = AcquiredTurn::begin(
+        store.clone(),
+        "session-a",
+        &TurnInput::from("abandoned"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     reject_interrupts(&database).await;
     drop(abandoned);
     store.interrupted.notified().await;
@@ -494,16 +477,15 @@ async fn failing_or_completing_a_turn_that_is_not_running_reports_ownership_loss
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
-    let acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("prompt"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("prompt"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     let turn_position = acquired.guard.owner().turn_position;
     database
         .fail_turn(
@@ -553,16 +535,15 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .await
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
-    let mut abandoned = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("abandoned"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let mut abandoned = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("abandoned"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     abandoned.guard.disarm();
     let active = database
         .load_session("session-a")
@@ -579,16 +560,15 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
         .load_session("session-a")
         .await
         .expect("session should load");
-    let replacement = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("replacement"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("replacement turn should begin");
+    let replacement = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("replacement"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("replacement turn should begin");
     let status = sqlx::query_scalar::<_, String>(
         "SELECT status FROM session_turn WHERE session_id = ? AND turn_position = ?",
     )
@@ -621,16 +601,15 @@ async fn interruption_rolls_back_when_clearing_continuation_fails() {
             .await
             .expect("session should be created");
         complete_native_turn(&database, "native-session").await;
-        let mut acquired = database
-            .begin_turn(
-                Arc::new(database.clone()),
-                "session-a",
-                &TurnInput::from("abandoned"),
-                &turn_options(),
-                0,
-            )
-            .await
-            .expect("turn should begin");
+        let mut acquired = AcquiredTurn::begin(
+            Arc::new(database.clone()),
+            "session-a",
+            &TurnInput::from("abandoned"),
+            &turn_options(),
+            0,
+        )
+        .await
+        .expect("turn should begin");
         acquired.guard.disarm();
         let owner =
             active_turn_owner(&database, "session-a", acquired.guard.owner().turn_position).await;
@@ -696,16 +675,15 @@ async fn delayed_or_unowned_cleanup_preserves_provider_continuation() {
         .await
         .expect("session should be created");
     complete_native_turn(&database, "native-session").await;
-    let mut acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("pending"),
-            &turn_options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let mut acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("pending"),
+        &turn_options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     acquired.guard.disarm();
     let owner =
         active_turn_owner(&database, "session-a", acquired.guard.owner().turn_position).await;

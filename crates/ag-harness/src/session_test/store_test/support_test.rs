@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use tokio::sync::Notify;
 
+use crate::session::SessionError;
+
 pub(super) struct AcquisitionGate {
     pub(super) entered: Notify,
     pub(super) release: Notify,
@@ -8,9 +10,11 @@ pub(super) struct AcquisitionGate {
 
 #[async_trait]
 impl crate::session::ReservationObserver for AcquisitionGate {
-    async fn committed(&self) {
+    async fn committed(&self) -> Result<(), SessionError> {
         self.entered.notify_one();
         self.release.notified().await;
+
+        Ok(())
     }
 }
 
@@ -28,5 +32,7 @@ impl crate::session::ReservationObserver for CommitGate {
         assert!(!self.fail, "injected committer task failure");
     }
 
-    async fn committed(&self) {}
+    async fn committed(&self) -> Result<(), SessionError> {
+        Ok(())
+    }
 }

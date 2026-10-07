@@ -21,7 +21,6 @@ use super::{
 };
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
-use crate::input::TurnInput;
 use crate::lifecycle::{
     LifecycleEmitter, LifecycleEvent, ModelResponseType, ToolErrorType, TurnErrorType,
 };
@@ -30,16 +29,14 @@ use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelErrorType,
     ModelMessage, ModelMetadata, ModelRequest, ModelResponse,
 };
-use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use crate::recovery::HostTurnRecord;
 use crate::repository::Repository;
 use crate::schema_contract::OutputSchema;
-use crate::session::{
-    AcquiredTurn, LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner,
-};
-use crate::store::SessionStore;
+use crate::session::{LoadedSession, NewSession, SessionError, StoreIdentity, TurnOwner};
+use crate::store::{ModelSwitch, Reservation, SessionStore, TurnAdmission};
 use crate::telemetry;
 use crate::tool::{ReadArguments, Tool, ToolCall};
-use crate::turn::{TurnError, TurnOptions, TurnOutcome};
+use crate::turn::{TurnError, TurnOutcome};
 use crate::write_journal::{WriteRecord, WriteStatus};
 
 static TRACE_PROVIDER_LOCK: TestMutex<()> = TestMutex::const_new(());
@@ -811,44 +808,16 @@ impl SessionStore for TracedWriteStore {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &crate::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
-        self.store
-            .switch_model(id, generation, identity, metadata, capabilities)
-            .await
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
+        self.store.switch_model(id, switch).await
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        self.store
-            .begin_turn(store, id, input, options, generation)
-            .await
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.store
-            .begin_request(store, id, input, options, request, generation)
-            .await
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        self.store.reserve_turn(id, admission).await
     }
 
     async fn load_request(

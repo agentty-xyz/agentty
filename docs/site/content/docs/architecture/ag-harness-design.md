@@ -58,7 +58,8 @@ crates/
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys with declared `ModelCapabilities`.
 - `SessionStore` is the public persistence contract and `BashExecutor` the public
-  command-execution contract; both accept host implementations.
+  command-execution contract; both accept host implementations. Stores expose atomic
+  record operations; the harness applies admission rules and builds each lease.
 
 ## Agent loop
 
@@ -82,6 +83,9 @@ flowchart TD
   never the only copy of conversation state.
 - One active turn per session. Renewable leases fence concurrent processes; expired
   leases mark turns `interrupted`, and only completed turns re-enter model context.
+- Reservation and model switching run in one store-owned atomic section that reads the
+  admission state and records the harness's decision: recorded host requests first, then
+  the model generation, an idle session, and no unresolved command.
 - Within one process, a single reservation lifecycle owns admission, lease renewal,
   finalization, and cleanup of abandoned owners. It recovers those owners before every
   turn acquisition or model switch, the same way for every store.
@@ -173,9 +177,6 @@ Planned, not shipped. Each step lands as its own change, in this order:
 1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
    required `ContextBudget` bound a turn, which fails typed once the next request no
    longer fits.
-1. **Narrow the `SessionStore` seam** — stores expose atomic record operations, and the
-   harness applies the admission rules and builds the lease once instead of in every
-   adapter.
 1. **The acquired turn owns request projection and commit** — host-request and plain
    turns become commit variants instead of flags.
 1. **Stopped-turn replay** — each finished tool exchange persists under the turn owner.

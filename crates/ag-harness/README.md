@@ -167,8 +167,11 @@ after three minutes, and a `429` `Retry-After` is honored up to sixty seconds.
 
 SQLite is the default (`Harness::database`, or `store::SqliteStore` explicitly).
 `store::MemoryStore` gives resumable sessions within one process. Custom backends
-implement `store::SessionStore` and are injected with `Harness::store`; the shared
-conformance suite is in `tests/support/store_conformance.rs`.
+implement `store::SessionStore` and are injected with `Harness::store`. A store supplies
+atomic record operations: `reserve_turn` and `switch_model` read an `AdmissionState` and
+record the decision from `TurnAdmission::admit` or `ModelSwitch::admit`, while the
+harness owns the admission rules and every lease. The shared conformance suite is in
+`tests/support/store_conformance.rs`.
 
 ## Observability
 

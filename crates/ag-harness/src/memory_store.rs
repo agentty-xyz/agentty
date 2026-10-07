@@ -8,16 +8,15 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
-use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus};
+use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
-    AcquiredTurn, LoadedSession, NewSession, SessionStore, StoreIdentity, StoredTurnOptions,
-    TurnOwner, WriteRecord, WriteStatus,
+    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
+    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use crate::write_journal::content_hash;
-use crate::{SessionError, TurnError, TurnOptions, TurnOutcome};
+use crate::{SessionError, TurnError, TurnOutcome};
 
 /// In-memory session history and write journals, with no restart durability.
 ///
@@ -39,111 +38,6 @@ impl MemoryStore {
             identity: StoreIdentity::unique(),
             state: Arc::default(),
         }
-    }
-
-    fn acquire(
-        &self,
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: Option<&HostRequest>,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        if store.identity() != self.identity() {
-            return Err(SessionError::InvalidData {
-                reason: "acquisition store has a different backing identity".to_string(),
-            });
-        }
-        let mut state = self.lock();
-        let session = state
-            .sessions
-            .get_mut(session_id)
-            .ok_or_else(|| SessionError::NotFound {
-                id: session_id.to_string(),
-            })?;
-        session.recover();
-        if let Some(request) = request
-            && let Some(record) = session.request(request.id())
-        {
-            record.check_request(request)?;
-
-            return Ok(HostTurnAcquisition::Recorded(record));
-        }
-        crate::session_model::check_generation(
-            session_id,
-            session.configuration.model_generation,
-            generation,
-        )?;
-        if session
-            .turns
-            .last()
-            .is_some_and(|turn| turn.status == Status::Running)
-        {
-            return Err(SessionError::Busy {
-                id: session_id.to_string(),
-            });
-        }
-        if session
-            .commands
-            .iter()
-            .any(crate::bash::CommandRecord::blocks_admission)
-        {
-            return Err(SessionError::Busy {
-                id: session_id.into(),
-            });
-        }
-        let previous = session
-            .turns
-            .iter()
-            .rev()
-            .find(|turn| turn.status == Status::Completed);
-        let compatible = previous
-            .map(|turn| StoredTurnOptions::decode(&turn.options))
-            .transpose()?
-            .is_some_and(|snapshot| snapshot.continuation_compatible(options));
-        let continuation = session
-            .configuration
-            .provider_session_id
-            .clone()
-            .filter(|_| compatible);
-        let position = session.next_turn;
-        let next_position = position
-            .checked_add(1)
-            .ok_or_else(|| SessionError::InvalidData {
-                reason: "session turn position exceeds integer range".to_string(),
-            })?;
-        let owner = TurnOwner::new(
-            self.identity.clone(),
-            session_id.to_string(),
-            position,
-            position.to_le_bytes().to_vec(),
-        );
-        let deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
-        let acquired = AcquiredTurn::new(
-            store,
-            owner.clone(),
-            deadline,
-            session.history(),
-            continuation.clone(),
-        )?
-        .with_checkpoint(session.configuration.checkpoint.clone());
-        session.turns.push(TurnRecord {
-            model: session.configuration.recorded_model(),
-            deadline,
-            error_type: None,
-            messages: vec![input.clone().into_user_message()],
-            options: StoredTurnOptions::encode(options),
-            outcome: None,
-            owner,
-            request: request.cloned(),
-            status: Status::Running,
-        });
-        session.next_turn = next_position;
-        session.configuration.provider_session_id = continuation;
-        drop(state);
-
-        acquired.activate().map(HostTurnAcquisition::Acquired)
     }
 
     fn complete(
@@ -370,82 +264,81 @@ impl SessionStore for MemoryStore {
         Ok(())
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &crate::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         let mut state = self.lock();
         let session = state
             .sessions
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
-        crate::session_model::check_generation(
-            id,
-            session.configuration.model_generation,
-            generation,
-        )?;
-        if session
-            .turns
-            .last()
-            .is_some_and(|turn| turn.status == Status::Running)
-            || session
-                .commands
-                .iter()
-                .any(crate::bash::CommandRecord::blocks_admission)
-        {
-            return Err(SessionError::Busy { id: id.to_string() });
-        }
-        crate::session_model::check_history(
+        switch.check_history(
             session
                 .turns
                 .iter()
                 .filter(|turn| turn.status == Status::Completed)
                 .flat_map(|turn| turn.messages.iter()),
-            capabilities,
         )?;
-        let next = crate::session_model::next_generation(generation)?;
+        let next = switch.admit(id, &session.admission_state(None))?;
         session.configuration.model_generation = next;
-        session.configuration.registration_identity = Some(identity.clone());
+        session.configuration.registration_identity = Some(switch.identity().clone());
         session.configuration.provider =
-            metadata.as_ref().map(|value| value.provider().to_string());
-        session.configuration.model = metadata.as_ref().map(|value| value.model().to_string());
+            switch.metadata().map(|value| value.provider().to_string());
+        session.configuration.model = switch.metadata().map(|value| value.model().to_string());
         session.configuration.provider_session_id = None;
 
         Ok(next)
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        let HostTurnAcquisition::Acquired(acquired) =
-            self.acquire(store, session_id, input, options, None, generation)?
-        else {
-            return Err(SessionError::HostTurnConflict);
-        };
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        let mut state = self.lock();
+        let session = state
+            .sessions
+            .get_mut(session_id)
+            .ok_or_else(|| SessionError::NotFound {
+                id: session_id.to_string(),
+            })?;
+        session.recover();
+        let turn =
+            match admission.admit(session_id, session.admission_state(admission.host_id()))? {
+                Admission::Recorded(record) => return Ok(Reservation::Recorded(record)),
+                Admission::Reserve(turn) => turn,
+            };
+        let position = session.next_turn;
+        let next_position = position
+            .checked_add(1)
+            .ok_or_else(|| SessionError::InvalidData {
+                reason: "session turn position exceeds integer range".to_string(),
+            })?;
+        let owner = TurnOwner::new(
+            self.identity.clone(),
+            session_id.to_string(),
+            position,
+            position.to_le_bytes().to_vec(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
+        let history = session.history();
+        session.turns.push(TurnRecord {
+            model: session.configuration.recorded_model(),
+            deadline,
+            error_type: None,
+            messages: vec![turn.message().clone()],
+            options: turn.options().to_string(),
+            outcome: None,
+            owner: owner.clone(),
+            request: turn.request().cloned(),
+            status: Status::Running,
+        });
+        session.next_turn = next_position;
+        session.configuration.provider_session_id = turn.continuation().map(str::to_string);
 
-        Ok(acquired)
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, session_id, input, options, Some(request), generation)
+        Ok(Reservation::Reserved(
+            ReservedTurn::new(turn, owner, deadline, history)
+                .with_checkpoint(session.configuration.checkpoint.clone()),
+        ))
     }
 
     async fn load_request(
@@ -619,6 +512,28 @@ struct Record {
 }
 
 impl Record {
+    fn admission_state(&self, host_id: Option<&str>) -> AdmissionState {
+        AdmissionState {
+            active_turn: self
+                .turns
+                .last()
+                .is_some_and(|turn| turn.status == Status::Running),
+            latest_options: self
+                .turns
+                .iter()
+                .rev()
+                .find(|turn| turn.status == Status::Completed)
+                .map(|turn| turn.options.clone()),
+            model_generation: self.configuration.model_generation,
+            provider_session_id: self.configuration.provider_session_id.clone(),
+            request: host_id.and_then(|host_id| self.request(host_id)),
+            unresolved_commands: self
+                .commands
+                .iter()
+                .any(crate::bash::CommandRecord::blocks_admission),
+        }
+    }
+
     fn request(&self, host_id: &str) -> Option<HostTurnRecord> {
         let turn = self.turns.iter().find(|turn| {
             turn.request

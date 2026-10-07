@@ -16,8 +16,8 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, MemoryStore, NewSession, SessionCheckpoint, SessionStore, SqliteStore,
-    StoreIdentity, StoredTurnOptions, TurnOwner, WriteStatus,
+    AcquiredTurn, MemoryStore, ModelSwitch, NewSession, SessionCheckpoint, SessionStore,
+    SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner, WriteStatus,
 };
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
@@ -28,7 +28,6 @@ pub(crate) use backend::ExternalStore;
 pub(crate) use gate::Gate;
 use serde_json::json;
 use tokio::sync::Notify;
-use tokio::time::Instant;
 
 pub(crate) fn schema() -> OutputSchema {
     OutputSchema::new(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})).expect("schema")
@@ -110,16 +109,15 @@ async fn command_reconciliation_preserves_records_and_validates_session_and_stor
             .create()
             .await
             .expect("independent");
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("run"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("owner");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("owner");
         let intent = CommandIntent {
             call_id: "call".into(),
             command: "effect".into(),
@@ -166,16 +164,15 @@ async fn external_store_without_command_support_fails_closed() {
         .create_session(&NewSession::new("unsupported", schema()), None, 1024)
         .await
         .expect("create");
-    let acquired = store
-        .begin_turn(
-            Arc::clone(&store),
-            "unsupported",
-            &TurnInput::from("run"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("owner");
+    let acquired = AcquiredTurn::begin(
+        Arc::clone(&store),
+        "unsupported",
+        &TurnInput::from("run"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("owner");
     let intent = CommandIntent {
         call_id: "call".into(),
         command: "effect".into(),
@@ -230,19 +227,14 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .into_iter()
         .map(TurnInput::from)
         .collect();
-    let acquired = store
-        .begin_turn(Arc::clone(&store), "session", &inputs[0], &options(), 0)
+    let acquired = AcquiredTurn::begin(Arc::clone(&store), "session", &inputs[0], &options(), 0)
         .await
-        .expect("begin")
-        .activate()
-        .expect("activation remains idempotent");
+        .expect("begin");
     let owner = acquired.owner().clone();
 
     // Act
     assert!(matches!(
-        store
-            .begin_turn(Arc::clone(&store), "session", &inputs[1], &options(), 0)
-            .await,
+        AcquiredTurn::begin(Arc::clone(&store), "session", &inputs[1], &options(), 0).await,
         Err(SessionError::Busy { .. })
     ));
     let write = store
@@ -268,8 +260,7 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         .finish_write(&owner, write, true)
         .await
         .expect("settle after terminal");
-    let successor = store
-        .begin_turn(Arc::clone(&store), "session", &inputs[2], &options(), 0)
+    let successor = AcquiredTurn::begin(Arc::clone(&store), "session", &inputs[2], &options(), 0)
         .await
         .expect("successor");
     store.interrupt(&owner).await.expect("stale interrupt");
@@ -341,8 +332,7 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
             .create_session(&NewSession::new("images", schema()), None, 4096)
             .await
             .expect("create");
-        let acquired = store
-            .begin_turn(Arc::clone(&store), "images", &input, &options(), 0)
+        let acquired = AcquiredTurn::begin(Arc::clone(&store), "images", &input, &options(), 0)
             .await
             .expect("begin");
 
@@ -378,16 +368,15 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             .await
             .expect("create");
         for turn in ["zero", "one"] {
-            let acquired = store
-                .begin_turn(
-                    Arc::clone(&store),
-                    "checkpoints",
-                    &TurnInput::from(turn),
-                    &options(),
-                    0,
-                )
-                .await
-                .expect("begin");
+            let acquired = AcquiredTurn::begin(
+                Arc::clone(&store),
+                "checkpoints",
+                &TurnInput::from(turn),
+                &options(),
+                0,
+            )
+            .await
+            .expect("begin");
             store
                 .complete_turn(
                     acquired.owner(),
@@ -456,10 +445,10 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .create_session(&NewSession::new(&id, schema()), None, 100)
                 .await
                 .expect("create");
-            let turn = store
-                .begin_turn(store.clone(), &id, &TurnInput::from("first"), &options(), 0)
-                .await
-                .expect("turn");
+            let turn =
+                AcquiredTurn::begin(store.clone(), &id, &TurnInput::from("first"), &options(), 0)
+                    .await
+                    .expect("turn");
             let write = store
                 .write_intent(
                     turn.owner(),
@@ -487,16 +476,15 @@ async fn write_settlement_retries_preserve_terminal_outcomes() {
                 .complete_turn(turn.owner(), &[], None)
                 .await
                 .expect("complete");
-            let successor = store
-                .begin_turn(
-                    store.clone(),
-                    &id,
-                    &TurnInput::from("successor"),
-                    &options(),
-                    0,
-                )
-                .await
-                .expect("successor");
+            let successor = AcquiredTurn::begin(
+                store.clone(),
+                &id,
+                &TurnInput::from("successor"),
+                &options(),
+                0,
+            )
+            .await
+            .expect("successor");
             store
                 .finish_write(turn.owner(), write, applied)
                 .await
@@ -528,16 +516,15 @@ async fn conflicting_write_settlements_have_one_winner() {
             .create_session(&NewSession::new("settlement-race", schema()), None, 100)
             .await
             .expect("create");
-        let turn = store
-            .begin_turn(
-                store.clone(),
-                "settlement-race",
-                &TurnInput::from("prompt"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("turn");
+        let turn = AcquiredTurn::begin(
+            store.clone(),
+            "settlement-race",
+            &TurnInput::from("prompt"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
         let write = store
             .write_intent(
                 turn.owner(),
@@ -586,8 +573,8 @@ async fn concurrent_creation_and_acquisition_have_one_winner() {
         let first_input = TurnInput::from("first");
         let second_input = TurnInput::from("second");
         let (first, second) = tokio::join!(
-            store.begin_turn(store.clone(), "race", &first_input, &selected, 0),
-            store.begin_turn(store.clone(), "race", &second_input, &selected, 0),
+            AcquiredTurn::begin(store.clone(), "race", &first_input, &selected, 0),
+            AcquiredTurn::begin(store.clone(), "race", &second_input, &selected, 0),
         );
         let acquisitions = [first, second];
 
@@ -622,16 +609,15 @@ async fn owner_lookup_preserves_identity_across_activation() {
             .create_session(&NewSession::new("identity", schema()), None, 256)
             .await
             .expect("create");
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "identity",
-                &TurnInput::from("prompt"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("acquire");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "identity",
+            &TurnInput::from("prompt"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("acquire");
         let active = acquired.owner();
         let reserved = TurnOwner::new(
             active.store_identity().clone(),
@@ -889,40 +875,44 @@ async fn bounded_history_and_continuation_policy_are_shared() {
 }
 
 #[tokio::test]
-async fn external_reservation_rejects_foreign_store_and_expired_acknowledgment() {
+async fn expired_reservation_acknowledgment_is_interrupted_before_execution() {
     // Arrange
     let store: Arc<dyn SessionStore> = Arc::new(ExternalStore::new());
-    let foreign = TurnOwner::new(
-        StoreIdentity::new("test", "foreign"),
-        "session".to_string(),
-        1,
-        vec![1],
-    );
+    store
+        .create_session(&NewSession::new("session", schema()), None, 1024)
+        .await
+        .expect("session");
+    let gate = Arc::new(Gate::new(Arc::clone(&store), true));
+    let expired = {
+        let gate = Arc::clone(&gate);
+        tokio::spawn(async move {
+            AcquiredTurn::begin(gate, "session", &TurnInput::from("expired"), &options(), 0).await
+        })
+    };
+    gate.entered.notified().await;
 
-    // Act / Assert
-    assert!(
-        AcquiredTurn::new(
-            Arc::clone(&store),
-            foreign,
-            Instant::now(),
-            Vec::new(),
-            None
-        )
-        .is_err()
-    );
-    let owner = TurnOwner::new(store.identity().clone(), "session".to_string(), 1, vec![1]);
-    let expired = AcquiredTurn::new(
+    // Act
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(300)).await;
+    tokio::time::resume();
+    gate.release.notify_one();
+    let expired = expired.await.expect("acquisition");
+    tokio::time::timeout(Duration::from_secs(2), gate.interrupted.notified())
+        .await
+        .expect("expired acknowledgment interrupted");
+    let successor = AcquiredTurn::begin(
         Arc::clone(&store),
-        owner,
-        Instant::now() - Duration::from_secs(1),
-        Vec::new(),
-        None,
+        "session",
+        &TurnInput::from("successor"),
+        &options(),
+        0,
     )
-    .expect("reservation");
-    assert!(matches!(
-        expired.activate(),
-        Err(SessionError::OwnershipLost { .. })
-    ));
+    .await
+    .expect("successor");
+
+    // Assert
+    assert!(matches!(expired, Err(SessionError::OwnershipLost { .. })));
+    assert_eq!(successor.owner().turn_position(), 1);
     assert_eq!(
         StoreIdentity::new("backend", "key"),
         StoreIdentity::new("backend", "key")
@@ -933,6 +923,47 @@ async fn external_reservation_rejects_foreign_store_and_expired_acknowledgment()
             .expect("snapshot")
             .continuation_compatible(&options())
     );
+}
+
+#[tokio::test]
+async fn reservations_owned_by_another_store_or_session_never_execute() {
+    // Arrange
+    for store in stores().await {
+        store
+            .create_session(&NewSession::new("other", schema()), None, 1024)
+            .await
+            .expect("other session");
+        let mut foreign_store = Gate::new(Arc::clone(&store), true);
+        foreign_store.identity = StoreIdentity::unique();
+        let mut foreign_session = Gate::new(Arc::clone(&store), true);
+        foreign_session.reserve_session = Some("other".to_string());
+
+        for (gate, session_id) in [
+            (foreign_store, "foreign-store"),
+            (foreign_session, "foreign-session"),
+        ] {
+            gate.release.notify_one();
+            let requests: Arc<Mutex<Vec<ModelRequest>>> = Arc::default();
+            let mut session = Harness::new(Echo {
+                requests: Arc::clone(&requests),
+            })
+            .store(Arc::new(gate))
+            .session(session_id, schema())
+            .create()
+            .await
+            .expect("session");
+
+            // Act
+            let result = session.send("prompt").await;
+
+            // Assert
+            assert!(
+                matches!(result, Err(SessionError::InvalidData { .. })),
+                "{session_id}"
+            );
+            assert!(requests.lock().expect("requests").is_empty());
+        }
+    }
 }
 
 struct BlockingModel {
@@ -1183,16 +1214,15 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
             .create_session(&NewSession::new("switch-commands", schema()), None, 1024)
             .await
             .expect("session");
-        let turn = store
-            .begin_turn(
-                Arc::clone(&store),
-                "switch-commands",
-                &TurnInput::from("run"),
-                &options(),
-                0,
-            )
-            .await
-            .expect("turn");
+        let turn = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "switch-commands",
+            &TurnInput::from("run"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
         let id = store
             .command_intent(
                 turn.owner(),
@@ -1217,7 +1247,10 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
         // Act / Assert
         assert!(matches!(
             store
-                .switch_model("switch-commands", 0, &identity, None, capabilities)
+                .switch_model(
+                    "switch-commands",
+                    &ModelSwitch::new(identity.clone(), None, capabilities, 0)
+                )
                 .await,
             Err(SessionError::Busy { .. })
         ));
@@ -1233,33 +1266,34 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
             .expect("owner reconciliation");
         assert_eq!(
             store
-                .switch_model("switch-commands", 0, &identity, None, capabilities)
+                .switch_model(
+                    "switch-commands",
+                    &ModelSwitch::new(identity.clone(), None, capabilities, 0)
+                )
                 .await
                 .expect("switch after reconciliation"),
             1
         );
         assert!(matches!(
-            store
-                .begin_turn(
-                    Arc::clone(&store),
-                    "switch-commands",
-                    &TurnInput::from("stale"),
-                    &options(),
-                    0
-                )
-                .await,
-            Err(SessionError::StaleModel { .. })
-        ));
-        let next = store
-            .begin_turn(
+            AcquiredTurn::begin(
                 Arc::clone(&store),
                 "switch-commands",
-                &TurnInput::from("next"),
+                &TurnInput::from("stale"),
                 &options(),
-                1,
+                0
             )
-            .await
-            .expect("new model turn");
+            .await,
+            Err(SessionError::StaleModel { .. })
+        ));
+        let next = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "switch-commands",
+            &TurnInput::from("next"),
+            &options(),
+            1,
+        )
+        .await
+        .expect("new model turn");
         assert_ne!(next.owner(), turn.owner());
         let records = store
             .load_commands("switch-commands")

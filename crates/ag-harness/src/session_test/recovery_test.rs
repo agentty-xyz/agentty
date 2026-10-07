@@ -9,7 +9,7 @@ use crate::input::TurnInput;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, SessionError};
-use crate::store::{NewSession, SessionStore};
+use crate::store::{AcquiredTurn, NewSession, SessionStore};
 use crate::turn::TurnReport;
 
 #[tokio::test]
@@ -29,8 +29,8 @@ async fn recovery_acquisition_is_atomic_across_independent_sqlite_pools() {
     // Act
     let input = TurnInput::from("hello");
     let (first, second) = tokio::join!(
-        left.begin_request(left.clone(), "session", &input, &options, &request, 0),
-        right.begin_request(right.clone(), "session", &input, &options, &request, 0),
+        AcquiredTurn::begin_request(left.clone(), "session", &input, &options, &request, 0),
+        AcquiredTurn::begin_request(right.clone(), "session", &input, &options, &request, 0),
     );
 
     // Assert
@@ -60,18 +60,16 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
         .await
         .expect("create");
     let request = HostRequest::from_configuration("id".into(), json!({})).expect("request");
-    let HostTurnAcquisition::Acquired(turn) = database
-        .begin_request(
-            database.clone(),
-            "session",
-            &TurnInput::from("hello"),
-            &turn_options(),
-            &request,
-            0,
-        )
-        .await
-        .expect("turn")
-    else {
+    let HostTurnAcquisition::Acquired(turn) = AcquiredTurn::begin_request(
+        database.clone(),
+        "session",
+        &TurnInput::from("hello"),
+        &turn_options(),
+        &request,
+        0,
+    )
+    .await
+    .expect("turn") else {
         std::panic::resume_unwind(Box::new("expected acquisition"));
     };
     let outcome = TurnOutcome::new(
@@ -135,17 +133,16 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
         .await
         .expect("session");
     let request = HostRequest::from_configuration("id".into(), json!({})).expect("request");
-    let turn = database
-        .begin_request(
-            database.clone(),
-            "session",
-            &TurnInput::from("hello"),
-            &turn_options(),
-            &request,
-            0,
-        )
-        .await
-        .expect("turn");
+    let turn = AcquiredTurn::begin_request(
+        database.clone(),
+        "session",
+        &TurnInput::from("hello"),
+        &turn_options(),
+        &request,
+        0,
+    )
+    .await
+    .expect("turn");
     timestamp.store(2000, Ordering::SeqCst);
 
     // Act
@@ -159,17 +156,16 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
         .await
         .expect("lookup")
         .expect("record");
-    let duplicate = reopened
-        .begin_request(
-            Arc::new(reopened.clone()),
-            "session",
-            &TurnInput::from("hello"),
-            &turn_options(),
-            &request,
-            0,
-        )
-        .await
-        .expect("duplicate");
+    let duplicate = AcquiredTurn::begin_request(
+        Arc::new(reopened.clone()),
+        "session",
+        &TurnInput::from("hello"),
+        &turn_options(),
+        &request,
+        0,
+    )
+    .await
+    .expect("duplicate");
 
     // Assert
     assert!(matches!(record.status, HostTurnStatus::Interrupted { .. }));

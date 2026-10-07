@@ -16,18 +16,19 @@ use sqlx::{SqliteConnection, SqlitePool, Transaction};
 use thiserror::Error;
 use tokio::time::Instant;
 
+use crate::admission::{
+    Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
+};
 use crate::compaction::{CheckpointError, SessionCheckpoint};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::recovery::{
-    ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
-};
-use crate::reservation::{TURN_LEASE_SECONDS, TurnGuard, lease_deadline};
+use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
+use crate::reservation::{TURN_LEASE_SECONDS, lease_deadline};
 use crate::store::SessionStore;
 use crate::tool::{ReadArguments, ToolCall, WriteArguments};
 use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 use crate::write_journal::{WriteRecord, WriteStatus, content_hash};
-use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOptions, TurnOutcome};
+use crate::{OutputSchema, OutputSchemaError, TurnError, TurnOutcome};
 
 const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 const DB_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -100,12 +101,6 @@ struct HostTurnRow {
     status: String,
     terminal_outcome: Option<String>,
     turn_position: i64,
-}
-
-enum Reservation {
-    Acquired(TurnGuard),
-    Recorded(HostTurnRecord),
-    Retry,
 }
 
 struct CheckpointRow {
@@ -318,12 +313,14 @@ impl StoreIdentity {
 trait ReservationObserver: Send + Sync {
     async fn model_validated(&self) {}
     async fn committing(&self) {}
-    async fn committed(&self);
+    async fn committed(&self) -> Result<(), SessionError>;
 }
 
 #[async_trait]
 impl ReservationObserver for () {
-    async fn committed(&self) {}
+    async fn committed(&self) -> Result<(), SessionError> {
+        Ok(())
+    }
 }
 
 /// SQLite database used by persistent harness sessions.
@@ -439,68 +436,11 @@ impl Database {
 
         Ok(TurnAcquisition {
             checkpoint,
-            expected_generation: configuration.model_generation,
             configuration,
             latest_completed_turn,
             turn_position,
             turns,
         })
-    }
-
-    async fn acquire(
-        &self,
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: Option<&HostRequest>,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        if store.identity() != self.identity() {
-            return Err(SessionError::InvalidData {
-                reason: "acquisition store has a different backing identity".to_string(),
-            });
-        }
-        let message = EncodedMessage::from_message(&input.clone().into_user_message())?;
-
-        loop {
-            let mut acquisition = self.load_turn_acquisition(session_id).await?;
-            acquisition.expected_generation = generation;
-            let previous_options = acquisition
-                .configuration
-                .turn_options
-                .as_deref()
-                .map(StoredTurnOptions::decode)
-                .transpose()?;
-            let compatible = previous_options
-                .as_ref()
-                .is_some_and(|previous| previous.continuation_compatible(options));
-            match self
-                .reserve_turn(
-                    Arc::clone(&store),
-                    session_id,
-                    &message,
-                    &acquisition,
-                    options,
-                    request,
-                )
-                .await?
-            {
-                Reservation::Acquired(guard) => {
-                    return Ok(HostTurnAcquisition::Acquired(AcquiredTurn {
-                        checkpoint: acquisition.checkpoint,
-                        guard,
-                        provider_session_id: acquisition
-                            .configuration
-                            .provider_session_id
-                            .filter(|_| compatible),
-                        turns: acquisition.turns,
-                    }));
-                }
-                Reservation::Recorded(record) => return Ok(HostTurnAcquisition::Recorded(record)),
-                Reservation::Retry => {}
-            }
-        }
     }
 
     async fn complete(
@@ -581,15 +521,14 @@ WHERE id = ?
         Ok(())
     }
 
-    async fn reserve_turn(
+    /// Applies admission to state read under the writer lock and reserves
+    /// the turn; returns `None` when history changed after `acquisition`.
+    async fn try_reserve(
         &self,
-        store: Arc<dyn SessionStore>,
         session_id: &str,
-        message: &EncodedMessage,
-        acquisition: &TurnAcquisition,
-        options: &TurnOptions,
-        request: Option<&HostRequest>,
-    ) -> Result<Reservation, SessionError> {
+        acquisition: TurnAcquisition,
+        admission: &TurnAdmission,
+    ) -> Result<Option<Reservation>, SessionError> {
         let operation = "reserve persistent session turn";
         let recovery_now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self
@@ -598,28 +537,33 @@ WHERE id = ?
             .await
             .session_context(operation)?;
         recover_stale_turns(&mut transaction, session_id, recovery_now).await?;
-        if let Some(request) = request
-            && let Some(record) =
-                load_request_from(&mut transaction, &self.identity, session_id, request.id())
-                    .await?
-        {
-            record.check_request(request)?;
-            transaction.commit().await.session_context(operation)?;
+        let state = load_admission_state(
+            &mut transaction,
+            &self.identity,
+            session_id,
+            admission.host_id(),
+        )
+        .await?;
+        let turn = match admission.admit(session_id, state)? {
+            Admission::Recorded(record) => {
+                transaction.commit().await.session_context(operation)?;
 
-            return Ok(Reservation::Recorded(record));
-        }
-        check_command_admission(&mut transaction, session_id).await?;
+                return Ok(Some(Reservation::Recorded(record)));
+            }
+            Admission::Reserve(turn) => turn,
+        };
         if !acquisition.is_current(&mut transaction, session_id).await? {
             transaction.commit().await.session_context(operation)?;
 
-            return Ok(Reservation::Retry);
+            return Ok(None);
         }
+        let message = EncodedMessage::from_message(turn.message())?;
         let deadline = lease_deadline();
         let reservation_now = self.timestamp_source.now_timestamp_seconds();
         let lease_expires_at = reservation_now.saturating_add(TURN_LEASE_SECONDS);
-        let snapshot = StoredTurnOptions::encode(options);
-        let host_id = request.map(HostRequest::id);
-        let host_request = request.map(serialize_payload).transpose()?;
+        let snapshot = turn.options();
+        let host_id = turn.request().map(HostRequest::id);
+        let host_request = turn.request().map(serialize_payload).transpose()?;
         let result = sqlx::query_scalar!(
             r#"
 INSERT INTO session_turn (
@@ -651,27 +595,40 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             acquisition.turn_position,
             owner_token,
         );
-        let guard = TurnGuard::new(store, owner, deadline);
         insert_message(
             &mut transaction,
             session_id,
             acquisition.turn_position,
             0,
-            message,
+            &message,
             reservation_now,
             operation,
         )
         .await?;
-        clear_incompatible_continuation(
-            &mut transaction,
-            session_id,
-            &acquisition.configuration,
-            options,
-        )
-        .await?;
-        self.commit_reservation(transaction, guard)
+        sqlx::query("UPDATE session SET provider_session_id = ? WHERE id = ?")
+            .bind(turn.continuation())
+            .bind(session_id)
+            .execute(&mut *transaction)
             .await
-            .map(Reservation::Acquired)
+            .session_context(operation)?;
+        self.reservation_observer.committing().await;
+        let acknowledged = async {
+            transaction.commit().await.session_context(operation)?;
+            self.reservation_observer.committed().await
+        }
+        .await;
+        if let Err(error) = acknowledged {
+            // A failed acknowledgment may follow a durable commit, and only
+            // this call knows the owner; the lease bounds a failed interrupt.
+            let _ = self.interrupt(&owner).await;
+
+            return Err(error);
+        }
+
+        Ok(Some(Reservation::Reserved(
+            ReservedTurn::new(turn, owner, deadline, acquisition.turns)
+                .with_checkpoint(acquisition.checkpoint),
+        )))
     }
 
     fn reservation_error(error: sqlx::Error, session_id: &str) -> SessionError {
@@ -685,29 +642,6 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
                 source: error,
             }
         }
-    }
-
-    async fn commit_reservation(
-        &self,
-        transaction: Transaction<'static, sqlx::Sqlite>,
-        guard: TurnGuard,
-    ) -> Result<TurnGuard, SessionError> {
-        let operation = "reserve persistent session turn";
-        let observer = Arc::clone(&self.reservation_observer);
-        let mut guard = tokio::spawn(async move {
-            observer.committing().await;
-            transaction.commit().await.session_context(operation)?;
-
-            Ok::<_, SessionError>(guard)
-        })
-        .await
-        .map_err(|error| SessionError::InvalidData {
-            reason: format!("reservation task failed: {error}"),
-        })??;
-        self.reservation_observer.committed().await;
-        guard.activate()?;
-
-        Ok(guard)
     }
 
     async fn recover_stale_turns(&self, session_id: &str) -> Result<(), SessionError> {
@@ -1060,24 +994,15 @@ ON CONFLICT(session_id) DO UPDATE SET
         Ok(())
     }
 
-    async fn switch_model(
-        &self,
-        id: &str,
-        generation: i64,
-        identity: &ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
-    ) -> Result<i64, SessionError> {
-        let next = crate::session_model::next_generation(generation)?;
+    async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         let operation = "switch session model";
         loop {
             // Validate canonical history outside the writer transaction, then
             // revalidate its completed-turn boundary under the admission lock.
             let mut snapshot = self.pool.begin().await.session_context(operation)?;
-            let configuration = load_turn_configuration(&mut snapshot, id).await?;
-            crate::session_model::check_generation(id, configuration.model_generation, generation)?;
+            load_turn_configuration(&mut snapshot, id).await?;
             let revision = latest_completed_turn(&mut snapshot, id).await?;
-            check_switch_history(&mut snapshot, id, capabilities).await?;
+            check_switch_history(&mut snapshot, id, switch).await?;
             snapshot.commit().await.session_context(operation)?;
             self.reservation_observer.model_validated().await;
             let mut transaction = self
@@ -1087,28 +1012,16 @@ ON CONFLICT(session_id) DO UPDATE SET
                 .session_context(operation)?;
             let now = self.timestamp_source.now_timestamp_seconds();
             recover_stale_turns(&mut transaction, id, now).await?;
-            let current = load_turn_configuration(&mut transaction, id).await?;
-            crate::session_model::check_generation(id, current.model_generation, generation)?;
-            let active = sqlx::query_scalar!(
-                "SELECT COUNT(*) FROM session_turn WHERE session_id = ? AND status IN ('pending', \
-                 'running')",
-                id
-            )
-            .fetch_one(&mut *transaction)
-            .await
-            .session_context(operation)?;
-            if active != 0 {
-                return Err(SessionError::Busy { id: id.to_string() });
-            }
-            check_command_admission(&mut transaction, id).await?;
             if latest_completed_turn(&mut transaction, id).await? != revision {
                 transaction.commit().await.session_context(operation)?;
                 continue;
             }
-            let key = identity.key();
-            let registration_revision = identity.revision();
-            let provider = metadata.as_ref().map(ModelMetadata::provider);
-            let model = metadata.as_ref().map(ModelMetadata::model);
+            let state = load_admission_state(&mut transaction, &self.identity, id, None).await?;
+            let next = switch.admit(id, &state)?;
+            let key = switch.identity().key();
+            let registration_revision = switch.identity().revision();
+            let provider = switch.metadata().map(ModelMetadata::provider);
+            let model = switch.metadata().map(ModelMetadata::model);
             sqlx::query!(
                 "UPDATE session SET model_generation = ?, registration_key = ?, \
                  registration_revision = ?, provider = ?, model = ?, provider_session_id = NULL, \
@@ -1129,35 +1042,17 @@ ON CONFLICT(session_id) DO UPDATE SET
         }
     }
 
-    async fn begin_turn(
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError> {
-        let HostTurnAcquisition::Acquired(acquired) = self
-            .acquire(store, session_id, input, options, None, generation)
-            .await?
-        else {
-            return Err(SessionError::HostTurnConflict);
-        };
-
-        Ok(acquired)
-    }
-
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError> {
-        self.acquire(store, session_id, input, options, Some(request), generation)
-            .await
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError> {
+        loop {
+            let acquisition = self.load_turn_acquisition(session_id).await?;
+            if let Some(reservation) = self.try_reserve(session_id, acquisition, admission).await? {
+                return Ok(reservation);
+            }
+        }
     }
 
     async fn load_request(
@@ -1576,70 +1471,6 @@ impl From<StoredTurnOptionsError> for SessionError {
     }
 }
 
-/// A reserved turn that retains cleanup ownership through commit
-/// acknowledgment. Dropping it interrupts only its owner. The Tokio runtime
-/// must remain driven until cleanup completes; persistence settlement does not
-/// settle filesystem effects.
-pub struct AcquiredTurn {
-    pub(crate) checkpoint: Option<SessionCheckpoint>,
-    pub(crate) guard: TurnGuard,
-    pub(crate) provider_session_id: Option<String>,
-    pub(crate) turns: Vec<Vec<ModelMessage>>,
-}
-
-impl AcquiredTurn {
-    /// Returns the reservation identity used for backend lifecycle operations.
-    pub fn owner(&self) -> &TurnOwner {
-        self.guard.owner()
-    }
-
-    /// Arms owner-scoped cleanup before submitting the reservation commit.
-    /// `store` must be the unchanged handle supplied to `begin_turn`.
-    ///
-    /// # Errors
-    /// Returns an error if the owner identifies another store.
-    pub fn new(
-        store: Arc<dyn SessionStore>,
-        owner: TurnOwner,
-        deadline: Instant,
-        turns: Vec<Vec<ModelMessage>>,
-        provider_session_id: Option<String>,
-    ) -> Result<Self, SessionError> {
-        if store.identity() != &owner.database {
-            return Err(owner.lost());
-        }
-
-        Ok(Self {
-            checkpoint: None,
-            guard: TurnGuard::new(store, owner, deadline),
-            provider_session_id,
-            turns,
-        })
-    }
-
-    /// Attaches the session's current compaction checkpoint. `turns` supplied
-    /// to [`Self::new`] must then contain only turns after its boundary.
-    #[must_use]
-    pub fn with_checkpoint(mut self, checkpoint: Option<SessionCheckpoint>) -> Self {
-        self.checkpoint = checkpoint;
-
-        self
-    }
-
-    /// Starts ownership monitoring after the reservation is acknowledged.
-    /// Renewal is scheduled halfway through the remaining confirmed lease,
-    /// capped at 100 seconds, and recalculated after every acknowledgment.
-    /// Return this activated value from `begin_turn`.
-    ///
-    /// # Errors
-    /// An expired acknowledgment is interrupted rather than made executable.
-    pub fn activate(mut self) -> Result<Self, SessionError> {
-        self.guard.activate()?;
-
-        Ok(self)
-    }
-}
-
 /// Session configuration and bounded completed turns returned by a store.
 #[derive(Clone)]
 pub struct LoadedSession {
@@ -1685,7 +1516,6 @@ impl LoadedSession {
 struct TurnAcquisition {
     checkpoint: Option<SessionCheckpoint>,
     configuration: TurnConfigurationRow,
-    expected_generation: i64,
     latest_completed_turn: Option<i64>,
     turn_position: i64,
     turns: Vec<Vec<ModelMessage>>,
@@ -1698,11 +1528,6 @@ impl TurnAcquisition {
         session_id: &str,
     ) -> Result<bool, SessionError> {
         let configuration = load_turn_configuration(transaction, session_id).await?;
-        crate::session_model::check_generation(
-            session_id,
-            configuration.model_generation,
-            self.expected_generation,
-        )?;
         let turn_position = next_turn_position(transaction, session_id).await?;
         let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
         let checkpoint_boundary = load_checkpoint_from(transaction, session_id)
@@ -2006,30 +1831,6 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .foreign_keys(true)
 }
 
-async fn clear_incompatible_continuation(
-    connection: &mut SqliteConnection,
-    session_id: &str,
-    configuration: &TurnConfigurationRow,
-    options: &TurnOptions,
-) -> Result<(), SessionError> {
-    let continuation_compatible = configuration
-        .turn_options
-        .as_deref()
-        .map(StoredTurnOptions::decode)
-        .transpose()?
-        .is_some_and(|previous| previous.continuation_compatible(options));
-    if !continuation_compatible {
-        sqlx::query!(
-            "UPDATE session SET provider_session_id = NULL WHERE id = ?",
-            session_id
-        )
-        .execute(connection)
-        .await
-        .session_context("reserve persistent session turn")?;
-    }
-    Ok(())
-}
-
 async fn load_request_from(
     connection: &mut SqliteConnection,
     identity: &StoreIdentity,
@@ -2105,7 +1906,7 @@ struct SwitchMessageRow {
 async fn check_switch_history(
     connection: &mut SqliteConnection,
     id: &str,
-    capabilities: crate::model::ModelCapabilities,
+    switch: &ModelSwitch,
 ) -> Result<(), SessionError> {
     let mut after = 0;
     loop {
@@ -2122,7 +1923,7 @@ async fn check_switch_history(
         }
         for row in rows {
             let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
-            crate::session_model::check_history(std::iter::once(&message), capabilities)?;
+            switch.check_history([&message])?;
             after = row.id;
         }
     }
@@ -2606,23 +2407,42 @@ async fn load_commands_from(
         .collect()
 }
 
-async fn check_command_admission(
+/// Reads admission facts under the caller's writer lock, after stale-turn
+/// recovery.
+async fn load_admission_state(
     connection: &mut SqliteConnection,
+    identity: &StoreIdentity,
     session_id: &str,
-) -> Result<(), SessionError> {
-    let blocked = sqlx::query_scalar::<_, bool>(
+    host_id: Option<&str>,
+) -> Result<AdmissionState, SessionError> {
+    let configuration = load_turn_configuration(connection, session_id).await?;
+    let active = sqlx::query_scalar!(
+        "SELECT COUNT(*) FROM session_turn WHERE session_id = ? AND status IN ('pending', \
+         'running')",
+        session_id
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .session_context("check turn admission")?;
+    let unresolved_commands = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM session_command WHERE session_id = ? AND unresolved = 1 AND \
          reconciled = 0)",
     )
     .bind(session_id)
-    .fetch_one(connection)
+    .fetch_one(&mut *connection)
     .await
     .session_context("check command admission")?;
-    if blocked {
-        return Err(SessionError::Busy {
-            id: session_id.into(),
-        });
-    }
+    let request = match host_id {
+        Some(host_id) => load_request_from(connection, identity, session_id, host_id).await?,
+        None => None,
+    };
 
-    Ok(())
+    Ok(AdmissionState {
+        active_turn: active != 0,
+        latest_options: configuration.turn_options,
+        model_generation: configuration.model_generation,
+        provider_session_id: configuration.provider_session_id,
+        request,
+        unresolved_commands,
+    })
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use serde_json::json;
 
 use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
-use crate::store::{MemoryStore, NewSession, SessionStore, SqliteStore, TurnOwner};
+use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore, TurnOwner};
 use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnLimits, TurnOptions};
 
 fn outcome() -> CommandOutcome {
@@ -66,16 +66,15 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
             .expect("session");
-        let first = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("first"),
-                &options,
-                0,
-            )
-            .await
-            .expect("first");
+        let first = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("first"),
+            &options,
+            0,
+        )
+        .await
+        .expect("first");
         let owner = first.owner().clone();
         let intent = CommandIntent {
             call_id: "call".into(),
@@ -88,15 +87,14 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
         // Act
         assert!(store.reconcile_command(&owner, id).await.is_err());
         store.interrupt(&owner).await.expect("interrupt");
-        let blocked = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("second"),
-                &options,
-                0,
-            )
-            .await;
+        let blocked = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("second"),
+            &options,
+            0,
+        )
+        .await;
         let records = store.load_commands("commands").await.expect("records");
         let stale = TurnOwner::new(
             store.identity().clone(),
@@ -110,16 +108,15 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
             .reconcile_command(&owner, id)
             .await
             .expect("explicit reconciliation");
-        let second = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("second"),
-                &options,
-                0,
-            )
-            .await
-            .expect("successor");
+        let second = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("second"),
+            &options,
+            0,
+        )
+        .await
+        .expect("successor");
         store
             .finish_command(&owner, id, &outcome())
             .await
@@ -171,16 +168,15 @@ async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
             .expect("session");
-        let acquired = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("run"),
-                &options,
-                0,
-            )
-            .await
-            .expect("acquire");
+        let acquired = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("run"),
+            &options,
+            0,
+        )
+        .await
+        .expect("acquire");
         let mut result = outcome();
         result.cleanup_failed = true;
         let id = store
@@ -202,15 +198,14 @@ async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
             .await
             .expect("outcome");
         store.interrupt(acquired.owner()).await.expect("interrupt");
-        let blocked = store
-            .begin_turn(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("next"),
-                &options,
-                0,
-            )
-            .await;
+        let blocked = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("next"),
+            &options,
+            0,
+        )
+        .await;
 
         // Assert
         assert!(matches!(blocked, Err(SessionError::Busy { .. })));
@@ -243,18 +238,16 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
             json!({"prompt":"run"}),
         )
         .expect("request");
-        let crate::recovery::HostTurnAcquisition::Acquired(acquired) = store
-            .begin_request(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("run"),
-                &options,
-                &request,
-                0,
-            )
-            .await
-            .expect("acquire")
-        else {
+        let crate::recovery::HostTurnAcquisition::Acquired(acquired) = AcquiredTurn::begin_request(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("run"),
+            &options,
+            &request,
+            0,
+        )
+        .await
+        .expect("acquire") else {
             std::panic::resume_unwind(Box::new("expected acquisition"));
         };
         store
@@ -271,17 +264,16 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
             .expect("intent");
 
         // Act
-        let duplicate = store
-            .begin_request(
-                Arc::clone(&store),
-                "commands",
-                &TurnInput::from("run"),
-                &options,
-                &request,
-                0,
-            )
-            .await
-            .expect("duplicate");
+        let duplicate = AcquiredTurn::begin_request(
+            Arc::clone(&store),
+            "commands",
+            &TurnInput::from("run"),
+            &options,
+            &request,
+            0,
+        )
+        .await
+        .expect("duplicate");
 
         // Assert
         let crate::recovery::HostTurnAcquisition::Recorded(record) = duplicate else {

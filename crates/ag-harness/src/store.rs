@@ -7,33 +7,34 @@
 //! defined here.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::time::Instant;
 
+pub use crate::admission::{
+    Admission, AdmissionState, ModelSwitch, NewTurn, Reservation, ReservedTurn, TurnAdmission,
+};
 pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
-use crate::input::TurnInput;
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
-use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnRecord};
+use crate::recovery::HostTurnRecord;
+pub use crate::reservation::AcquiredTurn;
 use crate::session::SessionError;
 pub use crate::session::{
-    AcquiredTurn, Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity,
-    TurnOwner,
+    Database as SqliteStore, LoadedSession, NewSession, SessionInfo, StoreIdentity, TurnOwner,
 };
 pub use crate::session_model::RecordedModel;
-use crate::turn::{TurnError, TurnOptions, TurnOutcome};
+use crate::turn::{TurnError, TurnOutcome};
 pub use crate::turn_options_snapshot::{StoredTurnOptions, StoredTurnOptionsError};
 pub use crate::write_journal::{WriteRecord, WriteStatus};
 
-/// Owner-scoped mutations validate ownership in the transaction applying their
-/// effects. Acquisition must settle its commit before reporting failure;
-/// dropping its waiter retains responsibility for any eventual reservation.
-/// History returned by load/acquire contains only complete turns within the
-/// stored byte budget and, when a compaction checkpoint exists, only turns
-/// after its covered boundary; loads and acquisitions return the current
-/// checkpoint alongside that history. Implementations preserve the existing
+/// Stores supply atomic record operations; the harness applies admission
+/// rules and owns every reservation's lease. Owner-scoped mutations validate
+/// ownership in the transaction applying their effects. History returned by
+/// loads and reservations contains only complete turns within the stored byte
+/// budget and, when a compaction checkpoint exists, only turns after its
+/// covered boundary; both return the current checkpoint alongside that
+/// history. Implementations preserve the existing
 /// options codec and fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
@@ -99,61 +100,39 @@ pub trait SessionStore: Send + Sync {
     /// turns. Return the current registration identity in [`LoadedSession`];
     /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
-    /// Switch an idle session atomically with turn admission. Recover expired
-    /// owners, reject active owners, unresolved commands, and a mismatched
-    /// generation, validate all
-    /// completed history with the target capabilities, then update identity,
-    /// increment the generation, and clear continuation in the same mutation.
-    /// Rejections leave model selection unchanged. Never rewrite turn
-    /// snapshots. Reject provider-specific reasoning explicitly: it has no
-    /// cross-model portability contract. Validate canonical history, including
-    /// completed turns outside the replay budget.
+    /// Switches an idle session's model in one atomic section: recover
+    /// expired turns and validate every completed canonical message with
+    /// [`ModelSwitch::check_history`], including turns outside the replay
+    /// budget, so unsupported history is reported before stale or busy
+    /// admission. Then read [`AdmissionState`], apply [`ModelSwitch::admit`]
+    /// for the generation to record, and record it with the switch's identity
+    /// and metadata while clearing continuation, in the same mutation.
+    /// Rejections leave model selection unchanged; never rewrite turn
+    /// snapshots.
     async fn switch_model(
         &self,
-        id: &str,
-        generation: i64,
-        identity: &crate::recovery::ExecutionIdentity,
-        metadata: Option<ModelMetadata>,
-        capabilities: crate::model::ModelCapabilities,
+        session_id: &str,
+        switch: &ModelSwitch,
     ) -> Result<i64, SessionError>;
 
-    /// Bind the reservation to `store` before commit, including abandoned
-    /// acquisition cleanup. Decorators forward this handle unchanged; it must
-    /// have the same backing identity as the acquiring implementation.
-    ///
-    /// Construct [`AcquiredTurn`] before committing and call its `activate`
-    /// method only after acknowledgment. Errors must be definitive: no later
-    /// reservation may appear without a retained cleanup owner. A dropped
-    /// future must retain that responsibility. Clear incompatible continuation
-    /// atomically, using [`crate::store::StoredTurnOptions`]. Return only
-    /// completed history bounded by the stored payload budget, revalidated
-    /// at acquisition. Validate `generation` atomically before reserving a
-    /// turn; persist the selected model as immutable turn provenance.
-    /// Persist the validated input through the shared message codec,
-    /// preserving block order and image content.
-    async fn begin_turn(
+    /// Reserves a turn in one atomic section across every handle to the
+    /// backing store: recover expired turns, read [`AdmissionState`] with the
+    /// request recorded under [`TurnAdmission::host_id`], and apply
+    /// [`TurnAdmission::admit`]. Return a recorded request unchanged.
+    /// Otherwise persist the [`NewTurn`] as the running turn at the next
+    /// position under a fresh owner token and lease, with the current model
+    /// selection as immutable provenance, and set the session continuation to
+    /// its `continuation`. Persist its message through the shared message
+    /// codec, preserving block order and image content. Return a
+    /// [`ReservedTurn`] whose owner names this store's identity and
+    /// `session_id`, and whose deadline never exceeds the stored lease expiry;
+    /// the harness rejects any other owner without executing.
+    /// Errors must be definitive: a failed reservation leaves no running turn.
+    async fn reserve_turn(
         &self,
-        store: Arc<dyn SessionStore>,
         session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        generation: i64,
-    ) -> Result<AcquiredTurn, SessionError>;
-
-    /// Atomically classify `request` before checking session busy state, or
-    /// bind it to a new reservation. Compare fingerprints before status or
-    /// generation. Use the same retained acquisition/cleanup rules as
-    /// `begin_turn`; a separate lookup followed by insertion is
-    /// insufficient across independent handles.
-    async fn begin_request(
-        &self,
-        store: Arc<dyn SessionStore>,
-        session_id: &str,
-        input: &TurnInput,
-        options: &TurnOptions,
-        request: &HostRequest,
-        generation: i64,
-    ) -> Result<HostTurnAcquisition, SessionError>;
+        admission: &TurnAdmission,
+    ) -> Result<Reservation, SessionError>;
 
     /// Atomically publishes the session's compaction checkpoint, replacing an
     /// existing record. Validate before mutating: the checkpoint's generation

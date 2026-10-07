@@ -9,7 +9,7 @@ use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::session::{Database, NewSession, SessionError};
-use crate::store::SessionStore;
+use crate::store::{AcquiredTurn, SessionStore};
 use crate::store_conformance_test::{options, schema};
 
 #[tokio::test]
@@ -107,17 +107,15 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     let task =
         tokio::spawn(async move { acquired.guard.complete(&[], Some("first-native")).await });
     store.entered.notified().await;
-    let mut successor = store
-        .database
-        .begin_turn(
-            Arc::new(store.database.clone()),
-            "session",
-            &TurnInput::from("next"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("successor");
+    let mut successor = AcquiredTurn::begin(
+        Arc::new(store.database.clone()),
+        "session",
+        &TurnInput::from("next"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("successor");
     successor
         .guard
         .complete(&[], Some("next-native"))
@@ -289,16 +287,15 @@ async fn stopped_ownership_monitor_reports_ownership_loss() {
         .create_session(&NewSession::new("session-a", schema()), None, 100_000)
         .await
         .expect("session should be created");
-    let mut acquired = database
-        .begin_turn(
-            Arc::new(database.clone()),
-            "session-a",
-            &TurnInput::from("prompt"),
-            &options(),
-            0,
-        )
-        .await
-        .expect("turn should begin");
+    let mut acquired = AcquiredTurn::begin(
+        Arc::new(database.clone()),
+        "session-a",
+        &TurnInput::from("prompt"),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn should begin");
     acquired
         .guard
         .renewal_task
