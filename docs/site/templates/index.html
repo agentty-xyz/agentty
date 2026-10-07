@@ -9,6 +9,9 @@
 {% block main_width_class %}
     site-container
 {% endblock main_width_class %}
+{% block main_extra_classes %}
+    home-layout
+{% endblock main_extra_classes %}
 {% block content %}
     <section class="hero-section">
         <pre class="logo" aria-hidden="true">    _    ____ _____ _   _ _____ _____ __   __
@@ -21,7 +24,7 @@
         <div class="hero-description">{{ section.content | safe }}</div>
         <div class="hero-actions">
             <a class="button button-primary"
-               href="/docs/getting-started/overview/"
+               href="/docs/getting-started/installation/"
                data-analytics-event="get_started_clicked">Get started</a>
             <a class="button button-secondary"
                href="{{ config.extra.github_repo }}"
@@ -59,100 +62,8 @@
     </section>
     <section class="site-section">
         <h2 class="section-heading">// installation</h2>
-        <div class="install-wrapper">
-            <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
-                 the panel's top border, creating a seamless visual connection -->
-            <div class="install-tabs" role="tablist" aria-label="Installation method">
-                <button class="install-tab is-active"
-                        type="button"
-                        role="tab"
-                        aria-controls="install-command"
-                        aria-selected="true"
-                        data-cmd="npm install -g agentty">npm</button>
-                <button class="install-tab"
-                        type="button"
-                        role="tab"
-                        aria-controls="install-command"
-                        aria-selected="false"
-                        tabindex="-1"
-                        data-cmd="npx agentty">npx</button>
-                <button class="install-tab"
-                        type="button"
-                        role="tab"
-                        aria-controls="install-command"
-                        aria-selected="false"
-                        tabindex="-1"
-                        data-cmd="cargo install agentty">cargo</button>
-                <button class="install-tab"
-                        type="button"
-                        role="tab"
-                        aria-controls="install-command"
-                        aria-selected="false"
-                        tabindex="-1"
-                        data-cmd="curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh">
-                    sh
-                </button>
-            </div>
-            <div class="install-command"
-                 id="install-command"
-                 role="tabpanel"
-                 aria-live="polite">
-                <span class="install-prompt">$</span>
-                <code class="install-cmd-text">npm install -g agentty</code>
-                <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
-            </div>
-        </div>
-        <script>
-(function () {
-  var tabs = document.querySelectorAll('.install-tab');
-  var cmdText = document.querySelector('.install-cmd-text');
-  var copyBtn = document.querySelector('.copy-btn');
-  /** Deactivate all tabs then activate the given one. */
-  function setActive(activeTab) {
-    tabs.forEach(function (tab) {
-      tab.classList.remove('is-active');
-      tab.setAttribute('aria-selected', 'false');
-      tab.tabIndex = -1;
-    });
-    activeTab.classList.add('is-active');
-    activeTab.setAttribute('aria-selected', 'true');
-    activeTab.tabIndex = 0;
-    document.dispatchEvent(new CustomEvent('agentty:install-method-selected', {
-      detail: { method: activeTab.textContent.trim() }
-    }));
-  }
-
-  tabs.forEach(function (tab) {
-    tab.addEventListener('click', function () {
-      setActive(tab);
-      cmdText.textContent = tab.dataset.cmd;
-    });
-    tab.addEventListener('keydown', function (event) {
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
-        return;
-      }
-
-      event.preventDefault();
-      var currentIndex = Array.from(tabs).indexOf(tab);
-      var direction = event.key === 'ArrowRight' ? 1 : -1;
-      var nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
-      setActive(nextTab);
-      cmdText.textContent = nextTab.dataset.cmd;
-      nextTab.focus();
-    });
-  });
-
-  copyBtn.addEventListener('click', function () {
-    navigator.clipboard.writeText(cmdText.textContent).then(function () {
-      copyBtn.textContent = 'copied!';
-      setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
-      document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
-        detail: { method: document.querySelector('.install-tab.is-active').textContent.trim() }
-      }));
-    });
-  });
-})();
-        </script>
+        {% include "partials/install-methods.html" %}
+        <p class="home-note">Built with Agentty itself, using the same workflow it provides.</p>
     </section>
     <section class="site-section">
         <div class="section-heading-group">

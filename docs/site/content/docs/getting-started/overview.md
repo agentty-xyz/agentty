@@ -22,14 +22,12 @@ for AI-assisted software development in your terminal.
 
 ## Typical Flow
 
-1. Open a repository and start `agentty`.
-1. Press `a` and choose `Regular`.
-1. Type the first prompt and press `Enter` to start the agent immediately.
-1. Let the agent modify files in its worktree.
-1. Review the diff (`d`) and decide to merge or discard.
+A session takes your prompt through agent-driven edits to a reviewable diff. You decide
+whether to merge or discard the changes.
 
-Sessions can also be staged as drafts or stacked on top of another session. See
-[Workflow](@/docs/usage/workflow.md) for draft and stacked session details.
+Follow [Installation](@/docs/getting-started/installation.md#start-a-session) for your
+first session. Sessions can also be staged as drafts or stacked on top of another
+session; see [Workflow](@/docs/usage/workflow.md) for those options.
 
 ## Worktree Isolation
 
@@ -61,8 +59,7 @@ Installed agent CLIs are also refreshed at startup. See
   [Keybindings](@/docs/usage/keybindings.md).
 - **Project**: A git repository registered in Agentty. Select between projects with the
   Projects tab.
-- **Diff view**: Press `d` in a review-state session to see exactly what the agent
-  changed.
+- **Diff view**: The changes an agent made in a session, ready for your review.
 
 ## Development Status
 

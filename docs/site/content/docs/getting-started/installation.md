@@ -4,54 +4,22 @@ description = "Install Agentty, launch your first session, and review generated 
 weight = 1
 +++
 
-<a id="installation-introduction"></a> `agentty` is an ADE (Agentic Development
-Environment) for structured, controllable AI-assisted software development.
+<a id="installation-introduction"></a> Install `agentty`, authenticate an agent backend,
+and launch your first session.
 
 <!-- more -->
 
-## Prerequisites
-
-Agentty runs inside Git repositories and uses linked worktrees for session isolation.
-Install Git using the official [Git downloads](https://git-scm.com/downloads) for your
-operating system, then verify the installation:
-
-```bash
-git --version
-```
-
 ## Install
 
-<a id="installation-options"></a> npm is recommended because it supports Agentty's
-automatic update flow. Other installation methods remain available when npm is not the
-right fit.
+<a id="installation-options"></a>
 
-### npm (recommended, supports auto-update)
+{{ install_methods() }}
 
-```bash
-npm install -g agentty
-```
+For Cargo installation on macOS, install Xcode Command Line Tools for native process
+bindings.
 
-### npx (no install)
-
-```bash
-npx agentty
-```
-
-### Shell installer
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh
-```
-
-### Cargo
-
-macOS source builds require Xcode Command Line Tools for native process bindings.
-
-```bash
-cargo install agentty
-```
-
-## Verify a GitHub Release
+<details id="verify-a-github-release">
+<summary>Verify a GitHub Release</summary>
 
 Install the [GitHub CLI](https://cli.github.com/), then download a GitHub release
 artifact. Each artifact has keyless Sigstore build provenance that identifies Agentty's
@@ -68,6 +36,8 @@ specific release and a downloaded asset with:
 gh release verify vX.Y.Z --repo agentty-xyz/agentty
 gh release verify-asset vX.Y.Z PATH_TO_ARTIFACT --repo agentty-xyz/agentty
 ```
+
+</details>
 
 ## Prepare an Agent Backend
 
@@ -92,9 +62,13 @@ for third-party invocation through Agentty.
 
 ## Start a Session
 
-1. Open a git repository in your terminal.
-1. Run `agentty`.
-1. Start a new session and let the agent work in its dedicated worktree branch.
+Agentty automatically discovers Git repositories under your home directory.
+
+1. Run `agentty` from any directory.
+1. In the **Projects** tab, select a repository and press `Enter`.
+1. In the **Sessions** tab, press `a` and choose `Regular`.
+1. Type your first prompt and press `Enter` to start the agent.
+1. Let the agent modify files in its dedicated worktree branch.
 
 Only one Agentty instance can use a given Agentty root at a time. If startup reports
 that another instance is running, close that instance first. A crash releases ownership
@@ -105,3 +79,10 @@ independently.
 
 <a id="installation-review-changes"></a> Inside `agentty`, open the diff view (`d`) to
 inspect the generated `git diff` before you keep or discard edits.
+
+## Next Steps
+
+- [Overview](@/docs/getting-started/overview.md) — understand sessions, projects, and
+  worktree isolation.
+- [Workflow](@/docs/usage/workflow.md) — learn how to create, review, and finish
+  sessions.

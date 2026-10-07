@@ -411,6 +411,26 @@ svg {
     max-width: 760px;
 }
 
+/* Keep the homepage introduction, demo, and installation close across viewport sizes. */
+.site-main.home-layout {
+    padding-top: clamp(2.5rem, 6vw, 3.5rem);
+}
+
+.home-layout .hero-section {
+    margin-bottom: clamp(2.5rem, 6vw, 3rem);
+}
+
+.home-layout .site-section:not(:last-child) {
+    margin-bottom: clamp(3rem, 7vw, 4rem);
+}
+
+.home-note {
+    margin: 1.25rem 0 0;
+    color: var(--color-muted);
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
 /* Allow the ASCII logo to scale down enough to avoid horizontal scrolling on phones. */
 .logo {
     color: var(--color-accent);
@@ -1490,7 +1510,7 @@ svg {
     text-decoration-color: currentColor;
 }
 
-.docs-content :not(pre) > code {
+.docs-content :not(pre) > code:not(.install-cmd-text) {
     display: inline;
     border: 1px solid var(--color-border);
     border-radius: 0.3rem;

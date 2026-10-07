@@ -1,0 +1,127 @@
+{% set npm_install_command = "npm install -g agentty" %}
+{% set npx_install_command = "npx agentty" %}
+{% set cargo_install_command = "cargo install agentty" %}
+{% set shell_install_command = "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh" %}
+<p>
+    <strong>npm (recommended)</strong> supports automatic updates.
+</p>
+<div class="install-wrapper">
+    <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
+                 the panel's top border, creating a seamless visual connection -->
+    <div class="install-tabs" role="tablist" aria-label="Installation method">
+        <button class="install-tab is-active"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="true"
+                data-cmd="{{ npm_install_command }}">npm</button>
+        <button class="install-tab"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="false"
+                tabindex="-1"
+                data-cmd="{{ npx_install_command }}">npx</button>
+        <button class="install-tab"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="false"
+                tabindex="-1"
+                data-cmd="{{ cargo_install_command }}">cargo</button>
+        <button class="install-tab"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="false"
+                tabindex="-1"
+                data-cmd="{{ shell_install_command }}">sh</button>
+    </div>
+    <div class="install-command"
+         id="install-command"
+         role="tabpanel"
+         aria-live="polite">
+        <span class="install-prompt">$</span>
+        <code class="install-cmd-text">{{ npm_install_command }}</code>
+        <button class="copy-btn" title="Copy to clipboard" aria-label="Copy command">copy</button>
+    </div>
+</div>
+<noscript>
+    <style>
+        .install-tabs,
+        .install-command .copy-btn {
+            display: none;
+        }
+
+        .install-fallback pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+    </style>
+    <details class="install-fallback">
+        <summary>Other installation methods</summary>
+        <p>
+            <strong>npx (run without installing)</strong>
+        </p>
+        <pre><code>{{ npx_install_command }}</code></pre>
+        <p>
+            <strong>Cargo</strong>
+        </p>
+        <pre><code>{{ cargo_install_command }}</code></pre>
+        <p>
+            <strong>Shell installer</strong>
+        </p>
+        <pre><code>{{ shell_install_command }}</code></pre>
+    </details>
+</noscript>
+<script>
+(function () {
+  var tabs = document.querySelectorAll('.install-tab');
+  var cmdText = document.querySelector('.install-cmd-text');
+  var copyBtn = document.querySelector('.copy-btn');
+  /** Deactivate all tabs then activate the given one. */
+  function setActive(activeTab) {
+    tabs.forEach(function (tab) {
+      tab.classList.remove('is-active');
+      tab.setAttribute('aria-selected', 'false');
+      tab.tabIndex = -1;
+    });
+    activeTab.classList.add('is-active');
+    activeTab.setAttribute('aria-selected', 'true');
+    activeTab.tabIndex = 0;
+    document.dispatchEvent(new CustomEvent('agentty:install-method-selected', {
+      detail: { method: activeTab.textContent.trim() }
+    }));
+  }
+
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      setActive(tab);
+      cmdText.textContent = tab.dataset.cmd;
+    });
+    tab.addEventListener('keydown', function (event) {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') {
+        return;
+      }
+
+      event.preventDefault();
+      var currentIndex = Array.from(tabs).indexOf(tab);
+      var direction = event.key === 'ArrowRight' ? 1 : -1;
+      var nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
+      setActive(nextTab);
+      cmdText.textContent = nextTab.dataset.cmd;
+      nextTab.focus();
+    });
+  });
+
+  copyBtn.addEventListener('click', function () {
+    navigator.clipboard.writeText(cmdText.textContent).then(function () {
+      copyBtn.textContent = 'copied!';
+      setTimeout(function () { copyBtn.textContent = 'copy'; }, 2000);
+      document.dispatchEvent(new CustomEvent('agentty:install-command-copied', {
+        detail: { method: document.querySelector('.install-tab.is-active').textContent.trim() }
+      }));
+    });
+  });
+})();
+</script>

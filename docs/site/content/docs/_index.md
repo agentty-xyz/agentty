@@ -9,7 +9,7 @@ in_search_index = true
 render = true
 transparent = false
 aliases = [ "/documentation/"]
-redirect_to = "docs/getting-started/overview/"
+redirect_to = "docs/getting-started/installation/"
 +++
 
 <a id="docs-overview"></a> Browse setup and workflow guides for `agentty`.
