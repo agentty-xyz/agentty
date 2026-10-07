@@ -746,6 +746,14 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
                     )
                     .viewing_pause_ms(1500)
                     .capture_labeled(
+                        "commit_result",
+                        "Auto-commit succeeds before the missing-hook warning",
+                    )
+                    .press_key("Ctrl+d")
+                    .wait_for_text("prek install", 5000)
+                    .wait_for_text("pre-commit install", 5000)
+                    .viewing_pause_ms(1500)
+                    .capture_labeled(
                         "commit_warning",
                         "Auto-commit succeeds and prints the missing-hook warning",
                     )
@@ -779,10 +787,12 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
 
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "[Commit Warning]", &full);
+                    let commit_frame = common::frame_from_capture(&report.captures[1]);
+                    let commit_full = Region::full(commit_frame.cols(), commit_frame.rows());
                     assertion::assert_text_in_region(
-                        frame,
+                        &commit_frame,
                         "Created pending worktree change",
-                        &full,
+                        &commit_full,
                     );
                     assertion::assert_text_in_region(frame, "prek install", &full);
                     assertion::assert_text_in_region(frame, "pre-commit install", &full);

@@ -135,7 +135,8 @@ fn test_session_header_lines_wraps_review_request_url_to_second_line_when_too_na
 
     // Assert
     assert_eq!(header_lines.len(), 3);
-    assert!(metadata_line.contains("Size: XS"));
+    assert!(header_lines[0].to_string().starts_with("[XS] "));
+    assert!(metadata_line.contains("Tokens: 0/0"));
     assert!(review_url_line.starts_with("https://"));
     assert!(review_url_line.ends_with("https://example.test/pull/42"));
 }
@@ -196,7 +197,7 @@ fn managed_session_header_identifies_its_controller() {
 }
 
 #[test]
-fn test_session_metadata_text_prints_agent_before_model() {
+fn test_session_metadata_text_shows_stats_without_composer_fields() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = model_fixture::codex_selection();
@@ -205,24 +206,47 @@ fn test_session_metadata_text_prints_agent_before_model() {
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains(&format!(
-        "Agent: codex  Model: {}",
-        model_fixture::CODEX_MODEL_ID
-    )));
+    assert!(metadata_text.contains("Timer: 0s  Lines: +0 / -0"));
+    assert!(metadata_text.contains("Tokens: 0/0"));
+    for field in [
+        "Agent:",
+        "Model:",
+        "Size:",
+        "Style:",
+        "Speed:",
+        "Reasoning:",
+    ] {
+        assert!(!metadata_text.contains(field));
+    }
 }
 
 #[test]
-fn test_session_metadata_text_prints_speed_after_reasoning() {
-    // Arrange
-    let mut session = SessionFixtureBuilder::new().build();
-    session.agent = model_fixture::codex_selection();
-    session.speed_mode = crate::domain::agent::SpeedMode::Fast;
+fn test_session_metadata_text_keeps_stats_and_speed_in_prompt_only() {
+    for speed in [
+        crate::domain::agent::SpeedMode::Normal,
+        crate::domain::agent::SpeedMode::Fast,
+    ] {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.agent = model_fixture::codex_selection();
+        session.speed_mode = speed;
 
-    // Act
-    let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+        // Act
+        let header = session_header_lines(&session, 160, ReasoningLevel::default(), 0, false);
+        let prompt_status = prompt_session_status(&session);
 
-    // Assert
-    assert!(metadata_text.contains("Reasoning: high  Speed: Fast  Style: Balanced  Tokens:"));
+        // Assert
+        assert!(
+            header[1]
+                .to_string()
+                .contains("Timer: 0s  Lines: +0 / -0  Tokens: 0/0")
+        );
+        assert!(!header[1].to_string().contains("Speed:"));
+        assert_eq!(
+            prompt_status,
+            format!("Balanced · {} · Auto Edit", speed.name())
+        );
+    }
 }
 
 #[test]
@@ -239,12 +263,12 @@ fn test_session_metadata_text_omits_speed_for_provider_without_speed_control() {
     let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
 
     // Assert
-    assert!(metadata_text.contains("Reasoning: high  Style: Balanced  Tokens:"));
+    assert!(metadata_text.contains("Timer: 0s  Lines: +0 / -0  Tokens: 0/0"));
     assert!(!metadata_text.contains("Speed:"));
 }
 
 #[test]
-fn test_session_metadata_and_prompt_status_show_every_response_style() {
+fn test_prompt_status_shows_every_response_style() {
     for (response_style, label) in [
         (ResponseStyle::Concise, "Concise"),
         (ResponseStyle::Balanced, "Balanced"),
@@ -255,23 +279,18 @@ fn test_session_metadata_and_prompt_status_show_every_response_style() {
         session.response_style = response_style;
 
         // Act
-        let metadata_without_speed =
-            session_metadata_text(&session, 200, ReasoningLevel::default(), 0);
         let prompt_status_without_speed = prompt_session_status(&session);
         session.agent = model_fixture::codex_selection();
-        let metadata_text = session_metadata_text(&session, 200, ReasoningLevel::default(), 0);
         let prompt_status = prompt_session_status(&session);
 
         // Assert
-        assert!(metadata_without_speed.contains(&format!("Style: {label}")));
-        assert!(metadata_text.contains(&format!("Style: {label}")));
         assert_eq!(prompt_status_without_speed, format!("{label} · Auto Edit"));
         assert_eq!(prompt_status, format!("{label} · Normal · Auto Edit"));
     }
 }
 
 #[test]
-fn metadata_preserves_style_and_tokens_at_constrained_widths() {
+fn metadata_preserves_tokens_at_constrained_widths() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = model_fixture::codex_selection();
@@ -287,21 +306,11 @@ fn metadata_preserves_style_and_tokens_at_constrained_widths() {
         assert_eq!(header.len(), 2);
         assert_eq!(header[1].to_string(), metadata);
         assert!(header[1].width() <= usize::from(width));
-        if width >= 32 {
-            assert!(
-                metadata.contains("Style: Balanced"),
-                "width {width}: {metadata}"
-            );
+        if width >= 15 {
             assert!(
                 metadata.contains("Tokens: 123/456"),
                 "width {width}: {metadata}"
             );
-        }
-        if width >= 80 {
-            assert!(metadata.contains(&format!(
-                "Agent: codex  Model: {}",
-                model_fixture::CODEX_MODEL_ID
-            )));
         }
     }
 }

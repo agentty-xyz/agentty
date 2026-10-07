@@ -17,7 +17,7 @@ use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
-use crate::ui::{Page, layout, markdown, prompt_format};
+use crate::ui::{Page, layout, markdown, prompt_format, style};
 
 fn session_fixture() -> Session {
     crate::test_support::SessionFixtureBuilder::new()
@@ -75,6 +75,31 @@ fn layout_input<'a>(
         review_text: None,
         session,
         wall_clock_unix_seconds: 0,
+    }
+}
+
+#[test]
+fn test_transcript_view_height_matches_empty_composer_when_entering_reply() {
+    // Arrange
+    let session = session_fixture();
+    let view_mode = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: None,
+    };
+    let empty_prompt_mode = prompt_mode("");
+
+    for width in [0, 1, 40, 80] {
+        for height in 0..=30 {
+            let area = Rect::new(0, 0, width, height);
+
+            // Act
+            let view_height = transcript_view_height(layout_input(area, &session, &view_mode));
+            let prompt_height =
+                transcript_view_height(layout_input(area, &session, &empty_prompt_mode));
+
+            // Assert
+            assert_eq!(view_height, prompt_height, "width {width}, height {height}");
+        }
     }
 }
 
@@ -403,6 +428,53 @@ fn rendered_prompt_mode_text(session: &Session) -> String {
 }
 
 #[test]
+fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
+    for status in [
+        Status::Draft,
+        Status::InProgress,
+        Status::Review,
+        Status::Done,
+    ] {
+        // Arrange
+        let mut session = session_fixture();
+        session.agent = model_fixture::codex_selection();
+        session.status = status;
+        let mode = AppMode::View {
+            session_id: session.id.clone(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let width = 80;
+        let height = 14;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("failed to draw session view");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let settings = format!(
+            "codex/{} [high] · Balanced · Normal · Auto Edit",
+            model_fixture::CODEX_MODEL_ID
+        );
+        let composer_row = (0..height)
+            .find(|row| buffer_row_text(buffer, *row, width).contains(&settings))
+            .expect("session settings should remain visible");
+        let border = &buffer[(1, composer_row)];
+        assert_eq!(border.symbol(), "╭");
+        assert_eq!(border.fg, style::palette::border());
+        assert!(!buffer_text(buffer).contains("Type your message"));
+        assert!(buffer_row_text(buffer, height - 2, width).contains("q: back"));
+    }
+}
+
+#[test]
 fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider() {
     // Arrange
     let mut session = session_fixture();
@@ -413,13 +485,32 @@ fn test_render_prompt_composer_shows_speed_and_auto_edit_for_supported_provider(
 
     // Assert
     assert!(text.contains(&format!(
-        "[{}] · Balanced · Normal · Auto Edit",
+        "codex/{} [high] · Balanced · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
     assert!(!text.contains(&format!(
-        "[{}]  · Balanced · Normal · Auto Edit",
+        "codex/{} [high]  · Balanced · Normal · Auto Edit",
         model_fixture::CODEX_MODEL_ID
     )));
+}
+
+#[test]
+fn test_render_prompt_composer_shows_saved_reasoning_level() {
+    // Arrange
+    let mut session = session_fixture();
+    session.agent = model_fixture::codex_selection();
+    session.reasoning_level_override = Some(ReasoningLevel::Low);
+
+    // Act
+    let text = rendered_prompt_mode_text(&session);
+
+    // Assert
+    assert!(text.contains(&format!(
+        "codex/{} [low] · Balanced · Normal · Auto Edit",
+        model_fixture::CODEX_MODEL_ID
+    )));
+    assert!(!text.contains("Reasoning:"));
+    assert!(!text.contains("[high]"));
 }
 
 #[test]

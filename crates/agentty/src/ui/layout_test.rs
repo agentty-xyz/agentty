@@ -177,7 +177,13 @@ fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
 
     // Assert
     assert_eq!(header_lines.len(), 2);
+    assert!(
+        header_lines[0]
+            .to_string()
+            .starts_with(&format!("[{}] This is", session.size))
+    );
     assert!(header_lines[0].to_string().contains("..."));
+    assert!(header_lines[0].width() <= 50);
     assert!(header_lines[1].to_string().contains("Timer: 1h 1m 0s"));
 }
 
@@ -216,12 +222,7 @@ fn test_session_metadata_text_ticks_live_in_progress_timer() {
     // Assert
     assert!(early_metadata.contains("Lines: +9 / -3"));
     assert!(early_metadata.contains("Timer: 30s"));
-    assert!(early_metadata.contains(&format!("Model: {}", model_fixture::CODEX_MODEL_ID)));
-    assert!(
-        early_metadata.find(&format!("Model: {}", model_fixture::CODEX_MODEL_ID))
-            < early_metadata.find("Reasoning: high"),
-        "model should appear before reasoning in metadata text"
-    );
+    assert!(early_metadata.contains("Tokens: 0/0"));
     assert!(later_metadata.contains("Timer: 1h 1m 0s"));
 }
 

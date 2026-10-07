@@ -447,12 +447,13 @@ async fn existing_session_keeps_persisted_reasoning_label() -> E2eResult {
     Ok(())
 }
 
-/// Verify that the session chat header shows the selected agent immediately
-/// before the model name.
+/// Verify that session chat prefixes the title with size and shows
+/// agent/model with reasoning in an inactive composer, then activates it only
+/// on entering reply mode and keeps it visible after cancellation.
 #[tokio::test]
-async fn session_chat_header_agent_model() -> E2eResult {
+async fn session_chat_header_and_composer_metadata() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("session_chat_header_agent_model")
+    FeatureTest::new("session_chat_header_and_composer_metadata")
         .with_git()
         .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
@@ -461,23 +462,63 @@ async fn session_chat_header_agent_model() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
+                    .wait_for_text("[M] Review-ready session shortcuts", 5000)
                     .wait_for_text(
-                        format!("Agent: codex  Model: {}", model_fixture::CODEX_MODEL_ID),
+                        format!("codex/{} [high]", model_fixture::CODEX_MODEL_ID),
                         5000,
                     )
+                    .write_text("zzzz")
                     .capture_labeled(
-                        "agent_model_header",
-                        "Session chat header showing agent before model",
+                        "inactive_composer",
+                        "Session settings remain visible while viewing the chat",
                     )
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("editable-composer-check")
+                    .wait_for_text("editable-composer-check", 5000)
+                    .capture_labeled("active_composer", "Enter activates the reply composer")
+                    .press_key("Escape")
+                    .wait_for_text("q: back", 5000)
+                    .capture_labeled("inactive_again", "Settings remain visible after cancelling")
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    let inactive_frame = common::frame_from_capture(&report.captures[0]);
+                    let active_frame = common::frame_from_capture(&report.captures[1]);
+                    let settings = format!(
+                        "codex/{} [high] · Balanced · Normal · Auto Edit",
+                        model_fixture::CODEX_MODEL_ID
+                    );
+                    for captured_frame in [&inactive_frame, &active_frame, frame] {
+                        let full = Region::full(captured_frame.cols(), captured_frame.rows());
+                        assertion::assert_text_in_region(captured_frame, &settings, &full);
+                        assertion::assert_not_visible(captured_frame, "zzzz");
+                    }
+                    for inactive in [&inactive_frame, frame] {
+                        assertion::assert_not_visible(inactive, "Type your message");
+                        assertion::assert_not_visible(inactive, "editable-composer-check");
+                    }
+                    assertion::assert_text_in_region(
+                        &active_frame,
+                        "editable-composer-check",
+                        &Region::full(active_frame.cols(), active_frame.rows()),
+                    );
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        &format!("Agent: codex  Model: {}", model_fixture::CODEX_MODEL_ID),
+                        "[M] Review-ready session shortcuts",
                         &full,
                     );
+                    for field in [
+                        "Agent:",
+                        "Model:",
+                        "Size:",
+                        "Style:",
+                        "Speed:",
+                        "Reasoning:",
+                    ] {
+                        assertion::assert_not_visible(frame, field);
+                    }
                 })
             },
         )

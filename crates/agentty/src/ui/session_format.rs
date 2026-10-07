@@ -53,8 +53,8 @@ pub(crate) fn session_resources_line(
     )
 }
 
-/// Formats the session title and metadata lines rendered above the output
-/// panel.
+/// Formats the size-prefixed session title and metadata lines rendered above
+/// the output panel.
 ///
 /// When a linked review-request URL is available, the URL shares the metadata
 /// row when the full row fits and otherwise wraps to the row directly above
@@ -71,7 +71,8 @@ pub fn session_header_lines(
     let base_style = Style::default()
         .fg(style::status_color(session.status))
         .add_modifier(Modifier::BOLD);
-    let title_spans = markdown::parse_inline_spans(&title_text, base_style);
+    let mut title_spans = markdown::parse_inline_spans(&title_text, base_style);
+    title_spans.insert(0, Span::styled(format!("[{}] ", session.size), base_style));
     let title_spans = text_util::truncate_spans_with_ellipsis(title_spans, title_width);
     let metadata_lines = session_header_metadata_lines(
         session,
@@ -113,8 +114,8 @@ pub fn session_header_lines(
     lines
 }
 
-/// Formats the metadata row, reserving space for response style and token
-/// usage before truncating other fields. Omits the chat-header-only URL.
+/// Formats the metadata row, reserving space for token usage before
+/// truncating other fields. Omits the chat-header-only URL.
 pub fn session_metadata_text(
     session: &Session,
     header_width: u16,
@@ -196,7 +197,7 @@ fn session_header_metadata_lines(
 }
 
 /// Builds width-bounded metadata shared by session header and single-line
-/// renderers, keeping response style and token usage visible together.
+/// renderers, keeping token usage visible at constrained widths.
 fn session_metadata_base_text(
     session: &Session,
     header_width: u16,
@@ -208,59 +209,19 @@ fn session_metadata_base_text(
     let timer = text_util::format_duration_compact(
         session.in_progress_duration_seconds(wall_clock_unix_seconds),
     );
-    let reasoning_level = session.effective_reasoning_level();
     let input_tokens = text_util::format_token_count(session.stats.input_tokens);
     let output_tokens = text_util::format_token_count(session.stats.output_tokens);
-    let speed = session_speed_display(session)
-        .map_or_default(|speed_mode| format!("  Speed: {speed_mode}"));
-    let response_style = session.response_style.name();
-
-    let details = format!(
-        "Size: {}  Lines: +{added_lines} / -{deleted_lines}  Timer: {timer}  Agent: {}  Model: \
-         {}  Reasoning: {}{speed}",
-        session.size,
-        session.agent.kind(),
-        session.agent.model().as_str(),
-        reasoning_level.as_str(),
-    );
-    let style_and_tokens =
-        format!("Style: {response_style}  Tokens: {input_tokens}/{output_tokens}");
+    let details = format!("Timer: {timer}  Lines: +{added_lines} / -{deleted_lines}");
+    let tokens = format!("Tokens: {input_tokens}/{output_tokens}");
     let available_width = usize::from(header_width);
-    let details_width = available_width.saturating_sub(style_and_tokens.width() + 2);
+    let details_width = available_width.saturating_sub(tokens.width() + 2);
 
     if details_width == 0 {
-        return text_util::truncate_with_ellipsis(&style_and_tokens, available_width);
+        return text_util::truncate_with_ellipsis(&tokens, available_width);
     }
 
-    let details = if details.width() > details_width {
-        let agent_model = format!(
-            "Agent: {}  Model: {}",
-            session.agent.kind(),
-            session.agent.model().as_str(),
-        );
-        let timer_agent_model = format!("Timer: {timer}  {agent_model}");
-
-        if timer_agent_model.width() <= details_width {
-            format!(
-                "{timer_agent_model}  Size: {}  Lines: +{added_lines} / -{deleted_lines}  \
-                 Reasoning: {}{speed}",
-                session.size,
-                reasoning_level.as_str(),
-            )
-        } else {
-            format!(
-                "Timer: {timer}  Size: {}  Lines: +{added_lines} / -{deleted_lines}  \
-                 {agent_model}  Reasoning: {}{speed}",
-                session.size,
-                reasoning_level.as_str(),
-            )
-        }
-    } else {
-        details
-    };
-
     format!(
-        "{}  {style_and_tokens}",
+        "{}  {tokens}",
         text_util::truncate_with_ellipsis(&details, details_width)
     )
 }
@@ -269,8 +230,8 @@ fn session_metadata_base_text(
 /// provider has no speed control to report.
 ///
 /// Gemini and Antigravity expose no speed selection, so `/speed` is hidden for
-/// them; surfacing a `Speed:` field anyway would advertise a setting those
-/// sessions cannot change.
+/// them; surfacing a speed indicator in the composer would advertise a
+/// setting those sessions cannot change.
 pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {
     if !session.agent.kind().supports_speed_mode() {
         return None;

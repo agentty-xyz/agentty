@@ -295,6 +295,8 @@ async fn test_large_review_partial_retry() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
                     .press_key("f")
+                    .wait_for_text("Press f to retry the review.", 30000)
+                    .press_key("g")
                     .wait_for_text("Partial review:", 30000)
                     .press_key("g")
                     .wait_for_text("Preserved batch finding.", 5000)
@@ -305,6 +307,9 @@ async fn test_large_review_partial_retry() -> E2eResult {
                     .press_key("f")
                     .wait_for_text("Regenerate focused review?", 5000)
                     .press_key("y")
+                    .write_text("G")
+                    .wait_for_text("Processed files: 1/1.", 30000)
+                    .press_key("g")
                     .wait_for_text("Cross-file check completed.", 30000)
                     .capture_labeled("retried_review", "Retry completes the original diff review")
             },
@@ -1697,6 +1702,8 @@ async fn test_focused_review_progress() -> E2eResult {
                     .capture_labeled("batch_progress", "Original diff batches in progress")
                     .wait_for_text("Checking cross-file interactions", 30000)
                     .capture_labeled("cross_file_progress", "Cross-file check in progress")
+                    .wait_for_text("Processed files: 1/1.", 30000)
+                    .press_key("g")
                     .wait_for_text("Cross-file check completed.", 30000)
             },
             |frame, report| {
@@ -1754,6 +1761,8 @@ printf '%s\n' '{"type":"system","subtype":"init"}'"#,
                     .press_key("f")
                     .wait_for_text("Consolidating review findings", 30000)
                     .capture_labeled("reduction_progress", "Reconciling all review findings")
+                    .wait_for_text("Processed files: 1/1.", 30000)
+                    .press_key("g")
                     .wait_for_text("Consolidated review completed.", 30000)
                     .capture_labeled("final_review", "Final review replaces batch candidates")
             },

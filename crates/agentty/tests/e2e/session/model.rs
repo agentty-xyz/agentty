@@ -157,7 +157,9 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
+                    .wait_for_text("> antigravity", 3000)
                     .press_key("Down")
+                    .wait_for_text("> claude", 3000)
                     .press_key("Enter")
                     .wait_for_text("claude-opus-5-5", 3000)
                     .capture_labeled(
@@ -253,8 +255,11 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
+                    .wait_for_text("> antigravity", 3000)
                     .press_key("Down")
+                    .wait_for_text("> claude", 3000)
                     .press_key("Down")
+                    .wait_for_text("> codex", 3000)
                     .press_key("Enter")
                     .wait_for_text("gpt-6-astra", 3000)
                     .capture_labeled(
