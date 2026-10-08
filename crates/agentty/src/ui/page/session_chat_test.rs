@@ -623,6 +623,7 @@ fn test_render_question_panel_preserves_frame_without_prepared_areas() {
         input: &input,
         questions: &questions,
         selected_option_index: None,
+        started_label: "",
     };
 
     // Act
@@ -816,6 +817,7 @@ fn test_render_question_lookup_requires_space_for_a_complete_result_row() {
             input: &input,
             questions: &questions,
             selected_option_index: None,
+            started_label: "",
         };
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, height))
             .expect("failed to create terminal");
@@ -923,4 +925,75 @@ fn test_render_question_mode_with_options_in_small_terminal_does_not_panic() {
             Page::render(&mut page, frame, area);
         })
         .expect("failed to draw question mode with many options in small terminal");
+}
+
+/// Renders `mode` for a session started two hours before the frame clock and
+/// returns every buffer row.
+fn rendered_rows_with_started_session(mode: &AppMode, width: u16, height: u16) -> Vec<String> {
+    let mut session = session_fixture();
+    session.created_at = 1_782_864_000;
+    let mut page = test_session_chat_page(&session, mode);
+    page.frame_time = FrameTime::new(1_782_871_200, 0, 0);
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw started session");
+
+    (0..height)
+        .map(|row| buffer_row_text(terminal.backend().buffer(), row, width))
+        .collect()
+}
+
+#[test]
+fn test_render_session_shows_started_label_only_in_every_footer() {
+    // Arrange
+    let label = "Started 2026-07-01 00:00 (2h 0m ago)";
+    let view_mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+    let question_mode = AppMode::Question {
+        at_mention_state: None,
+        session_id: "session-id".into(),
+        questions: vec![QuestionItem::new("Continue?")],
+        responses: Vec::new(),
+        current_index: 0,
+        focus: ChatFocus::Input,
+        input: InputState::default(),
+        scroll_offset: None,
+        selected_option_index: None,
+    };
+
+    // Act
+    let view_rows = rendered_rows_with_started_session(&view_mode, 240, 16);
+    let prompt_rows = rendered_rows_with_started_session(&prompt_mode(""), 240, 16);
+    let question_rows = rendered_rows_with_started_session(&question_mode, 240, 16);
+
+    // Assert
+    for rows in [&view_rows, &prompt_rows, &question_rows] {
+        let label_rows: Vec<&String> = rows.iter().filter(|row| row.contains(label)).collect();
+        let resource_row = rows.iter().find(|row| row.contains("Processes: --"));
+        assert_eq!(label_rows.len(), 1, "rows: {rows:#?}");
+        assert!(label_rows[0].trim_end().ends_with(label));
+        assert!(resource_row.is_some_and(|row| !row.contains("Started")));
+    }
+}
+
+#[test]
+fn test_render_session_omits_started_label_when_rows_are_too_narrow() {
+    // Arrange
+    let mode = AppMode::View {
+        session_id: "session-id".into(),
+        scroll_offset: None,
+    };
+
+    // Act
+    let rows = rendered_rows_with_started_session(&mode, 60, 12);
+
+    // Assert
+    assert!(rows.iter().all(|row| !row.contains("Started")));
 }

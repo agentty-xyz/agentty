@@ -527,6 +527,68 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
     Ok(())
 }
 
+/// Seeds one review-ready session started three days and four hours before
+/// the pinned feature clock.
+async fn seed_aged_review_ready_session(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_ready_session(env).await?;
+
+    common::open_database(env)
+        .await?
+        .sessions()
+        .update_session_created_at(
+            "review-shortcut-0001",
+            common::PINNED_CLOCK_UNIX_SECONDS - (3 * 86_400 + 4 * 3_600),
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that session chat shows when the session started and its age only
+/// in the footer, in view and reply modes.
+#[tokio::test]
+async fn session_chat_shows_session_start_and_age() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_chat_shows_session_start_and_age")
+        .with_git()
+        .with_terminal_size(180, 30)
+        .setup(|env| Box::pin(async move { seed_aged_review_ready_session(env).await }))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("Enter")
+                    .wait_for_text("Started 2026-06-27 20:00 (3d 4h ago)", 5000)
+                    .capture_labeled("view", "Session start and age while viewing")
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .capture_labeled("reply", "Session start and age while replying")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let view_frame = common::frame_from_capture(&report.captures[0]);
+                    for (captured_frame, footer_text) in
+                        [(&view_frame, "q: back"), (frame, "Enter: send")]
+                    {
+                        let label_rows: Vec<String> = (0..captured_frame.rows())
+                            .map(|row| captured_frame.row_text(row))
+                            .filter(|row| row.contains("Started 2026-06-27 20:00 (3d 4h ago)"))
+                            .collect();
+                        assert_eq!(label_rows.len(), 1, "label rows: {label_rows:#?}");
+                        assert!(label_rows[0].contains(footer_text));
+                        assert!(!label_rows[0].contains("Processes:"));
+                    }
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify that a selected session row remains readable under Dark Horizon.
 ///
 /// The source renderer test covers the exact selected-cell background color;

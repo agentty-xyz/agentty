@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -15,8 +15,9 @@ use testty::session::PtySessionBuilder;
 use tokio::sync::mpsc;
 
 use super::{
-    EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState, forced_redraw_elapsed,
-    render_frame, run, run_until_quit, run_with_backend, stop_orchestration_task,
+    DrawStamp, EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState,
+    forced_redraw_elapsed, render_frame, run, run_until_quit, run_with_backend,
+    stop_orchestration_task,
 };
 use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
@@ -369,7 +370,7 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
     let (backend, clear_count, _draw_count) = CountingBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
     let clock = crate::infra::clock::RealClock;
-    let mut last_draw_at = clock.now_instant();
+    let mut last_draw = DrawStamp::now(&clock);
     let presentation = PresentationState::default();
 
     // Act
@@ -377,7 +378,7 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
         &mut app,
         &mut terminal,
         &clock,
-        &mut last_draw_at,
+        &mut last_draw,
         &presentation,
     )
     .expect("initial list frame should render");
@@ -398,7 +399,7 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
         &mut app,
         &mut terminal,
         &clock,
-        &mut last_draw_at,
+        &mut last_draw,
         &presentation,
     )
     .expect("session frame should render");
@@ -407,7 +408,7 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
         &mut app,
         &mut terminal,
         &clock,
-        &mut last_draw_at,
+        &mut last_draw,
         &presentation,
     )
     .expect("same session page should redraw");
@@ -415,6 +416,77 @@ async fn render_frame_clears_terminal_only_when_base_page_changes() {
     // Assert
     assert_eq!(repeated_clear_decisions, [true, true]);
     assert_eq!(clear_count.load(Ordering::Relaxed), 1);
+}
+
+/// Wall clock whose Unix second count tests set directly.
+struct SettableWallClock {
+    unix_seconds: AtomicI64,
+}
+
+impl Clock for SettableWallClock {
+    fn now_instant(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
+
+    fn now_system_time(&self) -> std::time::SystemTime {
+        let unix_seconds = u64::try_from(self.unix_seconds.load(Ordering::Relaxed))
+            .expect("test wall clock should stay after the Unix epoch");
+
+        std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(unix_seconds)
+    }
+}
+
+/// Verifies idle frames without tick-driven UI still redraw once the wall
+/// clock enters a new minute, so minute-granular labels such as session ages
+/// do not go stale.
+#[tokio::test]
+async fn render_frame_redraws_idle_ui_when_wall_clock_minute_changes() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
+    let clock = SettableWallClock {
+        unix_seconds: AtomicI64::new(1_782_864_000),
+    };
+    let mut last_draw = DrawStamp::now(&clock);
+    let presentation = PresentationState::default();
+    app.mark_dirty();
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock,
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("initial frame should render");
+    let initial_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Act
+    clock.unix_seconds.store(1_782_864_059, Ordering::Relaxed);
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock,
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("same-minute idle frame should be skipped");
+    let same_minute_draw_count = draw_count.load(Ordering::Relaxed);
+    clock.unix_seconds.store(1_782_864_060, Ordering::Relaxed);
+    render_frame(
+        &mut app,
+        &mut terminal,
+        &clock,
+        &mut last_draw,
+        &presentation,
+    )
+    .expect("next-minute idle frame should render");
+    let next_minute_draw_count = draw_count.load(Ordering::Relaxed);
+
+    // Assert
+    assert!(!app.has_visible_tick_driven_ui());
+    assert_eq!(same_minute_draw_count, initial_draw_count);
+    assert_eq!(next_minute_draw_count, initial_draw_count + 1);
 }
 
 /// Verifies that `run_with_backend` drives the main loop with a
@@ -687,12 +759,12 @@ async fn run_cycle_renders_pending_session_update_before_waiting_for_events() {
     });
 
     let clock: Arc<dyn Clock> = Arc::new(crate::infra::clock::RealClock);
-    let last_draw_at = clock.now_instant();
+    let last_draw = DrawStamp::now(clock.as_ref());
     let mut main_loop_state = MainLoopState {
         app: &mut app,
         clock,
         event_rx: &mut event_rx,
-        last_draw_at,
+        last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal: &mut terminal,
         tick: &mut tick,

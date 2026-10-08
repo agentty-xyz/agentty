@@ -10,7 +10,7 @@ use crate::domain::project::ProjectListItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId};
 use crate::domain::theme::ColorTheme;
-use crate::infra::clock;
+use crate::infra::clock::{self, Clock};
 use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::setting::SettingsScreenSnapshot;
@@ -67,17 +67,15 @@ pub(crate) struct AppViewSnapshot<'a> {
 impl App {
     /// Projects immutable application state for one frontend frame.
     pub(crate) fn view_snapshot(&self) -> AppViewSnapshot<'_> {
-        let clock_client = self.services.clock();
-        let system_time = clock_client.now_system_time();
-        let wall_clock_unix_seconds = session::unix_timestamp_from_system_time(system_time);
-        let frame_time = FrameTime::new(
-            wall_clock_unix_seconds,
-            clock::unix_timestamp_millis(system_time),
-            clock_client.local_utc_offset_seconds(wall_clock_unix_seconds),
-        );
+        let visible_session_id = visible_review_session_id(&self.mode);
+        let visible_session_created_at = visible_session_id
+            .and_then(|session_id| self.sessions.session_for_id(session_id))
+            .map(|session| session.created_at);
+        let frame_time =
+            read_frame_time(self.services.clock().as_ref(), visible_session_created_at);
+        let wall_clock_unix_seconds = frame_time.unix_seconds();
         let status_bar_fyi_rotation_index =
             u64::try_from(wall_clock_unix_seconds.div_euclid(60)).unwrap_or_default();
-        let visible_session_id = visible_review_session_id(&self.mode);
         let session_review = visible_session_id.map(|session_id| {
             let (_, text) = self.review_view_state(session_id);
 
@@ -157,6 +155,29 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Help { .. } => None,
+    }
+}
+
+/// Reads one coherent frame clock snapshot.
+///
+/// When a session is visible, also resolves the local UTC offset at its start
+/// so a start time before a daylight-saving transition keeps its original
+/// local hour.
+fn read_frame_time(clock_client: &dyn Clock, visible_session_created_at: Option<i64>) -> FrameTime {
+    let system_time = clock_client.now_system_time();
+    let wall_clock_unix_seconds = session::unix_timestamp_from_system_time(system_time);
+    let frame_time = FrameTime::new(
+        wall_clock_unix_seconds,
+        clock::unix_timestamp_millis(system_time),
+        clock_client.local_utc_offset_seconds(wall_clock_unix_seconds),
+    );
+
+    match visible_session_created_at {
+        Some(created_at) => frame_time.with_local_utc_offset_at(
+            created_at,
+            clock_client.local_utc_offset_seconds(created_at),
+        ),
+        None => frame_time,
     }
 }
 

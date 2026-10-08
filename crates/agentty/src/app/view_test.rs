@@ -1,6 +1,59 @@
-use super::visible_review_session_id;
+use std::time::{Duration, Instant, SystemTime};
+
+use super::{read_frame_time, visible_review_session_id};
 use crate::app::Tab;
+use crate::infra::clock::Clock;
 use crate::presentation::app_mode::{AppMode, DiffFocus, DiffLineComments};
+
+/// Unix timestamp where the test clock's local offset switches from summer to
+/// winter time.
+const DST_END_UNIX_SECONDS: i64 = 1_792_890_000;
+
+/// Pinned clock whose local offset changes at one daylight-saving boundary.
+struct DaylightSavingClock {
+    unix_seconds: u64,
+}
+
+impl Clock for DaylightSavingClock {
+    fn local_utc_offset_seconds(&self, timestamp_seconds: i64) -> i64 {
+        if timestamp_seconds < DST_END_UNIX_SECONDS {
+            return 7_200;
+        }
+
+        3_600
+    }
+
+    fn now_instant(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn now_system_time(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(self.unix_seconds)
+    }
+}
+
+#[test]
+fn read_frame_time_resolves_visible_session_offset_at_its_start() {
+    // Arrange
+    let clock = DaylightSavingClock {
+        unix_seconds: 1_793_000_000,
+    };
+    let created_at = DST_END_UNIX_SECONDS - 86_400;
+
+    // Act
+    let with_session = read_frame_time(&clock, Some(created_at));
+    let without_session = read_frame_time(&clock, None);
+
+    // Assert
+    assert_eq!(with_session.unix_seconds(), 1_793_000_000);
+    assert_eq!(with_session.unix_millis(), 1_793_000_000_000);
+    assert_eq!(with_session.local_utc_offset_seconds(), 3_600);
+    assert_eq!(with_session.local_utc_offset_seconds_at(created_at), 7_200);
+    assert_eq!(
+        without_session.local_utc_offset_seconds_at(created_at),
+        3_600
+    );
+}
 
 #[test]
 fn visible_review_session_id_includes_diff_comments() {
