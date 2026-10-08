@@ -4,7 +4,7 @@ use ag_session::AgentKind;
 use super::backend::AgentBackendError;
 
 /// Rejects requested controls that the selected adapter cannot enforce.
-pub(super) fn validate(kind: AgentKind, policy: &ExecutionPolicy) -> Result<(), AgentBackendError> {
+pub(crate) fn validate(kind: AgentKind, policy: &ExecutionPolicy) -> Result<(), AgentBackendError> {
     let unsupported = if policy.max_concurrent_subagents.is_some()
         && !matches!(kind, AgentKind::Claude | AgentKind::Codex)
     {

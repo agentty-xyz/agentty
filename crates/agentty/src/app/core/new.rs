@@ -14,6 +14,7 @@ use crate::app::setting::SettingsManager;
 use crate::app::startup::{AppStartup, StartupProjectContext, StartupSessionLoadContext};
 use crate::app::{AppError, review, sync, task};
 use crate::domain::agent::{AgentCliInfo, AgentKind};
+use crate::domain::harness::HarnessAvailability;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
@@ -31,7 +32,9 @@ impl App {
     ///
     /// When `auto_update` is `true`, a background `npm i -g agentty@latest`
     /// runs automatically after detecting a newer version at startup or in an
-    /// hourly follow-up check.
+    /// hourly follow-up check. When `experimental_harness` is `true`, Harness
+    /// sessions run in process and keep their history under
+    /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
@@ -39,12 +42,19 @@ impl App {
     /// recovery cannot complete.
     pub async fn new(
         auto_update: bool,
+        experimental_harness: bool,
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
         repositories: impl Into<AppRepositories>,
     ) -> Result<Self, AppError> {
-        let clients = AppClients::new();
+        let clients = if experimental_harness {
+            AppClients::new().with_experimental_harness(
+                crate::app::agentty_home().join(super::AGENTTY_HARNESS_DIR),
+            )
+        } else {
+            AppClients::new()
+        };
         let current_version_display_text = current_version_display_text(
             std::env::var_os(E2E_PIN_DISPLAY_VERSION_ENV_VAR).as_deref(),
             env!("CARGO_PKG_VERSION"),
@@ -377,10 +387,23 @@ impl App {
             &clients.agent_availability_probe,
         ))
         .await;
-        AppStartup::validate_startup_agent_availability(&available_agent_kinds)?;
+        let harness_default_model = clients
+            .experimental_harness
+            .then(|| {
+                clients
+                    .agent_availability_probe
+                    .native_harness_default_model()
+            })
+            .flatten();
+        let harness_availability =
+            HarnessAvailability::resolve(clients.experimental_harness, harness_default_model);
+        AppStartup::validate_startup_agent_availability(
+            &available_agent_kinds,
+            harness_availability,
+        )?;
         let available_agent_clis = AgentCliInfo::loading_from_kinds(&available_agent_kinds);
 
-        Ok(AppServices::new_with_agent_clis(
+        let mut services = AppServices::new_with_agent_clis(
             base_path,
             clock,
             event_tx,
@@ -399,7 +422,10 @@ impl App {
                 session_run_factory: Arc::clone(&clients.session_run_factory),
             },
             available_agent_clis,
-        ))
+        );
+        services.set_harness_availability(harness_availability);
+
+        Ok(services)
     }
 
     /// Completes durable operation recovery before startup admits sessions.

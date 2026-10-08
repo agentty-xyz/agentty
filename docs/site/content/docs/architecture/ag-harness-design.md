@@ -9,8 +9,9 @@ weight = 6
 `ag-harness` is the base layer between an application and an LLM. It is Rust-native,
 app-facing, and lightweight: an agent loop, three policy-checked tools, durable
 sessions, and content-free lifecycle events. Product decisions stay in the application.
-It is not yet an Agentty backend; product integration must follow the
-[Execution](@/docs/core-components/execution.md) boundary.
+Agentty runs it as the preview `AgentKind::Harness` backend behind
+`--experimental-harness`, following the [Execution](@/docs/core-components/execution.md)
+boundary.
 
 ```mermaid
 flowchart LR
@@ -180,25 +181,31 @@ OpenTelemetry without storing prompts or tool output in telemetry. Awaited and s
 turns alike run under the caller's OpenTelemetry context, so harness spans nest under
 the host's span; a started turn keeps the context current at its first poll.
 
-## Next iterations
+## Agentty integration
 
-Planned, not shipped: an Agentty `AgentKind::Harness` backend, one release behind
-Agentty's existing boundaries and offered only when Agentty starts with
-`--experimental-harness`.
+Shipped as a preview: `AgentKind::Harness` runs in process through `ag-agent`, offered
+only when Agentty starts with `--experimental-harness` and a provider is configured.
 
-- A native backend beside the CLI and app-server transports provides a durable
+- A native transport beside the CLI and app-server transports provides a durable
   `AgentChannel` and the one-shot path. The harness session shares the Agentty session
   ID and is canonical; a missing database restarts from Agentty's replay transcript.
+  Follow-up session turns send only the refresh reminder while Agentty passes back the
+  turn's versioned instruction key and the harness still replays the turn that carried
+  the full contract. Utility and review turns, policy changes, model switches, and
+  history eviction re-send the full contract.
 - `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
-  inherits Agentty's full environment except the `MODEL_*`, `KIMI_*`, and `DASHSCOPE_*`
+  inherits Agentty's environment except the `MODEL_*`, `KIMI_*`, and `DASHSCOPE_*`
   provider key and URL variables. Like Codex full access, and unlike Claude, `bash` does
   not keep the main checkout read-only.
-- API keys come from environment variables; the harness is available when any provider
-  key is set. Each session's database lives under the Agentty data root, outside the
-  session worktree, so session commits and worktree cleanup never include it; session
-  deletion removes it explicitly.
-- Agentty commits a turn's worktree only after `TurnControl::settled` succeeds.
+- Each session's database lives under the Agentty data root, outside the session
+  worktree, so session commits and worktree cleanup never include it; session deletion
+  removes it explicitly.
+- A turn returns to Agentty only after `TurnControl::settled`, so Agentty commits a
+  settled worktree.
 - Deterministic `FeatureTest` coverage uses a scripted provider.
 
-Later: proactive compaction, and one correlator shared by `LifecycleTraceObserver` and
-`LifecycleMetrics`.
+## Next iterations
+
+Planned: a comparison base pinned to the session's base commit, idempotent host request
+IDs for Agentty operations, the native Bash sandbox, proactive compaction, and one
+correlator shared by `LifecycleTraceObserver` and `LifecycleMetrics`.

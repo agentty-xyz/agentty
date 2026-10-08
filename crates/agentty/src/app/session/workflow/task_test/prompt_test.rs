@@ -16,6 +16,7 @@ use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::session::SessionError;
 use crate::db::AppRepositories;
+use crate::domain::agent::AgentKind;
 use crate::domain::session_message::SessionTranscript;
 
 #[tokio::test]
@@ -60,6 +61,7 @@ async fn test_handle_auto_commit_stops_on_input_size() {
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("project"),

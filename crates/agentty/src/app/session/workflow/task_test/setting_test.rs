@@ -101,6 +101,7 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         &database,
         "session-id",
         model_fixture::codex_selection(),
+        AgentKind::ALL,
     )
     .await;
 
@@ -122,11 +123,87 @@ async fn test_load_auto_commit_agent_setting_falls_back_through_defaults() {
         &database,
         "session-id",
         model_fixture::codex_selection(),
+        AgentKind::ALL,
     )
     .await;
 
     // Assert
     assert_eq!(session_fallback_agent, model_fixture::codex_selection());
+}
+
+#[tokio::test]
+/// Verifies Harness sessions without fast or smart defaults commit with their
+/// own model instead of a CLI backend.
+async fn test_load_auto_commit_agent_setting_keeps_harness_session_model() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, AgentModel::KimiK3.as_str()).await;
+    let harness_selection = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+
+    // Act
+    let auto_commit_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        harness_selection,
+        &[],
+    )
+    .await;
+
+    // Assert
+    assert_eq!(auto_commit_agent, harness_selection);
+}
+
+#[tokio::test]
+/// Verifies persisted CLI defaults drive Harness auto-commits only while that
+/// CLI is installed, so Harness-only launches keep the session's own model.
+async fn test_load_auto_commit_agent_setting_ignores_uninstalled_cli_defaults() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db should open");
+    insert_review_session(&database, AgentModel::KimiK3.as_str()).await;
+    let project_id = database
+        .sessions()
+        .load_session_project_id("session-id")
+        .await
+        .expect("failed to load session project id")
+        .expect("session should have project id");
+    database
+        .settings()
+        .upsert_project_settings(
+            project_id,
+            vec![
+                (
+                    SettingName::DefaultFastAgent,
+                    AgentKind::Codex.name().to_string(),
+                ),
+                (
+                    SettingName::DefaultFastModel,
+                    model_fixture::CODEX_MODEL.as_str().to_string(),
+                ),
+            ],
+        )
+        .await
+        .expect("failed to persist default fast selection");
+    let harness_selection = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+
+    // Act
+    let harness_only_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        harness_selection,
+        &[],
+    )
+    .await;
+    let codex_installed_agent = SessionTaskService::load_auto_commit_agent_setting(
+        &database,
+        "session-id",
+        harness_selection,
+        &[AgentKind::Codex],
+    )
+    .await;
+
+    // Assert
+    assert_eq!(harness_only_agent, harness_selection);
+    assert_eq!(codex_installed_agent, model_fixture::codex_selection());
 }
 
 #[tokio::test]

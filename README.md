@@ -141,9 +141,16 @@ pattern.
 agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
+agentty --experimental-harness  # Offer preview Harness sessions
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
+
+`--experimental-harness` adds a preview **Harness** session type that runs Agentty's
+built-in agent loop against Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY`
+with `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`. Its edit mode
+runs unsandboxed shell commands. See
+[Harness sessions](https://agentty.xyz/docs/agents/backends/#backends-harness).
 
 Session tracing is disabled unless `--otlp-endpoint` supplies a complete OTLP
 HTTP/protobuf traces URL. Authentication headers can come from

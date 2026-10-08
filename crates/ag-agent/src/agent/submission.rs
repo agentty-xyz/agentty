@@ -26,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use super::backend::{AgentBackend, BuildCommandRequest};
 use super::cli::error;
 use super::cli::execution::{self, CliExecutionError, CliExecutionObserver, CliExitStatus};
+use super::native::NativeHarnessConfig;
 use super::submission_pool::{SubmissionLease, SubmissionPool};
 use super::{ParsedResponse, create_app_server_client, create_backend, parse_response};
 use crate::app_server::{AppServerClient, AppServerTurnRequest};
@@ -34,6 +35,7 @@ use crate::app_server::{AppServerClient, AppServerTurnRequest};
 pub struct RealOneShotClient {
     app_server_client_override: Option<Arc<dyn AppServerClient>>,
     force_shutdown: CancellationToken,
+    native_harness: Option<NativeHarnessConfig>,
     pool: Mutex<Option<SubmissionPool>>,
 }
 
@@ -46,6 +48,7 @@ impl RealOneShotClient {
         Self {
             app_server_client_override,
             force_shutdown: CancellationToken::new(),
+            native_harness: None,
             pool: Mutex::new(None),
         }
     }
@@ -57,8 +60,18 @@ impl RealOneShotClient {
         Self {
             app_server_client_override,
             force_shutdown: CancellationToken::new(),
+            native_harness: None,
             pool: Mutex::new(Some(SubmissionPool::default())),
         }
+    }
+
+    /// Runs [`AgentKind::Harness`] submissions in process with `config`.
+    /// Without it, harness submissions fail before execution.
+    #[must_use]
+    pub fn with_native_harness(mut self, config: NativeHarnessConfig) -> Self {
+        self.native_harness = Some(config);
+
+        self
     }
 }
 
@@ -88,6 +101,13 @@ impl OneShotClient for RealOneShotClient {
             .harness
             .parse::<AgentKind>()
             .map_err(OneShotError::new)?;
+        if let (AgentKind::Harness, Some(config)) = (agent_kind, &self.native_harness) {
+            return tokio::select! {
+                biased;
+                () = self.force_shutdown.cancelled() => Err(OneShotError::new("[Stopped] Agent runtime forced to shut down")),
+                result = super::native::run_one_shot(config, request, cancellation) => result.map_err(OneShotError::new),
+            };
+        }
         let lease = self
             .pool
             .lock()

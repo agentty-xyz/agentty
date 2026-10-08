@@ -20,9 +20,9 @@ pub(crate) use ag_contracts::is_input_size_error;
 pub use agent::MockAgentBackend;
 pub use agent::{
     AgentAvailabilityProbe, AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest,
-    RealAgentAvailabilityProbe, RealOneShotClient, StaticAgentAvailabilityProbe,
-    cleanup_session_worktree_artifacts, create_app_server_client, create_backend, executable_name,
-    instruction_bootstrap_key, transport_mode,
+    NativeHarnessConfig, RealAgentAvailabilityProbe, RealOneShotClient,
+    StaticAgentAvailabilityProbe, cleanup_session_worktree_artifacts, create_app_server_client,
+    create_backend, executable_name, instruction_bootstrap_key, transport_mode,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use app_server::MockAppServerClient;

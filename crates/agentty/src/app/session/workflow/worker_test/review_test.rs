@@ -179,6 +179,7 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
         .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -261,6 +262,7 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -353,6 +355,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -434,6 +437,7 @@ async fn test_failed_push_discards_review_fix_undone_by_descendant() {
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -712,6 +716,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -733,23 +738,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
         session_agent,
         status: Arc::new(Mutex::new(Status::InProgress)),
     };
-    let turn_result = TurnResult {
-        assistant_message: AgentResponse {
-            answer: "Implemented the change.".to_string(),
-            questions: Vec::new(),
-            review_comment_outcomes: vec![ReviewCommentOutcome {
-                reply: "Added the missing validation.".to_string(),
-                resolution: ReviewCommentResolution::Fixed,
-                thread_id: "thread-42".to_string(),
-            }],
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
-        },
-        context_reset: false,
-        input_tokens: 0,
-        output_tokens: 0,
-        provider_conversation_id: None,
-    };
+    let turn_result = fixed_review_turn_result();
 
     // Act
     let status = apply_worker_turn_result(
@@ -816,6 +805,7 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
         .never();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

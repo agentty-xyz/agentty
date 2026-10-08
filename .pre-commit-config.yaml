@@ -291,7 +291,7 @@ repos:
           --lib --bins --examples --test check_execution_boundary --test check_instruction
           --test check_migration --test test_focused --test sandbox
           --test public_api --test lifecycle --test telemetry --test benchmark_summary
-          --locked --profile ci
+          --test native_harness --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
           --no-default-ignore-filename-regex --ignore-filename-regex
           "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"

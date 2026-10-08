@@ -222,6 +222,7 @@ fn test_legacy_missing_and_invalid_agent_values_have_deterministic_fallbacks() {
     // Arrange
     let cases = [
         (None, "gpt-5.5", AgentKind::Codex, AgentModel::Gpt61Sol),
+        (None, "qwen-plus", AgentKind::Harness, AgentModel::QwenPlus),
         (
             Some("unknown"),
             "unknown-model",

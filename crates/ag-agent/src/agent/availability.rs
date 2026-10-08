@@ -8,8 +8,8 @@ use std::process::{Child, Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use ag_session::AgentKind;
 pub use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
+use ag_session::{AgentKind, AgentModel};
 use semver::Version;
 
 use crate::model::agent::AgentCliInfo;
@@ -79,11 +79,16 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         available_agent_clis_from_path(env::var_os("PATH").as_deref())
     }
+
+    fn native_harness_default_model(&self) -> Option<AgentModel> {
+        super::native::default_model(&super::native::process_environment())
+    }
 }
 
-/// Returns the CLI executable name used by the provided agent kind.
+/// Returns the CLI executable name used by the provided agent kind, or `None`
+/// for the in-process harness.
 #[must_use]
-pub fn executable_name(agent_kind: AgentKind) -> &'static str {
+pub fn executable_name(agent_kind: AgentKind) -> Option<&'static str> {
     agent_kind.executable_name()
 }
 
@@ -93,7 +98,8 @@ fn available_agent_clis_from_path(path_value: Option<&OsStr>) -> Vec<AgentCliInf
         .iter()
         .copied()
         .filter_map(|agent_kind| {
-            let executable_path = executable_path_on_path(path_value, executable_name(agent_kind))?;
+            let executable_path =
+                executable_path_on_path(path_value, executable_name(agent_kind)?)?;
 
             Some((agent_kind, executable_path))
         })
@@ -114,15 +120,17 @@ fn available_agent_kinds_from_path(path_value: Option<&OsStr>) -> Vec<AgentKind>
                 return ensure_antigravity_cli_supported_on_path(path_value).is_ok();
             }
 
-            executable_path_on_path(path_value, executable_name(*agent_kind)).is_some()
+            executable_name(*agent_kind)
+                .and_then(|name| executable_path_on_path(path_value, name))
+                .is_some()
         })
         .collect()
 }
 
 /// Validates one Antigravity executable resolved from the provided `PATH`.
 fn ensure_antigravity_cli_supported_on_path(path_value: Option<&OsStr>) -> Result<(), String> {
-    let Some(executable_path) =
-        executable_path_on_path(path_value, executable_name(AgentKind::Antigravity))
+    let Some(executable_path) = executable_name(AgentKind::Antigravity)
+        .and_then(|name| executable_path_on_path(path_value, name))
     else {
         let result = Err(format!(
             "Antigravity CLI {ANTIGRAVITY_MINIMUM_VERSION} or newer is required, but `agy` was \
@@ -145,8 +153,8 @@ fn ensure_antigravity_cli_supported_on_path(path_value: Option<&OsStr>) -> Resul
 pub(super) fn ensure_cached_antigravity_cli_supported_on_path(
     path_value: Option<&OsStr>,
 ) -> Result<(), String> {
-    let executable_path =
-        executable_path_on_path(path_value, executable_name(AgentKind::Antigravity));
+    let executable_path = executable_name(AgentKind::Antigravity)
+        .and_then(|name| executable_path_on_path(path_value, name));
     let current_fingerprint = executable_path
         .as_deref()
         .and_then(antigravity_executable_fingerprint);

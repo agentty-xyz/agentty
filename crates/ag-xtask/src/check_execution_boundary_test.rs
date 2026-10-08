@@ -61,6 +61,7 @@ fn layered_workspace_passes() {
             dependency("ag-worker", "ag-runtime"),
             dependency("ag-runtime", "ag-agent"),
             dependency("ag-harness-cli", "ag-harness"),
+            dependency("ag-agent", "ag-harness"),
         ],
         vec![
             adapter_source(),
@@ -175,6 +176,8 @@ fn dependency_policy_rejects_bypasses_and_keeps_contracts_independent() {
         ("agentty", "ag-worker", true),
         ("ag-store", "ag-worker", true),
         ("ag-harness-cli", "ag-harness", true),
+        ("ag-agent", "ag-harness", true),
+        ("ag-runtime", "ag-harness", false),
         ("ag-session", "ag-worker", false),
         ("ag-runtime", "ag-worker", false),
         ("ag-agent", "ag-worker", false),

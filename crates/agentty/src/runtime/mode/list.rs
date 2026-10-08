@@ -12,9 +12,9 @@ use crate::presentation::help_action::{
     HelpAction, archive_action, project_list_actions, session_list_actions, settings_actions,
 };
 use crate::presentation::setting::{SettingsAction, SettingsInput};
-use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key;
+use crate::runtime::{EventResult, key_handler};
 
 /// Handles key input while the app is in list mode.
 ///
@@ -152,9 +152,7 @@ async fn open_session_creation_flow(app: &mut App) {
         return;
     }
 
-    app.mode = AppMode::SessionCreation {
-        selected_option_index: 0,
-    };
+    app.mode = key_handler::session_creation_mode(app);
 }
 
 /// Handles `Enter` in list mode and triggers the selected tab primary action.

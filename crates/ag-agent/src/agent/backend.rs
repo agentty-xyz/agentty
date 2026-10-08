@@ -13,6 +13,9 @@ pub enum AgentTransport {
     AppServer,
     /// Provider runs as direct CLI subprocess commands.
     Cli,
+    /// Provider runs in process through `ag-harness`, when the host configures
+    /// it.
+    Native,
 }
 
 impl AgentTransport {

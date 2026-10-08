@@ -26,7 +26,7 @@ flowchart TD
 | Agent Runtime      | `ag-runtime`                   | Adapter composition, dispatch, provider lifecycle |
 | Shared contracts   | `ag-contracts`, `ag-protocol`  | Requests, events, policy types, response schemas  |
 | Harness (external) | `ag-agent`                     | CLI and app-server adapters, policy enforcement   |
-| Harness (native)   | `ag-harness`, `ag-harness-cli` | Standalone model loop, tools, and companion CLI   |
+| Harness (native)   | `ag-harness`, `ag-harness-cli` | Model loop run in process by `ag-agent`, and CLI  |
 | LLM                | None                           | Reached through the harness                       |
 | Supporting         | `ag-session`, `ag-store`       | Session models, model selection, and persistence  |
 
@@ -85,22 +85,26 @@ separate from disabling MCP access.
 
 Shared policy types live in `ag-contracts`; `ag-runtime` carries the resolved policy,
 and harness adapters translate and enforce it. Provider flags stay in `ag-agent`.
-Retained processes must match the requested policy before reuse. The standalone
-`ag-harness` tool-call budget remains separate until its runtime adapter is integrated.
+Retained processes must match the requested policy before reuse. The native harness
+accepts none of these controls and charges each model request against a utility's
+provider-call budget.
 
 ## Agent Runtime
 
 `ag-runtime` composes harness adapters, dispatches worker-admitted requests, and
 coordinates provider lifecycle. Shared requests, events, settings, and errors live in
 `ag-contracts`. `ag-agent` implements the adapter contracts for external CLI and
-app-server harnesses, owning transport details and provider resource cleanup.
+app-server harnesses and for the in-process native harness, owning transport details and
+provider resource cleanup.
 
 ## Harness
 
 A harness runs the agent loop: it combines context, calls models, executes tools, and
-decides when to continue or finish. External agent tools provide this loop today.
-`ag-harness` provides a standalone Rust implementation; connecting it through
-`ag-runtime` remains separate work.
+decides when to continue or finish. External agent tools provide this loop for CLI and
+app-server providers. `ag-harness` provides a Rust implementation that `ag-agent` runs
+in process for `AgentKind::Harness` when the host enables it; Agentty does so only when
+started with `--experimental-harness`. Without that configuration, harness work fails
+before execution.
 
 ## LLM
 
@@ -113,8 +117,8 @@ requests; external harnesses manage their own model integrations.
 
 `ag-session` owns session models and model selection; `ag-store` supplies persistence.
 Only `ag-worker` depends on `ag-runtime`, and only `ag-runtime` depends on `ag-agent`.
-Only `ag-harness-cli` depends on `ag-harness` until its runtime adapter is integrated.
-Applications configure worker handles and import shared types from `ag-contracts`. The
+Only `ag-harness-cli` and `ag-agent` may depend on `ag-harness`. Applications configure
+worker handles and import shared types from `ag-contracts`. The
 `check-execution-boundary` hook enforces this boundary on every commit: dependency rules
 cover all workspace dependencies, including test code, and source checks keep raw
 adapter use and agent CLI launches out of production code outside the execution crates.

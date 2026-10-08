@@ -1,4 +1,5 @@
-//! Provider-managed instruction bootstrap planning for app-server sessions.
+//! Provider-managed instruction bootstrap planning for app-server and native
+//! sessions.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
@@ -44,7 +45,7 @@ pub fn instruction_bootstrap_key(conversation_id: Option<&str>) -> Option<String
         .map(|id| format!("v1:{:016x}:{}:{id}", *INSTRUCTION_FINGERPRINT, id.len()))
 }
 
-/// Prompt-shaping mode used for one app-server turn attempt.
+/// Prompt-shaping mode used for one persistent-session turn attempt.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum InstructionDeliveryMode {
     /// Send the full instruction contract without transcript replay.
@@ -57,9 +58,9 @@ pub(crate) enum InstructionDeliveryMode {
     BootstrapWithReplay,
 }
 
-/// Plans how one app-server turn should deliver Agentty's instruction
+/// Plans how one persistent-session turn should deliver Agentty's instruction
 /// contract.
-pub(crate) fn plan_app_server_instruction_delivery(
+pub(crate) fn plan_instruction_delivery(
     request_kind: &AgentRequestKind,
     current_provider_conversation_id: Option<&str>,
     persisted_instruction_conversation_id: Option<&str>,

@@ -16,6 +16,7 @@ use crate::app::session_state::SessionState;
 use crate::app::tab::Tab;
 use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, AgentModel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{Project, ProjectListItem, project_name_from_path};
 use crate::domain::selection::SelectionState;
 use crate::domain::session_order;
@@ -56,11 +57,13 @@ pub(crate) struct StartupSessionLoadContext<'a> {
 pub(crate) struct AppStartup;
 
 impl AppStartup {
-    /// Returns a startup error when no supported backend CLI is installed.
+    /// Returns a startup error when no supported backend CLI is installed and
+    /// in-process Harness sessions are unavailable.
     pub(crate) fn validate_startup_agent_availability(
         available_agent_kinds: &[AgentKind],
+        harness_availability: HarnessAvailability,
     ) -> Result<(), AppError> {
-        if available_agent_kinds.is_empty() {
+        if available_agent_kinds.is_empty() && !harness_availability.is_available() {
             return Err(AppError::Workflow(
                 "No supported backend CLI found on `PATH`. Install `codex`, `claude`, `gemini`, \
                  or Antigravity CLI 1.1.7 or newer. For an older `agy`, run `agy update`, then \

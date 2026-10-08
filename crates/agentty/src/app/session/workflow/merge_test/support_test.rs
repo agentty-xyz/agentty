@@ -134,6 +134,7 @@ pub(super) async fn build_rebase_assist_input_for_test(
         RebaseAssistInput {
             app_event_tx,
             assist_mode: RebaseAssistMode::OneShot,
+            available_agent_kinds: Arc::from(AgentKind::ALL),
             child_pid: Arc::new(Mutex::new(None)),
             db,
             folder,
@@ -164,6 +165,7 @@ pub(super) async fn build_merge_task_input_for_test(
         temp_dir,
         MergeTaskInput {
             app_event_tx,
+            available_agent_kinds: Arc::from(AgentKind::ALL),
             archive_diff: false,
             base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),

@@ -22,6 +22,7 @@ impl RuntimeFactory {
     pub fn with_app_server(client: Arc<dyn ag_agent::AppServerClient>) -> Self {
         Self {
             app_server: Some(client),
+            ..Self::default()
         }
     }
 }

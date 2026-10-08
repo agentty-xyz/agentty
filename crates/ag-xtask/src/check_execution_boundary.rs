@@ -110,7 +110,7 @@ impl ExecutionBoundaryCheck<'_> {
             "ag-worker" => matches!(owner, "agentty" | "ag-store"),
             "ag-agent" => owner == "ag-runtime",
             "ag-runtime" => owner == "ag-worker",
-            "ag-harness" => owner == "ag-harness-cli",
+            "ag-harness" => matches!(owner, "ag-harness-cli" | "ag-agent"),
             _ => owner != "ag-contracts" || !target.starts_with("ag-") || target == "ag-protocol",
         }
     }

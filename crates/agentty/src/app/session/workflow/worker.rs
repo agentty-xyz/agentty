@@ -33,7 +33,7 @@ use crate::app::branch_publish::{
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, unix_timestamp_from_system_time};
 use crate::app::{AppEvent, AppServices, SessionManager};
-use crate::domain::agent::AgentSelection;
+use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{
     PublishBranchAction, QueuedMessage, ReviewRequest, SessionId, SessionStats, Status,
 };
@@ -444,6 +444,9 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
 /// Shared state threaded through all worker turn executions.
 pub(super) struct SessionWorkerContext {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Locally installed agent CLIs that title and auto-commit utility
+    /// prompts may target.
+    pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Serializes post-turn publish ownership with queued branch operations.
     pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Per-turn cancellation token shared with the UI through
@@ -1150,6 +1153,7 @@ impl SessionWorkerService {
 
         let context = SessionWorkerContext {
             app_event_tx: services.event_sender(),
+            available_agent_kinds: services.available_agent_kinds().into(),
             branch_operation_lock: Arc::clone(&runtime.branch_operation_lock),
             cancel_token: Arc::clone(&runtime.cancel_token),
             session_run,
@@ -1717,6 +1721,7 @@ impl SessionWorkerService {
         SessionManager::run_rebase_command(RebaseCommandInput {
             app_event_tx: context.app_event_tx.clone(),
             assist_mode: RebaseAssistMode::ExistingSession(assist_client),
+            available_agent_kinds: Arc::clone(&context.available_agent_kinds),
             base_branch,
             branch_operation_lock: Arc::clone(&context.branch_operation_lock),
             child_pid: Arc::clone(&context.child_pid),

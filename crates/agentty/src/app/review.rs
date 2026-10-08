@@ -247,6 +247,7 @@ fn review_agent_kind_label(agent_kind: AgentKind) -> &'static str {
         AgentKind::Gemini => "Gemini",
         AgentKind::Claude => "Claude",
         AgentKind::Codex => "Codex",
+        AgentKind::Harness => "Harness",
     }
 }
 
@@ -475,6 +476,22 @@ pub(crate) async fn start_review_assist(
     .await;
 
     request_id
+}
+
+/// Returns the review agent for one session: the configured review agent when
+/// its CLI is installed, otherwise the session's own selection, so a Harness
+/// session in a launch without CLIs never reviews through a missing CLI.
+pub(crate) fn session_review_agent(
+    review_agent: ReviewAgent,
+    session_agent: AgentSelection,
+    available_agent_kinds: &[AgentKind],
+) -> ReviewAgent {
+    let (review_selection, reasoning_level, speed_mode) = review_agent;
+    if available_agent_kinds.contains(&review_selection.kind()) {
+        return review_agent;
+    }
+
+    normalize_review_agent((session_agent, reasoning_level, speed_mode))
 }
 
 pub(crate) fn normalize_review_agent(review_agent: ReviewAgent) -> ReviewAgent {
