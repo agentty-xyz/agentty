@@ -1,6 +1,7 @@
 use super::{
-    GroupedSessionRow, SessionTreePosition, grouped_session_rows, next_selectable_session_index,
-    preferred_initial_session_index, previous_selectable_session_index, selectable_session_indexes,
+    ArchiveAction, GroupedSessionRow, SessionTreePosition, archive_actions, grouped_session_rows,
+    next_selectable_index, preferred_initial_session_index, previous_selectable_index,
+    selectable_session_indexes,
 };
 use crate::domain::session::Status;
 
@@ -36,7 +37,7 @@ fn test_preferred_initial_session_index_falls_back_to_first_grouped_session() {
 }
 
 #[test]
-fn test_next_selectable_session_index_advances_in_grouped_order() {
+fn test_next_selectable_index_advances_in_grouped_order() {
     // Arrange
     let sessions = vec![
         crate::test_support::titled_session_fixture("active-1", Status::Review),
@@ -45,14 +46,14 @@ fn test_next_selectable_session_index_advances_in_grouped_order() {
     ];
 
     // Act
-    let selected_index = next_selectable_session_index(&sessions, Some(1));
+    let selected_index = next_selectable_index(&sessions, 0, Some(1));
 
     // Assert
     assert_eq!(selected_index, Some(0));
 }
 
 #[test]
-fn test_next_selectable_session_index_wraps_after_last_grouped_row() {
+fn test_next_selectable_index_wraps_after_last_grouped_row() {
     // Arrange
     let sessions = vec![
         crate::test_support::titled_session_fixture("active-1", Status::Review),
@@ -60,14 +61,14 @@ fn test_next_selectable_session_index_wraps_after_last_grouped_row() {
     ];
 
     // Act
-    let selected_index = next_selectable_session_index(&sessions, Some(1));
+    let selected_index = next_selectable_index(&sessions, 0, Some(1));
 
     // Assert
     assert_eq!(selected_index, Some(0));
 }
 
 #[test]
-fn test_previous_selectable_session_index_moves_back_in_grouped_order() {
+fn test_previous_selectable_index_moves_back_in_grouped_order() {
     // Arrange
     let sessions = vec![
         crate::test_support::titled_session_fixture("active-1", Status::Review),
@@ -76,14 +77,14 @@ fn test_previous_selectable_session_index_moves_back_in_grouped_order() {
     ];
 
     // Act
-    let selected_index = previous_selectable_session_index(&sessions, Some(0));
+    let selected_index = previous_selectable_index(&sessions, 0, Some(0));
 
     // Assert
     assert_eq!(selected_index, Some(1));
 }
 
 #[test]
-fn test_previous_selectable_session_index_wraps_before_first_grouped_row() {
+fn test_previous_selectable_index_wraps_before_first_grouped_row() {
     // Arrange
     let sessions = vec![
         crate::test_support::titled_session_fixture("active-1", Status::Review),
@@ -91,7 +92,7 @@ fn test_previous_selectable_session_index_wraps_before_first_grouped_row() {
     ];
 
     // Act
-    let selected_index = previous_selectable_session_index(&sessions, Some(0));
+    let selected_index = previous_selectable_index(&sessions, 0, Some(0));
 
     // Assert
     assert_eq!(selected_index, Some(1));
@@ -465,4 +466,45 @@ fn test_grouped_session_rows_nests_descendants_to_depth_five() {
             ),
         ]
     );
+}
+
+#[test]
+fn test_archive_actions_list_load_more_before_show_less() {
+    for (has_more, is_expanded, expected) in [
+        (false, false, Vec::new()),
+        (true, false, vec![ArchiveAction::LoadMore]),
+        (false, true, vec![ArchiveAction::ShowLess]),
+        (
+            true,
+            true,
+            vec![ArchiveAction::LoadMore, ArchiveAction::ShowLess],
+        ),
+    ] {
+        // Act
+        let actions = archive_actions(has_more, is_expanded);
+
+        // Assert
+        assert_eq!(actions, expected);
+    }
+}
+
+#[test]
+fn test_selectable_index_navigation_includes_archive_action_slots() {
+    // Arrange
+    let sessions = vec![
+        crate::test_support::titled_session_fixture("archive-1", Status::Done),
+        crate::test_support::titled_session_fixture("active-1", Status::Review),
+    ];
+
+    // Act
+    let after_last_session = next_selectable_index(&sessions, 2, Some(0));
+    let after_first_action = next_selectable_index(&sessions, 2, Some(2));
+    let wrapped_forward = next_selectable_index(&sessions, 2, Some(3));
+    let wrapped_backward = previous_selectable_index(&sessions, 2, Some(1));
+
+    // Assert
+    assert_eq!(after_last_session, Some(2));
+    assert_eq!(after_first_action, Some(3));
+    assert_eq!(wrapped_forward, Some(1));
+    assert_eq!(wrapped_backward, Some(3));
 }

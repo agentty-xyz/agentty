@@ -6,9 +6,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::app::{App, Tab};
 use crate::domain::input::InputCommand;
 use crate::domain::session::{Session, Status};
+use crate::domain::session_order::ArchiveAction;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, HelpContext};
 use crate::presentation::help_action::{
-    HelpAction, project_list_actions, session_list_actions, settings_actions,
+    HelpAction, archive_action, project_list_actions, session_list_actions, settings_actions,
 };
 use crate::presentation::setting::{SettingsAction, SettingsInput};
 use crate::runtime::EventResult;
@@ -168,12 +169,22 @@ async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
             }
         }
         Tab::Sessions => {
-            if app.sessions.is_load_more_selected() {
-                app.sessions
-                    .load_more_archived_sessions(&mut app.mode, &app.projects, &app.services)
-                    .await;
+            match app.sessions.selected_archive_action() {
+                Some(ArchiveAction::LoadMore) => {
+                    app.sessions
+                        .load_more_archived_sessions(&mut app.mode, &app.projects, &app.services)
+                        .await;
 
-                return Ok(EventResult::Continue);
+                    return Ok(EventResult::Continue);
+                }
+                Some(ArchiveAction::ShowLess) => {
+                    app.sessions
+                        .show_less_archived_sessions(&mut app.mode, &app.projects, &app.services)
+                        .await;
+
+                    return Ok(EventResult::Continue);
+                }
+                None => {}
             }
             if let Some(session_index) = app.sessions.selected_session_index() {
                 let Some(session_id) = app
@@ -262,11 +273,8 @@ fn list_keybindings(app: &App) -> Vec<HelpAction> {
             .and_then(|selected_index| app.sessions.session_at(selected_index))
             .is_some();
     let mut actions = session_list_actions(can_cancel_selected_session, can_open_selected_session);
-    if app.sessions.is_load_more_selected() {
-        actions.insert(
-            0,
-            HelpAction::new("load more", "Enter", "Load next 10 archived sessions"),
-        );
+    if let Some(action) = app.sessions.selected_archive_action() {
+        actions.insert(0, archive_action(action));
     }
 
     actions

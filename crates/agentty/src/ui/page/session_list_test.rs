@@ -1090,6 +1090,52 @@ fn archive_load_more_row_is_selectable_and_disappears_at_end() {
 }
 
 #[test]
+fn archive_show_less_row_follows_load_more_and_owns_its_footer() {
+    for has_more in [true, false] {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(ColorTheme::DarkHorizon);
+        let sessions = vec![crate::test_support::titled_session_fixture(
+            "archived",
+            Status::Done,
+        )];
+        let mut table_state = TableState::default();
+        table_state.select(Some(sessions.len() + usize::from(has_more)));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 16)).expect("terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::default(), 0)
+                    .has_more_archived_sessions(has_more)
+                    .is_archive_expanded(true)
+                    .render(frame, frame.area());
+            })
+            .expect("draw expanded archive");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let action = find_text_start_cell(buffer, "Show less...").expect("show less visible");
+        assert_eq!(action.bg, style::palette::surface_selection());
+        let lines = buffer_lines(buffer);
+        let show_less_row = lines
+            .iter()
+            .position(|line| line.contains("Show less..."))
+            .expect("show less row");
+        assert_eq!(
+            lines
+                .iter()
+                .position(|line| line.contains("Load more..."))
+                .map(|row| row + 1),
+            has_more.then_some(show_less_row)
+        );
+        let text = buffer_text(buffer);
+        assert!(text.contains("Enter: show less"));
+        assert!(!text.contains("Enter: load more"));
+    }
+}
+
+#[test]
 fn archive_header_uses_full_total_while_other_groups_use_loaded_rows() {
     // Arrange
     let sessions = vec![

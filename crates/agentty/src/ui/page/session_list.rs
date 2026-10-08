@@ -12,7 +12,9 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::session::{Session, SessionId, SessionSize, Status};
-use crate::domain::session_order::{self, GroupedSessionRow, SessionGroup, SessionTreePosition};
+use crate::domain::session_order::{
+    self, ArchiveAction, GroupedSessionRow, SessionGroup, SessionTreePosition,
+};
 use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::{Page, layout, markdown, style};
@@ -49,6 +51,8 @@ pub struct SessionListPage<'a> {
     archived_session_count: Option<usize>,
     /// Whether the archive pagination action is available.
     has_more_archived_sessions: bool,
+    /// Whether the archive collapse action is available.
+    is_archive_expanded: bool,
     /// Latest session branch comparisons keyed by stable session id.
     session_git_statuses: Option<&'a HashMap<SessionId, SessionGitStatus>>,
     /// Current wall-clock time expressed as Unix seconds for live timer labels.
@@ -67,6 +71,7 @@ impl<'a> SessionListPage<'a> {
             archived_session_count: None,
             default_reasoning_level,
             has_more_archived_sessions: false,
+            is_archive_expanded: false,
             sessions,
             session_git_statuses: None,
             table_state,
@@ -86,6 +91,14 @@ impl<'a> SessionListPage<'a> {
     #[must_use]
     pub fn has_more_archived_sessions(mut self, has_more: bool) -> Self {
         self.has_more_archived_sessions = has_more;
+
+        self
+    }
+
+    /// Shows an actionable row that collapses the archive to its first page.
+    #[must_use]
+    pub fn is_archive_expanded(mut self, is_expanded: bool) -> Self {
+        self.is_archive_expanded = is_expanded;
 
         self
     }
@@ -189,7 +202,7 @@ impl PreparedSessionCells {
 
 /// Grouped table row carrying the session cells prepared for this frame.
 enum PreparedSessionRow<'a> {
-    LoadMore,
+    ArchiveAction(ArchiveAction),
     GroupLabel {
         group: SessionGroup,
         session_count: usize,
@@ -276,9 +289,16 @@ impl Page for SessionListPage<'_> {
         if let Some(total) = self.archived_session_count {
             set_archive_session_count(&mut table_rows, total);
         }
-        if self.has_more_archived_sessions {
-            table_rows.push(PreparedSessionRow::LoadMore);
-        }
+        let archive_actions = session_order::archive_actions(
+            self.has_more_archived_sessions,
+            self.is_archive_expanded,
+        );
+        let first_action_row = table_rows.len();
+        table_rows.extend(
+            archive_actions
+                .iter()
+                .map(|action| PreparedSessionRow::ArchiveAction(*action)),
+        );
         let column_constraints = [
             Constraint::Fill(1),
             model_column_width(&table_rows),
@@ -292,12 +312,14 @@ impl Page for SessionListPage<'_> {
             0,
         );
         let selected_session_id = selected_session_id(self.sessions, self.table_state.selected());
-        let load_more_selected = self.has_more_archived_sessions
-            && self.table_state.selected() == Some(self.sessions.len());
-        let selected_row = if load_more_selected {
-            Some(table_rows.len() - 1)
-        } else {
-            selected_render_row(&table_rows, selected_session_id)
+        let selected_action_position = self
+            .table_state
+            .selected()
+            .and_then(|selected_index| selected_index.checked_sub(self.sessions.len()))
+            .filter(|action_position| *action_position < archive_actions.len());
+        let selected_row = match selected_action_position {
+            Some(action_position) => Some(first_action_row + action_position),
+            None => selected_render_row(&table_rows, selected_session_id),
         };
         let row_window = visible_row_window(selected_row, usize::from(areas.main_area.height));
         let is_empty = table_rows.is_empty();
@@ -328,19 +350,16 @@ impl Page for SessionListPage<'_> {
             .table_state
             .selected()
             .and_then(|selected_index| self.sessions.get(selected_index));
-        let help_line = if load_more_selected {
-            let mut actions = help_action::session_list_footer_actions(false, false);
-            actions.insert(
-                0,
-                help_action::HelpAction::new(
-                    "load more",
-                    "Enter",
-                    "Load next 10 archived sessions",
-                ),
-            );
-            crate::ui::help_format::footer_line(&actions)
-        } else {
-            session_list_help_line(selected_session)
+        let help_line = match selected_action_position {
+            Some(action_position) => {
+                let mut actions = help_action::session_list_footer_actions(false, false);
+                actions.insert(
+                    0,
+                    help_action::archive_action(archive_actions[action_position]),
+                );
+                crate::ui::help_format::footer_line(&actions)
+            }
+            None => session_list_help_line(selected_session),
         };
         let help_message = Paragraph::new(help_line);
         f.render_widget(help_message, areas.footer_area);
@@ -415,7 +434,7 @@ fn selected_render_row(
     let selected_session_id = selected_session_id?;
 
     rows.iter().position(|row| match row {
-        PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::LoadMore => false,
+        PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::ArchiveAction(_) => false,
         PreparedSessionRow::Session { session, .. } => session.id == selected_session_id,
     })
 }
@@ -500,8 +519,10 @@ fn set_archive_session_count(rows: &mut Vec<PreparedSessionRow<'_>>, total: usiz
 /// Converts one grouped row descriptor into a `ratatui` table row.
 fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> Row<'static> {
     match row {
-        PreparedSessionRow::LoadMore => Row::new(vec![Cell::from("Load more...")])
-            .style(Style::default().fg(style::palette::text_muted())),
+        PreparedSessionRow::ArchiveAction(action) => {
+            Row::new(vec![Cell::from(archive_action_label(action))])
+                .style(Style::default().fg(style::palette::text_muted()))
+        }
         PreparedSessionRow::GroupLabel {
             group,
             session_count,
@@ -520,6 +541,14 @@ fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> R
             adds_group_spacing,
             has_merge_conflict,
         ),
+    }
+}
+
+/// Returns the visible label for one archive pagination row.
+fn archive_action_label(action: ArchiveAction) -> &'static str {
+    match action {
+        ArchiveAction::LoadMore => "Load more...",
+        ArchiveAction::ShowLess => "Show less...",
     }
 }
 
@@ -650,7 +679,7 @@ fn model_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
     column_width(
         "Model",
         rows.iter().filter_map(|row| match row {
-            PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::LoadMore => None,
+            PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::ArchiveAction(_) => None,
             PreparedSessionRow::Session { cells, .. } => Some(cells.model_width),
         }),
     )
@@ -672,7 +701,7 @@ fn status_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
         .iter()
         .map(|status| status.to_string().chars().count());
     let session_widths = rows.iter().filter_map(|row| match row {
-        PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::LoadMore => None,
+        PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::ArchiveAction(_) => None,
         PreparedSessionRow::Session { cells, .. } => Some(cells.status_width),
     });
 
@@ -684,7 +713,7 @@ fn timer_column_width(rows: &[PreparedSessionRow<'_>]) -> Constraint {
     column_width(
         "Timer",
         rows.iter().filter_map(|row| match row {
-            PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::LoadMore => None,
+            PreparedSessionRow::GroupLabel { .. } | PreparedSessionRow::ArchiveAction(_) => None,
             PreparedSessionRow::Session { cells, .. } => Some(cells.timer_width),
         }),
     )

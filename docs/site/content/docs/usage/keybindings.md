@@ -47,15 +47,17 @@ of pasted text.
 | `a`                 | Check hooks, then open the session creation selector |
 | `s`                 | Sync active project branch                           |
 | `c`                 | Cancel selected session after confirmation           |
-| `Enter`             | Open session or load more archived sessions          |
+| `Enter`             | Open session, or load more / show less archive rows  |
 | `j` / `k`           | Navigate sessions                                    |
 | `p`                 | Open project switcher popup                          |
 | `Tab` / `Shift+Tab` | Switch to next / previous tab                        |
 | `?`                 | Help                                                 |
 
 The archive starts with the 10 most recently updated sessions. Select `Load more...` and
-press `Enter` to load the next 10. The archive heading shows the project's total
-archived sessions across all pages. Switching projects resets the archive window.
+press `Enter` to load the next 10. Once more than 10 are loaded, select `Show less...`
+and press `Enter` to hide them again and return to the first 10. The archive heading
+shows the project's total archived sessions across all pages. Switching projects resets
+the archive window.
 
 `a` opens the session-type selector, with a warning first if configured hooks are
 missing. `Enter` continues past that warning; `Esc` / `q` cancels. New-session setup

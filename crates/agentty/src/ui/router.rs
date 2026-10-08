@@ -33,6 +33,7 @@ struct RouteSharedContext<'a> {
     current_tab: Tab,
     default_reasoning_level: ReasoningLevel,
     has_more_archived_sessions: bool,
+    is_archive_expanded: bool,
     /// Cached most-recently-opened ordering over `projects`.
     mru_project_order: &'a [usize],
     project_table_state: &'a mut TableState,
@@ -224,6 +225,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_project_id,
         archived_session_count,
         has_more_archived_sessions,
+        is_archive_expanded,
         active_prompt_outputs,
         available_agent_clis,
         current_tab,
@@ -256,6 +258,7 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         current_tab,
         default_reasoning_level,
         has_more_archived_sessions,
+        is_archive_expanded,
         mru_project_order,
         project_table_state,
         projects,
@@ -865,6 +868,7 @@ fn render_list_background(
             )
             .archived_session_count(shared.archived_session_count)
             .has_more_archived_sessions(shared.has_more_archived_sessions)
+            .is_archive_expanded(shared.is_archive_expanded)
             .session_git_statuses(shared.session_git_statuses)
             .render(f, chunks[1]);
         }

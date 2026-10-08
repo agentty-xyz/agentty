@@ -1,4 +1,5 @@
 use crate::domain::session::{PublishBranchAction, Session, Status};
+use crate::domain::session_order::ArchiveAction;
 use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 
 /// Footer shortcut label for prompt image paste.
@@ -271,6 +272,20 @@ pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
         Status::Merged => ViewSessionState::Merged,
         Status::Review => ViewSessionState::Review,
         Status::AgentReview => ViewSessionState::AgentReview,
+    }
+}
+
+/// Returns the `Enter` action for one selected archive pagination row.
+pub(crate) fn archive_action(action: ArchiveAction) -> HelpAction {
+    match action {
+        ArchiveAction::LoadMore => {
+            HelpAction::new("load more", "Enter", "Load next 10 archived sessions")
+        }
+        ArchiveAction::ShowLess => HelpAction::new(
+            "show less",
+            "Enter",
+            "Hide archived sessions beyond the first 10",
+        ),
     }
 }
 

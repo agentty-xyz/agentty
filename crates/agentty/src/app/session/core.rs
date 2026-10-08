@@ -28,6 +28,7 @@ use crate::domain::session::{
     SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::{
     QueuedAction, TransientMessage, TransientMessageAnchor, TransientMessageBody,
@@ -450,15 +451,19 @@ impl SessionManager {
         self.state.has_more_archived_sessions
     }
 
-    /// Returns whether selection points at the archive pagination action.
-    pub(crate) fn is_load_more_selected(&self) -> bool {
-        self.state.has_more_archived_sessions
-            && self.state.table_state.selected() == Some(self.state.sessions.len())
+    /// Returns whether loaded archived rows extend beyond the first page.
+    pub(crate) fn is_archive_expanded(&self) -> bool {
+        self.state.is_archive_expanded()
+    }
+
+    /// Returns the archive pagination action under the current selection.
+    pub(crate) fn selected_archive_action(&self) -> Option<ArchiveAction> {
+        self.state.selected_archive_action()
     }
 
     /// Resets the archive window when switching active projects.
     pub(crate) fn reset_archive_page(&mut self) {
-        self.state.archive_limit = crate::domain::session_order::ARCHIVE_PAGE_SIZE;
+        self.state.archive_limit = session_order::ARCHIVE_PAGE_SIZE;
         self.state.has_more_archived_sessions = false;
     }
 

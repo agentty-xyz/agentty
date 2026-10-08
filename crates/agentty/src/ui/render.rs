@@ -61,6 +61,8 @@ pub struct RenderContext<'a> {
     pub git_upstream_ref: Option<&'a str>,
     /// Whether the archive pagination action should be visible.
     pub has_more_archived_sessions: bool,
+    /// Whether the archive collapse action should be visible.
+    pub is_archive_expanded: bool,
     /// Whether tmux-only worktree actions can be rendered.
     pub is_tmux_session: bool,
     /// Newer stable version when one is available.

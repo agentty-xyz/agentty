@@ -40,6 +40,7 @@ pub(crate) fn render_app(
             git_status: snapshot.git_status,
             archived_session_count: snapshot.archived_session_count,
             has_more_archived_sessions: snapshot.has_more_archived_sessions,
+            is_archive_expanded: snapshot.is_archive_expanded,
             is_tmux_session: snapshot.is_tmux_session,
             latest_available_version: snapshot.latest_available_version,
             update_status: snapshot.update_status,

@@ -19,6 +19,7 @@ use super::support::{
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{SessionId, Status};
+use crate::domain::session_order::ArchiveAction;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 
@@ -745,7 +746,7 @@ fn archive_load_more_navigation_wraps_and_skips_group_headers() {
     manager.next();
     let archive_selected = manager.state.table_state.selected();
     manager.next();
-    let action_selected = manager.is_load_more_selected();
+    let action_selected = manager.selected_archive_action() == Some(ArchiveAction::LoadMore);
     let action_is_not_session = manager.selected_session().is_none();
     manager.previous();
     let back_to_archive = manager.state.table_state.selected();
@@ -753,7 +754,7 @@ fn archive_load_more_navigation_wraps_and_skips_group_headers() {
     manager.next();
     let wrapped_forward = manager.state.table_state.selected();
     manager.previous();
-    let wrapped_backward = manager.is_load_more_selected();
+    let wrapped_backward = manager.selected_archive_action() == Some(ArchiveAction::LoadMore);
     manager.previous();
     manager.previous();
     let back_to_active = manager.state.table_state.selected();
@@ -768,4 +769,31 @@ fn archive_load_more_navigation_wraps_and_skips_group_headers() {
     assert_eq!(back_to_active, Some(1));
     assert!(!manager.has_more_archived_sessions());
     assert_eq!(manager.state.archive_limit, 10);
+}
+
+#[test]
+fn archive_navigation_visits_load_more_then_show_less() {
+    // Arrange
+    let mut manager = session_manager_with_sessions(vec![session_with_id("archive", Status::Done)]);
+    manager.state.has_more_archived_sessions = true;
+    manager.state.archive_limit = 20;
+    manager.state.table_state.select(Some(0));
+
+    // Act
+    manager.next();
+    let first_action = manager.selected_archive_action();
+    manager.next();
+    let second_action = manager.selected_archive_action();
+    manager.next();
+    let wrapped_forward = manager.state.table_state.selected();
+    manager.previous();
+    let wrapped_backward = manager.selected_archive_action();
+    manager.reset_archive_page();
+
+    // Assert
+    assert_eq!(first_action, Some(ArchiveAction::LoadMore));
+    assert_eq!(second_action, Some(ArchiveAction::ShowLess));
+    assert_eq!(wrapped_forward, Some(0));
+    assert_eq!(wrapped_backward, Some(ArchiveAction::ShowLess));
+    assert!(!manager.is_archive_expanded());
 }

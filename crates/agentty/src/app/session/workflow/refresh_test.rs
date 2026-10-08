@@ -24,6 +24,7 @@ use crate::domain::session::{
     Session, SessionHandles, SessionId, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
+use crate::domain::session_order::ArchiveAction;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
 use crate::infra::fs::FsClient;
@@ -863,9 +864,18 @@ impl Clock for FakeClock {
     }
 }
 
-#[tokio::test]
-async fn archive_pages_survive_refresh_and_retry_failed_reads() {
-    // Arrange
+/// Session manager, services, and pool loaded with 21 archived sessions.
+struct ArchiveFixture {
+    _temp_dir: tempfile::TempDir,
+    manager: SessionManager,
+    mode: AppMode,
+    pool: sqlx::SqlitePool,
+    projects: ProjectManager,
+    services: AppServices,
+}
+
+/// Seeds 21 archived sessions and loads their first archive page.
+async fn archive_fixture() -> ArchiveFixture {
     let (database, pool) = AppRepositories::in_memory_with_pool()
         .await
         .expect("database");
@@ -903,11 +913,33 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
     let temp_dir = tempdir().expect("project dir");
     let projects = empty_project_manager(temp_dir.path().to_path_buf());
     let mut mode = AppMode::List;
-
-    // Act
     manager
         .refresh_sessions_now(&mut mode, &projects, &services)
         .await;
+
+    ArchiveFixture {
+        _temp_dir: temp_dir,
+        manager,
+        mode,
+        pool,
+        projects,
+        services,
+    }
+}
+
+#[tokio::test]
+async fn archive_pages_survive_refresh_and_retry_failed_reads() {
+    // Arrange
+    let ArchiveFixture {
+        _temp_dir,
+        mut manager,
+        mut mode,
+        pool,
+        projects,
+        services,
+    } = archive_fixture().await;
+
+    // Act
     manager
         .state
         .table_state
@@ -918,7 +950,10 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
 
     // Assert
     assert_eq!(manager.sessions().len(), 10);
-    assert!(manager.is_load_more_selected());
+    assert_eq!(
+        manager.selected_archive_action(),
+        Some(ArchiveAction::LoadMore)
+    );
 
     // Act
     manager
@@ -949,7 +984,10 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
     // Assert
     assert_eq!(manager.sessions().len(), 20);
     assert_eq!(manager.state.archive_limit, 20);
-    assert!(manager.is_load_more_selected());
+    assert_eq!(
+        manager.selected_archive_action(),
+        Some(ArchiveAction::LoadMore)
+    );
     let warning_fields = warning_fields.lock().expect("warning fields lock");
     assert_eq!(
         warning_fields.get("message").map(String::as_str),
@@ -959,6 +997,62 @@ async fn archive_pages_survive_refresh_and_retry_failed_reads() {
         warning_fields
             .get("error")
             .is_some_and(|error| !error.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn archive_show_less_collapses_window_and_retries_failed_reads() {
+    // Arrange
+    let ArchiveFixture {
+        _temp_dir,
+        mut manager,
+        mut mode,
+        pool,
+        projects,
+        services,
+    } = archive_fixture().await;
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+    manager.state.table_state.select(Some(21));
+
+    // Act
+    manager
+        .refresh_sessions_now(&mut mode, &projects, &services)
+        .await;
+    let show_less_survives_refresh = manager.selected_archive_action();
+    manager
+        .show_less_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(show_less_survives_refresh, Some(ArchiveAction::ShowLess));
+    assert_eq!(manager.sessions().len(), 10);
+    assert_eq!(manager.state.archive_limit, 10);
+    assert!(!manager.is_archive_expanded());
+    assert_eq!(
+        manager.selected_archive_action(),
+        Some(ArchiveAction::LoadMore)
+    );
+
+    // Arrange
+    manager
+        .load_more_archived_sessions(&mut mode, &projects, &services)
+        .await;
+    manager.state.table_state.select(Some(21));
+    pool.close().await;
+
+    // Act: database failure preserves the expanded page and action for retry.
+    manager
+        .show_less_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(manager.sessions().len(), 20);
+    assert_eq!(manager.state.archive_limit, 20);
+    assert_eq!(
+        manager.selected_archive_action(),
+        Some(ArchiveAction::ShowLess)
     );
 }
 
@@ -1009,6 +1103,25 @@ async fn archive_load_more_reconciles_when_no_additional_rows_remain() {
         "archive"
     );
     assert!(!manager.has_more_archived_sessions());
+    assert_eq!(
+        manager.state.archive_actions(),
+        vec![ArchiveAction::ShowLess]
+    );
+
+    // Act
+    manager.next();
+    let show_less_selected = manager.selected_archive_action();
+    manager
+        .show_less_archived_sessions(&mut mode, &projects, &services)
+        .await;
+
+    // Assert
+    assert_eq!(show_less_selected, Some(ArchiveAction::ShowLess));
+    assert_eq!(manager.state.archive_actions(), Vec::<ArchiveAction>::new());
+    assert_eq!(
+        manager.selected_session().expect("last remaining row").id,
+        "archive"
+    );
 }
 
 #[tokio::test]
