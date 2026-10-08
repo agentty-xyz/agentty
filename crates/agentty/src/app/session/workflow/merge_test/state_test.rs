@@ -17,7 +17,7 @@ async fn test_update_session_title_from_commit_message_persists_title() {
         .sessions()
         .insert_session(
             "session-id",
-            AgentModel::ClaudeSonnet5.as_str(),
+            AgentModel::ClaudeSonnet55.as_str(),
             "main",
             "Review",
             project_id,

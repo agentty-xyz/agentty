@@ -32,7 +32,7 @@ fn request() -> OneShotRequest {
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
-        model: AgentModel::ClaudeSonnet5.as_str().to_string(),
+        model: AgentModel::ClaudeSonnet55.as_str().to_string(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: String::new(),
         provider_call_budget: None,
@@ -980,7 +980,7 @@ async fn batches_original_unicode_diff_then_checks_cross_file_interactions() {
             .expect("budget")
             .consume()?;
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+        assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
         assert!(request.prompt.len() <= PROMPT_BUDGET);
         if request.request_kind == AgentRequestKind::UtilityPrompt {
             return Ok(OneShotSubmission {
@@ -1155,7 +1155,7 @@ async fn final_reduction_replaces_candidates_and_normalizes_the_complete_review(
                 assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
                 assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
                 assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
-                assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+                assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
                 assert!(request.prompt.contains("Accepted decision"));
                 assert!(request.prompt.contains("diff --git a/source b/source"));
                 assert!(request.prompt.contains("Preserved finding."));

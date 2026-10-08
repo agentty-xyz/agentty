@@ -339,7 +339,7 @@ fn test_render_archive_rows_use_muted_text_across_columns() {
     archived_session.title = Some("Archived session title".to_string());
     archived_session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeSonnet5,
+        AgentModel::ClaudeSonnet55,
     );
     archived_session.reasoning_level_override = Some(ReasoningLevel::High);
     archived_session.size = SessionSize::Xxl;
@@ -361,8 +361,8 @@ fn test_render_archive_rows_use_muted_text_across_columns() {
         .expect("archived title should be visible");
     let archived_size_cell =
         find_text_start_cell(buffer, "[XXL]").expect("archived size should be visible");
-    let archived_model_cell =
-        find_text_start_cell(buffer, "claude-sonnet-5").expect("archived model should be visible");
+    let archived_model_cell = find_text_start_cell(buffer, "claude-sonnet-5-5")
+        .expect("archived model should be visible");
     let archived_reasoning_cell =
         find_text_start_cell(buffer, "high").expect("archived reasoning should be visible");
     let archived_status_cell =
@@ -478,12 +478,13 @@ fn test_text_column_width_uses_longest_project_value() {
 #[test]
 fn test_model_column_width_uses_longest_model_value() {
     // Arrange
-    let expected_width = u16::try_from("claude-sonnet-5 [low]".chars().count()).unwrap_or(u16::MAX);
+    let expected_width =
+        u16::try_from("claude-sonnet-5-5 [low]".chars().count()).unwrap_or(u16::MAX);
     let mut default_session =
         crate::test_support::titled_session_fixture("active-1", Status::Review);
     default_session.agent = crate::domain::agent::AgentSelection::new(
         crate::domain::agent::AgentKind::Claude,
-        AgentModel::ClaudeSonnet5,
+        AgentModel::ClaudeSonnet55,
     );
     default_session.reasoning_level_override = Some(ReasoningLevel::Low);
     let mut medium_session =

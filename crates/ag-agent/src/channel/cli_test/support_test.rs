@@ -8,7 +8,7 @@ pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder,
         main_checkout_root: None,
-        model: "claude-sonnet-5".to_string(),
+        model: "claude-sonnet-5-5".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: "Write a test".into(),

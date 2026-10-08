@@ -16,7 +16,7 @@ use crate::domain::session::Status;
 async fn set_session_model_persists_new_model_and_clears_conversation_state() {
     // Arrange
     let mut session = test_session("Prompt", Status::Review, Some("Title"), "");
-    session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+    session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     let database = database_with_session(&session).await;
     database
         .sessions()
@@ -82,7 +82,7 @@ async fn set_session_model_persists_new_model_and_clears_conversation_state() {
 async fn set_session_model_keeps_conversation_state_when_model_does_not_change() {
     // Arrange
     let mut session = test_session("Prompt", Status::InProgress, Some("Title"), "");
-    session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+    session.agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     let database = database_with_session(&session).await;
     database
         .sessions()
@@ -101,7 +101,7 @@ async fn set_session_model_keeps_conversation_state_when_model_does_not_change()
         .set_session_model(
             &services,
             "session-id",
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         )
         .await
         .expect("set session model should succeed");
@@ -118,7 +118,7 @@ async fn set_session_model_keeps_conversation_state_when_model_does_not_change()
         emitted_event,
         AppEvent::SessionModelUpdated {
             session_id: "session-id".into(),
-            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         }
     );
     assert!(!session_manager.should_replay_history("session-id"));

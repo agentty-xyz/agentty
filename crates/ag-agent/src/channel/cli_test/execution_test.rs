@@ -68,7 +68,7 @@ fn test_build_command_request_uses_agent_facing_prompt_text() {
         continuation: ag_contracts::TurnContinuation::fresh(),
         folder: PathBuf::from("/tmp/session"),
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
-        model: "claude-sonnet-5".to_string(),
+        model: "claude-sonnet-5-5".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         personality: ag_contracts::PersonalityPrompt::default(),
         prompt: TurnPrompt::from("Review @src/main.rs"),

@@ -1023,7 +1023,7 @@ async fn test_commit_changes_reuses_existing_session_commit_message_in_tests() {
         &session_folder,
         "main",
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Low,
             SpeedMode::Normal,
         ),

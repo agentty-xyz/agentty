@@ -659,7 +659,7 @@ async fn completed_turn_starts_auto_review_when_project_is_inactive() {
                 ),
                 (
                     crate::domain::setting::SettingName::DefaultReviewModel,
-                    "claude-sonnet-5".to_string(),
+                    "claude-sonnet-5-5".to_string(),
                 ),
                 (
                     crate::domain::setting::SettingName::DefaultReviewReasoningLevel,

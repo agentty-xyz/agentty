@@ -104,13 +104,13 @@ async fn antigravity_protocol_compliance_e2e() {
     }
 }
 
-/// Verifies real Claude Sonnet (`claude-sonnet-5`) turn execution through
+/// Verifies real Claude Sonnet (`claude-sonnet-5-5`) turn execution through
 /// the worker runtime yields a non-empty protocol `answer`.
 #[tokio::test]
 #[ignore = "requires real Claude CLI credentials and network"]
 async fn claude_sonnet_protocol_compliance_e2e() {
     // Arrange
-    let model = AgentModel::ClaudeSonnet5;
+    let model = AgentModel::ClaudeSonnet55;
     if provider_preflight_skip_reason(AgentKind::Claude)
         .await
         .is_some()

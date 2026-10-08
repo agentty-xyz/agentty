@@ -1741,7 +1741,7 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
         .returning(move |request| {
             assert_eq!(request.harness, (AgentKind::Claude).to_string());
             assert_eq!(request.folder, expected_folder);
-            assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+            assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
             assert_eq!(request.prompt, "Resolve sync conflicts");
             assert_eq!(
                 request.request_kind,
@@ -1768,7 +1768,7 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
         .resolve_rebase_conflicts(
             folder,
             "Resolve sync conflicts".to_string(),
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         )
         .await;
 

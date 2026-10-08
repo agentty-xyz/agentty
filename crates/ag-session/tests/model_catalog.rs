@@ -31,7 +31,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
             vec![
                 "claude-fable-5-1",
                 "claude-opus-5-5",
-                "claude-sonnet-5",
+                "claude-sonnet-5-5",
                 "claude-haiku-4-5-20251001",
             ],
             "claude-fable-5-1",
@@ -93,6 +93,11 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
     assert_eq!(
         AgentModel::parse_persisted("gpt-6-sol"),
         Ok(AgentModel::Gpt61Sol)
+    );
+    assert!("claude-sonnet-5".parse::<AgentModel>().is_err());
+    assert_eq!(
+        AgentModel::parse_persisted("claude-sonnet-5"),
+        Ok(AgentModel::ClaudeSonnet55)
     );
     assert!("claude-fable-5".parse::<AgentModel>().is_err());
     assert_eq!(

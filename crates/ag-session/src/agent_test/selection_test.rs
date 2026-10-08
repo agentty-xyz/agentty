@@ -151,7 +151,7 @@ fn test_resolve_model_for_available_agent_kinds_uses_first_available_default() {
     // Arrange
     let unavailable_model = AgentModel::ClaudeOpus55;
     let available_agent_kinds = [AgentKind::Codex, AgentKind::Antigravity];
-    let unavailable_fallback_model = AgentModel::ClaudeSonnet5;
+    let unavailable_fallback_model = AgentModel::ClaudeSonnet55;
 
     // Act
     let resolved_model = resolve_model_for_available_agent_kinds(

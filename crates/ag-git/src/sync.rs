@@ -524,7 +524,9 @@ fn worktree_file_content(bytes: Vec<u8>) -> WorktreeFileContent {
 }
 
 /// Copies one repository index beside its source and returns the temporary
-/// path used by isolated read-only diff commands.
+/// path used by isolated read-only diff commands. Preserving its modification
+/// time retains Git's racy-clean checks for same-size edits with matching stat
+/// data.
 fn copy_git_index_to_temp(index_path: &Path) -> Result<tempfile::TempPath, GitError> {
     let index_parent = index_path.parent().ok_or_else(|| {
         GitError::OutputParse(format!(
@@ -532,12 +534,20 @@ fn copy_git_index_to_temp(index_path: &Path) -> Result<tempfile::TempPath, GitEr
             index_path.display()
         ))
     })?;
-    let temporary_index =
+    let mut temporary_index =
         tempfile::NamedTempFile::new_in(index_parent).map_err(|error| GitError::CommandFailed {
             command: "create temporary git index".to_string(),
             stderr: error.to_string(),
         })?;
-    std::fs::copy(index_path, temporary_index.path()).map_err(|error| GitError::CommandFailed {
+    (|| -> std::io::Result<()> {
+        let mut source_index = std::fs::File::open(index_path)?;
+        let modified = source_index.metadata()?.modified()?;
+        std::io::copy(&mut source_index, temporary_index.as_file_mut())?;
+        temporary_index
+            .as_file()
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+    })()
+    .map_err(|error| GitError::CommandFailed {
         command: "copy git index".to_string(),
         stderr: error.to_string(),
     })?;

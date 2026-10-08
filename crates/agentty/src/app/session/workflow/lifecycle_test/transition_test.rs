@@ -518,7 +518,7 @@ async fn test_claimed_title_generation_finishes_when_session_context_is_missing(
         latest_request: "Latest request".to_string(),
         run_client: Arc::new(run_client),
         reasoning_level: ReasoningLevel::Low,
-        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        session_agent: AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         session_id: SessionId::from("missing-session"),
         speed_mode: SpeedMode::Normal,
         title_generation: 1,
@@ -622,7 +622,7 @@ async fn test_run_title_generation_command_returns_answer_text() {
         .returning(move |request| {
             assert_eq!(request.harness, (AgentKind::Claude).to_string());
             assert_eq!(request.folder, expected_folder);
-            assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+            assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
             assert_eq!(
                 request.permission_mode,
                 ag_contracts::PermissionMode::ReadOnly
@@ -648,7 +648,7 @@ async fn test_run_title_generation_command_returns_answer_text() {
     let title = SessionManager::run_title_generation_command(
         &folder,
         "Generate a title",
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Fast,
@@ -692,7 +692,7 @@ async fn test_run_title_generation_command_retries_provider_failure() {
     let title = SessionManager::run_title_generation_command(
         Path::new("/tmp/title-generation"),
         "Generate a title",
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Normal,
@@ -719,7 +719,7 @@ async fn test_run_title_generation_command_returns_none_after_retry_exhaustion()
     let title = SessionManager::run_title_generation_command(
         Path::new("/tmp/title-generation"),
         "Generate a title",
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
         ReasoningLevel::Low,
         "session-id",
         SpeedMode::Normal,

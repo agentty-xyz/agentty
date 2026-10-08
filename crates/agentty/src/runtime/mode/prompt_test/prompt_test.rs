@@ -2166,7 +2166,7 @@ async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
     // Arrange
     let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;
     app.sessions.sessions_mut()[0].agent =
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 
@@ -2192,7 +2192,7 @@ async fn test_handle_prompt_submit_key_starts_regular_session_with_image_turn() 
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
     app.sessions.sessions_mut()[0].agent =
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     let prompt_context = prompt_context(&mut app).expect("expected prompt context");
 

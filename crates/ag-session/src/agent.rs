@@ -106,9 +106,9 @@ define_model_catalog! {
             fast: true,
             context: None,
         },
-        /// Claude Sonnet model backed by `claude-sonnet-5`.
-        ClaudeSonnet5 = 9 => {
-            id: "claude-sonnet-5",
+        /// Claude Sonnet model backed by `claude-sonnet-5-5`.
+        ClaudeSonnet55 = 9 => {
+            id: "claude-sonnet-5-5",
             description: "Balanced Claude model for quality and latency.",
             fast: false,
             context: None,
@@ -311,9 +311,9 @@ impl AgentModel {
     /// This registry is the single source of truth for model retirement.
     /// Retiring a model means removing its selectable [`AgentModel`] variant
     /// and mapping its persisted id to the replacement model here. Retired
-    /// ids never appear in selectable model lists; they stay in the database
-    /// as history for finished sessions, while sessions that are still active
-    /// are switched to the replacement automatically.
+    /// ids never appear in selectable model lists. Persisted selections resolve
+    /// to the replacement, and sessions that are still active are switched to
+    /// it automatically. Database migrations may also normalize saved ids.
     #[must_use]
     pub fn retired_replacement(value: &str) -> Option<Self> {
         const RETIRED_MODEL_REPLACEMENTS: &[(&str, AgentModel)] = &[
@@ -335,7 +335,8 @@ impl AgentModel {
             ("claude-opus-4-8", AgentModel::ClaudeOpus55),
             ("claude-opus-4-6", AgentModel::ClaudeOpus55),
             ("claude-opus-4-7", AgentModel::ClaudeOpus55),
-            ("claude-sonnet-4-6", AgentModel::ClaudeSonnet5),
+            ("claude-sonnet-4-6", AgentModel::ClaudeSonnet55),
+            ("claude-sonnet-5", AgentModel::ClaudeSonnet55),
             ("gpt-5.5", AgentModel::Gpt61Sol),
             ("gpt-5.4-mini", AgentModel::Gpt6Luna),
             ("gpt-5.4", AgentModel::Gpt61Sol),

@@ -145,7 +145,7 @@ async fn test_reply_replays_history_once_after_model_switch() {
 
     app.set_session_model(
         &session_id,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
     )
     .await
     .expect("failed to switch model");

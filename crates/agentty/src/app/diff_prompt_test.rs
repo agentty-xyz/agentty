@@ -24,7 +24,7 @@ fn request() -> OneShotRequest {
         harness: (AgentKind::Claude).to_string(),
         child_pid: None,
         folder: PathBuf::from("."),
-        model: AgentModel::ClaudeSonnet5.as_str().to_string(),
+        model: AgentModel::ClaudeSonnet55.as_str().to_string(),
         permission_mode: PermissionMode::ReadOnly,
         prompt: String::new(),
         request_kind: AgentRequestKind::FocusedReview,
@@ -133,7 +133,7 @@ async fn budgets_huge_unicode_diff_history_and_fences_before_submission() {
             .consume()?;
         assert!(request.prompt.len() <= PROMPT_BUDGET);
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        assert_eq!(request.model, AgentModel::ClaudeSonnet5.as_str());
+        assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
         seen_calls
             .lock()
             .expect("operation should succeed")

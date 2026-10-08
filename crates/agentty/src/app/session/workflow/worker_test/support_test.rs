@@ -177,7 +177,7 @@ pub(super) fn resume_command(operation_id: &str) -> SessionCommand {
             review_comment_thread_ids: Vec::new(),
             session_agent: AgentSelection::new(
                 crate::domain::agent::AgentKind::Claude,
-                AgentModel::ClaudeSonnet5,
+                AgentModel::ClaudeSonnet55,
             ),
         },
     }
@@ -522,7 +522,7 @@ pub(super) async fn prepare_fork_with_saved_reply(app: &mut crate::app::App) -> 
     let source_id = app.create_session().await.expect("source");
     app.set_session_model(
         &source_id,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
     )
     .await
     .expect("non-app-server model");

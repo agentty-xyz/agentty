@@ -417,7 +417,7 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
     let error = SessionTaskService::generate_session_commit_message_with_client(
         temp_directory.path(),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Low,
             crate::domain::agent::SpeedMode::Normal,
         ),
@@ -461,7 +461,7 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
     let generated_message = SessionTaskService::generate_session_commit_message_with_client(
         temp_directory.path(),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::XHigh,
             crate::domain::agent::SpeedMode::Fast,
         ),

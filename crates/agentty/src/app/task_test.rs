@@ -54,7 +54,7 @@ async fn oversized_selected_criteria_fail_before_provider_submission() {
     let result = TaskService::review_assist_text_with_client(
         Path::new("project"),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Medium,
             crate::domain::agent::SpeedMode::Normal,
         ),
@@ -138,7 +138,7 @@ async fn final_passes_keep_original_criteria_when_summaries_retain_only_some_pat
     let result = TaskService::review_assist_text_with_client(
         Path::new("project"),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Medium,
             crate::domain::agent::SpeedMode::Normal,
         ),
@@ -194,7 +194,7 @@ async fn oversized_review_batches_original_diff_and_discloses_summarized_history
     let result = TaskService::review_assist_text_with_client(
         Path::new("."),
         (
-            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
             ReasoningLevel::Medium,
             crate::domain::agent::SpeedMode::Normal,
         ),
@@ -1023,7 +1023,7 @@ fn focused_review_persistence_retries_use_capped_exponential_backoff() {
 async fn review_assist_text_with_client_returns_one_shot_error_on_submit_failure() {
     // Arrange
     let session_folder = Path::new("/tmp/review-assist-submit-error");
-    let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+    let review_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     let review_diff = "diff --git a/src/lib.rs b/src/lib.rs";
     let mut run_client = ag_worker::MockRunClient::new();
     run_client
@@ -1136,7 +1136,7 @@ async fn focused_review_allows_eighteen_minutes_but_caps_all_phases_at_thirty() 
         let text = TaskService::review_assist_text_with_client(
             Path::new("project"),
             (
-                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5),
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
                 ReasoningLevel::Medium,
                 crate::domain::agent::SpeedMode::Normal,
             ),

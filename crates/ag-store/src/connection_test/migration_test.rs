@@ -360,6 +360,173 @@ async fn review_diff_baseline_migration_preserves_existing_review_hashes() {
     );
 }
 
+/// Verifies Sonnet retirement updates saved selections without changing other
+/// settings.
+#[tokio::test]
+async fn test_migrate_sonnet_5_to_55_updates_sessions_and_model_settings() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/sonnet-migration", None)
+        .await
+        .expect("project should exist");
+    for (session_id, model) in [
+        ("legacy", "claude-sonnet-5"),
+        ("current", "claude-sonnet-5-5"),
+        ("other", "claude-opus-5-5"),
+    ] {
+        database
+            .sessions()
+            .insert_session(session_id, model, "main", "Review", project_id)
+            .await
+            .expect("session should exist");
+    }
+    let setting_names = [
+        SettingName::DefaultSmartModel,
+        SettingName::DefaultFastModel,
+        SettingName::DefaultReviewModel,
+        SettingName::Theme,
+    ];
+    for name in setting_names {
+        database
+            .settings()
+            .upsert_setting(name, "claude-sonnet-5")
+            .await
+            .expect("global setting should exist");
+        database
+            .settings()
+            .upsert_project_setting(project_id, name, "claude-sonnet-5")
+            .await
+            .expect("project setting should exist");
+    }
+
+    // Act
+    rerun_embedded_migration(database.pool(), 88).await;
+    let sessions =
+        sqlx::query_as::<_, (String, String)>("SELECT id, model FROM session ORDER BY id")
+            .fetch_all(database.pool())
+            .await
+            .expect("sessions should load");
+    let global_settings =
+        sqlx::query_as::<_, (String, String)>("SELECT name, value FROM setting ORDER BY name")
+            .fetch_all(database.pool())
+            .await
+            .expect("global settings should load");
+    let project_settings = load_project_setting_rows(&database, project_id).await;
+
+    // Assert
+    assert_eq!(
+        sessions,
+        vec![
+            ("current".to_string(), "claude-sonnet-5-5".to_string()),
+            ("legacy".to_string(), "claude-sonnet-5-5".to_string()),
+            ("other".to_string(), "claude-opus-5-5".to_string())
+        ]
+    );
+    let expected_settings = vec![
+        (
+            "DefaultFastModel".to_string(),
+            "claude-sonnet-5-5".to_string(),
+        ),
+        (
+            "DefaultReviewModel".to_string(),
+            "claude-sonnet-5-5".to_string(),
+        ),
+        (
+            "DefaultSmartModel".to_string(),
+            "claude-sonnet-5-5".to_string(),
+        ),
+        ("Theme".to_string(), "claude-sonnet-5".to_string()),
+    ];
+    assert_eq!(global_settings, expected_settings);
+    assert_eq!(project_settings, expected_settings);
+}
+
+/// Verifies merged Sonnet usage keeps all counters and the earliest timestamp.
+#[tokio::test]
+async fn test_migrate_sonnet_5_to_55_consolidates_usage_without_losing_history() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("database should open");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/sonnet-usage", None)
+        .await
+        .expect("project should exist");
+    for session_id in ["legacy", "mixed", "current"] {
+        insert_session_fixture(&database, session_id, "main", "Review", project_id).await;
+    }
+    sqlx::raw_sql(
+        "INSERT INTO session_usage (session_id, model, created_at, input_tokens, \
+         invocation_count, output_tokens) VALUES
+        ('legacy', 'claude-sonnet-5', 30, 10, 1, 20),
+        ('mixed', 'claude-sonnet-5', 20, 100, 2, 200),
+        ('mixed', 'claude-sonnet-5-5', 10, 300, 3, 400),
+        ('mixed', 'claude-opus-5-5', 40, 50, 4, 60),
+        ('current', 'claude-sonnet-5-5', 50, 70, 5, 80),
+        (NULL, 'claude-sonnet-5', 60, 90, 6, 100),
+        (NULL, 'claude-sonnet-5-5', 70, 110, 7, 120);",
+    )
+    .execute(database.pool())
+    .await
+    .expect("usage rows should exist");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 88).await;
+    let usage = sqlx::query_as::<_, (Option<String>, String, i64, i64, i64, i64)>(
+        "SELECT session_id, model, created_at, input_tokens, invocation_count, output_tokens FROM \
+         session_usage ORDER BY session_id, model, created_at",
+    )
+    .fetch_all(database.pool())
+    .await
+    .expect("usage should load");
+
+    // Assert
+    assert_eq!(
+        usage,
+        vec![
+            (None, "claude-sonnet-5-5".to_string(), 60, 90, 6, 100),
+            (None, "claude-sonnet-5-5".to_string(), 70, 110, 7, 120),
+            (
+                Some("current".to_string()),
+                "claude-sonnet-5-5".to_string(),
+                50,
+                70,
+                5,
+                80
+            ),
+            (
+                Some("legacy".to_string()),
+                "claude-sonnet-5-5".to_string(),
+                30,
+                10,
+                1,
+                20
+            ),
+            (
+                Some("mixed".to_string()),
+                "claude-opus-5-5".to_string(),
+                40,
+                50,
+                4,
+                60
+            ),
+            (
+                Some("mixed".to_string()),
+                "claude-sonnet-5-5".to_string(),
+                10,
+                400,
+                5,
+                600
+            ),
+        ]
+    );
+}
+
 /// Inserts one raw session-message row for migration compatibility tests.
 async fn insert_session_message_row(
     database: &Database,

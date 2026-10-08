@@ -363,7 +363,7 @@ pub(super) async fn persist_inherited_launch_settings(app: &App, session_id: &Se
     app.services
         .db()
         .sessions()
-        .update_session_agent_model(session_id, "claude", "claude-sonnet-5")
+        .update_session_agent_model(session_id, "claude", "claude-sonnet-5-5")
         .await
         .expect("source agent should update");
     app.services

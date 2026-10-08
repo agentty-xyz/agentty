@@ -1,11 +1,11 @@
 //! Local HTTP capture fixture for lifecycle telemetry tests.
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::analytics::Analytics;
 
@@ -28,6 +28,45 @@ pub(crate) fn capture_events(count: usize) -> (Analytics, JoinHandle<Vec<Value>>
     let receiver = thread::spawn(move || (0..count).map(|_| receive_event(&listener)).collect());
 
     (analytics, receiver)
+}
+
+#[test]
+fn capture_response_disables_reuse_of_closed_connections() {
+    // Arrange
+    let listener = TcpListener::bind("127.0.0.1:0").expect("telemetry listener");
+    let address = listener.local_addr().expect("telemetry address");
+    let event = json!({ "event": "agentty_launch" });
+    let body = serde_json::to_vec(&event).expect("event JSON");
+    let receiver = thread::spawn(move || receive_event(&listener));
+    let mut client = TcpStream::connect(address).expect("telemetry connection");
+    client
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("response timeout");
+
+    // Act
+    write!(
+        client,
+        "POST /i/v0/e/ HTTP/1.1\r\nHost: {address}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .expect("request headers");
+    client.write_all(&body).expect("request body");
+    let mut response = String::new();
+    client
+        .read_to_string(&mut response)
+        .expect("response followed by connection closure");
+    let captured_event = receiver.join().expect("telemetry receiver");
+
+    // Assert
+    let (headers, response_body) = response.split_once("\r\n\r\n").expect("HTTP response");
+    assert!(
+        headers
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("Connection: close")),
+        "a receiver that closes after one request must disable connection reuse"
+    );
+    assert_eq!(response_body, "{}");
+    assert_eq!(captured_event, event);
 }
 
 fn receive_event(listener: &TcpListener) -> Value {
@@ -73,8 +112,10 @@ fn receive_event(listener: &TcpListener) -> Value {
         if request.len() >= header_end + length {
             let event = serde_json::from_slice(&request[header_end..header_end + length])
                 .expect("event JSON");
+            // Each socket serves one request, so pooled senders must not reuse
+            // it.
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
                 .expect("telemetry response");
 
             return event;

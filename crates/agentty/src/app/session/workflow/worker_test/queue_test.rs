@@ -582,7 +582,7 @@ async fn worker_turn_telemetry_tracks_success_and_interruption_but_excludes_fail
             queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         context.app_event_tx = event_tx;
-        let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+        let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
         let command = SessionCommand::Run {
             operation_id: "telemetry-turn".into(),
             request_kind: request_kind.clone(),
@@ -642,7 +642,7 @@ async fn turn_telemetry_reports_interruption_during_auto_commit() {
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     context.app_event_tx = event_tx;
     let command = resume_command("auto-commit-cancellation");
-    let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet5);
+    let expected_agent = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55);
     db.operations()
         .insert_session_operation(
             "auto-commit-cancellation",
