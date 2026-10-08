@@ -43,15 +43,15 @@ crates/
 
 ## Public boundary
 
-- `Harness` owns the model, validated repository, configured defaults, lifecycle
-  observers, and the selected session store.
+- `Harness` owns the model and its required `ContextBudget`, validated repository,
+  configured defaults, lifecycle observers, and the selected session store.
 - `Session` is the only multi-turn abstraction; `run_once` executes a stateless turn.
 - `Session::turn` is the configurable durable-turn entry point: chain `options` and
   `host_id`, then either await the turn or `start` it for a `TurnControl`.
   `Harness::turn` takes explicit options for a stateless turn and is likewise awaited or
   started; it has no host ID.
-- `TurnOptions` fixes the schema, `ToolPolicy`, limits, and optional `ComparisonBase`
-  for one execution. Explicit options replace defaults; they are never merged.
+- `TurnOptions` fixes the schema, `ToolPolicy`, and optional `ComparisonBase` for one
+  execution. Explicit options replace defaults; they are never merged.
 - The crate root exports what a typical host needs; extension points and detailed
   records live in the `provider`, `model`, `tool`, `bash`, `turn`, `store`, `recovery`,
   and `lifecycle` modules.
@@ -64,7 +64,9 @@ crates/
 ## Agent loop
 
 A turn continues until the model responds without requesting a tool, and the terminal
-response must satisfy the caller's schema:
+response must satisfy the caller's schema. There is no tool-call limit: cancellation and
+the required `ContextBudget` bound a turn, which fails typed once the next request no
+longer fits.
 
 ```mermaid
 flowchart TD
@@ -79,8 +81,8 @@ flowchart TD
 
 ## Sessions
 
-- The selected store is canonical. Provider-native continuation is an optimization,
-  never the only copy of conversation state.
+- The selected store is canonical. Every request replays projected history; providers
+  never hold conversation state.
 - One active turn per session. Renewable leases fence concurrent processes; expired
   leases mark turns `interrupted`, and only completed turns re-enter model context.
 - Reservation and model switching run in one store-owned atomic section that reads the
@@ -96,9 +98,9 @@ flowchart TD
 - `switch_model` selects another registration for an idle session. `compact` publishes a
   schema-validated summary checkpoint that request projection replays ahead of the
   remaining recent turns.
-- A registration may declare an approximate `ContextBudget`: requests keep the most
-  recent whole turns that fit, and mandatory content that cannot fit fails with a typed
-  error before any provider call.
+- Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
+  by its registration: requests keep the most recent whole turns that fit, and mandatory
+  content that cannot fit fails with a typed error before any provider call.
 - Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
   turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
   observe context projection instead of inferring it from model answers.
@@ -174,9 +176,6 @@ the host's span; a started turn keeps the context current at its first poll.
 
 Planned, not shipped. Each step lands as its own change, in this order:
 
-1. **No per-turn tool-call limit** — `TurnLimits` is removed. Cancellation and a
-   required `ContextBudget` bound a turn, which fails typed once the next request no
-   longer fits.
 1. **The acquired turn owns request projection and commit** — host-request and plain
    turns become commit variants instead of flags.
 1. **Stopped-turn replay** — each finished tool exchange persists under the turn owner.

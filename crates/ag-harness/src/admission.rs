@@ -21,12 +21,12 @@ use crate::{SessionError, TurnOptions};
 pub struct AdmissionState {
     /// Whether a turn still holds an unexpired reservation.
     pub active_turn: bool,
-    /// Options snapshot recorded by the latest completed turn.
+    /// Options snapshot recorded by the latest completed turn, checked only
+    /// to reject an undecodable snapshot; stores that keep no snapshots
+    /// report `None`.
     pub latest_options: Option<String>,
     /// Current model selection generation.
     pub model_generation: i64,
-    /// Current provider continuation.
-    pub provider_session_id: Option<String>,
     /// Request recorded under [`TurnAdmission::host_id`]; always `None` for
     /// model switches and plain turns.
     pub request: Option<HostTurnRecord>,
@@ -66,8 +66,8 @@ impl TurnAdmission {
 
     /// Classifies a recorded host request before checking busy state, then
     /// requires the expected model generation, no active turn, and no
-    /// unresolved command. Keeps the continuation only when the latest
-    /// completed turn's options are compatible.
+    /// unresolved command. The latest completed turn's options snapshot must
+    /// still decode.
     ///
     /// # Errors
     /// Returns [`SessionError::HostTurnConflict`] for a reused host ID with a
@@ -87,15 +87,11 @@ impl TurnAdmission {
             return Ok(Admission::Recorded(record));
         }
         check_idle(session_id, &state, self.generation)?;
-        let compatible = state
-            .latest_options
-            .as_deref()
-            .map(StoredTurnOptions::decode)
-            .transpose()?
-            .is_some_and(|previous| previous.continuation_compatible(&self.options));
+        if let Some(snapshot) = &state.latest_options {
+            StoredTurnOptions::decode(snapshot)?;
+        }
 
         Ok(Admission::Reserve(NewTurn {
-            continuation: state.provider_session_id.filter(|_| compatible),
             message: self.input.clone().into_user_message(),
             options: StoredTurnOptions::encode(&self.options),
             request: self.request.clone(),
@@ -113,18 +109,12 @@ pub enum Admission {
 
 /// Running-turn record admitted by [`TurnAdmission::admit`].
 pub struct NewTurn {
-    continuation: Option<String>,
     message: ModelMessage,
     options: String,
     request: Option<HostRequest>,
 }
 
 impl NewTurn {
-    /// Provider continuation the session keeps; `None` clears it.
-    pub fn continuation(&self) -> Option<&str> {
-        self.continuation.as_deref()
-    }
-
     /// User message persisted as the turn's first message.
     pub fn message(&self) -> &ModelMessage {
         &self.message
@@ -154,7 +144,6 @@ pub struct ReservedTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) deadline: Instant,
     pub(crate) owner: TurnOwner,
-    pub(crate) turn: NewTurn,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
@@ -162,17 +151,11 @@ impl ReservedTurn {
     /// Describes a committed reservation. `deadline` must not exceed the
     /// stored lease expiry; `turns` holds completed history bounded by the
     /// stored budget, oldest first.
-    pub fn new(
-        turn: NewTurn,
-        owner: TurnOwner,
-        deadline: Instant,
-        turns: Vec<Vec<ModelMessage>>,
-    ) -> Self {
+    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<Vec<ModelMessage>>) -> Self {
         Self {
             checkpoint: None,
             deadline,
             owner,
-            turn,
             turns,
         }
     }

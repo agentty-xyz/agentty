@@ -1,6 +1,9 @@
 //! Integration coverage for metadata-only lifecycle observation.
 #![cfg(test)]
 
+#[path = "support/context_budget.rs"]
+mod context_budget_fixture;
+
 use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -14,6 +17,8 @@ use serde_json::json;
 use tokio::sync::Notify;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+use crate::context_budget_fixture::unbounded_context_budget;
 
 #[derive(Clone, Default)]
 struct EventRecorder {
@@ -288,8 +293,11 @@ async fn harness_owns_model_events_without_duplicate_model_observation() {
         .await;
     let model_events = EventRecorder::default();
     let harness_events = EventRecorder::default();
-    let harness = ag_harness::Harness::new(client(&server, "harness-model", model_events.clone()))
-        .with_lifecycle_observer(harness_events.clone());
+    let harness = ag_harness::Harness::new(
+        client(&server, "harness-model", model_events.clone()),
+        unbounded_context_budget(),
+    )
+    .with_lifecycle_observer(harness_events.clone());
 
     // Act
     let output = harness
@@ -361,8 +369,11 @@ async fn cancelling_harness_turn_closes_model_and_turn_lifecycles_once() {
         .await;
     let model_events = EventRecorder::default();
     let harness_events = EventRecorder::default();
-    let harness = ag_harness::Harness::new(client(&server, "cancelled-turn", model_events.clone()))
-        .with_lifecycle_observer(harness_events.clone());
+    let harness = ag_harness::Harness::new(
+        client(&server, "cancelled-turn", model_events.clone()),
+        unbounded_context_budget(),
+    )
+    .with_lifecycle_observer(harness_events.clone());
 
     // Act
     let mut turn = tokio::spawn(async move {
@@ -419,10 +430,13 @@ async fn durable_lifecycle_and_duration_include_completion_persistence() {
         let observed_events = events.clone();
         let observed_completion = Arc::clone(&model_completed);
         let harness = Arc::new(
-            ag_harness::Harness::new(GatedModel {
-                release: Arc::clone(&release),
-                started: Arc::clone(&started),
-            })
+            ag_harness::Harness::new(
+                GatedModel {
+                    release: Arc::clone(&release),
+                    started: Arc::clone(&started),
+                },
+                unbounded_context_budget(),
+            )
             .database(&database_path)
             .with_lifecycle_observer(move |event: LifecycleEvent| {
                 if matches!(

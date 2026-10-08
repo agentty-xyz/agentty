@@ -106,7 +106,7 @@ pub trait SessionStore: Send + Sync {
     /// budget, so unsupported history is reported before stale or busy
     /// admission. Then read [`AdmissionState`], apply [`ModelSwitch::admit`]
     /// for the generation to record, and record it with the switch's identity
-    /// and metadata while clearing continuation, in the same mutation.
+    /// and metadata in the same mutation.
     /// Rejections leave model selection unchanged; never rewrite turn
     /// snapshots.
     async fn switch_model(
@@ -121,9 +121,8 @@ pub trait SessionStore: Send + Sync {
     /// [`TurnAdmission::admit`]. Return a recorded request unchanged.
     /// Otherwise persist the [`NewTurn`] as the running turn at the next
     /// position under a fresh owner token and lease, with the current model
-    /// selection as immutable provenance, and set the session continuation to
-    /// its `continuation`. Persist its message through the shared message
-    /// codec, preserving block order and image content. Return a
+    /// selection as immutable provenance. Persist its message through the
+    /// shared message codec, preserving block order and image content. Return a
     /// [`ReservedTurn`] whose owner names this store's identity and
     /// `session_id`, and whose deadline never exceeds the stored lease expiry;
     /// the harness rejects any other owner without executing.
@@ -163,23 +162,21 @@ pub trait SessionStore: Send + Sync {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError>;
 
     /// Renew only an unexpired owner; return a conservative confirmed deadline.
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError>;
-    /// Atomically commits messages and continuation under an unexpired owner.
+    /// Atomically commits messages under an unexpired owner.
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
     ) -> Result<(), SessionError>;
-    /// Marks an unexpired owned turn failed and clears its continuation.
+    /// Marks an unexpired owned turn failed.
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError>;
 
-    /// Idempotent cleanup must never clear a successor's continuation.
+    /// Idempotent cleanup must never interrupt a successor's turn.
     async fn interrupt(&self, owner: &TurnOwner) -> Result<(), SessionError>;
     /// Returns all write records, including failed, interrupted, and evicted
     /// turns.

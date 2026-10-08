@@ -54,10 +54,9 @@ impl Model for RecordingModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.requests.lock().expect("requests").push(request);
 
-        Ok(
-            ModelCompletion::from_response(ModelResponse::Output(json!({"answer": self.name})))
-                .with_provider_session_id(format!("{}-continuation", self.name)),
-        )
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({"answer": self.name}),
+        )))
     }
 }
 
@@ -69,13 +68,13 @@ fn budget(max_request_weight: u64, reserved_output_weight: u64) -> ContextBudget
 
 fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
     let mut registry = ModelRegistry::new();
-    let registrations: [(&'static str, Option<ContextBudget>); 6] = [
-        ("small", Some(budget(35, 5))),
-        ("mid", Some(budget(41, 0))),
-        ("huge", Some(budget(101, 0))),
-        ("tiny", Some(budget(5, 0))),
-        ("tiny-default", Some(budget(4, 0))),
-        ("vision", Some(budget(60, 0))),
+    let registrations: [(&'static str, ContextBudget); 6] = [
+        ("small", budget(35, 5)),
+        ("mid", budget(41, 0)),
+        ("huge", budget(101, 0)),
+        ("tiny", budget(5, 0)),
+        ("tiny-default", budget(4, 0)),
+        ("vision", budget(60, 0)),
     ];
     for (name, context_budget) in registrations {
         registry
@@ -88,7 +87,6 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                 ModelCapabilities {
                     context_budget,
                     image_input: name == "vision",
-                    native_continuation: true,
                     tool_calls: true,
                 },
             )
@@ -110,7 +108,7 @@ fn user_texts(request: &ModelRequest) -> Vec<&str> {
 }
 
 #[tokio::test]
-async fn projection_bounds_requests_and_replays_without_continuation() {
+async fn projection_bounds_requests_on_every_handle() {
     for store in stores().await {
         // Arrange
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -173,13 +171,6 @@ async fn projection_bounds_requests_and_replays_without_continuation() {
         assert_eq!(third.report().history().replayed_turns(), 1);
         assert_eq!(third.report().history().evicted_turns(), 1);
         assert!(!third.report().history().checkpoint_replayed());
-        // Loading is silently bounded by the byte replay budget, so a budgeted
-        // registration never trusts a provider-side continuation.
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.provider_session_id().is_none())
-        );
         assert_eq!(recovered.model.expect("provenance").generation, 0);
         let HostTurnStatus::Completed(outcome) = recovered.status else {
             unreachable!("first turn completed");
@@ -288,7 +279,6 @@ async fn switching_models_applies_the_target_budget_to_whole_tool_groups() {
             message,
             ModelMessage::AssistantToolCalls(_) | ModelMessage::ToolResult { .. }
         )));
-        assert_eq!(requests[0].provider_session_id(), None);
         // Budget 101 fits all three turns, so the tool group returns intact.
         assert_eq!(
             user_texts(&requests[1]),
@@ -346,7 +336,6 @@ async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
                 },
                 ModelMessage::Assistant(r#"{"answer":"seeded"}"#.to_string()),
             ],
-            Some("seeded-continuation"),
         )
         .await
         .expect("complete tool turn");
@@ -365,7 +354,6 @@ async fn seed_tool_and_text_turns(store: &Arc<dyn SessionStore>) {
             &[ModelMessage::Assistant(
                 r#"{"answer":"seeded"}"#.to_string(),
             )],
-            Some("seeded-continuation"),
         )
         .await
         .expect("complete text turn");
@@ -404,8 +392,7 @@ async fn image_history_projects_at_its_encoded_weight() {
         let requests = requests.lock().expect("requests");
         assert_eq!(requests.len(), 3);
         // The 57-weight image turn exceeds the 55 weights left after the
-        // current input, so replay drops it; budgeted registrations never
-        // reuse native continuation.
+        // current input, so replay drops it.
         assert!(
             !requests[1]
                 .messages()
@@ -413,7 +400,6 @@ async fn image_history_projects_at_its_encoded_weight() {
                 .any(|message| matches!(message, ModelMessage::UserInput(_)))
         );
         assert_eq!(user_texts(&requests[1]), ["next"]);
-        assert_eq!(requests[1].provider_session_id(), None);
         assert_eq!(next.report().history().evicted_turns(), 1);
         assert_eq!(next.report().history().replayed_turns(), 0);
         assert_eq!(user_texts(&requests[2]), ["next", "again"]);

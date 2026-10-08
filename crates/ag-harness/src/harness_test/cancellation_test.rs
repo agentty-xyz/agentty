@@ -9,11 +9,12 @@ use tempfile::tempdir;
 use tokio::sync::Notify;
 
 use super::support::{
-    ContinuationInterruptionModel, LeaseExpiryModel, LeaseOwnershipModel, PendingToolFileSystem,
-    SlowModel, elapsed_timestamp, model, object_schema, read_call, response_without_metadata,
+    InterruptionModel, LeaseExpiryModel, LeaseOwnershipModel, PendingToolFileSystem, SlowModel,
+    elapsed_timestamp, model, object_schema, read_call, response_without_metadata,
     send_with_resumed_session, stored_lease_expiry, wait_for_fixture, wait_for_lease_extension,
     wait_for_stored_turn_state,
 };
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::FileSystem as _;
 use crate::harness::{DEFAULT_MAX_HISTORY_BYTES, Harness, Session, SessionHistory};
 use crate::model::ModelResponse;
@@ -30,11 +31,14 @@ async fn cancelling_a_provider_request_durably_interrupts_the_session_turn() {
     let database_path = directory.path().join("harness.db");
     let request_started = Arc::new(Notify::new());
     let harness = Arc::new(
-        Harness::new(ContinuationInterruptionModel {
-            call_count: AtomicUsize::new(0),
-            dropped: Arc::new(Notify::new()),
-            started: Arc::clone(&request_started),
-        })
+        Harness::new(
+            InterruptionModel {
+                call_count: AtomicUsize::new(0),
+                dropped: Arc::new(Notify::new()),
+                started: Arc::clone(&request_started),
+            },
+            unbounded_context_budget(),
+        )
         .database(&database_path),
     );
     let mut session = harness
@@ -73,7 +77,6 @@ async fn cancelling_a_provider_request_durably_interrupts_the_session_turn() {
         .resume("session-a")
         .await
         .expect("session should reopen");
-    assert!(resumed.provider_session_id.is_none());
     let recovered = resumed
         .send("retry")
         .await
@@ -115,7 +118,7 @@ async fn cancelling_a_tool_request_durably_interrupts_the_session_turn() {
         )))
     });
     let harness = Arc::new(
-        Harness::new(model)
+        Harness::new(model, unbounded_context_budget())
             .database(&database_path)
             .repository(Repository::fixture("repo"))
             .allow(Tool::Read)
@@ -169,11 +172,14 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         .expect("session should be created");
     let first_started = Arc::new(Notify::new());
     let first_release = Arc::new(Notify::new());
-    let harness = Harness::new(LeaseExpiryModel {
-        call_count: AtomicUsize::new(0),
-        release_first: Arc::clone(&first_release),
-        started_first: Arc::clone(&first_started),
-    });
+    let harness = Harness::new(
+        LeaseExpiryModel {
+            call_count: AtomicUsize::new(0),
+            release_first: Arc::clone(&first_release),
+            started_first: Arc::clone(&first_started),
+        },
+        unbounded_context_budget(),
+    );
     let mut first = Session {
         checkpoint: None,
         model_generation: 0,
@@ -181,7 +187,6 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        provider_session_id: None,
         schema: object_schema(),
         system_prompt: None,
     };
@@ -192,7 +197,6 @@ async fn active_session_turn_renews_its_lease_during_a_long_model_request() {
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        provider_session_id: None,
         schema: object_schema(),
         system_prompt: None,
     };
@@ -271,11 +275,14 @@ async fn recovered_lease_cancels_the_original_model_request() {
         .expect("session should be created");
     let first_started = Arc::new(Notify::new());
     let first_dropped = Arc::new(Notify::new());
-    let harness = Harness::new(ContinuationInterruptionModel {
-        call_count: AtomicUsize::new(0),
-        dropped: Arc::clone(&first_dropped),
-        started: Arc::clone(&first_started),
-    });
+    let harness = Harness::new(
+        InterruptionModel {
+            call_count: AtomicUsize::new(0),
+            dropped: Arc::clone(&first_dropped),
+            started: Arc::clone(&first_started),
+        },
+        unbounded_context_budget(),
+    );
     let mut first = Session {
         checkpoint: None,
         model_generation: 0,
@@ -283,7 +290,6 @@ async fn recovered_lease_cancels_the_original_model_request() {
         harness: harness.snapshot(),
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        provider_session_id: None,
         schema: object_schema(),
         system_prompt: None,
     };
@@ -294,7 +300,6 @@ async fn recovered_lease_cancels_the_original_model_request() {
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        provider_session_id: None,
         schema: object_schema(),
         system_prompt: None,
     };
@@ -361,11 +366,14 @@ END
     .expect("renewal failure trigger should be created");
     let request_started = Arc::new(Notify::new());
     let request_dropped = Arc::new(Notify::new());
-    let harness = Harness::new(LeaseOwnershipModel {
-        call_count: AtomicUsize::new(0),
-        dropped_first: Arc::clone(&request_dropped),
-        started_first: Arc::clone(&request_started),
-    });
+    let harness = Harness::new(
+        LeaseOwnershipModel {
+            call_count: AtomicUsize::new(0),
+            dropped_first: Arc::clone(&request_dropped),
+            started_first: Arc::clone(&request_started),
+        },
+        unbounded_context_budget(),
+    );
     let mut session = Session {
         checkpoint: None,
         model_generation: 0,
@@ -373,7 +381,6 @@ END
         harness,
         history: SessionHistory::new(DEFAULT_MAX_HISTORY_BYTES),
         id: "session-a".to_string(),
-        provider_session_id: None,
         schema: object_schema(),
         system_prompt: None,
     };
@@ -404,7 +411,8 @@ END
 async fn session_rejects_overlapping_turns_for_the_same_id() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(SlowModel).database(directory.path().join("harness.db"));
+    let harness = Harness::new(SlowModel, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut first = harness
         .session("session-a", object_schema())
         .create()
@@ -434,7 +442,8 @@ async fn session_rejects_overlapping_turns_for_the_same_id() {
 async fn different_sessions_run_concurrently() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(SlowModel).database(directory.path().join("harness.db"));
+    let harness = Harness::new(SlowModel, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut first = harness
         .session("session-a", object_schema())
         .create()

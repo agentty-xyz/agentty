@@ -2,7 +2,7 @@ use std::env;
 use std::sync::atomic::AtomicUsize;
 
 use ag_harness::provider::ModelProvider;
-use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use ag_harness::{Harness, Repository, Tool, ToolPolicy, TurnOptions};
 use serde_json::json;
 use tokio::io::BufReader;
 
@@ -25,11 +25,7 @@ fn test_models() -> ModelSwitcher<impl FnMut(&ModelSelection) -> Result<FixedMod
 }
 
 fn test_options() -> TurnOptions {
-    TurnOptions::new(
-        chat_schema().expect("schema"),
-        ToolPolicy::default(),
-        TurnLimits::default(),
-    )
+    TurnOptions::new(chat_schema().expect("schema"), ToolPolicy::default())
 }
 
 #[tokio::test]
@@ -38,10 +34,13 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
     let directory = tempfile::tempdir().expect("temporary directory should be created");
     let repository = Repository::new(env!("CARGO_MANIFEST_DIR"), test_git_executable())
         .expect("repository fixture should be valid");
-    let harness = Harness::new(FixedModel(json!({"message": "hello"})))
-        .database(directory.path().join("harness.db"))
-        .repository(repository)
-        .allow(Tool::Read);
+    let harness = Harness::new(
+        FixedModel(json!({"message": "hello"})),
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
+    .database(directory.path().join("harness.db"))
+    .repository(repository)
+    .allow(Tool::Read);
     let mut session = harness
         .session(
             "session-a",
@@ -80,9 +79,12 @@ async fn interactive_chat_prints_prompts_and_handles_blank_input() {
 async fn interactive_chat_continues_after_a_failed_turn() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FailOnceModel {
-        requests: AtomicUsize::new(0),
-    })
+    let harness = Harness::new(
+        FailOnceModel {
+            requests: AtomicUsize::new(0),
+        },
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
     .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(
@@ -119,9 +121,12 @@ async fn interactive_chat_continues_after_a_failed_turn() {
 async fn noninteractive_chat_reports_a_failure_before_retrying() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FailOnceModel {
-        requests: AtomicUsize::new(0),
-    })
+    let harness = Harness::new(
+        FailOnceModel {
+            requests: AtomicUsize::new(0),
+        },
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
     .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(
@@ -158,9 +163,12 @@ async fn noninteractive_chat_reports_a_failure_before_retrying() {
 async fn noninteractive_chat_returns_the_last_failure_at_eof() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FailOnceModel {
-        requests: AtomicUsize::new(0),
-    })
+    let harness = Harness::new(
+        FailOnceModel {
+            requests: AtomicUsize::new(0),
+        },
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
     .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(
@@ -198,8 +206,11 @@ async fn noninteractive_chat_returns_the_last_failure_at_eof() {
 async fn chat_rejects_model_output_that_violates_schema() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FixedModel(json!({"unexpected": true})))
-        .database(directory.path().join("harness.db"));
+    let harness = Harness::new(
+        FixedModel(json!({"unexpected": true})),
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
+    .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(
             "session-a",
@@ -240,8 +251,11 @@ async fn chat_rejects_model_output_that_violates_schema() {
 async fn one_shot_chat_does_not_read_follow_up_terminal_input() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FixedModel(json!({"message": "hello"})))
-        .database(directory.path().join("harness.db"));
+    let harness = Harness::new(
+        FixedModel(json!({"message": "hello"})),
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
+    .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(
             "session-a",
@@ -277,9 +291,12 @@ async fn one_shot_chat_does_not_read_follow_up_terminal_input() {
 async fn one_shot_chat_returns_turn_failures() {
     // Arrange
     let directory = tempfile::tempdir().expect("temporary directory should be created");
-    let harness = Harness::new(FailOnceModel {
-        requests: AtomicUsize::new(0),
-    })
+    let harness = Harness::new(
+        FailOnceModel {
+            requests: AtomicUsize::new(0),
+        },
+        ModelSelection::context_budget().expect("CLI context budget"),
+    )
     .database(directory.path().join("harness.db"));
     let mut session = harness
         .session(

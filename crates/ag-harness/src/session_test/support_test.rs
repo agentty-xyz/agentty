@@ -92,7 +92,7 @@ pub(super) fn turn(prompt: &str, answer: &str) -> Vec<ModelMessage> {
     ]
 }
 
-pub(super) async fn complete_native_turn(database: &Database, provider_session_id: &str) {
+pub(super) async fn complete_first_turn(database: &Database) {
     let mut acquired = AcquiredTurn::begin(
         Arc::new(database.clone()),
         "session-a",
@@ -107,7 +107,6 @@ pub(super) async fn complete_native_turn(database: &Database, provider_session_i
             "session-a",
             acquired.guard.owner().turn_position,
             &turn("first", "first")[1..],
-            Some(provider_session_id),
         )
         .await
         .expect("turn should complete");
@@ -254,10 +253,9 @@ impl Database {
         session_id: &str,
         turn_position: i64,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
         let owner = active_turn_owner(self, session_id, turn_position).await;
-        crate::store::SessionStore::complete_turn(self, &owner, messages, continuation).await
+        crate::store::SessionStore::complete_turn(self, &owner, messages).await
     }
 
     pub(crate) async fn fail_turn(
@@ -464,11 +462,7 @@ pub(super) async fn wait_for_interrupted_turn(database: &Database, turn_position
 }
 
 pub(super) fn turn_options() -> crate::TurnOptions {
-    crate::TurnOptions::new(
-        schema(),
-        crate::ToolPolicy::default(),
-        crate::TurnLimits::default(),
-    )
+    crate::TurnOptions::new(schema(), crate::ToolPolicy::default())
 }
 
 /// Makes every owned-turn interruption fail until [`allow_interrupts`].

@@ -3,9 +3,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ag_harness::bash::{BashConfig, CommandOutcome};
-use ag_harness::{ToolPolicy, TurnError, TurnLimits, TurnOptions};
+use ag_harness::{ToolPolicy, TurnError, TurnOptions};
 
 use super::fixture::{NativeFixture, Workspace, schema, with_runtime};
+#[cfg(target_os = "macos")]
+use crate::context_budget_fixture::unbounded_context_budget;
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -180,7 +182,7 @@ async fn native_positive_controls_and_filesystem_network_denials() {
 async fn native_denied_tool_and_unsafe_aliases_never_execute() {
     // Arrange
     let workspace = Workspace::new();
-    let options = TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default());
+    let options = TurnOptions::new(schema(), ToolPolicy::default());
     let outside = tempfile::tempdir().expect("outside");
     std::fs::write(outside.path().join("secret"), "secret").expect("secret");
 
@@ -485,10 +487,11 @@ async fn native_metadata_denials_include_new_names_and_nested_repository_scope()
              output/new-file/.git; then exit 93; fi; printf allowed > output/ordinary",
         )
         .await;
-    let nested = ag_harness::Harness::new(super::fixture::ShellModel).repository(
-        ag_harness::Repository::new(root.join("output/nested"), "/usr/bin/git")
-            .expect("nested repository"),
-    );
+    let nested = ag_harness::Harness::new(super::fixture::ShellModel, unbounded_context_budget())
+        .repository(
+            ag_harness::Repository::new(root.join("output/nested"), "/usr/bin/git")
+                .expect("nested repository"),
+        );
     let options = workspace.options(Duration::from_secs(10), 128);
     std::fs::create_dir(root.join("output/nested/output")).expect("nested output");
     let nested_coverage = super::coverage::Coverage::new(&root.join("output/nested"));

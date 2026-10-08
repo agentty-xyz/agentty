@@ -40,7 +40,9 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
         .fail_turn(
             "session",
             first.guard.owner().turn_position,
-            &TurnError::ToolCallLimit { limit: 8 },
+            &TurnError::ToolDenied {
+                name: "read".to_string(),
+            },
         )
         .await
         .expect("failed turn");
@@ -67,11 +69,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
 
     // Assert
     assert_eq!(running.0, "running");
-    assert!(
-        StoredTurnOptions::decode(&running.1)
-            .expect("running options")
-            .continuation_compatible(&options)
-    );
+    assert!(StoredTurnOptions::decode(&running.1).is_ok());
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].0, "failed");
     assert_eq!(rows[1].0, "interrupted");
@@ -79,7 +77,7 @@ async fn snapshots_are_committed_before_execution_and_survive_failure_and_interr
 }
 
 #[tokio::test]
-async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuration() {
+async fn legacy_history_keeps_its_schema_after_dropping_native_continuation() {
     // Arrange
     let directory = tempdir().expect("temporary directory");
     let database_path = directory.path().join("legacy.db");
@@ -87,10 +85,6 @@ async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuratio
     let database = Database::open(&database_path)
         .await
         .expect("migrated database");
-    sqlx::query("UPDATE session SET provider_session_id = 'legacy-native' WHERE id = 'session-a'")
-        .execute(database.pool())
-        .await
-        .expect("legacy continuation");
 
     // Act
     let loaded = database
@@ -106,17 +100,15 @@ async fn legacy_history_keeps_its_schema_but_replays_unknown_native_configuratio
     )
     .await
     .expect("new turn");
-    let native: Option<String> =
-        sqlx::query_scalar("SELECT provider_session_id FROM session WHERE id = 'session-a'")
-            .fetch_one(database.pool())
-            .await
-            .expect("canonical continuation");
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('session')")
+        .fetch_all(database.pool())
+        .await
+        .expect("session columns");
 
     // Assert
     assert_eq!(loaded.schema, schema());
     assert_eq!(acquired.turns.len(), 2);
-    assert!(acquired.provider_session_id.is_none());
-    assert!(native.is_none());
+    assert!(!columns.iter().any(|column| column == "provider_session_id"));
 }
 
 #[tokio::test]
@@ -137,18 +129,13 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     .await
     .expect("reservation");
     database
-        .complete_turn(
-            "session",
-            first.guard.owner().turn_position,
-            &[],
-            Some("native"),
-        )
+        .complete_turn("session", first.guard.owner().turn_position, &[])
         .await
         .expect("completion");
     first.guard.disarm();
     let encoded = StoredTurnOptions::encode(&turn_options());
     let mut unsupported: Value = serde_json::from_str(&encoded).expect("snapshot");
-    unsupported["version"] = json!(5);
+    unsupported["version"] = json!(6);
     let invalid_schema = json!({"type": "invalid"});
     let schema_error = OutputSchema::new(invalid_schema.clone()).expect_err("invalid schema");
     let mut invalid: Value = serde_json::from_str(&encoded).expect("snapshot");
@@ -156,7 +143,7 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
     let cases = [
         (
             unsupported.to_string(),
-            "invalid persistent session data: unsupported turn options version 5".to_string(),
+            "invalid persistent session data: unsupported turn options version 6".to_string(),
             false,
         ),
         (
@@ -209,12 +196,12 @@ async fn corrupt_snapshots_are_rejected_on_reopen_and_before_reservation() {
 }
 
 #[tokio::test]
-async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuation() {
+async fn version_two_snapshots_keep_their_fingerprint_rules() {
     // Arrange
     let options = turn_options();
     let mut legacy = json!({
         "comparison_base": null,
-        "max_tool_calls": options.limits().max_tool_calls(),
+        "max_tool_calls": 8,
         "output_schema": options.schema().value(),
         "tool_policy": options.tool_policy(),
         "version": 2,
@@ -238,12 +225,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
     .await
     .expect("first turn");
     database
-        .complete_turn(
-            "session",
-            first.guard.owner().turn_position,
-            &[],
-            Some("native"),
-        )
+        .complete_turn("session", first.guard.owner().turn_position, &[])
         .await
         .expect("completed turn");
     first.guard.disarm();
@@ -254,7 +236,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .expect("legacy snapshot");
 
     // Act
-    let stored = StoredTurnOptions::decode(&legacy.to_string()).expect("legacy metadata");
+    let stored = StoredTurnOptions::decode(&legacy.to_string());
     let reopened = Database::open(&database_path)
         .await
         .expect("reopened database");
@@ -262,7 +244,7 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
         .load_session("session")
         .await
         .expect("legacy history");
-    let acquired = AcquiredTurn::begin(
+    AcquiredTurn::begin(
         Arc::new(reopened.clone()),
         "session",
         &TurnInput::from("next"),
@@ -278,10 +260,9 @@ async fn version_two_snapshots_keep_their_fingerprint_rules_and_native_continuat
             .expect("new snapshot");
 
     // Assert
-    assert!(stored.continuation_compatible(&options));
-    assert_eq!(acquired.provider_session_id.as_deref(), Some("native"));
+    assert!(stored.is_ok());
     assert_eq!(
         serde_json::from_str::<Value>(&snapshot).expect("new metadata")["version"],
-        3
+        5
     );
 }

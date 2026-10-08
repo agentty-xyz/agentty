@@ -6,6 +6,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::support::{TurnStatusRow, metadata_model, model, schema};
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::model::{ModelCompletion, ModelError, ModelMessage, ModelMetadata, ModelResponse};
 use crate::recovery::ExecutionIdentity;
@@ -88,7 +89,7 @@ async fn persistent_chat_restores_completed_history_and_system_prompt() {
             }),
         )))
     });
-    let harness = Harness::new(model).database(&database_path);
+    let harness = Harness::new(model, unbounded_context_budget()).database(&database_path);
     let mut session = harness
         .session("session-a", schema())
         .system_prompt("persistent instructions")
@@ -127,7 +128,7 @@ async fn persistent_chat_does_not_store_failed_turns() {
         .expect_complete()
         .times(1)
         .returning(|_| Err(ModelError::InvalidResponse));
-    let harness = Harness::new(model).database(&database_path);
+    let harness = Harness::new(model, unbounded_context_budget()).database(&database_path);
     let mut session = harness
         .session("session-a", schema())
         .create()
@@ -168,13 +169,21 @@ async fn opening_session_validates_saved_model_identity() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
     let database_path = directory.path().join("harness.db");
-    let original = Harness::new(metadata_model("provider-a", "model-a")).database(&database_path);
+    let original = Harness::new(
+        metadata_model("provider-a", "model-a"),
+        unbounded_context_budget(),
+    )
+    .database(&database_path);
     original
         .session("session-a", schema())
         .create()
         .await
         .expect("session should be created");
-    let different = Harness::new(metadata_model("provider-b", "model-b")).database(&database_path);
+    let different = Harness::new(
+        metadata_model("provider-b", "model-b"),
+        unbounded_context_budget(),
+    )
+    .database(&database_path);
 
     // Act
     let mismatch = different
@@ -198,13 +207,21 @@ async fn opening_session_accepts_matching_model_identity() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
     let database_path = directory.path().join("harness.db");
-    let original = Harness::new(metadata_model("provider", "model")).database(&database_path);
+    let original = Harness::new(
+        metadata_model("provider", "model"),
+        unbounded_context_budget(),
+    )
+    .database(&database_path);
     original
         .session("session-a", schema())
         .create()
         .await
         .expect("session should be created");
-    let matching = Harness::new(metadata_model("provider", "model")).database(&database_path);
+    let matching = Harness::new(
+        metadata_model("provider", "model"),
+        unbounded_context_budget(),
+    )
+    .database(&database_path);
 
     // Act
     let session = matching
@@ -242,7 +259,7 @@ async fn opening_session_rejects_incomplete_saved_model_identity() {
         .await
         .expect("model identity should be corrupted");
     drop(connection);
-    let harness = Harness::new(model()).database(&database_path);
+    let harness = Harness::new(model(), unbounded_context_budget()).database(&database_path);
 
     // Act
     let error = harness
@@ -289,7 +306,7 @@ async fn persistent_chat_uses_saved_history_budget_when_reopened() {
     // Arrange
     let directory = tempdir().expect("temporary directory should be created");
     let database_path = directory.path().join("harness.db");
-    let harness = Harness::new(model())
+    let harness = Harness::new(model(), unbounded_context_budget())
         .database(&database_path)
         .max_history_bytes(NonZeroUsize::new(64).expect("history limit should be nonzero"));
     let session = harness

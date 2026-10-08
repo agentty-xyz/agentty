@@ -10,7 +10,7 @@ use crate::bash::{
 use crate::command_journal::CommandCleanupScope;
 use crate::store::StoredTurnOptions;
 use crate::tool::{ToolCall, ToolCallArguments, ToolDefinition};
-use crate::{OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{OutputSchema, Tool, ToolPolicy, TurnOptions};
 
 fn configuration() -> BashConfig {
     BashConfig::new(
@@ -78,7 +78,6 @@ fn options(configuration: BashConfig) -> TurnOptions {
     TurnOptions::new(
         OutputSchema::new(json!({"type":"object"})).expect("schema"),
         ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::default(),
     )
     .with_bash(configuration)
 }
@@ -177,15 +176,15 @@ fn policy_is_immutable_and_snapshots_identify_environment_without_values() {
 
     // Act
     let encoded = StoredTurnOptions::encode(&turn_options);
-    let decoded = StoredTurnOptions::decode(&encoded).expect("snapshot");
+    let decoded = StoredTurnOptions::decode(&encoded);
 
     // Assert
     assert!(!encoded.contains("secret-environment-value"));
     assert!(!format!("{configured:?}").contains("secret-environment-value"));
     assert!(encoded.contains("TOKEN"));
     assert!(encoded.contains("revision-1"));
-    assert!(decoded.continuation_compatible(&turn_options));
-    assert!(!decoded.continuation_compatible(&options(original)));
+    assert!(decoded.is_ok());
+    assert_ne!(encoded, StoredTurnOptions::encode(&options(original)));
     assert_eq!(turn_options.bash(), Some(&configured));
 }
 
@@ -217,14 +216,9 @@ fn executor_selection_records_identity_and_stays_distinct_from_native_snapshots(
         "native snapshots keep their pre-executor encoding: {native_encoded}"
     );
     assert!(selected_encoded.contains("unsandboxed"));
-    let decoded = StoredTurnOptions::decode(&selected_encoded).expect("snapshot");
-    assert!(decoded.continuation_compatible(&selected_options));
-    assert!(!decoded.continuation_compatible(&native_options));
-    assert!(
-        StoredTurnOptions::decode(&native_encoded)
-            .expect("legacy-shaped snapshot")
-            .continuation_compatible(&native_options)
-    );
+    assert_ne!(selected_encoded, native_encoded);
+    assert!(StoredTurnOptions::decode(&selected_encoded).is_ok());
+    assert!(StoredTurnOptions::decode(&native_encoded).is_ok());
 }
 
 #[test]

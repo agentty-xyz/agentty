@@ -54,6 +54,8 @@ Sessions whose history contains provider reasoning cannot switch models. A model
   for Kimi, Qwen, model, and credential options.
 - Chats default to low model reasoning to reduce latency; pass
   `--reasoning-effort <LEVEL>` to select deeper reasoning.
+- Every model is assumed to have a 128k-token context window. Each request replays the
+  most recent turns that fit, and a turn fails once its own tool traffic no longer fits.
 
 ## Tracing
 

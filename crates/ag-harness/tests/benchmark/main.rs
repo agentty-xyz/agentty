@@ -1,5 +1,7 @@
 //! Manually executed, real-model compatibility benchmark.
 
+#[path = "../support/context_budget.rs"]
+mod context_budget_fixture;
 mod summary;
 
 use std::collections::BTreeSet;
@@ -20,6 +22,8 @@ use opentelemetry::trace::SpanId;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
 use serde_json::{Value, json};
+
+use crate::context_budget_fixture::unbounded_context_budget;
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -155,7 +159,7 @@ fn structured(provider: Provider) -> CaseFuture {
             "required": ["person", "tags"],
             "additionalProperties": false
         }))?;
-        let outcome = Harness::new(provider.client()?)
+        let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .run_once(
                 "Extract this record exactly: Ada has score 17, is active, and has tags rust then \
                  agent.",
@@ -188,7 +192,7 @@ fn parallel_read(provider: Provider) -> CaseFuture {
         std::fs::write(repository.path().join("beta.txt"), "second=17\n")?;
         let schema = string_value_schema("code")?;
         let repository = benchmark_repository(repository.path())?;
-        let outcome = Harness::new(provider.client()?)
+        let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
             .allow(Tool::Read)
             .run_once(
@@ -242,7 +246,7 @@ fn read_recovery(provider: Provider) -> CaseFuture {
         std::fs::write(repository.path().join("fallback.txt"), "code=violet-29\n")?;
         let schema = string_value_schema("code")?;
         let repository = benchmark_repository(repository.path())?;
-        let outcome = Harness::new(provider.client()?)
+        let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
             .allow(Tool::Read)
             .run_once(
@@ -281,7 +285,7 @@ fn write(provider: Provider) -> CaseFuture {
             "additionalProperties": false
         }))?;
         let repository = benchmark_repository(repository.path())?;
-        let outcome = Harness::new(provider.client()?)
+        let outcome = Harness::new(provider.client()?, unbounded_context_budget())
             .repository(repository)
             .allow(Tool::Write)
             .run_once(
@@ -348,7 +352,8 @@ fn instrumented_harness(provider: Provider) -> Result<Harness, DynError> {
     let observers = LifecycleObserverSet::new(LifecycleMetrics::new())
         .with_observer(LifecycleTraceObserver::new());
 
-    Ok(Harness::new(provider.client()?).with_lifecycle_observer(observers))
+    Ok(Harness::new(provider.client()?, unbounded_context_budget())
+        .with_lifecycle_observer(observers))
 }
 
 fn string_value_schema(property: &str) -> Result<OutputSchema, DynError> {

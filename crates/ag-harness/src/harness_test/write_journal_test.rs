@@ -5,6 +5,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::support::{model, object_schema, response_without_metadata, write_call};
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
 use crate::model::{ModelError, ModelMessage, ModelResponse};
 use crate::repository::Repository;
@@ -45,7 +46,7 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
                 }
             });
         let directory = tempdir().expect("repository");
-        let harness = Harness::new(model)
+        let harness = Harness::new(model, unbounded_context_budget())
             .database(directory.path().join("harness.db"))
             .repository(Repository::fixture(directory.path()))
             .max_history_bytes(NonZeroUsize::new(1).expect("positive budget"))
@@ -93,7 +94,7 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
             b"new\n"
         );
         assert_eq!(history.turns, Vec::<Vec<ModelMessage>>::new());
-        assert_eq!(reopened.history.messages(), Vec::<ModelMessage>::new());
+        assert!(reopened.history.turns().is_empty());
     }
 }
 
@@ -101,7 +102,8 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
 async fn session_inspection_reports_storage_failure() {
     // Arrange
     let directory = tempdir().expect("database directory");
-    let harness = Harness::new(model()).database(directory.path().join("harness.db"));
+    let harness = Harness::new(model(), unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let session = harness
         .session("session-a", object_schema())
         .create()
@@ -156,7 +158,7 @@ async fn run_once_writes_without_opening_the_session_database() {
         });
     let directory = tempdir().expect("repository");
     let database = directory.path().join("unused.db");
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .database(&database)
         .repository(Repository::fixture(directory.path()))
         .allow(Tool::Write);

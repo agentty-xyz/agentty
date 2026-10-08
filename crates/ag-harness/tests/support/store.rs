@@ -35,7 +35,6 @@ struct Record {
     pending: Vec<ModelMessage>,
     positions: Vec<i64>,
     requests: Vec<HostTurnRecord>,
-    snapshot: Option<String>,
     writes: Vec<(Vec<u8>, WriteRecord)>,
 }
 
@@ -43,9 +42,8 @@ impl Record {
     fn admission_state(&self, host_id: Option<&str>) -> AdmissionState {
         AdmissionState {
             active_turn: self.owner.is_some(),
-            latest_options: self.snapshot.clone(),
+            latest_options: None,
             model_generation: self.loaded.model_generation,
-            provider_session_id: self.loaded.provider_session_id.clone(),
             request: host_id.and_then(|host_id| self.request(host_id)),
             unresolved_commands: false,
         }
@@ -120,7 +118,6 @@ impl Record {
                 );
             }
             self.owner = None;
-            self.loaded.provider_session_id = None;
         }
     }
 
@@ -145,7 +142,6 @@ impl ExternalStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: Option<&TurnOutcome>,
     ) -> Result<(), SessionError> {
         let mut sessions = self.sessions.lock().expect("sessions");
@@ -161,7 +157,6 @@ impl ExternalStore {
             session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
         }
         session.owner = None;
-        session.loaded.provider_session_id = continuation.map(str::to_string);
 
         Ok(())
     }
@@ -210,7 +205,6 @@ impl SessionStore for ExternalStore {
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
-                    provider_session_id: None,
                     registration_identity: config.registration_identity().cloned(),
                     schema: config.schema().clone(),
                     system_prompt: config.system_prompt().map(str::to_string),
@@ -221,7 +215,6 @@ impl SessionStore for ExternalStore {
                 pending: Vec::new(),
                 positions: Vec::new(),
                 requests: Vec::new(),
-                snapshot: None,
                 writes: Vec::new(),
             },
         );
@@ -251,7 +244,6 @@ impl SessionStore for ExternalStore {
         session.loaded.registration_identity = Some(switch.identity().clone());
         session.loaded.provider = switch.metadata().map(|value| value.provider().to_string());
         session.loaded.model = switch.metadata().map(|value| value.model().to_string());
-        session.loaded.provider_session_id = None;
         Ok(next)
     }
 
@@ -291,12 +283,9 @@ impl SessionStore for ExternalStore {
         session.next_turn += 1;
         session.owner = Some((owner.clone(), deadline));
         session.pending = vec![turn.message().clone()];
-        session.snapshot = Some(turn.options().to_string());
-        session.loaded.provider_session_id = turn.continuation().map(str::to_string);
 
         Ok(Reservation::Reserved(
-            ReservedTurn::new(turn, owner, deadline, bounded.turns)
-                .with_checkpoint(bounded.checkpoint),
+            ReservedTurn::new(owner, deadline, bounded.turns).with_checkpoint(bounded.checkpoint),
         ))
     }
 
@@ -348,10 +337,9 @@ impl SessionStore for ExternalStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, Some(outcome))
+        self.complete(owner, messages, Some(outcome))
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -370,9 +358,8 @@ impl SessionStore for ExternalStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, None)
+        self.complete(owner, messages, None)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -386,7 +373,6 @@ impl SessionStore for ExternalStore {
             },
         );
         session.owner = None;
-        session.loaded.provider_session_id = None;
 
         Ok(())
     }
@@ -406,7 +392,6 @@ impl SessionStore for ExternalStore {
                 },
             );
             session.owner = None;
-            session.loaded.provider_session_id = None;
         }
 
         Ok(())

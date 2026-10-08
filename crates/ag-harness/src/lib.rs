@@ -7,6 +7,9 @@
 //! # Quickstart
 //!
 //! ```no_run
+//! use std::num::NonZeroU64;
+//!
+//! use ag_harness::model::ContextBudget;
 //! use ag_harness::provider::{MUSE_SPARK_1_3, Muse};
 //! use ag_harness::{Harness, OutputSchema};
 //! use serde_json::json;
@@ -17,7 +20,9 @@
 //!     "properties": { "summary": { "type": "string" } },
 //!     "required": ["summary"],
 //! }))?;
-//! let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?);
+//! let budget = ContextBudget::new(NonZeroU64::new(128_000).ok_or("budget")?)
+//!     .with_reserved_output(16_384)?;
+//! let harness = Harness::new(Muse::from_env(MUSE_SPARK_1_3)?, budget);
 //!
 //! let outcome = harness.run_once("Summarize Cargo.toml", schema).await?;
 //! println!("{}", outcome.output()["summary"]);
@@ -27,7 +32,8 @@
 //!
 //! # Concepts
 //!
-//! - [`Harness`] holds the model, tool defaults, repository, and store.
+//! - [`Harness`] holds the model, its required context budget, tool defaults,
+//!   repository, and store.
 //! - [`Session`] is a durable conversation: `harness.session(id, schema)`
 //!   creates one and `harness.resume(id)` reopens it in any process.
 //! - A turn is one prompt run to a schema-valid answer. `run_once` and
@@ -74,6 +80,10 @@ mod gated_store_test;
 #[cfg(test)]
 #[path = "../tests/support/repository.rs"]
 mod repository_fixture;
+
+#[cfg(test)]
+#[path = "../tests/support/context_budget.rs"]
+mod context_budget_fixture;
 
 mod admission;
 pub mod bash;
@@ -133,7 +143,7 @@ pub use repository::{Repository, RepositoryError};
 pub use schema_contract::{OutputSchema, OutputSchemaError};
 pub use session::SessionError;
 pub use tool::Tool;
-pub use turn::{TurnControl, TurnError, TurnLimits, TurnOptions, TurnOutcome};
+pub use turn::{TurnControl, TurnError, TurnOptions, TurnOutcome};
 
 /// Entry point for the matching trusted `ag-harness-sandbox` executable.
 /// Run only in a dedicated process, before creating any runtime or threads.

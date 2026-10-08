@@ -13,15 +13,14 @@ use crate::turn::{TurnError, TurnOptions};
 /// Approximate request-weight budget for one registered model configuration.
 ///
 /// Weights are deterministic approximations produced by a [`ContextEstimator`];
-/// they never claim exact provider token counts. Declare the budget in
-/// [`crate::model::ModelCapabilities`] to enable projection for that
-/// registration and revise the registration's
+/// they never claim exact provider token counts. Every harness requires one:
+/// pass it to `Harness::new` or declare it in
+/// [`crate::model::ModelCapabilities`], and revise the effective
 /// [`crate::recovery::ExecutionIdentity`] when it changes. The budget governs
 /// every provider request of a turn: the initial request keeps the most recent
-/// whole turns that fit, requests grown by in-turn tool traffic are re-admitted
-/// before each follow-up model call, and budgeted registrations replay
-/// projected history instead of reusing native continuation. The stored
-/// byte-based replay budget still bounds how much history is loaded.
+/// whole turns that fit, and requests grown by in-turn tool traffic are
+/// re-admitted before each follow-up model call. The stored byte-based replay
+/// budget still bounds how much history is loaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextBudget {
     max_request_weight: NonZeroU64,

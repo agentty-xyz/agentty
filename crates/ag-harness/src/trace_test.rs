@@ -19,6 +19,7 @@ use super::{
     LifecycleTraceObserver, PendingTool, TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES, TraceState,
     finish_span,
 };
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{
@@ -248,17 +249,17 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
         .expect("observer should enable unknown model calls")
         .completed(None, ModelResponseType::Output);
 
-    let limited_turn = emitter.start_turn().expect("observer should enable turns");
-    let limited_turn_id = limited_turn.id();
+    let budget_turn = emitter.start_turn().expect("observer should enable turns");
+    let budget_turn_id = budget_turn.id();
     emitter
         .request_tool(
-            "limited-call".to_string(),
+            "budget-call".to_string(),
             "read".to_string(),
-            Some(limited_turn_id),
+            Some(budget_turn_id),
         )
         .expect("turn should enable tools")
-        .failed(ToolErrorType::CallLimit);
-    limited_turn.failed(TurnErrorType::ToolCallLimit);
+        .failed(ToolErrorType::Execution);
+    budget_turn.failed(TurnErrorType::ContextBudget);
 
     let cancelled_tool_turn = emitter.start_turn().expect("observer should enable turns");
     let cancelled_tool_turn_id = cancelled_tool_turn.id();
@@ -426,7 +427,7 @@ fn assert_failure_spans(spans: &[SpanData]) {
     let failed_tool = find_span(spans, "execute_tool read", Some("tool_execution_error"));
     assert_eq!(failed_tool.status, Status::error(""));
     find_span(spans, "invoke_agent", Some("cancelled"));
-    find_span(spans, "invoke_agent", Some("tool_call_limit"));
+    find_span(spans, "invoke_agent", Some("context_budget_exceeded"));
     find_span(spans, "execute_tool write", Some("cancelled"));
 }
 
@@ -512,16 +513,19 @@ async fn propagates_model_and_tool_contexts_to_nested_spans() {
             Ok(Box::new(Cursor::new(b"[workspace]\n".to_vec())))
         });
     file_system.expect_replace_beneath().never();
-    let harness = Harness::new(NestedSpanModel {
-        call_count: AtomicUsize::new(0),
-        observed_baggage: Arc::clone(&observed_baggage),
-        tool_call: ToolCall::read(
-            "mock-call".to_string(),
-            serde_json::from_value::<ReadArguments>(json!({"path": "Cargo.toml", "limit": 1}))
-                .expect("read arguments"),
-            None,
-        ),
-    })
+    let harness = Harness::new(
+        NestedSpanModel {
+            call_count: AtomicUsize::new(0),
+            observed_baggage: Arc::clone(&observed_baggage),
+            tool_call: ToolCall::read(
+                "mock-call".to_string(),
+                serde_json::from_value::<ReadArguments>(json!({"path": "Cargo.toml", "limit": 1}))
+                    .expect("read arguments"),
+                None,
+            ),
+        },
+        unbounded_context_budget(),
+    )
     .file_system(file_system)
     .repository(Repository::fixture("repo"))
     .allow(Tool::Read)
@@ -629,16 +633,11 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Model(ModelErrorType::InvalidOutput),
         TurnErrorType::Tool,
         TurnErrorType::ToolDenied,
-        TurnErrorType::ToolCallLimit,
         TurnErrorType::ContextBudget,
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
-    let tool_errors = [
-        ToolErrorType::Cancelled,
-        ToolErrorType::CallLimit,
-        ToolErrorType::Execution,
-    ];
+    let tool_errors = [ToolErrorType::Cancelled, ToolErrorType::Execution];
 
     // Act
     let turn_values = turn_errors.map(TurnErrorType::as_str);
@@ -652,16 +651,12 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "invalid_output",
             "tool_execution_error",
             "tool_denied",
-            "tool_call_limit",
             "context_budget_exceeded",
             "repository_required",
             "session_error",
         ]
     );
-    assert_eq!(
-        tool_values,
-        ["cancelled", "tool_call_limit", "tool_execution_error"]
-    );
+    assert_eq!(tool_values, ["cancelled", "tool_execution_error"]);
 }
 
 #[tokio::test]
@@ -832,12 +827,9 @@ impl SessionStore for TracedWriteStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.store
-            .complete_request(owner, messages, continuation, outcome)
-            .await
+        self.store.complete_request(owner, messages, outcome).await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -848,11 +840,8 @@ impl SessionStore for TracedWriteStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.store
-            .complete_turn(owner, messages, continuation)
-            .await
+        self.store.complete_turn(owner, messages).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -913,21 +902,24 @@ async fn assert_retained_write_context(drop_caller: bool) {
         observed_baggage: Arc::clone(&observed_baggage),
         finished: Notify::new(),
     });
-    let harness = Harness::new(NestedSpanModel {
-        call_count: AtomicUsize::new(0),
-        observed_baggage: Arc::clone(&observed_baggage),
-        tool_call: ToolCall::from_json(
-            "write-call".into(),
-            "write",
-            &json!({
-                "path": "new.txt",
-                "patch": "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
-            })
-            .to_string(),
-            None,
-        )
-        .expect("write arguments"),
-    })
+    let harness = Harness::new(
+        NestedSpanModel {
+            call_count: AtomicUsize::new(0),
+            observed_baggage: Arc::clone(&observed_baggage),
+            tool_call: ToolCall::from_json(
+                "write-call".into(),
+                "write",
+                &json!({
+                    "path": "new.txt",
+                    "patch": "--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n"
+                })
+                .to_string(),
+                None,
+            )
+            .expect("write arguments"),
+        },
+        unbounded_context_budget(),
+    )
     .store(store.clone())
     .file_system(TracedReplacement {
         entered: Arc::clone(&entered),

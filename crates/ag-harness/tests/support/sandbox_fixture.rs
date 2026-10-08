@@ -11,13 +11,14 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::SqliteStore;
 use ag_harness::tool::ToolCall;
 use ag_harness::{
-    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnLimits, TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, Tool, ToolPolicy, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
 use tempfile::TempDir;
 
 use super::coverage::{self, Coverage};
+use crate::context_budget_fixture::unbounded_context_budget;
 
 pub(super) struct ShellModel;
 
@@ -79,7 +80,7 @@ impl Workspace {
     }
 
     pub(super) fn harness(&self) -> Harness {
-        Harness::new(ShellModel)
+        Harness::new(ShellModel, unbounded_context_budget())
             .repository(Repository::new(self.path(), "/usr/bin/git").expect("repository"))
             .execution_identity(ExecutionIdentity::new("native-shell", "1").expect("identity"))
     }
@@ -107,12 +108,8 @@ impl Workspace {
         .with_write("output".into())
         .expect("write grant");
 
-        TurnOptions::new(
-            schema(),
-            ToolPolicy::default().allow(Tool::Bash),
-            TurnLimits::default(),
-        )
-        .with_bash(with_runtime(configuration, extra))
+        TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+            .with_bash(with_runtime(configuration, extra))
     }
 
     pub(super) fn executor_options(
@@ -136,12 +133,8 @@ impl Workspace {
                 .with_write("output".into())
                 .expect("write grant");
 
-                TurnOptions::new(
-                    schema(),
-                    ToolPolicy::default().allow(Tool::Bash),
-                    TurnLimits::default(),
-                )
-                .with_bash(configuration)
+                TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Bash))
+                    .with_bash(configuration)
             }
         }
     }

@@ -13,6 +13,7 @@ use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::store_conformance_test::{Gate, image_input, options, schema, stores};
 
 struct RecordingModel {
@@ -38,10 +39,9 @@ impl Model for RecordingModel {
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.requests.lock().expect("requests").push(request);
-        Ok(
-            ModelCompletion::from_response(ModelResponse::Output(json!({"answer": self.name})))
-                .with_provider_session_id(format!("{}-continuation", self.name)),
-        )
+        Ok(ModelCompletion::from_response(ModelResponse::Output(
+            json!({"answer": self.name}),
+        )))
     }
 }
 
@@ -56,9 +56,8 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                     requests: Arc::clone(requests),
                 },
                 ModelCapabilities {
-                    context_budget: None,
+                    context_budget: unbounded_context_budget(),
                     image_input: name.ends_with("vision"),
-                    native_continuation: true,
                     tool_calls: name != "no-tools",
                 },
             )
@@ -171,11 +170,6 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
         let requests = requests.lock().expect("requests");
         assert_eq!(requests.len(), 3);
         assert!(
-            requests
-                .iter()
-                .all(|request| request.provider_session_id().is_none())
-        );
-        assert!(
             requests[1]
                 .messages()
                 .iter()
@@ -191,7 +185,7 @@ async fn switches_fence_stale_handles_and_preserve_request_recovery() {
 }
 
 #[tokio::test]
-async fn switch_rejections_preserve_selection_and_continuation() {
+async fn switch_rejections_preserve_selection() {
     // Arrange
     for store in stores().await {
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -226,11 +220,7 @@ async fn switch_rejections_preserve_selection_and_continuation() {
             Err(SessionError::Busy { .. })
         ));
         store
-            .complete_turn(
-                acquired.owner(),
-                &[ModelMessage::Assistant("done".into())],
-                Some("a-continuation"),
-            )
+            .complete_turn(acquired.owner(), &[ModelMessage::Assistant("done".into())])
             .await
             .expect("complete");
         drop(acquired);
@@ -238,19 +228,12 @@ async fn switch_rejections_preserve_selection_and_continuation() {
         // Assert
         let after = store.load_session("switch").await.expect("after");
         assert_eq!(after.recorded_model(), before.recorded_model());
-        assert_eq!(after.provider_session_id, before.provider_session_id);
         session
             .switch_model(&registry, "b")
             .await
             .expect("idle switch");
-        assert!(
-            store
-                .load_session("switch")
-                .await
-                .expect("switched")
-                .provider_session_id
-                .is_none()
-        );
+        let switched = store.load_session("switch").await.expect("switched");
+        assert_eq!(switched.registration_identity.expect("identity").key(), "b");
     }
 }
 
@@ -309,7 +292,7 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
             .await
             .expect("acquire");
             store
-                .complete_turn(acquired.owner(), messages, Some("old"))
+                .complete_turn(acquired.owner(), messages)
                 .await
                 .expect("complete");
             drop(acquired);
@@ -332,7 +315,6 @@ async fn switches_validate_canonical_tool_and_reasoning_history() {
             // Assert
             let loaded = store.load_session(&id).await.expect("unchanged");
             assert_eq!(loaded.model_generation, 0);
-            assert_eq!(loaded.provider_session_id.as_deref(), Some("old"));
             assert!(
                 loaded.turns.is_empty(),
                 "validation must include budget-evicted history"
@@ -372,7 +354,6 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
                     content: "answer".into(),
                     reasoning_content: "provider state".into(),
                 }],
-                None,
             )
             .await
             .expect("complete");
@@ -390,7 +371,7 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
             ModelSwitch::new(
                 ExecutionIdentity::new("b", "1").expect("identity"),
                 None,
-                ModelCapabilities::default(),
+                ModelCapabilities::new(unbounded_context_budget()),
                 generation,
             )
         };
@@ -409,7 +390,7 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
             Err(SessionError::UnsupportedModelHistory { .. })
         ));
         store
-            .complete_turn(active.owner(), &[], None)
+            .complete_turn(active.owner(), &[])
             .await
             .expect("complete active");
         assert_eq!(
@@ -452,7 +433,6 @@ async fn switches_validate_image_history_against_target_capabilities() {
             .complete_turn(
                 acquired.owner(),
                 &[ModelMessage::Assistant("described".into())],
-                Some("old"),
             )
             .await
             .expect("complete");
@@ -481,7 +461,6 @@ async fn switches_validate_image_history_against_target_capabilities() {
         let loaded = store.load_session("images").await.expect("unchanged");
         assert_eq!(loaded.model_generation, 0);
         assert_eq!(loaded.registration_identity.expect("identity").key(), "a");
-        assert_eq!(loaded.provider_session_id.as_deref(), Some("old"));
         assert!(
             loaded.turns.is_empty(),
             "validation must include budget-evicted image history"
@@ -684,9 +663,8 @@ async fn independent_store_admission_checks_generation_atomically() {
     for store in stores().await {
         let identity = ExecutionIdentity::new("b", "1").expect("identity");
         let capabilities = ModelCapabilities {
-            context_budget: None,
+            context_budget: unbounded_context_budget(),
             image_input: false,
-            native_continuation: true,
             tool_calls: true,
         };
         for switch_first in [false, true] {
@@ -714,7 +692,7 @@ async fn independent_store_admission_checks_generation_atomically() {
                 (Ok(1), Err(SessionError::StaleModel { .. })) => {}
                 (Err(SessionError::Busy { .. }), Ok(acquired)) => {
                     store
-                        .complete_turn(acquired.owner(), &[], None)
+                        .complete_turn(acquired.owner(), &[])
                         .await
                         .expect("complete");
                 }
@@ -742,9 +720,8 @@ async fn switching_checks_adapter_schema_without_network_access() {
             })
             .expect("client"),
             ModelCapabilities {
-                context_budget: None,
+                context_budget: unbounded_context_budget(),
                 image_input: false,
-                native_continuation: false,
                 tool_calls: true,
             },
         )
@@ -835,7 +812,7 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
         .await
         .expect("acquire");
         store
-            .complete_turn(acquired.owner(), &messages, Some("a-continuation"))
+            .complete_turn(acquired.owner(), &messages)
             .await
             .expect("complete");
         drop(acquired);
@@ -872,7 +849,6 @@ async fn switching_preserves_tool_groups_and_explicit_execution_identity() {
                 .windows(2)
                 .any(|pair| pair == messages.as_slice())
         );
-        assert!(requests[1].provider_session_id().is_none());
     }
 }
 
@@ -901,7 +877,7 @@ async fn switch_errors_do_not_admit_partial_selection() {
                     &ModelSwitch::new(
                         ExecutionIdentity::new("b", "1").expect("identity"),
                         None,
-                        ModelCapabilities::default(),
+                        ModelCapabilities::new(unbounded_context_budget()),
                         0,
                     )
                 )

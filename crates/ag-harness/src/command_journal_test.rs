@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore, TurnOwner};
-use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnLimits, TurnOptions};
+use crate::{OutputSchema, SessionError, ToolPolicy, TurnInput, TurnOptions};
 
 fn outcome() -> CommandOutcome {
     CommandOutcome {
@@ -60,8 +60,7 @@ async fn both_stores_block_unknown_commands_and_reconcile_only_the_original_owne
     ];
     for store in stores {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options =
-            TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
@@ -162,8 +161,7 @@ async fn unresolved_cleanup_remains_blocking_after_outcome_recording() {
     ];
     for store in stores {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options =
-            TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await
@@ -227,8 +225,7 @@ async fn duplicate_requests_classify_before_pending_command_admission() {
     ];
     for store in stores {
         let schema = OutputSchema::new(json!({"type":"object"})).expect("schema");
-        let options =
-            TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+        let options = TurnOptions::new(schema.clone(), ToolPolicy::default());
         store
             .create_session(&NewSession::new("commands", schema), None, 1024)
             .await

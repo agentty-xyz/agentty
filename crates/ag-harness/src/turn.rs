@@ -7,7 +7,6 @@
 //! and observes settlement.
 
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -30,24 +29,24 @@ use crate::write::WriteError;
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
 ///
 /// Construct a new value for each turn. Explicit options never inherit
-/// permissions or schema changes from an earlier turn. Counters, cancellation,
-/// and conversation history belong to execution state, not this snapshot.
+/// permissions or schema changes from an earlier turn. Cancellation and
+/// conversation history belong to execution state, not this snapshot. A turn
+/// has no tool-call limit: cancellation and, when declared, the effective
+/// model's context budget bound it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnOptions {
     bash: Option<BashConfig>,
     comparison_base: Option<ComparisonBase>,
-    limits: TurnLimits,
     schema: OutputSchema,
     tool_policy: ToolPolicy,
 }
 
 impl TurnOptions {
-    /// Resolves a required schema, explicit permissions, and execution limits.
-    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy, limits: TurnLimits) -> Self {
+    /// Resolves a required schema and explicit permissions.
+    pub fn new(schema: OutputSchema, tool_policy: ToolPolicy) -> Self {
         Self {
             bash: None,
             comparison_base: None,
-            limits,
             schema,
             tool_policy,
         }
@@ -65,11 +64,6 @@ impl TurnOptions {
     /// Returns this turn's Bash host policy, if configured.
     pub fn bash(&self) -> Option<&BashConfig> {
         self.bash.as_ref()
-    }
-
-    /// Returns the execution bounds for this turn.
-    pub fn limits(&self) -> TurnLimits {
-        self.limits
     }
 
     /// Returns the schema required for every terminal model output.
@@ -93,30 +87,6 @@ impl TurnOptions {
     /// Returns the selected comparison base, if comparisons are available.
     pub fn comparison_base(&self) -> Option<&ComparisonBase> {
         self.comparison_base.as_ref()
-    }
-}
-
-/// Immutable execution bounds; consuming a budget does not modify these limits.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TurnLimits {
-    max_tool_calls: NonZeroUsize,
-}
-
-impl TurnLimits {
-    /// Sets the total permitted tool calls, including calls in batches.
-    pub fn new(max_tool_calls: NonZeroUsize) -> Self {
-        Self { max_tool_calls }
-    }
-
-    /// Returns the total permitted tool calls in a turn.
-    pub fn max_tool_calls(self) -> NonZeroUsize {
-        self.max_tool_calls
-    }
-}
-
-impl Default for TurnLimits {
-    fn default() -> Self {
-        Self::new(NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN))
     }
 }
 
@@ -267,8 +237,7 @@ impl ModelRequestActivity {
         self.duration
     }
 
-    /// Returns whether the request produced output, a tool call, or a rejected
-    /// native continuation that the harness replayed.
+    /// Returns whether the request produced output or a tool call.
     pub fn response_type(&self) -> ModelResponseType {
         self.response_type
     }
@@ -514,12 +483,6 @@ pub enum TurnError {
     /// A repository write failed.
     #[error(transparent)]
     Write(#[from] WriteError),
-    /// The model exceeded the bounded number of calls in one turn.
-    #[error("model exceeded the per-turn tool call limit of {limit}")]
-    ToolCallLimit {
-        /// Configured maximum calls.
-        limit: usize,
-    },
     /// Mandatory content exceeds the effective model's declared context
     /// budget, before any history is considered.
     #[error("mandatory request content weighs {required} but the model context budget is {budget}")]
@@ -546,40 +509,8 @@ impl TurnError {
             | Self::CommandFailed { .. } => TurnErrorType::Tool,
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
-            Self::ToolCallLimit { .. } => TurnErrorType::ToolCallLimit,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
         }
-    }
-}
-
-#[derive(Debug, Error)]
-pub(crate) enum ResumeFailure {
-    #[error("native provider continuation failed: {source}")]
-    Native {
-        #[source]
-        source: ModelError,
-    },
-    #[error("native provider continuation was unavailable and history replay failed: {source}")]
-    Replay {
-        #[source]
-        source: ModelError,
-    },
-}
-
-impl ResumeFailure {
-    pub(crate) fn into_model_error(self) -> ModelError {
-        let source = match &self {
-            Self::Native { source } | Self::Replay { source } => source,
-        };
-        if !matches!(source, ModelError::Request(_)) {
-            return match self {
-                Self::Native { source } | Self::Replay { source } => source,
-            };
-        }
-        let error_type = source.error_type();
-        let http_status = source.http_status();
-
-        ModelError::classified_request(error_type, http_status, Box::new(self))
     }
 }
 

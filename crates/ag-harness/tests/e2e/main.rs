@@ -2,6 +2,8 @@
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
+#[path = "../support/context_budget.rs"]
+mod context_budget_fixture;
 mod features;
 #[path = "support/greeting.rs"]
 mod greeting;

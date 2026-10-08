@@ -5,6 +5,10 @@
 mod fixture;
 
 #[cfg(test)]
+#[path = "support/context_budget.rs"]
+mod context_budget_fixture;
+
+#[cfg(test)]
 #[path = "support/sandbox_coverage.rs"]
 mod coverage;
 

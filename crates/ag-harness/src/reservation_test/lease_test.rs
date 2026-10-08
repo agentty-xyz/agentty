@@ -44,7 +44,7 @@ async fn terminal_persistence_is_bounded_and_keeps_cleanup_armed() {
         let (store, mut acquired) = GatedStore::fixture(phase).await;
         let task = tokio::spawn(async move {
             let result = if phase == PauseAt::Completion {
-                acquired.guard.complete(&[], None).await
+                acquired.guard.complete(&[]).await
             } else {
                 acquired
                     .guard
@@ -76,7 +76,7 @@ async fn completion_acknowledgement_excludes_renewal_and_preserves_success() {
     let task = tokio::spawn(async move {
         let result = acquired
             .guard
-            .complete(&[ModelMessage::Assistant("answer".into())], Some("native"))
+            .complete(&[ModelMessage::Assistant("answer".into())])
             .await;
 
         (result, acquired)
@@ -95,7 +95,6 @@ async fn completion_acknowledgement_excludes_renewal_and_preserves_success() {
     result.expect("completion must win");
     assert!(!acquired.guard.armed);
     assert_eq!(store.renewals.load(Ordering::SeqCst), 0);
-    assert_eq!(loaded.provider_session_id.as_deref(), Some("native"));
     assert_eq!(loaded.turns.len(), 1);
 }
 
@@ -104,8 +103,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     // Arrange
     let (store, mut acquired) = GatedStore::fixture(PauseAt::CompletionAcknowledgement).await;
     let owner = acquired.guard.owner().clone();
-    let task =
-        tokio::spawn(async move { acquired.guard.complete(&[], Some("first-native")).await });
+    let task = tokio::spawn(async move { acquired.guard.complete(&[]).await });
     store.entered.notified().await;
     let mut successor = AcquiredTurn::begin(
         Arc::new(store.database.clone()),
@@ -118,7 +116,7 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     .expect("successor");
     successor
         .guard
-        .complete(&[], Some("next-native"))
+        .complete(&[])
         .await
         .expect("successor completion");
 
@@ -132,7 +130,6 @@ async fn terminal_acknowledgement_loss_cannot_interrupt_a_successor() {
     let loaded = store.load_session("session").await.expect("session");
 
     // Assert
-    assert_eq!(loaded.provider_session_id.as_deref(), Some("next-native"));
     assert_eq!(loaded.turns.len(), 2);
 }
 
@@ -152,7 +149,7 @@ async fn finalization_uses_the_deadline_confirmed_by_a_slow_renewal() {
         ready.notify_one();
         let result = acquired
             .guard
-            .complete(&[ModelMessage::Assistant("answer".into())], Some("native"))
+            .complete(&[ModelMessage::Assistant("answer".into())])
             .await;
 
         (result, acquired)
@@ -179,7 +176,6 @@ async fn finalization_uses_the_deadline_confirmed_by_a_slow_renewal() {
     result.expect("completion uses the renewed deadline");
     assert!(!acquired.guard.armed);
     assert_eq!(store.renewals.load(Ordering::SeqCst), 1);
-    assert_eq!(loaded.provider_session_id.as_deref(), Some("native"));
     assert_eq!(loaded.turns.len(), 1);
 }
 
@@ -194,7 +190,7 @@ async fn finalization_waiting_for_renewal_stops_at_the_confirmed_deadline() {
     let ready = started.clone();
     let task = tokio::spawn(async move {
         ready.notify_one();
-        acquired.guard.complete(&[], None).await
+        acquired.guard.complete(&[]).await
     });
     started.notified().await;
 
@@ -247,7 +243,7 @@ async fn finalization_rechecks_expiry_even_when_the_monitor_has_not_reported() {
     let ready = started.clone();
     let task = tokio::spawn(async move {
         ready.notify_one();
-        acquired.guard.complete(&[], None).await
+        acquired.guard.complete(&[]).await
     });
     started.notified().await;
 

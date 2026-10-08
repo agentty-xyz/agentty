@@ -2,15 +2,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::TurnOutcome;
 use crate::input::TurnInput;
+use crate::lifecycle::ModelResponseType;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, SessionError};
 use crate::store::{AcquiredTurn, NewSession, SessionStore};
-use crate::turn::TurnReport;
+use crate::turn::{ModelRequestActivity, TurnReport};
 
 #[tokio::test]
 async fn recovery_acquisition_is_atomic_across_independent_sqlite_pools() {
@@ -79,12 +80,12 @@ async fn recovery_rejects_corrupt_terminal_data_instead_of_reexecuting() {
 
     // Act / Assert
     assert!(
-        SessionStore::complete_turn(database.as_ref(), turn.owner(), &[], None)
+        SessionStore::complete_turn(database.as_ref(), turn.owner(), &[])
             .await
             .is_err()
     );
     database
-        .complete_request(turn.owner(), &[], None, &outcome)
+        .complete_request(turn.owner(), &[], &outcome)
         .await
         .expect("complete");
     for payload in [
@@ -171,4 +172,94 @@ async fn recovery_after_reopen_marks_expired_host_requests_interrupted() {
     assert!(matches!(record.status, HostTurnStatus::Interrupted { .. }));
     assert!(matches!(duplicate, HostTurnAcquisition::Recorded(_)));
     drop(turn);
+}
+
+#[tokio::test]
+async fn migration_drops_removed_resume_activities_from_recorded_outcomes() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("sessions.sqlite");
+    let database = Arc::new(Database::open(&path).await.expect("database"));
+    database
+        .create_session(&NewSession::new("session", schema()), None, 1024)
+        .await
+        .expect("create");
+    let request = HostRequest::from_configuration("id".into(), json!({})).expect("request");
+    let HostTurnAcquisition::Acquired(turn) = AcquiredTurn::begin_request(
+        database.clone(),
+        "session",
+        &TurnInput::from("hello"),
+        &turn_options(),
+        &request,
+        0,
+    )
+    .await
+    .expect("turn") else {
+        std::panic::resume_unwind(Box::new("expected acquisition"));
+    };
+    let outcome = TurnOutcome::new(
+        json!({"summary":"ok"}),
+        TurnReport::new(
+            Duration::from_millis(9),
+            vec![
+                ModelRequestActivity::new(
+                    None,
+                    Duration::from_millis(2),
+                    ModelResponseType::ToolCall,
+                ),
+                ModelRequestActivity::new(
+                    None,
+                    Duration::from_millis(3),
+                    ModelResponseType::Output,
+                ),
+            ],
+            Vec::new(),
+        ),
+    );
+    database
+        .complete_request(turn.owner(), &[], &outcome)
+        .await
+        .expect("complete");
+    drop(turn);
+    let stored: String = sqlx::query_scalar("SELECT terminal_outcome FROM session_turn")
+        .fetch_one(&database.pool)
+        .await
+        .expect("stored outcome");
+    let mut stored: Value = serde_json::from_str(&stored).expect("outcome json");
+    let requests = stored["outcome"]["report"]["model_requests"]
+        .as_array_mut()
+        .expect("model requests");
+    let mut rejected_resume = requests[0].clone();
+    rejected_resume["response_type"] = json!("ResumeUnavailable");
+    requests.insert(0, rejected_resume);
+    // Restore the pre-migration-012 schema holding a native-resume fallback.
+    for statement in [
+        "ALTER TABLE session ADD COLUMN provider_session_id TEXT",
+        "DELETE FROM _sqlx_migrations WHERE version = 12",
+    ] {
+        sqlx::query(statement)
+            .execute(&database.pool)
+            .await
+            .expect("pre-migration schema");
+    }
+    sqlx::query("UPDATE session_turn SET terminal_outcome = ?")
+        .bind(stored.to_string())
+        .execute(&database.pool)
+        .await
+        .expect("legacy outcome");
+    database.pool.close().await;
+
+    // Act
+    let migrated = Database::open(&path).await.expect("migrated database");
+    let record = migrated
+        .load_request("session", "id")
+        .await
+        .expect("lookup")
+        .expect("record");
+
+    // Assert
+    let HostTurnStatus::Completed(recorded) = record.status else {
+        std::panic::resume_unwind(Box::new("expected completed request"));
+    };
+    assert_eq!(recorded, outcome);
 }

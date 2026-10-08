@@ -131,7 +131,6 @@ struct SessionRow {
     model_generation: i64,
     output_schema: String,
     provider: Option<String>,
-    provider_session_id: Option<String>,
     registration_key: Option<String>,
     registration_revision: Option<String>,
     system_prompt: Option<String>,
@@ -142,7 +141,6 @@ struct SessionRow {
 struct TurnConfigurationRow {
     max_history_bytes: i64,
     model_generation: i64,
-    provider_session_id: Option<String>,
     turn_options: Option<String>,
 }
 
@@ -447,7 +445,6 @@ impl Database {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
         outcome: Option<&TurnOutcome>,
     ) -> Result<(), SessionError> {
         let terminal_outcome = outcome
@@ -500,19 +497,12 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
             )
             .await?;
         }
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = ?, updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(provider_session_id)
-        .bind(now)
-        .bind(session_id)
-        .execute(&mut *transaction)
-        .await
-        .session_context("complete persistent session turn")?;
+        sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(session_id)
+            .execute(&mut *transaction)
+            .await
+            .session_context("complete persistent session turn")?;
         transaction
             .commit()
             .await
@@ -605,12 +595,6 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
             operation,
         )
         .await?;
-        sqlx::query("UPDATE session SET provider_session_id = ? WHERE id = ?")
-            .bind(turn.continuation())
-            .bind(session_id)
-            .execute(&mut *transaction)
-            .await
-            .session_context(operation)?;
         self.reservation_observer.committing().await;
         let acknowledged = async {
             transaction.commit().await.session_context(operation)?;
@@ -626,7 +610,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         }
 
         Ok(Some(Reservation::Reserved(
-            ReservedTurn::new(turn, owner, deadline, acquisition.turns)
+            ReservedTurn::new(owner, deadline, acquisition.turns)
                 .with_checkpoint(acquisition.checkpoint),
         )))
     }
@@ -889,7 +873,6 @@ SELECT model_generation AS "model_generation!: i64", provider,
        output_schema,
        system_prompt,
        max_history_bytes AS "max_history_bytes!: i64",
-       provider_session_id,
        (SELECT turn_options FROM session_turn
         WHERE session_id = session.id ORDER BY turn_position DESC LIMIT 1) AS "turn_options?: String"
 FROM session
@@ -923,7 +906,6 @@ WHERE id = ?
             max_history_bytes,
             model: row.model,
             provider: row.provider,
-            provider_session_id: row.provider_session_id,
             registration_identity,
             schema,
             system_prompt: row.system_prompt,
@@ -1024,8 +1006,7 @@ ON CONFLICT(session_id) DO UPDATE SET
             let model = switch.metadata().map(ModelMetadata::model);
             sqlx::query!(
                 "UPDATE session SET model_generation = ?, registration_key = ?, \
-                 registration_revision = ?, provider = ?, model = ?, provider_session_id = NULL, \
-                 updated_at = ? WHERE id = ?",
+                 registration_revision = ?, provider = ?, model = ?, updated_at = ? WHERE id = ?",
                 next,
                 key,
                 registration_revision,
@@ -1086,20 +1067,17 @@ ON CONFLICT(session_id) DO UPDATE SET
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, Some(outcome))
-            .await
+        self.complete(owner, messages, Some(outcome)).await
     }
 
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, None).await
+        self.complete(owner, messages, None).await
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -1133,18 +1111,12 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
         if result.rows_affected() == 0 {
             return Err(owner.lost());
         }
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = NULL, updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(now)
-        .bind(session_id)
-        .execute(&mut *transaction)
-        .await
-        .session_context("fail persistent session turn")?;
+        sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(session_id)
+            .execute(&mut *transaction)
+            .await
+            .session_context("fail persistent session turn")?;
         transaction
             .commit()
             .await
@@ -1487,8 +1459,6 @@ pub struct LoadedSession {
     pub model_generation: i64,
     /// Provider paired with the stored model name.
     pub provider: Option<String>,
-    /// Optional provider continuation, cleared on failure or interruption.
-    pub provider_session_id: Option<String>,
     /// Current registration key/revision, or `None` for direct/legacy
     /// sessions.
     pub registration_identity: Option<ExecutionIdentity>,
@@ -1936,7 +1906,7 @@ async fn load_turn_configuration(
     sqlx::query_as!(
         TurnConfigurationRow,
         r#"
-SELECT model_generation AS "model_generation!: i64", max_history_bytes AS "max_history_bytes!: i64", provider_session_id,
+SELECT model_generation AS "model_generation!: i64", max_history_bytes AS "max_history_bytes!: i64",
        (SELECT turn_options FROM session_turn
         WHERE session_id = session.id AND status = 'completed'
         ORDER BY turn_position DESC LIMIT 1) AS "turn_options?: String"
@@ -2240,18 +2210,12 @@ WHERE session_id = ?
     .await
     .session_context("recover stale persistent session turns")?;
     if result.rows_affected() > 0 {
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = NULL, updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(now)
-        .bind(session_id)
-        .execute(&mut **transaction)
-        .await
-        .session_context("recover stale persistent session turns")?;
+        sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(session_id)
+            .execute(&mut **transaction)
+            .await
+            .session_context("recover stale persistent session turns")?;
     }
 
     Ok(())
@@ -2309,17 +2273,11 @@ WHERE session_id = ?
     .execute(&mut **transaction)
     .await?;
     if result.rows_affected() > 0 {
-        sqlx::query(
-            r"
-UPDATE session
-SET provider_session_id = NULL, updated_at = ?
-WHERE id = ?
-",
-        )
-        .bind(now)
-        .bind(&owner.session_id)
-        .execute(&mut **transaction)
-        .await?;
+        sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(&owner.session_id)
+            .execute(&mut **transaction)
+            .await?;
     }
 
     Ok(())
@@ -2441,7 +2399,6 @@ async fn load_admission_state(
         active_turn: active != 0,
         latest_options: configuration.turn_options,
         model_generation: configuration.model_generation,
-        provider_session_id: configuration.provider_session_id,
         request,
         unresolved_commands,
     })

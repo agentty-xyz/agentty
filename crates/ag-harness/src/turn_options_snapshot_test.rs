@@ -4,22 +4,19 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::{StoredTurnOptions, StoredTurnOptionsError};
-use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnLimits, TurnOptions};
+use crate::{ComparisonBase, OutputSchema, Tool, ToolPolicy, TurnOptions};
 
 #[test]
 fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
     // Arrange
-    let options = TurnOptions::new(
-        schema(),
-        ToolPolicy::default().allow(Tool::Write),
-        TurnLimits::new(NonZeroUsize::new(3).expect("nonzero budget")),
-    );
+    let options = TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write));
     let encoded = StoredTurnOptions::encode(&options);
     let snapshot: Value = serde_json::from_str(&encoded).expect("snapshot JSON");
     let mut invalid = Vec::new();
     for (key, value) in [
-        ("version", json!(5)),
+        ("version", json!(6)),
         ("max_tool_calls", json!(0)),
+        ("max_tool_calls", json!(8)),
         ("output_schema", json!({"type":"invalid"})),
         ("tool_policy", json!({"read":true})),
         ("unknown", json!(true)),
@@ -38,8 +35,11 @@ fn snapshots_round_trip_and_reject_unknown_or_invalid_configuration() {
         .collect();
 
     // Assert
-    assert!(decoded.continuation_compatible(&options));
-    assert_eq!(decoded.max_tool_calls, options.limits().max_tool_calls());
+    assert_eq!(decoded.output_schema, *options.schema().value());
+    assert_eq!(decoded.tool_policy, options.tool_policy());
+    assert_eq!(decoded.version, 5);
+    assert_eq!(decoded.max_tool_calls, None);
+    assert!(snapshot.get("max_tool_calls").is_none());
     assert!(errors.iter().all(Result::is_err));
 }
 
@@ -53,14 +53,13 @@ fn comparison_snapshots_preserve_identity_and_fingerprint_all_effective_options(
     let other_scope = plain
         .clone()
         .with_comparison_base(ComparisonBase::fixture("other-repository"));
-    let budget = TurnOptions::new(
+    let permissions = TurnOptions::new(
         plain.schema().clone(),
-        plain.tool_policy(),
-        TurnLimits::new(NonZeroUsize::new(17).expect("budget")),
+        plain.tool_policy().allow(Tool::Read),
     );
 
     // Act
-    let snapshots: Vec<_> = [&plain, &selected, &other_scope, &budget]
+    let snapshots: Vec<_> = [&plain, &selected, &other_scope, &permissions]
         .into_iter()
         .map(|options| {
             StoredTurnOptions::decode(&StoredTurnOptions::encode(options)).expect("stored metadata")
@@ -72,10 +71,11 @@ fn comparison_snapshots_preserve_identity_and_fingerprint_all_effective_options(
         .collect();
 
     // Assert
-    assert!(snapshots[1].continuation_compatible(&selected));
-    assert!(!snapshots[1].continuation_compatible(&plain));
-    assert!(!snapshots[1].continuation_compatible(&other_scope));
-    assert!(snapshots[0].continuation_compatible(&budget));
+    assert_eq!(
+        snapshots[1].comparison_base.as_ref(),
+        selected.comparison_base().map(ComparisonBase::identity)
+    );
+    assert!(snapshots[0].comparison_base.is_none());
     for (index, fingerprint) in fingerprints.iter().enumerate() {
         assert_eq!(fingerprint.len(), 64);
         assert!(!fingerprints[..index].contains(fingerprint));
@@ -97,7 +97,6 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
                 OutputSchema::new(serde_json::from_str(schema).expect("schema JSON"))
                     .expect("schema"),
                 ToolPolicy::default(),
-                TurnLimits::new(NonZeroUsize::new(8).expect("budget")),
             )
         })
         .collect();
@@ -106,31 +105,31 @@ fn version_three_fingerprints_sort_nested_object_keys_and_preserve_array_order()
     let snapshots: Vec<_> = options
         .iter()
         .map(|options| {
-            StoredTurnOptions::decode(&StoredTurnOptions::encode(options)).expect("snapshot")
+            StoredTurnOptions::decode(&versioned_snapshot(options, 3).to_string())
+                .expect("snapshot")
         })
         .collect();
-    let mut reordered: Value =
-        serde_json::from_str(&StoredTurnOptions::encode(&options[0])).expect("snapshot JSON");
+    let mut reordered = versioned_snapshot(&options[0], 3);
     reordered["output_schema"] = options[1].schema().value().clone();
     let restored = StoredTurnOptions::decode(&reordered.to_string()).expect("reordered snapshot");
 
     // Assert
     assert_eq!(snapshots[0].version, 3);
+    assert_eq!(snapshots[0].max_tool_calls.map(NonZeroUsize::get), Some(8));
     assert_eq!(
         snapshots[0].fingerprint(),
         "ff322e5ad3b6da9df9bcead8ddd1d5f58157a4351f0a1c52756b67f29e1c71d4"
     );
     assert_eq!(snapshots[0].fingerprint(), snapshots[1].fingerprint());
     assert_ne!(snapshots[0].fingerprint(), snapshots[2].fingerprint());
-    assert!(restored.continuation_compatible(&options[0]));
-    assert!(!restored.continuation_compatible(&options[2]));
+    assert_eq!(restored.fingerprint(), snapshots[0].fingerprint());
 }
 
 #[test]
 fn version_one_options_remain_readable_but_never_imply_a_known_base() {
     // Arrange
     let options = turn_options();
-    let legacy = json!({"version":1, "output_schema":options.schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":options.limits().max_tool_calls()});
+    let legacy = json!({"version":1, "output_schema":options.schema().value(), "tool_policy":options.tool_policy(), "max_tool_calls":8});
     let mut conflicting = legacy.clone();
     conflicting["comparison_base"] = json!(ComparisonBase::fixture("repo").identity());
 
@@ -140,7 +139,7 @@ fn version_one_options_remain_readable_but_never_imply_a_known_base() {
 
     // Assert
     assert!(stored.comparison_base.is_none());
-    assert!(!stored.continuation_compatible(&options));
+    assert!(stored.fingerprint.is_none());
     assert!(invalid.is_err());
 }
 
@@ -189,53 +188,20 @@ fn version_two_fingerprints_retain_legacy_serialization() {
 }
 
 #[test]
-fn continuation_compares_schema_permissions_and_identity_for_both_known_versions() {
+fn legacy_tool_call_limits_remain_part_of_the_recorded_fingerprint() {
     // Arrange
     let selected =
         turn_options().with_comparison_base(ComparisonBase::fixture("missing-repository"));
-    let budget = TurnOptions::new(
-        selected.schema().clone(),
-        selected.tool_policy(),
-        TurnLimits::new(NonZeroUsize::new(17).expect("budget")),
-    )
-    .with_comparison_base(selected.comparison_base().expect("base").clone());
-    let changed_schema = TurnOptions::new(
-        OutputSchema::new(json!({"type": "string"})).expect("schema"),
-        selected.tool_policy(),
-        selected.limits(),
-    )
-    .with_comparison_base(selected.comparison_base().expect("base").clone());
-    let changed_permissions = TurnOptions::new(
-        selected.schema().clone(),
-        selected.tool_policy().allow(Tool::Write),
-        selected.limits(),
-    )
-    .with_comparison_base(selected.comparison_base().expect("base").clone());
-    let changed_root =
-        turn_options().with_comparison_base(ComparisonBase::fixture("other-repository"));
 
     // Act / Assert
-    for version in [2, 3] {
+    for version in [2, 3, 4] {
         let snapshot = versioned_snapshot(&selected, version);
-        let stored = StoredTurnOptions::decode(&snapshot.to_string()).expect("snapshot");
-        let changed_budget = versioned_snapshot(&budget, version);
-        assert_ne!(snapshot["fingerprint"], changed_budget["fingerprint"]);
-        assert!(stored.continuation_compatible(&selected));
-        assert!(stored.continuation_compatible(&budget));
-        for incompatible in [
-            &changed_schema,
-            &changed_permissions,
-            &changed_root,
-            &turn_options(),
-        ] {
-            assert!(!stored.continuation_compatible(incompatible));
-        }
-        let mut changed_oid = snapshot;
-        changed_oid["comparison_base"]["oid"] = json!("2".repeat(40));
-        sign_snapshot(&mut changed_oid);
-        let stored =
-            StoredTurnOptions::decode(&changed_oid.to_string()).expect("historical identity");
-        assert!(!stored.continuation_compatible(&selected));
+        let mut changed_limit = snapshot.clone();
+        changed_limit["max_tool_calls"] = json!(17);
+        sign_snapshot(&mut changed_limit);
+        let stored = StoredTurnOptions::decode(&changed_limit.to_string()).expect("legacy limit");
+        assert_eq!(stored.max_tool_calls.map(NonZeroUsize::get), Some(17));
+        assert_ne!(snapshot["fingerprint"], changed_limit["fingerprint"]);
     }
 }
 
@@ -246,7 +212,7 @@ fn historical_comparison_metadata_is_validated_without_a_live_repository() {
         turn_options().with_comparison_base(ComparisonBase::fixture("missing-repository"));
 
     // Act / Assert
-    for version in [2, 3] {
+    for version in [2, 3, 5] {
         for oid in ["a".repeat(40), "A".repeat(64)] {
             let mut snapshot = versioned_snapshot(&selected, version);
             snapshot["comparison_base"]["oid"] = json!(oid);
@@ -289,7 +255,7 @@ fn every_version_validates_schemas_and_version_one_rejects_fingerprints() {
     let options = turn_options();
 
     // Act / Assert
-    for version in [1, 2, 3] {
+    for version in [1, 2, 3, 5] {
         let mut snapshot = versioned_snapshot(&options, version);
         snapshot["output_schema"] = json!({"type": "invalid"});
         assert!(matches!(
@@ -305,10 +271,79 @@ fn every_version_validates_schemas_and_version_one_rejects_fingerprints() {
     ));
 }
 
+#[test]
+fn tool_call_limits_are_required_before_version_five_and_rejected_after() {
+    // Arrange
+    let options = turn_options();
+    let mut legacy_without_limit = versioned_snapshot(&options, 3);
+    legacy_without_limit
+        .as_object_mut()
+        .expect("object")
+        .remove("max_tool_calls");
+    sign_snapshot(&mut legacy_without_limit);
+    let mut current_with_limit = versioned_snapshot(&options, 5);
+    current_with_limit["max_tool_calls"] = json!(8);
+    sign_snapshot(&mut current_with_limit);
+
+    // Act
+    let legacy = StoredTurnOptions::decode(&legacy_without_limit.to_string());
+    let current = StoredTurnOptions::decode(&current_with_limit.to_string());
+
+    // Assert
+    assert!(matches!(
+        legacy,
+        Err(StoredTurnOptionsError::InvalidData { .. })
+    ));
+    assert!(matches!(
+        current,
+        Err(StoredTurnOptionsError::InvalidData { .. })
+    ));
+}
+
+#[test]
+fn version_five_fingerprints_sort_object_keys_without_a_tool_call_limit() {
+    // Arrange
+    let ordered =
+        OutputSchema::new(json!({"type": "object", "required": ["name"]})).expect("ordered schema");
+    let reordered = OutputSchema::new(
+        serde_json::from_str(r#"{"required":["name"],"type":"object"}"#).expect("schema JSON"),
+    )
+    .expect("reordered schema");
+
+    // Act
+    let snapshots: Vec<_> = [ordered, reordered]
+        .into_iter()
+        .map(|schema| {
+            let options = TurnOptions::new(schema, ToolPolicy::default());
+
+            StoredTurnOptions::decode(&StoredTurnOptions::encode(&options)).expect("snapshot")
+        })
+        .collect();
+
+    // Assert
+    assert_eq!(snapshots[0].version, 5);
+    assert!(
+        !snapshots[0]
+            .effective_options()
+            .as_object()
+            .expect("object")
+            .contains_key("max_tool_calls")
+    );
+    assert_eq!(snapshots[0].fingerprint(), snapshots[1].fingerprint());
+}
+
+/// Rewrites a current snapshot as `version`, adding the default legacy
+/// tool-call limit and dropping fields that version did not record.
 fn versioned_snapshot(options: &TurnOptions, version: u8) -> Value {
     let mut snapshot: Value =
         serde_json::from_str(&StoredTurnOptions::encode(options)).expect("snapshot");
     snapshot["version"] = json!(version);
+    if version < 5 {
+        snapshot["max_tool_calls"] = json!(8);
+    }
+    if version < 4 {
+        snapshot.as_object_mut().expect("object").remove("bash");
+    }
     if version == 1 {
         snapshot
             .as_object_mut()
@@ -336,5 +371,5 @@ fn schema() -> OutputSchema {
 }
 
 fn turn_options() -> TurnOptions {
-    TurnOptions::new(schema(), ToolPolicy::default(), TurnLimits::default())
+    TurnOptions::new(schema(), ToolPolicy::default())
 }

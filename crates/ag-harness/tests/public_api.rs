@@ -21,6 +21,10 @@ mod cancellation;
 mod repository_fixture;
 
 #[cfg(test)]
+#[path = "support/context_budget.rs"]
+mod context_budget_fixture;
+
+#[cfg(test)]
 #[path = "support/store_conformance.rs"]
 mod store_conformance_test;
 
@@ -31,7 +35,7 @@ mod compaction_test;
 use std::error::Error;
 use std::ffi::OsString;
 use std::io::{self, Cursor};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::os::unix::ffi::OsStringExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,11 +47,10 @@ use ag_harness::bash::{
 };
 use ag_harness::lifecycle::{
     LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
-    ModelResponseType,
 };
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ModelCapabilities, ModelCompletion, ModelMessage,
-    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
+    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
@@ -56,11 +59,13 @@ use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
 use ag_harness::{
     ComparisonBase, Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError,
     OutputSchema, OutputSchemaError, Repository, RepositoryError, Session, SessionBuilder,
-    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnLimits, TurnOptions,
+    SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnInputError, TurnOptions,
 };
 use async_trait::async_trait;
 use serde_json::json;
 use tokio::io::AsyncRead;
+
+use crate::context_budget_fixture::unbounded_context_budget;
 
 struct ExternalToolModel {
     batched: bool,
@@ -194,7 +199,7 @@ async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<
             };
             let directory = tempfile::tempdir()?;
             let repository = repository_fixture::repository_with_host_git(directory.path());
-            let harness = Harness::new(model)
+            let harness = Harness::new(model, unbounded_context_budget())
                 .store(store)
                 .repository(repository)
                 .file_system(NameFileSystem)
@@ -331,10 +336,13 @@ fn external_adapter_constructs_a_validated_write_call() -> Result<(), Box<dyn Er
 #[tokio::test]
 async fn external_tool_call_still_requires_harness_permission() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let harness = Harness::new(ExternalToolModel {
-        batched: false,
-        requests: Arc::new(Mutex::new(Vec::new())),
-    });
+    let harness = Harness::new(
+        ExternalToolModel {
+            batched: false,
+            requests: Arc::new(Mutex::new(Vec::new())),
+        },
+        unbounded_context_budget(),
+    );
 
     // Act
     let result = harness
@@ -345,18 +353,6 @@ async fn external_tool_call_still_requires_harness_permission() -> Result<(), Bo
     assert!(matches!(result, Err(TurnError::ToolDenied { name }) if name == "read"));
 
     Ok(())
-}
-
-#[test]
-fn external_consumer_can_inspect_resume_fallback_outcome() {
-    // Arrange
-    let response_type = ModelResponseType::ResumeUnavailable;
-
-    // Act
-    let response_type = response_type.to_string();
-
-    // Assert
-    assert_eq!(response_type, "resume unavailable");
 }
 
 struct ExternalModel;
@@ -505,7 +501,8 @@ async fn external_response_only_provider_implements_model() -> Result<(), Box<dy
 async fn external_consumer_creates_and_reopens_persistent_session() -> Result<(), Box<dyn Error>> {
     // Arrange
     let directory = tempfile::tempdir()?;
-    let harness = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+    let harness = Harness::new(ExternalModel, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
 
     let builder: SessionBuilder = harness
         .session("external-session", request()?.schema().clone())
@@ -515,7 +512,8 @@ async fn external_consumer_creates_and_reopens_persistent_session() -> Result<()
     drop(harness);
     let mut session: Session = tokio::spawn(builder.create()).await??;
     let first = tokio::spawn(async move { session.send("Ada").await }).await??;
-    let harness = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+    let harness = Harness::new(ExternalModel, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
     let mut reopened: Session = harness.resume("external-session").await?;
     drop(harness);
     let (id, second) = tokio::spawn(async move {
@@ -536,7 +534,7 @@ async fn external_consumer_creates_and_reopens_persistent_session() -> Result<()
 #[tokio::test]
 async fn durable_session_requires_explicit_storage() -> Result<(), Box<dyn Error>> {
     // Arrange
-    let harness = Harness::new(ExternalModel);
+    let harness = Harness::new(ExternalModel, unbounded_context_budget());
 
     // Act
     let error = harness
@@ -593,7 +591,8 @@ async fn session_info_exposes_stored_model_identity() -> Result<(), Box<dyn Erro
     // Arrange
     let directory = tempfile::tempdir()?;
     let database = directory.path().join("harness.db");
-    let harness = Harness::new(ExternalMetadataModel).database(&database);
+    let harness =
+        Harness::new(ExternalMetadataModel, unbounded_context_budget()).database(&database);
     let session = harness
         .session("external-session", request()?.schema().clone())
         .create()
@@ -655,12 +654,13 @@ async fn external_metadata_provider_reaches_harness_lifecycle() -> Result<(), Bo
     // Arrange
     let events = Arc::new(Mutex::new(Vec::new()));
     let observed_events = Arc::clone(&events);
-    let harness = Harness::new(ExternalMetadataModel).with_lifecycle_observer(move |event| {
-        observed_events
-            .lock()
-            .expect("event recorder should not be poisoned")
-            .push(event);
-    });
+    let harness = Harness::new(ExternalMetadataModel, unbounded_context_budget())
+        .with_lifecycle_observer(move |event| {
+            observed_events
+                .lock()
+                .expect("event recorder should not be poisoned")
+                .push(event);
+        });
 
     // Act
     let output = harness
@@ -711,7 +711,8 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
             .push(event);
     })
     .with_observer(LifecycleMetrics::new());
-    let harness = Harness::new(ExternalMetadataModel).with_lifecycle_observer(observers);
+    let harness = Harness::new(ExternalMetadataModel, unbounded_context_budget())
+        .with_lifecycle_observer(observers);
 
     // Act
     let output = harness
@@ -803,7 +804,7 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
         };
         let repository = repository_fixture::repository_with_host_git(&root);
         let store = Arc::new(MemoryStore::new());
-        let harness = Harness::new(FailingAfterWriteModel)
+        let harness = Harness::new(FailingAfterWriteModel, unbounded_context_budget())
             .database(directory.path().join("harness.db"))
             .repository(repository)
             .file_system(file_system)
@@ -828,7 +829,8 @@ async fn applied_write_survives_model_failure_and_session_reopen() -> Result<(),
         drop(harness);
         // Inspection works without the original filesystem or a configured
         // repository.
-        let inspector = Harness::new(ExternalModel).database(directory.path().join("harness.db"));
+        let inspector = Harness::new(ExternalModel, unbounded_context_budget())
+            .database(directory.path().join("harness.db"));
         let inspector = if memory {
             inspector.store(store)
         } else {
@@ -865,7 +867,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         requests: Arc::clone(&requests),
     };
     let directory = tempfile::tempdir()?;
-    let harness = Harness::new(model)
+    let harness = Harness::new(model, unbounded_context_budget())
         .database(directory.path().join("options.db"))
         .repository(repository_fixture::repository_with_host_git(
             directory.path(),
@@ -873,8 +875,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .file_system(NameFileSystem);
     let schema = request()?.schema().clone();
     let policy = ToolPolicy::default().allow(Tool::Read);
-    let limits = TurnLimits::default();
-    let options = TurnOptions::new(schema.clone(), policy, limits);
+    let options = TurnOptions::new(schema.clone(), policy);
 
     // Act
     let once = harness.turn("Read the name", options.clone()).await?;
@@ -883,7 +884,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .turn("Read the name")
         .options(options.clone())
         .await?;
-    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read), limits);
+    let denied = TurnOptions::new(schema.clone(), policy.deny(Tool::Read));
     let recalled = session.turn("Recall the name").options(denied).await?;
 
     // Assert
@@ -898,7 +899,6 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     );
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
-    assert_eq!(options.limits().max_tool_calls().get(), 8);
     let requests = requests
         .lock()
         .map_err(|_| io::Error::other("requests lock poisoned"))?;
@@ -953,13 +953,12 @@ async fn host_comparison_api_supports_both_entry_points_and_nested_scope()
     let base = ComparisonBase::resolve(&repository, "HEAD").await?;
     let validated = ComparisonBase::validate(&repository, base.oid()).await?;
     let directory = tempfile::tempdir()?;
-    let harness = Harness::new(ExternalComparisonModel)
+    let harness = Harness::new(ExternalComparisonModel, unbounded_context_budget())
         .repository(repository)
         .database(directory.path().join("comparison.db"));
     let options = TurnOptions::new(
         request()?.schema().clone(),
         ToolPolicy::default().allow(Tool::Read),
-        TurnLimits::default(),
     )
     .with_comparison_base(base.clone());
 
@@ -1029,10 +1028,13 @@ async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), B
     // Arrange
     let directory = tempfile::tempdir()?;
     let messages = Arc::new(Mutex::new(Vec::new()));
-    let harness = Harness::new(ImageEchoModel {
-        calls: Arc::default(),
-        messages: Arc::clone(&messages),
-    })
+    let harness = Harness::new(
+        ImageEchoModel {
+            calls: Arc::default(),
+            messages: Arc::clone(&messages),
+        },
+        unbounded_context_budget(),
+    )
     .database(directory.path().join("images.db"));
     let mut session = harness
         .session("images", request()?.schema().clone())
@@ -1045,10 +1047,13 @@ async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), B
     drop(session);
     drop(harness);
     let reopened_messages = Arc::new(Mutex::new(Vec::new()));
-    let harness = Harness::new(ImageEchoModel {
-        calls: Arc::default(),
-        messages: Arc::clone(&reopened_messages),
-    })
+    let harness = Harness::new(
+        ImageEchoModel {
+            calls: Arc::default(),
+            messages: Arc::clone(&reopened_messages),
+        },
+        unbounded_context_budget(),
+    )
     .database(directory.path().join("images.db"));
     let mut reopened = harness.resume("images").await?;
     reopened.send("recall").await?;
@@ -1069,20 +1074,76 @@ async fn ordered_image_input_round_trips_through_sqlite_reopen() -> Result<(), B
 }
 
 #[tokio::test]
+async fn image_input_beyond_the_context_budget_is_rejected_before_acquisition()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let store = MemoryStore::new();
+    let calls = Arc::new(Mutex::new(0));
+    let messages = Arc::new(Mutex::new(Vec::new()));
+    let budget = ContextBudget::new(NonZeroU64::new(128).ok_or("budget")?);
+    let harness = Harness::new(
+        ImageEchoModel {
+            calls: Arc::clone(&calls),
+            messages: Arc::clone(&messages),
+        },
+        budget,
+    )
+    .store(Arc::new(store.clone()));
+    let mut session = harness
+        .session("budget", request()?.schema().clone())
+        .create()
+        .await?;
+    let oversized = external_image_input(&[0; 512])?;
+    let retained = external_image_input(b"payload")?;
+
+    // Act
+    let rejected = session.send(oversized).await;
+    session.send(retained.clone()).await?;
+    session.send("recall").await?;
+
+    // Assert
+    assert!(
+        matches!(
+            rejected,
+            Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
+                budget: 128,
+                ..
+            }))
+        ),
+        "an image that cannot fit the context budget must fail loudly"
+    );
+    assert_eq!(*calls.lock().expect("calls"), 2);
+    assert_eq!(
+        store.load_session("budget").await?.turns.len(),
+        2,
+        "rejected image input must not reserve or persist a turn"
+    );
+    assert!(
+        messages.lock().expect("messages")[1].contains(&ModelMessage::UserInput(retained)),
+        "an image inside the budget must reach the follow-up request"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn image_input_beyond_the_history_budget_is_rejected_before_acquisition()
 -> Result<(), Box<dyn Error>> {
     // Arrange
     let store = MemoryStore::new();
     let calls = Arc::new(Mutex::new(0));
     let messages = Arc::new(Mutex::new(Vec::new()));
-    let harness = Harness::new(ImageEchoModel {
-        calls: Arc::clone(&calls),
-        messages: Arc::clone(&messages),
-    })
+    let harness = Harness::new(
+        ImageEchoModel {
+            calls: Arc::clone(&calls),
+            messages: Arc::clone(&messages),
+        },
+        unbounded_context_budget(),
+    )
     .store(Arc::new(store.clone()))
     .max_history_bytes(NonZeroUsize::new(512).ok_or("budget")?);
     let mut session = harness
-        .session("budget", request()?.schema().clone())
+        .session("history", request()?.schema().clone())
         .create()
         .await?;
     let oversized = external_image_input(&[0; 512])?;
@@ -1102,17 +1163,17 @@ async fn image_input_beyond_the_history_budget_is_rejected_before_acquisition()
                 ..
             })
         ),
-        "an image the budget would evict immediately must fail loudly"
+        "an image the history budget would evict immediately must fail loudly"
     );
     assert_eq!(*calls.lock().expect("calls"), 2);
     assert_eq!(
-        store.load_session("budget").await?.turns.len(),
+        store.load_session("history").await?.turns.len(),
         2,
         "rejected image input must not reserve or persist a turn"
     );
     assert!(
         messages.lock().expect("messages")[1].contains(&ModelMessage::UserInput(retained)),
-        "an image inside the budget must reach the follow-up request"
+        "an image inside the history budget must reach the follow-up request"
     );
 
     Ok(())
@@ -1131,9 +1192,8 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
                     messages: Arc::default(),
                 },
                 ModelCapabilities {
-                    context_budget: None,
+                    context_budget: unbounded_context_budget(),
                     image_input,
-                    native_continuation: false,
                     tool_calls: false,
                 },
             )
@@ -1190,7 +1250,8 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
 async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn Error>> {
     // Arrange
     let store = MemoryStore::new();
-    let harness = Harness::new(ExternalModel).store(Arc::new(store.clone()));
+    let harness =
+        Harness::new(ExternalModel, unbounded_context_budget()).store(Arc::new(store.clone()));
     let mut session = harness
         .session("unregistered", request()?.schema().clone())
         .create()
@@ -1200,9 +1261,8 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
         ExecutionIdentity::new("text", "1")?,
         ExternalModel,
         ModelCapabilities {
-            context_budget: None,
+            context_budget: unbounded_context_budget(),
             image_input: true,
-            native_continuation: false,
             tool_calls: false,
         },
     )?;
@@ -1255,14 +1315,17 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
 async fn image_host_requests_conflict_on_changed_content() -> Result<(), Box<dyn Error>> {
     // Arrange
     let calls = Arc::new(Mutex::new(0));
-    let harness = Harness::new(ImageEchoModel {
-        calls: Arc::clone(&calls),
-        messages: Arc::default(),
-    })
+    let harness = Harness::new(
+        ImageEchoModel {
+            calls: Arc::clone(&calls),
+            messages: Arc::default(),
+        },
+        unbounded_context_budget(),
+    )
     .store(Arc::new(MemoryStore::new()))
     .execution_identity(ExecutionIdentity::new("echo", "1").expect("identity"));
     let schema = request()?.schema().clone();
-    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default(), TurnLimits::default());
+    let options = || TurnOptions::new(schema.clone(), ToolPolicy::default());
     let mut session = harness
         .session("host-images", schema.clone())
         .create()
@@ -1416,10 +1479,9 @@ async fn external_executor_runs_bash_through_the_public_contract() -> Result<(),
     let options = TurnOptions::new(
         OutputSchema::new(json!({"type": "object"}))?,
         ToolPolicy::default().allow(Tool::Bash),
-        TurnLimits::default(),
     )
     .with_bash(configuration);
-    let harness = Harness::new(BashDrivingModel)
+    let harness = Harness::new(BashDrivingModel, unbounded_context_budget())
         .repository(repository_fixture::repository_with_host_git(&root));
 
     // Act

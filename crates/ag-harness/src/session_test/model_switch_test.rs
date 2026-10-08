@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::Notify;
 
 use crate::SessionError;
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
 use crate::recovery::ExecutionIdentity;
@@ -46,10 +47,6 @@ async fn switch_revalidates_history_completed_during_validation() {
         Err(SessionError::UnsupportedModelHistory { .. })
     ));
     assert_eq!(loaded.model_generation, 0);
-    assert_eq!(
-        loaded.provider_session_id.as_deref(),
-        Some("old-continuation")
-    );
 }
 
 #[tokio::test]
@@ -104,7 +101,7 @@ async fn switch_across_concurrent_unsupported_history(
                     &ModelSwitch::new(
                         ExecutionIdentity::new("b", "1").expect("identity"),
                         None,
-                        ModelCapabilities::default(),
+                        ModelCapabilities::new(unbounded_context_budget()),
                         0,
                     ),
                 )
@@ -119,7 +116,6 @@ async fn switch_across_concurrent_unsupported_history(
                 content: "answer".into(),
                 reasoning_content: "provider state".into(),
             }],
-            Some("old-continuation"),
         )
         .await
         .expect("complete");

@@ -44,7 +44,6 @@ impl MemoryStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
         outcome: Option<&TurnOutcome>,
     ) -> Result<(), SessionError> {
         self.validate_identity(owner)?;
@@ -59,7 +58,6 @@ impl MemoryStore {
         turn.outcome = outcome.cloned();
         turn.messages.extend_from_slice(messages);
         turn.status = Status::Completed;
-        session.configuration.provider_session_id = provider_session_id.map(str::to_string);
 
         Ok(())
     }
@@ -203,7 +201,6 @@ impl SessionStore for MemoryStore {
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
                     provider: metadata.as_ref().map(|value| value.provider().to_string()),
-                    provider_session_id: None,
                     registration_identity: config.registration_identity().cloned(),
                     schema: config.schema().clone(),
                     system_prompt: config.system_prompt().map(str::to_string),
@@ -284,7 +281,6 @@ impl SessionStore for MemoryStore {
         session.configuration.provider =
             switch.metadata().map(|value| value.provider().to_string());
         session.configuration.model = switch.metadata().map(|value| value.model().to_string());
-        session.configuration.provider_session_id = None;
 
         Ok(next)
     }
@@ -326,17 +322,15 @@ impl SessionStore for MemoryStore {
             deadline,
             error_type: None,
             messages: vec![turn.message().clone()],
-            options: turn.options().to_string(),
             outcome: None,
             owner: owner.clone(),
             request: turn.request().cloned(),
             status: Status::Running,
         });
         session.next_turn = next_position;
-        session.configuration.provider_session_id = turn.continuation().map(str::to_string);
 
         Ok(Reservation::Reserved(
-            ReservedTurn::new(turn, owner, deadline, history)
+            ReservedTurn::new(owner, deadline, history)
                 .with_checkpoint(session.configuration.checkpoint.clone()),
         ))
     }
@@ -362,10 +356,9 @@ impl SessionStore for MemoryStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, Some(outcome))
+        self.complete(owner, messages, Some(outcome))
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -381,9 +374,8 @@ impl SessionStore for MemoryStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.complete(owner, messages, continuation, None)
+        self.complete(owner, messages, None)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {
@@ -393,7 +385,6 @@ impl SessionStore for MemoryStore {
         let turn = session.live_turn(owner)?;
         turn.status = Status::Failed;
         turn.error_type = Some(format!("{:?}", error.error_type()));
-        session.configuration.provider_session_id = None;
 
         Ok(())
     }
@@ -408,7 +399,6 @@ impl SessionStore for MemoryStore {
         {
             turn.status = Status::Interrupted;
             turn.error_type = Some(owner.interruption_error_type().to_string());
-            session.configuration.provider_session_id = None;
         }
 
         Ok(())
@@ -518,14 +508,8 @@ impl Record {
                 .turns
                 .last()
                 .is_some_and(|turn| turn.status == Status::Running),
-            latest_options: self
-                .turns
-                .iter()
-                .rev()
-                .find(|turn| turn.status == Status::Completed)
-                .map(|turn| turn.options.clone()),
+            latest_options: None,
             model_generation: self.configuration.model_generation,
-            provider_session_id: self.configuration.provider_session_id.clone(),
             request: host_id.and_then(|host_id| self.request(host_id)),
             unresolved_commands: self
                 .commands
@@ -580,7 +564,6 @@ impl Record {
         {
             turn.status = Status::Interrupted;
             turn.error_type = Some("interrupted".to_string());
-            self.configuration.provider_session_id = None;
         }
     }
 
@@ -634,7 +617,6 @@ struct TurnRecord {
     error_type: Option<String>,
     messages: Vec<ModelMessage>,
     model: crate::store::RecordedModel,
-    options: String,
     outcome: Option<TurnOutcome>,
     owner: TurnOwner,
     request: Option<HostRequest>,

@@ -116,13 +116,12 @@ async fn migration_two_backfills_historical_turn_lifecycle_without_data_loss() {
         .load_session("session-a")
         .await
         .expect("upgraded session should load");
-    let session_row = sqlx::query_as::<_, (i64, i64, Option<String>)>(
-        "SELECT created_at, updated_at, provider_session_id FROM session WHERE id = ?",
-    )
-    .bind("session-a")
-    .fetch_one(database.pool())
-    .await
-    .expect("upgraded session row should load");
+    let session_row =
+        sqlx::query_as::<_, (i64, i64)>("SELECT created_at, updated_at FROM session WHERE id = ?")
+            .bind("session-a")
+            .fetch_one(database.pool())
+            .await
+            .expect("upgraded session row should load");
     let turns = sqlx::query_as::<_, (i64, String, Option<String>, Option<i64>, i64, i64)>(
         r"
 SELECT turn_position, status, error_type, lease_expires_at, created_at, updated_at
@@ -149,7 +148,7 @@ ORDER BY turn_position, message_position
     .expect("historical messages should load");
 
     // Assert
-    assert_eq!(session_row, (5, 30, None));
+    assert_eq!(session_row, (5, 30));
     assert_eq!(loaded.registration_identity, None);
     assert_eq!(
         turns,

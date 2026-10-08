@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::comparison::{ComparisonBase, ComparisonIdentity};
+use crate::comparison::ComparisonIdentity;
 use crate::{OutputSchema, OutputSchemaError, ToolPolicy, TurnOptions};
 
 /// Versioned durable metadata, independent of live repository validation.
@@ -20,7 +20,10 @@ pub struct StoredTurnOptions {
     comparison_base: Option<ComparisonIdentity>,
     #[serde(default)]
     fingerprint: Option<String>,
-    max_tool_calls: NonZeroUsize,
+    /// Removed per-turn tool-call limit, retained only so legacy v1-v4
+    /// snapshots keep validating against their recorded fingerprints.
+    #[serde(default)]
+    max_tool_calls: Option<NonZeroUsize>,
     output_schema: Value,
     tool_policy: ToolPolicy,
     version: u8,
@@ -35,10 +38,10 @@ impl StoredTurnOptions {
                 .comparison_base()
                 .map(|base| base.identity().clone()),
             fingerprint: None,
-            max_tool_calls: options.limits().max_tool_calls(),
+            max_tool_calls: None,
             output_schema: options.schema().value().clone(),
             tool_policy: options.tool_policy(),
-            version: if options.bash().is_some() { 4 } else { 3 },
+            version: 5,
         };
         let mut snapshot = stored.effective_options();
         snapshot["fingerprint"] = json!(stored.fingerprint());
@@ -53,7 +56,10 @@ impl StoredTurnOptions {
     /// schemas, comparison identities, or fingerprints.
     pub fn decode(snapshot: &str) -> Result<Self, StoredTurnOptionsError> {
         let stored: Self = serde_json::from_str(snapshot).map_err(StoredTurnOptionsError::Json)?;
-        if !matches!(stored.version, 1..=4) || (stored.version < 4 && stored.bash.is_some()) {
+        if !matches!(stored.version, 1..=5)
+            || (stored.version < 4 && stored.bash.is_some())
+            || (stored.version < 5) != stored.max_tool_calls.is_some()
+        {
             return Err(StoredTurnOptionsError::InvalidData {
                 reason: format!("unsupported turn options version {}", stored.version),
             });
@@ -77,26 +83,24 @@ impl StoredTurnOptions {
         Ok(stored)
     }
 
-    /// Whether native continuation can reuse this snapshot's context policy.
-    /// Legacy v1 snapshots cannot establish compatibility; budget alone does
-    /// not invalidate a continuation. This is not a host-request fingerprint.
-    pub fn continuation_compatible(&self, options: &TurnOptions) -> bool {
-        matches!(self.version, 2..=4)
-            && self.bash.as_ref() == options.bash().map(|config| &config.snapshot)
-            && self.output_schema == *options.schema().value()
-            && self.tool_policy == options.tool_policy()
-            && self.comparison_base.as_ref()
-                == options.comparison_base().map(ComparisonBase::identity)
-    }
-
     fn effective_options(&self) -> Value {
-        let mut value = json!({
-            "comparison_base": self.comparison_base,
-            "max_tool_calls": self.max_tool_calls,
-            "output_schema": self.output_schema,
-            "tool_policy": self.tool_policy,
-            "version": self.version,
-        });
+        // Legacy v2 fingerprints hash unsorted keys, so the limit keeps its
+        // original position for builds that preserve insertion order.
+        let mut value = match self.max_tool_calls {
+            Some(max_tool_calls) => json!({
+                "comparison_base": self.comparison_base,
+                "max_tool_calls": max_tool_calls,
+                "output_schema": self.output_schema,
+                "tool_policy": self.tool_policy,
+                "version": self.version,
+            }),
+            None => json!({
+                "comparison_base": self.comparison_base,
+                "output_schema": self.output_schema,
+                "tool_policy": self.tool_policy,
+                "version": self.version,
+            }),
+        };
         if self.version >= 4 {
             value["bash"] = json!(self.bash);
         }

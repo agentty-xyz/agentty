@@ -82,8 +82,23 @@ pub(crate) async fn acquire(
         .into_acquired()
 }
 
-/// Returns a recorded host request, or reserves a turn bound to it under
-/// admission.
+/// Returns the record already stored under `request`'s host ID after checking
+/// that it denotes the same effective request.
+pub(crate) async fn recorded_request(
+    store: &dyn SessionStore,
+    session_id: &str,
+    request: &HostRequest,
+) -> Result<Option<HostTurnRecord>, SessionError> {
+    let Some(record) = store.load_request(session_id, request.id()).await? else {
+        return Ok(None);
+    };
+    record.check_request(request)?;
+
+    Ok(Some(record))
+}
+
+/// Returns a host request recorded since the caller's lookup, or reserves a
+/// turn bound to it under admission.
 pub(crate) async fn acquire_request(
     store: Arc<dyn SessionStore>,
     selection: (String, i64),
@@ -94,19 +109,12 @@ pub(crate) async fn acquire_request(
     effects: Effects,
 ) -> Result<HostTurnAcquisition, SessionError> {
     let (session_id, generation) = selection;
-    if let Some(record) = store.load_request(&session_id, request.id()).await? {
-        record.check_request(&request)?;
-
-        return Ok(HostTurnAcquisition::Recorded(record));
-    }
     // Serialize local acquisition only, never the model execution. This also
     // lets a retry wait for a reservation that has not yet been committed.
     let acquisition = shared_lock(store.identity(), &session_id, |slot| &mut slot.request)
         .lock_owned()
         .await;
-    if let Some(record) = store.load_request(&session_id, request.id()).await? {
-        record.check_request(&request)?;
-
+    if let Some(record) = recorded_request(store.as_ref(), &session_id, &request).await? {
         return Ok(HostTurnAcquisition::Recorded(record));
     }
     let store = AdmittedStore::admit(store, &session_id, settlement, &effects).await?;
@@ -147,7 +155,6 @@ pub(crate) fn lease_deadline() -> Instant {
 pub struct AcquiredTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) guard: TurnGuard,
-    pub(crate) provider_session_id: Option<String>,
     pub(crate) turns: Vec<Vec<ModelMessage>>,
 }
 
@@ -231,7 +238,6 @@ impl AcquiredTurn {
             checkpoint,
             deadline,
             owner,
-            turn,
             turns,
         } = reserved;
         if owner.store_identity() != store.identity() || owner.session_id() != session_id {
@@ -245,7 +251,6 @@ impl AcquiredTurn {
         Ok(Self {
             checkpoint,
             guard,
-            provider_session_id: turn.continuation().map(str::to_string),
             turns,
         })
     }
@@ -441,26 +446,21 @@ impl TurnGuard {
 
     /// Renewal and finalization cannot race their acknowledgements. Waiting
     /// for a stalled renewal remains bounded by its last confirmed deadline.
-    pub(crate) async fn complete(
-        &mut self,
-        messages: &[ModelMessage],
-        provider_session_id: Option<&str>,
-    ) -> Result<(), SessionError> {
+    pub(crate) async fn complete(&mut self, messages: &[ModelMessage]) -> Result<(), SessionError> {
         let database = Arc::clone(&self.database);
         let owner = self.owner.clone();
-        self.finalize(database.complete_turn(&owner, messages, provider_session_id))
+        self.finalize(database.complete_turn(&owner, messages))
             .await
     }
 
     pub(crate) async fn complete_request(
         &mut self,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
         let database = Arc::clone(&self.database);
         let owner = self.owner.clone();
-        self.finalize(database.complete_request(&owner, messages, continuation, outcome))
+        self.finalize(database.complete_request(&owner, messages, outcome))
             .await
     }
 
@@ -760,14 +760,9 @@ impl SessionStore for AdmittedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
-        self.settled(
-            self.store
-                .complete_request(owner, messages, continuation, outcome)
-                .await,
-        )
+        self.settled(self.store.complete_request(owner, messages, outcome).await)
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {
@@ -778,13 +773,8 @@ impl SessionStore for AdmittedStore {
         &self,
         owner: &TurnOwner,
         messages: &[ModelMessage],
-        continuation: Option<&str>,
     ) -> Result<(), SessionError> {
-        self.settled(
-            self.store
-                .complete_turn(owner, messages, continuation)
-                .await,
-        )
+        self.settled(self.store.complete_turn(owner, messages).await)
     }
 
     async fn fail_turn(&self, owner: &TurnOwner, error: &TurnError) -> Result<(), SessionError> {

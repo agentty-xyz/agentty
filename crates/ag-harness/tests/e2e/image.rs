@@ -11,6 +11,7 @@ use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::MemoryStore;
 use ag_harness::{Harness, SessionError};
 
+use crate::context_budget_fixture::unbounded_context_budget;
 use crate::{DynError, vision};
 
 const MODEL_API_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -120,9 +121,8 @@ async fn test_qwen_text_model_rejects_images() -> Result<(), DynError> {
 async fn test_image_history_switches_between_providers() -> Result<(), DynError> {
     // Arrange
     let vision_capabilities = ModelCapabilities {
-        context_budget: None,
+        context_budget: unbounded_context_budget(),
         image_input: true,
-        native_continuation: false,
         tool_calls: true,
     };
     let mut registry = ModelRegistry::new();
