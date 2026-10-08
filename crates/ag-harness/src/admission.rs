@@ -8,6 +8,7 @@
 use tokio::time::Instant;
 
 use crate::compaction::SessionCheckpoint;
+use crate::context::HistoryTurn;
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord};
@@ -144,14 +145,15 @@ pub struct ReservedTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) deadline: Instant,
     pub(crate) owner: TurnOwner,
-    pub(crate) turns: Vec<Vec<ModelMessage>>,
+    pub(crate) turns: Vec<HistoryTurn>,
 }
 
 impl ReservedTurn {
     /// Describes a committed reservation. `deadline` must not exceed the
-    /// stored lease expiry; `turns` holds completed history bounded by the
-    /// stored budget, oldest first.
-    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<Vec<ModelMessage>>) -> Self {
+    /// stored lease expiry; `turns` holds finished history bounded by the
+    /// stored budget, oldest first, as [`crate::store::LoadedSession::turns`]
+    /// describes.
+    pub fn new(owner: TurnOwner, deadline: Instant, turns: Vec<HistoryTurn>) -> Self {
         Self {
             checkpoint: None,
             deadline,

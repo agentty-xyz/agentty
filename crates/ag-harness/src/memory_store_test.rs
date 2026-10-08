@@ -12,8 +12,8 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::session::Database;
 use crate::store::{
-    AcquiredTurn, MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner, WriteRecord,
-    WriteStatus,
+    AcquiredTurn, HistoryTurn, MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner,
+    TurnStop, WriteRecord, WriteStatus,
 };
 use crate::store_conformance_test::{harness, options, schema};
 use crate::{ModelError, SessionError, TurnError, TurnInput};
@@ -75,7 +75,7 @@ async fn clones_share_state_independent_stores_and_one_shot_are_isolated() {
             .await
             .expect("independent")
             .turns,
-        Vec::<Vec<ModelMessage>>::new()
+        Vec::<HistoryTurn>::new()
     );
 }
 
@@ -232,7 +232,7 @@ async fn journal_ids_are_store_wide_and_paths_and_terminal_prompts_are_retained(
 
         // Assert
         let loaded = store.load_session(name).await.expect("load");
-        assert_eq!(loaded.turns, Vec::<Vec<ModelMessage>>::new());
+        assert_eq!(loaded.turns, Vec::<HistoryTurn>::new());
         let writes = store.load_writes(name).await.expect("writes");
         assert_eq!(writes[0].repository_root, root);
         assert_eq!(writes[0].status, WriteStatus::Failed);
@@ -285,7 +285,9 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
     // Assert
     assert_eq!(
         loaded.turns,
-        vec![vec![ModelMessage::User("last".to_string())]]
+        vec![HistoryTurn::from(vec![ModelMessage::User(
+            "last".to_string()
+        )])]
     );
     assert_eq!(store.lock().sessions["session"].turns.len(), 3);
     store
@@ -301,7 +303,7 @@ async fn bounded_projection_keeps_complete_groups_and_canonical_records() {
             .await
             .expect("zero budget")
             .turns,
-        Vec::<Vec<ModelMessage>>::new()
+        Vec::<HistoryTurn>::new()
     );
 }
 
@@ -446,7 +448,17 @@ async fn expiry_and_stale_cleanup_match_sqlite() {
 
             // Assert
             let loaded = store.load_session("expiry").await.expect("history");
-            assert_eq!(loaded.turns.len(), 2);
+            assert_eq!(loaded.turns.len(), 3);
+            assert_eq!(
+                loaded.turns[1],
+                HistoryTurn {
+                    messages: vec![ModelMessage::User("expired".to_string())],
+                    stop: Some(TurnStop {
+                        error_type: "interrupted".to_string(),
+                        ..TurnStop::default()
+                    }),
+                }
+            );
             assert_ne!(old.owner(), next.owner());
             assert_eq!(
                 store.load_writes("expiry").await.expect("writes")[0].status,

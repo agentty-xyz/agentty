@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT message.id AS \"id!: i64\", message.kind AS \"kind!: String\", message.payload AS \"payload!: String\"\n               FROM session_message AS message JOIN session_turn AS turn\n                 ON turn.session_id = message.session_id AND turn.turn_position = message.turn_position\n               WHERE message.session_id = ? AND turn.status = 'completed' AND message.id > ?\n                 AND message.kind NOT IN ('user', 'assistant')\n               ORDER BY message.id LIMIT 64",
+  "query": "SELECT message.id AS \"id!: i64\", message.kind AS \"kind!: String\", message.payload AS \"payload!: String\"\n               FROM session_message AS message JOIN session_turn AS turn\n                 ON turn.session_id = message.session_id AND turn.turn_position = message.turn_position\n               WHERE message.session_id = ? AND turn.status IN ('completed', 'failed', 'interrupted')\n                 AND message.id > ?\n                 AND message.kind NOT IN ('user', 'assistant')\n               ORDER BY message.id LIMIT 64",
   "describe": {
     "columns": [
       {
@@ -46,5 +46,5 @@
       false
     ]
   },
-  "hash": "1918452e4eb59ae79b42df8747d15596d1df4f3648a6a75eb2a55de08d4a5209"
+  "hash": "a872019f33c037d2ad47aae8bc93c3620399623dcee48504a48264db0e5e8fc4"
 }

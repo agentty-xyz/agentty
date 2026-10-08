@@ -16,9 +16,10 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, MemoryStore, ModelSwitch, NewSession, SessionCheckpoint, SessionStore,
-    SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner, WriteStatus,
+    AcquiredTurn, HistoryTurn, MemoryStore, ModelSwitch, NewSession, SessionCheckpoint,
+    SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner, TurnStop, WriteStatus,
 };
+use ag_harness::tool::ToolCall;
 use ag_harness::{
     Harness, ImageContent, ImageMediaType, InputBlock, Model, ModelError, OutputSchema,
     SessionError, ToolPolicy, TurnError, TurnInput, TurnOptions,
@@ -296,14 +297,13 @@ pub(crate) async fn lifecycle(store: Arc<dyn SessionStore>) {
         )
         .await
         .expect("fail");
-    assert_eq!(
-        store
-            .load_session("session")
-            .await
-            .expect("failed history")
-            .turns
-            .len(),
-        1
+    let failed = store.load_session("session").await.expect("failed history");
+    assert_eq!(failed.turns.len(), 2);
+    assert!(
+        failed.turns[1]
+            .stop
+            .as_ref()
+            .is_some_and(|stop| stop.failed)
     );
 }
 
@@ -312,6 +312,305 @@ async fn all_backends_satisfy_lifecycle_and_journal_contract() {
     // Arrange / Act / Assert
     for store in stores().await {
         lifecycle(store).await;
+    }
+}
+
+async fn journaled_stores() -> Vec<Arc<dyn SessionStore>> {
+    vec![
+        Arc::new(MemoryStore::new()),
+        Arc::new(
+            SqliteStore::open(Path::new(":memory:"))
+                .await
+                .expect("sqlite"),
+        ),
+    ]
+}
+
+fn write_call(id: &str) -> ToolCall {
+    ToolCall::from_json(
+        id.to_string(),
+        "write",
+        &json!({"path": "src/lib.rs", "patch": "--- /dev/null\n+++ b/src/lib.rs\n@@ -0,0 +1 @@\n+new\n"})
+            .to_string(),
+        None,
+    )
+    .expect("write call")
+}
+
+fn failed_stop() -> TurnStop {
+    TurnStop {
+        error_type: format!(
+            "{:?}",
+            TurnError::Model(ModelError::InvalidResponse).error_type()
+        ),
+        failed: true,
+        ..TurnStop::default()
+    }
+}
+
+#[tokio::test]
+async fn all_backends_complete_after_appended_exchanges() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("appended", schema()), None, 100_000)
+            .await
+            .expect("create");
+        let turn = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "appended",
+            &TurnInput::from("done"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
+        let call = ModelMessage::AssistantToolCall(write_call("call"));
+        let result = ModelMessage::ToolResult {
+            call_id: "call".to_string(),
+            content: "{}".to_string(),
+            name: "write".to_string(),
+        };
+        store
+            .append_messages(turn.owner(), std::slice::from_ref(&call))
+            .await
+            .expect("append call");
+        store
+            .append_messages(turn.owner(), std::slice::from_ref(&result))
+            .await
+            .expect("append result");
+
+        // Act
+        store
+            .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+            .await
+            .expect("complete");
+        let late = store
+            .append_messages(turn.owner(), &[ModelMessage::Assistant("late".to_string())])
+            .await;
+        drop(turn);
+
+        // Assert
+        assert!(matches!(late, Err(SessionError::OwnershipLost { .. })));
+        assert_eq!(
+            store.load_session("appended").await.expect("history").turns,
+            vec![HistoryTurn::from(vec![
+                ModelMessage::User("done".to_string()),
+                call,
+                result,
+                ModelMessage::Assistant("{}".to_string()),
+            ])]
+        );
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_replay_stopped_turn_messages_and_unfinished_effects() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("stopped", schema()), None, 100_000)
+            .await
+            .expect("create");
+        let stopped = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "stopped",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("stopped turn");
+        let owner = stopped.owner().clone();
+        store
+            .append_messages(
+                &owner,
+                &[ModelMessage::AssistantToolCall(write_call("work-call"))],
+            )
+            .await
+            .expect("append call");
+        store
+            .write_intent(
+                &owner,
+                "work-call",
+                Path::new("repo"),
+                "src/lib.rs",
+                None,
+                b"new",
+            )
+            .await
+            .expect("write intent");
+        store
+            .command_intent(
+                &owner,
+                &CommandIntent {
+                    call_id: "command".to_string(),
+                    command: "cargo test".to_string(),
+                    policy: json!({}),
+                    workspace: "repo".into(),
+                },
+            )
+            .await
+            .expect("command intent");
+
+        // Act
+        store
+            .fail_turn(&owner, &TurnError::Model(ModelError::InvalidResponse))
+            .await
+            .expect("fail");
+        drop(stopped);
+        let loaded = store.load_session("stopped").await.expect("history");
+
+        // Assert
+        assert_eq!(loaded.latest_finished_turn, Some(0));
+        assert_eq!(
+            loaded.turns,
+            vec![HistoryTurn {
+                messages: vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::AssistantToolCall(write_call("work-call")),
+                ],
+                stop: Some(TurnStop {
+                    unfinished_commands: vec!["cargo test".to_string()],
+                    unfinished_writes: vec!["src/lib.rs".to_string()],
+                    ..failed_stop()
+                }),
+            }]
+        );
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_keep_running_turn_effects_out_of_stopped_turn_notes() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("running", schema()), None, 100_000)
+            .await
+            .expect("create");
+        let stopped = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "running",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("stopped turn");
+        store
+            .fail_turn(
+                stopped.owner(),
+                &TurnError::Model(ModelError::InvalidResponse),
+            )
+            .await
+            .expect("fail");
+        drop(stopped);
+        let running = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "running",
+            &TurnInput::from("next"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("running turn");
+        store
+            .write_intent(
+                running.owner(),
+                "next-call",
+                Path::new("repo"),
+                "src/main.rs",
+                None,
+                b"next",
+            )
+            .await
+            .expect("write intent");
+        store
+            .command_intent(
+                running.owner(),
+                &CommandIntent {
+                    call_id: "next-command".to_string(),
+                    command: "cargo build".to_string(),
+                    policy: json!({}),
+                    workspace: "repo".into(),
+                },
+            )
+            .await
+            .expect("command intent");
+
+        // Act
+        let loaded = store.load_session("running").await.expect("history");
+        drop(running);
+
+        // Assert
+        assert_eq!(
+            loaded.turns,
+            vec![HistoryTurn {
+                messages: vec![ModelMessage::User("work".to_string())],
+                stop: Some(failed_stop()),
+            }]
+        );
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_budget() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("brief", schema()), None, 4)
+            .await
+            .expect("create");
+        let older = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "brief",
+            &TurnInput::from("old"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("older turn");
+        store
+            .complete_turn(older.owner(), &[])
+            .await
+            .expect("complete");
+        drop(older);
+        let stopped = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "brief",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("stopped turn");
+        store
+            .append_messages(
+                stopped.owner(),
+                &[ModelMessage::AssistantToolCall(write_call("call"))],
+            )
+            .await
+            .expect("append");
+        store
+            .fail_turn(
+                stopped.owner(),
+                &TurnError::Model(ModelError::InvalidResponse),
+            )
+            .await
+            .expect("fail");
+        drop(stopped);
+
+        // Act
+        let loaded = store.load_session("brief").await.expect("history");
+
+        // Assert
+        assert_eq!(
+            loaded.turns,
+            vec![HistoryTurn {
+                messages: vec![ModelMessage::User("work".to_string())],
+                stop: Some(failed_stop()),
+            }]
+        );
     }
 }
 
@@ -342,10 +641,10 @@ async fn all_backends_preserve_ordered_image_input_in_history() {
         let loaded = store.load_session("images").await.expect("load");
         assert_eq!(
             loaded.turns,
-            vec![vec![
+            vec![HistoryTurn::from(vec![
                 ModelMessage::UserInput(input),
                 ModelMessage::Assistant("described".to_string()),
-            ]]
+            ])]
         );
     }
 }
@@ -407,7 +706,7 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             Err(SessionError::CheckpointStale { .. })
         ));
         let loaded = store.load_session("checkpoints").await.expect("load");
-        assert_eq!(loaded.latest_completed_turn, Some(1));
+        assert_eq!(loaded.latest_finished_turn, Some(1));
         assert_eq!(
             loaded.checkpoint.expect("checkpoint").covered_through(),
             0,
@@ -419,7 +718,7 @@ async fn all_backends_bound_history_to_the_checkpoint_and_reject_stale_publicati
             "turn zero is covered by the checkpoint"
         );
         assert!(matches!(
-            &loaded.turns[0][0],
+            &loaded.turns[0].messages[0],
             ModelMessage::User(text) if text == "one"
         ));
     }
@@ -767,7 +1066,13 @@ async fn expired_renewal_acknowledgment_cancels_a_short_lease_turn() {
     assert_eq!(store.renewals.load(Ordering::SeqCst), 1);
     assert_eq!(
         store.load_session("expired").await.expect("history").turns,
-        Vec::<Vec<ModelMessage>>::new()
+        vec![HistoryTurn {
+            messages: vec![ModelMessage::User("work".to_string())],
+            stop: Some(TurnStop {
+                error_type: "interrupted".to_string(),
+                ..TurnStop::default()
+            }),
+        }]
     );
 }
 
@@ -852,7 +1157,7 @@ async fn bounded_history_policy_is_shared() {
             loaded
                 .turns
                 .iter()
-                .flatten()
+                .flat_map(|turn| &turn.messages)
                 .map(ModelMessage::retained_bytes)
                 .sum::<usize>()
                 <= 50
@@ -1059,10 +1364,10 @@ async fn abandoned_acquisition_retains_admission_and_never_executes() {
                 .send("recovered")
                 .await
                 .expect("owner cleanup and successor");
-            assert_eq!(
-                store.load_session(&id).await.expect("history").turns.len(),
-                1
-            );
+            let loaded = store.load_session(&id).await.expect("history");
+            assert_eq!(loaded.turns.len(), 2);
+            assert!(loaded.turns[0].stop.is_some());
+            assert!(loaded.turns[1].stop.is_none());
         }
     }
 }

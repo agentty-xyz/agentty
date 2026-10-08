@@ -20,7 +20,6 @@ use thiserror::Error;
 pub use crate::command_journal::{
     CommandCleanupScope, CommandIntent, CommandOutcome, CommandRecord, CommandTermination,
 };
-pub use crate::command_settlement::CommandSettlementError;
 pub use crate::execution::{
     BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
     MainExit, OutputStream, ProcessEvent, UnsandboxedExecutor,

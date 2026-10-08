@@ -4,8 +4,11 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::tempdir;
 
 use super::support::{schema, turn};
+use crate::context::HistoryTurn;
 use crate::model::ModelMessage;
-use crate::session::{Database, NewSession, SessionError, TimestampSource, load_turn_size_page};
+use crate::session::{
+    Database, NewSession, SessionError, TimestampSource, TurnSizeRow, load_turn_size_page,
+};
 use crate::store::SessionStore as _;
 
 #[tokio::test]
@@ -37,7 +40,7 @@ async fn database_loads_only_newest_complete_turns_within_budget() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(loaded.turns, vec![latest_turn]);
+    assert_eq!(loaded.turns, vec![HistoryTurn::from(latest_turn)]);
 }
 
 #[tokio::test]
@@ -82,7 +85,13 @@ async fn database_paginates_turn_sizes_until_the_history_budget_is_filled() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(loaded.turns, expected_turns);
+    assert_eq!(
+        loaded.turns,
+        expected_turns
+            .into_iter()
+            .map(HistoryTurn::from)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -142,9 +151,9 @@ VALUES (?, ?, 0, 'user', '"boundary"', ?, 1)
         .expect("page before minimum should load");
 
     // Assert
-    assert_eq!(initial_page, [(i64::MAX, 2), (i64::MIN, 1)]);
-    assert_eq!(before_maximum, [(i64::MIN, 1)]);
-    assert_eq!(before_minimum, [] as [(i64, i64); 0]);
+    assert_eq!(sizes(&initial_page), [(i64::MAX, 2), (i64::MIN, 1)]);
+    assert_eq!(sizes(&before_maximum), [(i64::MIN, 1)]);
+    assert_eq!(sizes(&before_minimum), [] as [(i64, i64); 0]);
 }
 
 #[tokio::test]
@@ -169,7 +178,7 @@ async fn database_excludes_a_newest_turn_larger_than_the_budget() {
         .expect("session should load");
 
     // Assert
-    assert_eq!(loaded.turns, Vec::<Vec<ModelMessage>>::new());
+    assert_eq!(loaded.turns, Vec::<HistoryTurn>::new());
 }
 
 #[tokio::test]
@@ -284,4 +293,10 @@ async fn appending_an_empty_turn_to_a_missing_session_reports_not_found() {
 
     // Assert
     assert!(matches!(error, SessionError::NotFound { .. }));
+}
+
+fn sizes(rows: &[TurnSizeRow]) -> Vec<(i64, i64)> {
+    rows.iter()
+        .map(|row| (row.turn_position, row.retained_bytes))
+        .collect()
 }

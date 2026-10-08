@@ -1,4 +1,5 @@
-//! Turn-scoped cancellation and independent persistence and effect observation.
+//! Turn-scoped cancellation and one settlement covering persistence, writes,
+//! and commands.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -8,16 +9,16 @@ use opentelemetry::context::FutureExt as _;
 use thiserror::Error;
 use tokio::sync::watch;
 
-use crate::effect::{EffectSettlementError, Effects};
+use crate::effect::Effects;
 use crate::session::{SessionError, TurnOwner};
 use crate::{ModelError, TurnError, TurnOutcome, reservation};
 
 /// A lazy turn future with a separately retainable cancellation control.
 ///
 /// Poll or await this value to start execution. Dropping it requests
-/// cancellation; keep its [`Self::control`] to observe persistence and effect
-/// settlement. The OpenTelemetry context current at the first poll stays
-/// attached to the turn, so harness spans nest under the caller's span.
+/// cancellation; keep its [`Self::control`] to observe settlement. The
+/// OpenTelemetry context current at the first poll stays attached to the turn,
+/// so harness spans nest under the caller's span.
 #[must_use = "turns do not start until polled"]
 pub struct ControlledTurn<'a, E> {
     control: TurnControl,
@@ -87,13 +88,12 @@ impl<E> Drop for ControlledTurn<'_, E> {
     }
 }
 
-/// Cloneable cancellation, persistence, and effect observation for one turn.
+/// Cloneable cancellation and settlement observation for one turn.
 ///
 /// Cancellation stops the waiter promptly. A terminal commit already in
-/// progress can still succeed. Keep the Tokio runtime driven until settlement.
-/// Neither cancellation nor persistence settlement proves filesystem effects
-/// have stopped; observe [`Self::effects_settled`] and
-/// [`Self::commands_settled`] separately.
+/// progress can still succeed. Cancellation alone does not prove effects have
+/// stopped; wait for [`Self::settled`] and keep the Tokio runtime driven until
+/// it returns.
 #[derive(Clone)]
 pub struct TurnControl {
     pub(crate) effects: Effects,
@@ -109,40 +109,27 @@ impl TurnControl {
         self.effects.commands().outcomes()
     }
 
-    /// Observes retained command cleanup and outcome recording separately from
-    /// persistence and filesystem replacements. macOS success covers only
-    /// best-effort process-group cleanup; detached descendants may remain.
-    ///
-    /// # Errors
-    /// Returns an error for unresolved cleanup or command outcome recording.
-    pub async fn commands_settled(&self) -> Result<(), crate::bash::CommandSettlementError> {
-        self.effects.commands().settled().await
-    }
-
-    /// Retries this turn's retained cleanup and recording, never its commands.
-    /// Keep the runtime driven. Persistence settlement must finish first.
-    ///
-    /// # Errors
-    /// Returns an error when execution is still active or cleanup/recording
-    /// fails.
-    pub async fn retry_commands(&self) -> Result<(), crate::bash::CommandSettlementError> {
-        self.effects.commands().retry().await
-    }
-
     /// Requests cancellation without waiting for storage. Repeated calls and
     /// calls after completion cannot affect another turn.
     pub fn cancel(&self) {
         self.cancellation.send_replace(true);
     }
 
-    /// Waits for execution and its retained persistence owners to settle.
+    /// Waits until the turn has settled: execution and its persistence
+    /// owners, then managed filesystem writes, then command processes and
+    /// their outcome recording. After success the turn starts no more writes
+    /// or commands, so the host may inspect or commit the workspace.
     ///
-    /// A failed cleanup returns an error while admission remains protected.
-    /// Use [`Self::retry_settlement`] after addressing the storage failure.
-    /// This does not wait for detached filesystem effects or remote providers.
+    /// Success does not mean writes or commands succeeded, and nothing is
+    /// rolled back. It does not fence other processes or stop remote
+    /// providers. macOS command cleanup covers only its best-effort process
+    /// group; detached descendants may remain.
     ///
     /// # Errors
-    /// Returns the bounded diagnostic from an unsuccessful cleanup attempt.
+    /// Returns the first phase that failed. Persistence and command failures
+    /// keep admission protected until [`Self::retry_settlement`] succeeds; a
+    /// write whose completion is unknown keeps it protected for the lifetime
+    /// of this process.
     pub async fn settled(&self) -> Result<(), SettlementError> {
         let mut receiver = self.settlement.0.subscribe();
         loop {
@@ -151,40 +138,49 @@ impl TurnControl {
                 return Err(error);
             }
             if state.pending == 0 {
-                return Ok(());
+                break;
             }
             // This control retains the sender for the entire wait.
             let _ = receiver.changed().await;
         }
+        self.effects
+            .settled()
+            .await
+            .map_err(|error| SettlementError {
+                message: error.to_string(),
+                phase: SettlementPhase::Writes,
+            })?;
+
+        self.effects
+            .commands()
+            .settled()
+            .await
+            .map_err(|error| SettlementError {
+                message: error.to_string(),
+                phase: SettlementPhase::Commands,
+            })
     }
 
-    /// Waits until this turn can start no more writes and all managed
-    /// replacements have acknowledged completion and attempted outcome
-    /// recording.
-    ///
-    /// Independent of [`Self::settled`]: persistence cleanup can finish first.
-    /// Success does not mean writes succeeded or were rolled back. It does not
-    /// fence other processes or stop remote providers. Keep the runtime driven.
+    /// Retries this turn's failed persistence cleanup, then its unresolved
+    /// command cleanup and outcome recording. Never executes a model, tool,
+    /// or command, or cancels a successor turn. Work still in progress is
+    /// left alone; await [`Self::settled`] to observe it.
     ///
     /// # Errors
-    /// Reports unacknowledged filesystem completion or failed outcome
-    /// recording. Persistence retries do not retry effects or their journal
-    /// outcomes.
-    pub async fn effects_settled(&self) -> Result<(), EffectSettlementError> {
-        self.effects.settled().await
-    }
-
-    /// Retries only this turn's failed owner-scoped persistence cleanup.
-    /// Does not execute a model or tool, or cancel a successor turn.
-    /// If cleanup is still pending, this is a no-op; await [`Self::settled`]
-    /// to observe its outcome.
-    ///
-    /// # Errors
-    /// Returns the store failure when cleanup still cannot be acknowledged.
-    pub async fn retry_settlement(&self) -> Result<(), SessionError> {
+    /// Returns the phase whose cleanup still cannot be acknowledged.
+    pub async fn retry_settlement(&self) -> Result<(), SettlementError> {
         let failure = self.settlement.0.borrow().failure.clone();
         if let Some((owner, _)) = failure {
-            reservation::recover_owner(&owner).await?;
+            reservation::recover_owner(&owner)
+                .await
+                .map_err(|error| SettlementError::persistence(&error))?;
+        }
+        let commands = self.effects.commands();
+        if commands.retryable() {
+            commands.retry().await.map_err(|error| SettlementError {
+                message: error.to_string(),
+                phase: SettlementPhase::Commands,
+            })?;
         }
 
         Ok(())
@@ -196,11 +192,51 @@ impl TurnControl {
     }
 }
 
-/// A cleanup failure observed independently of the turn's execution result.
+/// A settlement phase that failed, observed independently of the turn's
+/// execution result.
 #[derive(Clone, Debug, Error)]
-#[error("turn persistence cleanup failed: {message}")]
+#[error("turn {} settlement failed: {message}", .phase.as_str())]
 pub struct SettlementError {
     message: String,
+    phase: SettlementPhase,
+}
+
+impl SettlementError {
+    /// Returns the phase that failed.
+    pub fn phase(&self) -> SettlementPhase {
+        self.phase
+    }
+
+    fn persistence(error: &SessionError) -> Self {
+        Self {
+            message: crate::schema_contract::bounded_diagnostic(error),
+            phase: SettlementPhase::Persistence,
+        }
+    }
+}
+
+/// Settlement phase reported by [`SettlementError`], in the order
+/// [`TurnControl::settled`] waits for them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum SettlementPhase {
+    /// Recording the turn's terminal state or interrupting its reservation.
+    Persistence,
+    /// Managed filesystem replacements and their recorded outcomes.
+    Writes,
+    /// Command process cleanup and recorded outcomes.
+    Commands,
+}
+
+impl SettlementPhase {
+    /// Returns the stable lowercase phase name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Persistence => "persistence",
+            Self::Writes => "writes",
+            Self::Commands => "commands",
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -220,9 +256,7 @@ impl Settlement {
     }
 
     pub(crate) fn failed(&self, owner: &TurnOwner, error: &SessionError) {
-        let error = SettlementError {
-            message: crate::schema_contract::bounded_diagnostic(error),
-        };
+        let error = SettlementError::persistence(error);
         self.0
             .send_modify(|state| state.failure = Some((owner.clone(), error)));
     }

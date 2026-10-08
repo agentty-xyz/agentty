@@ -8,6 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
+use crate::context::{HistoryTurn, TurnStop};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
@@ -196,7 +197,7 @@ impl SessionStore for MemoryStore {
                 commands: Vec::new(),
                 configuration: LoadedSession {
                     checkpoint: None,
-                    latest_completed_turn: None,
+                    latest_finished_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -223,7 +224,7 @@ impl SessionStore for MemoryStore {
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
         let mut loaded = session.configuration.clone();
-        loaded.latest_completed_turn = session.latest_completed_turn();
+        loaded.latest_finished_turn = session.latest_finished_turn();
         loaded.turns = session.history();
 
         Ok(loaded)
@@ -244,8 +245,8 @@ impl SessionStore for MemoryStore {
         session.recover();
         let outdated = session.configuration.model_generation != checkpoint.model_generation()
             || session
-                .latest_completed_turn()
-                .is_none_or(|completed| checkpoint.covered_through() > completed)
+                .latest_finished_turn()
+                .is_none_or(|finished| checkpoint.covered_through() > finished)
             || session
                 .configuration
                 .checkpoint
@@ -272,7 +273,7 @@ impl SessionStore for MemoryStore {
             session
                 .turns
                 .iter()
-                .filter(|turn| turn.status == Status::Completed)
+                .filter(|turn| turn.status != Status::Running)
                 .flat_map(|turn| turn.messages.iter()),
         )?;
         let next = switch.admit(id, &session.admission_state(None))?;
@@ -368,6 +369,22 @@ impl SessionStore for MemoryStore {
         turn.deadline = Instant::now() + Duration::from_secs(TURN_LEASE_SECONDS.unsigned_abs());
 
         Ok(turn.deadline)
+    }
+
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.validate_identity(owner)?;
+        let mut state = self.lock();
+        state
+            .owned_session(owner)?
+            .live_turn(owner)?
+            .messages
+            .extend_from_slice(messages);
+
+        Ok(())
     }
 
     async fn complete_turn(
@@ -567,15 +584,15 @@ impl Record {
         }
     }
 
-    fn latest_completed_turn(&self) -> Option<i64> {
+    fn latest_finished_turn(&self) -> Option<i64> {
         self.turns
             .iter()
-            .filter(|turn| turn.status == Status::Completed)
+            .filter(|turn| turn.status != Status::Running)
             .map(|turn| turn.owner.turn_position())
             .max()
     }
 
-    fn history(&self) -> Vec<Vec<ModelMessage>> {
+    fn history(&self) -> Vec<HistoryTurn> {
         let boundary = self
             .configuration
             .checkpoint
@@ -583,21 +600,59 @@ impl Record {
             .map_or(-1, crate::store::SessionCheckpoint::covered_through);
         let mut remaining = self.configuration.max_history_bytes;
         let mut turns = Vec::new();
-        for turn in self.turns.iter().rev().filter(|turn| {
-            turn.status == Status::Completed && turn.owner.turn_position() > boundary
-        }) {
-            let bytes = turn.messages.iter().fold(0_usize, |bytes, message| {
-                bytes.saturating_add(message.retained_bytes())
-            });
+        for turn in
+            self.turns.iter().rev().filter(|turn| {
+                turn.status != Status::Running && turn.owner.turn_position() > boundary
+            })
+        {
+            let stop = self.stop(turn);
+            let mut messages = turn.messages.as_slice();
+            let mut bytes = retained_bytes(messages);
+            if bytes > remaining && stop.is_some() {
+                messages = &messages[..messages.len().min(1)];
+                bytes = retained_bytes(messages);
+            }
             if bytes > remaining {
                 break;
             }
             remaining -= bytes;
-            turns.push(turn.messages.clone());
+            turns.push(HistoryTurn {
+                messages: messages.to_vec(),
+                stop,
+            });
         }
         turns.reverse();
 
         turns
+    }
+
+    /// Describes a stopped turn and its effects without a recorded outcome.
+    fn stop(&self, turn: &TurnRecord) -> Option<TurnStop> {
+        if turn.status == Status::Completed {
+            return None;
+        }
+        let position = turn.owner.turn_position();
+
+        Some(TurnStop {
+            error_type: turn.error_type.clone().unwrap_or_default(),
+            failed: turn.status == Status::Failed,
+            unfinished_commands: self
+                .commands
+                .iter()
+                .filter(|command| {
+                    command.owner.turn_position() == position && command.outcome.is_none()
+                })
+                .map(|command| command.intent.command.clone())
+                .collect(),
+            unfinished_writes: self
+                .writes
+                .iter()
+                .filter(|write| {
+                    write.turn_position == position && write.status == WriteStatus::Pending
+                })
+                .map(|write| write.path.clone())
+                .collect(),
+        })
     }
 
     fn live_turn(&mut self, owner: &TurnOwner) -> Result<&mut TurnRecord, SessionError> {
@@ -629,6 +684,12 @@ enum Status {
     Completed,
     Failed,
     Interrupted,
+}
+
+fn retained_bytes(messages: &[ModelMessage]) -> usize {
+    messages.iter().fold(0_usize, |bytes, message| {
+        bytes.saturating_add(message.retained_bytes())
+    })
 }
 
 fn lost(owner: &TurnOwner) -> SessionError {

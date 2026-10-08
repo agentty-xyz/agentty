@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelRequest};
-use crate::tool::{Tool, ToolDefinition};
+use crate::tool::{Tool, ToolCall, ToolDefinition};
 use crate::turn::{TurnError, TurnOptions};
 
 /// Approximate request-weight budget for one registered model configuration.
@@ -134,6 +134,148 @@ impl ContextEstimator for HeuristicContextEstimator {
     }
 }
 
+/// One finished session turn loaded for replay.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryTurn {
+    /// Persisted messages in order, starting with the turn's user input.
+    pub messages: Vec<ModelMessage>,
+    /// Why the turn stopped; `None` for a completed turn.
+    pub stop: Option<TurnStop>,
+}
+
+impl HistoryTurn {
+    /// Returns the messages replayed for this turn. A completed turn replays
+    /// verbatim. A stopped turn adds a placeholder result for every tool call
+    /// without a recorded result, in the request only, and ends with its stop
+    /// note.
+    pub(crate) fn replay(&self) -> Vec<ModelMessage> {
+        let Some(stop) = &self.stop else {
+            return self.messages.clone();
+        };
+        let mut replay = Vec::with_capacity(self.messages.len().saturating_add(1));
+        let mut unanswered = Vec::new();
+        for message in &self.messages {
+            if let ModelMessage::ToolResult { call_id, .. } = message {
+                unanswered.retain(|call: &&ToolCall| call.id() != call_id);
+            } else {
+                Self::push_placeholder_results(&mut replay, &mut unanswered);
+                match message {
+                    ModelMessage::AssistantToolCall(call) => unanswered.push(call),
+                    ModelMessage::AssistantToolCalls(calls) => unanswered.extend(calls),
+                    _ => {}
+                }
+            }
+            replay.push(message.clone());
+        }
+        Self::push_placeholder_results(&mut replay, &mut unanswered);
+        replay.push(stop.note());
+
+        replay
+    }
+
+    /// Returns a stopped turn's input and stop note, replayed when its full
+    /// replay does not fit; `None` for a completed turn.
+    pub(crate) fn brief_replay(&self) -> Option<Vec<ModelMessage>> {
+        let stop = self.stop.as_ref()?;
+
+        Some(
+            self.messages
+                .first()
+                .cloned()
+                .into_iter()
+                .chain([stop.note()])
+                .collect(),
+        )
+    }
+
+    /// Answers each tool call still awaiting a result, so a stopped turn
+    /// replays as a well-formed tool group.
+    fn push_placeholder_results(replay: &mut Vec<ModelMessage>, unanswered: &mut Vec<&ToolCall>) {
+        for call in unanswered.drain(..) {
+            replay.push(ModelMessage::ToolResult {
+                call_id: call.id().to_string(),
+                content: r#"{"error":"no result was recorded before the turn stopped"}"#
+                    .to_string(),
+                name: call.name().to_string(),
+            });
+        }
+    }
+}
+
+impl From<Vec<ModelMessage>> for HistoryTurn {
+    /// Describes a completed turn.
+    fn from(messages: Vec<ModelMessage>) -> Self {
+        Self {
+            messages,
+            stop: None,
+        }
+    }
+}
+
+/// Why a replayed turn stopped and which of its effects have no recorded
+/// outcome, as named by the turn's stop note.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TurnStop {
+    /// Stored content-free error type, such as `cancelled` or `Tool`.
+    pub error_type: String,
+    /// Whether the turn failed rather than being interrupted.
+    pub failed: bool,
+    /// Shell sources of commands without a recorded outcome.
+    pub unfinished_commands: Vec<String>,
+    /// Repository paths of writes without a recorded outcome.
+    pub unfinished_writes: Vec<String>,
+}
+
+impl TurnStop {
+    const MAX_NAMED_EFFECTS: usize = 8;
+    const MAX_NAMED_EFFECT_BYTES: usize = 200;
+
+    /// Renders the bounded note that closes this turn's replay.
+    fn note(&self) -> ModelMessage {
+        let ending = if self.failed {
+            format!("failed ({})", self.error_type)
+        } else {
+            format!("was interrupted ({})", self.error_type)
+        };
+        let mut note = format!(
+            "[harness] The turn above {ending} before completing and shows only what it recorded."
+        );
+        if !self.unfinished_writes.is_empty() {
+            note.push_str(" Writes with unknown outcome: ");
+            note.push_str(&Self::name_effects(&self.unfinished_writes));
+            note.push('.');
+        }
+        if !self.unfinished_commands.is_empty() {
+            note.push_str(" Commands with unknown outcome: ");
+            note.push_str(&Self::name_effects(&self.unfinished_commands));
+            note.push('.');
+        }
+
+        ModelMessage::User(note)
+    }
+
+    fn name_effects(effects: &[String]) -> String {
+        let mut named: Vec<String> = effects
+            .iter()
+            .take(Self::MAX_NAMED_EFFECTS)
+            .map(|effect| {
+                let mut end = effect.len().min(Self::MAX_NAMED_EFFECT_BYTES);
+                while !effect.is_char_boundary(end) {
+                    end -= 1;
+                }
+
+                format!("`{}`", &effect[..end])
+            })
+            .collect();
+        let omitted = effects.len().saturating_sub(Self::MAX_NAMED_EFFECTS);
+        if omitted > 0 {
+            named.push(format!("and {omitted} more"));
+        }
+
+        named.join(", ")
+    }
+}
+
 /// Admits the content every request must carry and returns the approximate
 /// weight left for history.
 ///
@@ -200,33 +342,40 @@ pub(crate) fn admit_grown_request(
     Ok(())
 }
 
-/// Flattens the most recent complete turns whose combined weight fits
+/// Flattens the most recent finished turns whose combined weight fits
 /// `available_weight`, dropping every turn older than the first that does
-/// not, so a turn's tool groups are never split. Returns the projected
-/// messages with the number of loaded turns that projection evicted.
+/// not, so a turn's tool groups are never split. A stopped turn whose full
+/// replay does not fit keeps only its input and stop note. Returns the
+/// projected messages with the number of loaded turns that projection
+/// evicted.
 pub(crate) fn select_recent_turns(
     estimator: &dyn ContextEstimator,
-    turns: &VecDeque<Vec<ModelMessage>>,
+    turns: &VecDeque<HistoryTurn>,
     available_weight: u64,
 ) -> (Vec<ModelMessage>, usize) {
-    let mut kept = 0_usize;
+    let weigh = |messages: &[ModelMessage]| {
+        messages.iter().fold(0_u64, |weight, message| {
+            weight.saturating_add(estimator.message_weight(message))
+        })
+    };
+    let mut kept = Vec::new();
     let mut remaining = available_weight;
     for turn in turns.iter().rev() {
-        let weight = turn.iter().fold(0_u64, |weight, message| {
-            weight.saturating_add(estimator.message_weight(message))
-        });
-        if weight > remaining {
+        let full = turn.replay();
+        let replay = if weigh(&full) <= remaining {
+            Some(full)
+        } else {
+            turn.brief_replay()
+                .filter(|brief| weigh(brief) <= remaining)
+        };
+        let Some(replay) = replay else {
             break;
-        }
-        remaining -= weight;
-        kept += 1;
+        };
+        remaining -= weigh(&replay);
+        kept.push(replay);
     }
-    let dropped_turns = turns.len().saturating_sub(kept);
-    let messages = turns
-        .iter()
-        .skip(dropped_turns)
-        .flat_map(|turn| turn.iter().cloned())
-        .collect();
+    let dropped_turns = turns.len().saturating_sub(kept.len());
+    let messages = kept.into_iter().rev().flatten().collect();
 
     (messages, dropped_turns)
 }

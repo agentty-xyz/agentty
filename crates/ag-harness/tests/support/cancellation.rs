@@ -17,6 +17,7 @@ use ag_harness::store::{
     StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
 };
 use ag_harness::tool::{FileSystem, LocalFileSystem, ToolCall};
+use ag_harness::turn::SettlementPhase;
 use ag_harness::{
     Harness, Model, ModelError, OutputSchema, SessionError, Tool, ToolPolicy, TurnControl,
     TurnError, TurnOptions, TurnOutcome,
@@ -45,6 +46,14 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
         .expect("bounded operation")
 }
 
+fn completed_turns(loaded: &LoadedSession) -> usize {
+    loaded
+        .turns
+        .iter()
+        .filter(|turn| turn.stop.is_none())
+        .count()
+}
+
 async fn unsettled(control: &TurnControl) {
     assert!(
         timeout(Duration::from_millis(20), control.settled())
@@ -58,6 +67,7 @@ struct Probe {
     calls: AtomicUsize,
     dropped: Notify,
     entered: Notify,
+    requests: std::sync::Mutex<Vec<ModelRequest>>,
 }
 
 struct DropNotice(Arc<Probe>);
@@ -74,6 +84,11 @@ struct TestModel(Arc<Probe>);
 impl Model for TestModel {
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         self.0.calls.fetch_add(1, Ordering::SeqCst);
+        self.0
+            .requests
+            .lock()
+            .expect("requests")
+            .push(request.clone());
         self.0.entered.notify_one();
         let _notice = DropNotice(Arc::clone(&self.0));
         if matches!(
@@ -125,6 +140,7 @@ enum Phase {
 
 struct Gate {
     entered: Notify,
+    fail_append: AtomicBool,
     fail_cleanup: AtomicBool,
     fail_outcome: AtomicBool,
     lookup: Notify,
@@ -137,6 +153,7 @@ impl Gate {
     fn new(store: Arc<dyn SessionStore>, phase: Phase) -> Self {
         Self {
             entered: Notify::new(),
+            fail_append: AtomicBool::new(false),
             fail_cleanup: AtomicBool::new(false),
             fail_outcome: AtomicBool::new(false),
             lookup: Notify::new(),
@@ -231,6 +248,20 @@ impl SessionStore for Gate {
         self.store.renew(owner).await
     }
 
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        if self.fail_append.load(Ordering::SeqCst) {
+            return Err(SessionError::Store {
+                operation: "append messages",
+                source: Box::new(io::Error::other("injected append failure")),
+            });
+        }
+        self.store.append_messages(owner, messages).await
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
@@ -321,16 +352,10 @@ async fn cancellation_before_poll_and_unstarted_drop_do_not_execute() {
     control.cancel();
     let error = turn.await.expect_err("cancelled");
     bounded(control.settled()).await.expect("settled");
-    bounded(control.effects_settled())
-        .await
-        .expect("effects settled");
     control.retry_settlement().await.expect("no cleanup needed");
     let unstarted = harness.turn("wait", options()).start();
     let unstarted_control = unstarted.control();
     drop(unstarted);
-    bounded(unstarted_control.effects_settled())
-        .await
-        .expect("unstarted effects");
     bounded(unstarted_control.settled())
         .await
         .expect("unstarted settled");
@@ -414,7 +439,7 @@ async fn abandoned_acquisition_keeps_admission_and_never_executes() {
             // Assert
             assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
             assert_eq!(
-                store.load_session(id).await.expect("history").turns.len(),
+                completed_turns(&store.load_session(id).await.expect("history")),
                 0
             );
             gate.release.notify_one();
@@ -477,7 +502,7 @@ async fn terminal_acknowledgment_survives_cancellation_and_caller_drop() {
 
             // Assert
             assert_eq!(
-                store.load_session(&id).await.expect("history").turns.len(),
+                completed_turns(&store.load_session(&id).await.expect("history")),
                 usize::from(phase != Phase::Fail)
             );
             gate.release.notify_one();
@@ -621,16 +646,8 @@ fn write_options() -> TurnOptions {
     TurnOptions::new(schema(), ToolPolicy::default().allow(Tool::Write))
 }
 
-async fn effects_pending(control: &TurnControl) {
-    assert!(
-        timeout(Duration::from_millis(20), control.effects_settled())
-            .await
-            .is_err()
-    );
-}
-
 #[tokio::test]
-async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
+async fn settlement_waits_for_filesystem_effect_completion() {
     // Arrange
     for store in stores().await {
         let root = tempfile::tempdir().expect("repository");
@@ -666,10 +683,7 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
             bounded(turn).await,
             Err(SessionError::Turn(TurnError::Cancelled))
         ));
-        bounded(control.settled())
-            .await
-            .expect("persistence settled");
-        effects_pending(&control).await;
+        unsettled(&control).await;
 
         // Assert
         assert!(!root.path().join("file.txt").exists());
@@ -688,7 +702,7 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
         ));
         release.notify_one();
         bounded(finished.notified()).await;
-        bounded(control.effects_settled())
+        bounded(control.settled())
             .await
             .expect("effects acknowledged");
         assert_eq!(
@@ -709,9 +723,7 @@ async fn persistence_settlement_does_not_prove_filesystem_effect_completion() {
         }
         control.cancel();
         control.retry_settlement().await.expect("stale retry");
-        bounded(control.effects_settled())
-            .await
-            .expect("stale effects");
+        bounded(control.settled()).await.expect("stale effects");
         unsettled(&successor_control).await;
         drop(successor);
         bounded(successor_control.settled())
@@ -764,10 +776,7 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
             bounded(turn).await,
             Err(SessionError::Turn(TurnError::Cancelled))
         ));
-        bounded(control.settled())
-            .await
-            .expect("persistence settled");
-        effects_pending(&control).await;
+        unsettled(&control).await;
 
         // Assert
         assert!(matches!(
@@ -788,7 +797,7 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
         ));
         release.notify_one();
         bounded(gate.entered.notified()).await;
-        effects_pending(&control).await;
+        unsettled(&control).await;
         assert!(matches!(
             session
                 .turn("ok")
@@ -798,9 +807,7 @@ async fn host_request_cancellation_retains_effect_and_outcome_admission() {
             Err(SessionError::Busy { .. })
         ));
         gate.release.notify_one();
-        bounded(control.effects_settled())
-            .await
-            .expect("effects settled");
+        bounded(control.settled()).await.expect("effects settled");
         let record = session
             .recover("write-id")
             .await
@@ -844,10 +851,7 @@ async fn cancelled_intent_does_not_start_replacement() {
 
         // Act
         drop(turn);
-        bounded(control.settled()).await.expect("persistence");
-        bounded(control.effects_settled())
-            .await
-            .expect("no effects");
+        bounded(control.settled()).await.expect("no effects");
         gate.release.notify_one();
 
         // Assert
@@ -924,7 +928,7 @@ async fn dropped_ordinary_turn_retains_replacement_and_admission() {
 }
 
 #[tokio::test]
-async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() {
+async fn cancelled_outcome_failure_is_observable_through_settlement() {
     // Arrange
     for store in stores().await {
         let root = tempfile::tempdir().expect("repository");
@@ -950,19 +954,18 @@ async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() 
 
         // Act
         drop(turn);
-        bounded(control.settled()).await.expect("persistence");
-        effects_pending(&control).await;
+        unsettled(&control).await;
         assert!(matches!(
             session.send("ok").await,
             Err(SessionError::Busy { .. })
         ));
         gate.release.notify_one();
-        let error = bounded(control.effects_settled())
+        let error = bounded(control.settled())
             .await
             .expect_err("outcome failure");
 
         // Assert
-        assert!(!error.is_unresolved());
+        assert_eq!(error.phase(), SettlementPhase::Writes);
         assert!(error.to_string().contains("injected outcome failure"));
         assert!(root.path().join("file.txt").exists());
         assert_eq!(
@@ -974,6 +977,123 @@ async fn cancelled_outcome_failure_is_observable_after_persistence_settlement() 
             .await
             .expect("acknowledged effect permits successor");
     }
+}
+
+#[tokio::test]
+async fn cancelled_write_replays_its_call_placeholder_and_unfinished_write() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let gate = Arc::new(Gate::new(store, Phase::Outcome));
+        gate.fail_outcome.store(true, Ordering::SeqCst);
+        let probe = Arc::new(Probe::default());
+        let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
+            .store(gate.clone())
+            .repository(repository_with_host_git(root.path()));
+        let mut session = harness
+            .session("replay", schema())
+            .create()
+            .await
+            .expect("session");
+        let mut turn = Box::pin(session.turn("write").options(write_options()).start());
+        let control = turn.control();
+        tokio::select! {
+            result = &mut turn => std::panic::resume_unwind(Box::new(format!("unexpected result {result:?}"))),
+            () = gate.entered.notified() => {},
+        }
+        drop(turn);
+        gate.release.notify_one();
+        let _ = bounded(control.settled()).await;
+
+        // Act
+        session.send("ok").await.expect("successor");
+
+        // Assert
+        let request = probe
+            .requests
+            .lock()
+            .expect("requests")
+            .last()
+            .cloned()
+            .expect("successor request");
+        let [input, call, placeholder, note, next] = request.messages() else {
+            std::panic::resume_unwind(Box::new(format!(
+                "unexpected replay {:?}",
+                request.messages()
+            )));
+        };
+        assert_eq!(input, &ModelMessage::User("write".to_string()));
+        assert!(matches!(call, ModelMessage::AssistantToolCall(call) if call.id() == "write"));
+        assert!(matches!(
+            placeholder,
+            ModelMessage::ToolResult { call_id, content, .. }
+                if call_id == "write" && content.contains("no result was recorded")
+        ));
+        assert!(matches!(
+            note,
+            ModelMessage::User(note)
+                if note.starts_with("[harness] The turn above was interrupted (cancelled)")
+                    && note.ends_with("Writes with unknown outcome: `file.txt`.")
+        ));
+        assert_eq!(next, &ModelMessage::User("ok".to_string()));
+    }
+}
+
+#[tokio::test]
+async fn failed_exchange_persistence_stops_the_turn_before_its_tool_runs() {
+    // Arrange
+    for store in stores().await {
+        let root = tempfile::tempdir().expect("repository");
+        let gate = Arc::new(Gate::new(store, Phase::None));
+        gate.fail_append.store(true, Ordering::SeqCst);
+        let harness = Harness::new(
+            TestModel(Arc::new(Probe::default())),
+            unbounded_context_budget(),
+        )
+        .store(gate.clone())
+        .repository(repository_with_host_git(root.path()));
+        let mut session = harness
+            .session("append", schema())
+            .create()
+            .await
+            .expect("session");
+
+        // Act
+        let error = session
+            .turn("write")
+            .options(write_options())
+            .await
+            .expect_err("append failure");
+
+        // Assert
+        let SessionError::Turn(error) = error else {
+            std::panic::resume_unwind(Box::new(format!("unexpected error {error:?}")));
+        };
+        assert_eq!(error.error_type(), TurnErrorType::Session);
+        assert!(error.to_string().contains("injected append failure"));
+        assert!(matches!(error, TurnError::MessageJournal { .. }));
+        assert!(!root.path().join("file.txt").exists());
+        assert_eq!(
+            session.writes().await.expect("journal"),
+            Vec::<WriteRecord>::new()
+        );
+    }
+}
+
+#[test]
+fn settlement_phases_have_stable_names() {
+    // Arrange
+    let phases = [
+        SettlementPhase::Persistence,
+        SettlementPhase::Writes,
+        SettlementPhase::Commands,
+    ];
+
+    // Act
+    let names = phases.map(SettlementPhase::as_str);
+
+    // Assert
+    assert_eq!(names, ["persistence", "writes", "commands"]);
 }
 
 #[tokio::test]
@@ -1001,12 +1121,9 @@ async fn one_shot_drop_retains_effect_completion() {
 
     // Act
     drop(turn);
-    bounded(control.settled()).await.expect("execution settled");
-    effects_pending(&control).await;
+    unsettled(&control).await;
     release.notify_one();
-    bounded(control.effects_settled())
-        .await
-        .expect("effect completion");
+    bounded(control.settled()).await.expect("effect completion");
 
     // Assert
     assert_eq!(
@@ -1096,15 +1213,9 @@ async fn controlled_turns_reopen_sqlite_and_preserve_regular_results() {
     let store = SqliteStore::open(&path).await.expect("reopen");
 
     // Assert
-    assert_eq!(
-        store
-            .load_session("session")
-            .await
-            .expect("history")
-            .turns
-            .len(),
-        1
-    );
+    let loaded = store.load_session("session").await.expect("history");
+    assert_eq!(completed_turns(&loaded), 1);
+    assert_eq!(loaded.turns.len(), 2);
     assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
 }
 
@@ -1166,10 +1277,7 @@ async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission()
 
             // Act
             let error = bounded(turn).await.expect_err("write failed");
-            bounded(control.settled())
-                .await
-                .expect("persistence settled");
-            let effects = bounded(control.effects_settled())
+            let effects = bounded(control.settled())
                 .await
                 .expect_err("effect failure");
             control
@@ -1178,7 +1286,13 @@ async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission()
                 .expect("persistence retry does not replay");
 
             // Assert
-            assert_eq!(effects.is_unresolved(), panic);
+            assert_eq!(effects.phase(), SettlementPhase::Writes);
+            assert_eq!(
+                effects
+                    .to_string()
+                    .contains("without acknowledging filesystem completion"),
+                panic
+            );
             assert_eq!(
                 session.writes().await.expect("journal")[0].status,
                 WriteStatus::Pending
@@ -1204,7 +1318,7 @@ async fn write_failures_preserve_combined_diagnostics_and_unresolved_admission()
 }
 
 #[tokio::test]
-async fn lease_loss_settles_persistence_before_retained_replacement() {
+async fn lease_loss_settlement_waits_for_retained_replacement() {
     // Arrange
     let store = Arc::new(ExternalStore::with_leases(
         Duration::from_secs(2),
@@ -1245,16 +1359,13 @@ async fn lease_loss_settles_persistence_before_retained_replacement() {
         bounded(turn).await,
         Err(SessionError::OwnershipLost { .. })
     ));
-    bounded(control.settled()).await.expect("persistence");
-    effects_pending(&control).await;
+    unsettled(&control).await;
     assert!(matches!(
         session.send("ok").await,
         Err(SessionError::Busy { .. })
     ));
     release.notify_one();
-    bounded(control.effects_settled())
-        .await
-        .expect("late outcome");
+    bounded(control.settled()).await.expect("late outcome");
 
     // Assert
     assert_eq!(
@@ -1265,7 +1376,7 @@ async fn lease_loss_settles_persistence_before_retained_replacement() {
 }
 
 #[tokio::test]
-async fn successful_controlled_writes_acknowledge_both_boundaries() {
+async fn successful_controlled_writes_settle_once() {
     // Arrange
     for store in stores().await {
         let root = tempfile::tempdir().expect("repository");
@@ -1285,8 +1396,7 @@ async fn successful_controlled_writes_acknowledge_both_boundaries() {
 
         // Act
         bounded(turn).await.expect("completed write");
-        bounded(control.settled()).await.expect("persistence");
-        bounded(control.effects_settled()).await.expect("effects");
+        bounded(control.settled()).await.expect("settled");
 
         // Assert
         assert_eq!(

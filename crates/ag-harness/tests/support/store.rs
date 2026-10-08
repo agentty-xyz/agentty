@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
-    SessionCheckpoint, SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
-    WriteStatus,
+    Admission, AdmissionState, HistoryTurn, LoadedSession, ModelSwitch, NewSession, Reservation,
+    ReservedTurn, SessionCheckpoint, SessionStore, StoreIdentity, TurnAdmission, TurnOwner,
+    TurnStop, WriteRecord, WriteStatus,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -81,8 +81,8 @@ impl Record {
             .checkpoint
             .as_ref()
             .map_or(-1, SessionCheckpoint::covered_through);
-        loaded.latest_completed_turn = self.positions.iter().copied().max();
-        let mut turns: Vec<Vec<ModelMessage>> = self
+        loaded.latest_finished_turn = self.positions.iter().copied().max();
+        let mut turns: Vec<HistoryTurn> = self
             .positions
             .iter()
             .zip(loaded.turns.iter())
@@ -91,7 +91,7 @@ impl Record {
             .collect();
         while turns
             .iter()
-            .flatten()
+            .flat_map(|turn| &turn.messages)
             .map(ModelMessage::retained_bytes)
             .sum::<usize>()
             > loaded.max_history_bytes
@@ -103,21 +103,46 @@ impl Record {
         loaded
     }
 
+    /// Ends the active turn with its persisted messages and, for a stopped
+    /// turn, its stop record.
+    fn finish(&mut self, owner: &TurnOwner, stop: Option<TurnStop>) {
+        let stop = stop.map(|stop| TurnStop {
+            unfinished_writes: self
+                .writes
+                .iter()
+                .filter(|(_, write)| {
+                    write.turn_position == owner.turn_position()
+                        && write.status == WriteStatus::Pending
+                })
+                .map(|(_, write)| write.path.clone())
+                .collect(),
+            ..stop
+        });
+        self.loaded.turns.push(HistoryTurn {
+            messages: std::mem::take(&mut self.pending),
+            stop,
+        });
+        self.positions.push(owner.turn_position());
+        self.owner = None;
+    }
+
     fn recover(&mut self) {
-        if self
-            .owner
-            .as_ref()
-            .is_some_and(|(_, deadline)| *deadline <= Instant::now())
+        if let Some((owner, deadline)) = self.owner.clone()
+            && deadline <= Instant::now()
         {
-            if let Some((owner, _)) = self.owner.clone() {
-                self.set_status(
-                    &owner,
-                    HostTurnStatus::Interrupted {
-                        error_type: "interrupted".into(),
-                    },
-                );
-            }
-            self.owner = None;
+            self.set_status(
+                &owner,
+                HostTurnStatus::Interrupted {
+                    error_type: "interrupted".into(),
+                },
+            );
+            self.finish(
+                &owner,
+                Some(TurnStop {
+                    error_type: "interrupted".into(),
+                    ..TurnStop::default()
+                }),
+            );
         }
     }
 
@@ -148,15 +173,10 @@ impl ExternalStore {
         let session = sessions.get_mut(owner.session_id()).expect("session");
         session.validate(owner)?;
         session.pending.extend_from_slice(messages);
-        session
-            .loaded
-            .turns
-            .push(std::mem::take(&mut session.pending));
-        session.positions.push(owner.turn_position());
         if let Some(outcome) = outcome {
             session.set_status(owner, HostTurnStatus::Completed(outcome.clone()));
         }
-        session.owner = None;
+        session.finish(owner, None);
 
         Ok(())
     }
@@ -200,7 +220,7 @@ impl SessionStore for ExternalStore {
             Record {
                 loaded: LoadedSession {
                     checkpoint: None,
-                    latest_completed_turn: None,
+                    latest_finished_turn: None,
                     model_generation: 0,
                     max_history_bytes,
                     model: metadata.as_ref().map(|value| value.model().to_string()),
@@ -238,7 +258,7 @@ impl SessionStore for ExternalStore {
             .get_mut(id)
             .ok_or_else(|| SessionError::NotFound { id: id.to_string() })?;
         session.recover();
-        switch.check_history(session.loaded.turns.iter().flatten())?;
+        switch.check_history(session.loaded.turns.iter().flat_map(|turn| &turn.messages))?;
         let next = switch.admit(id, &session.admission_state(None))?;
         session.loaded.model_generation = next;
         session.loaded.registration_identity = Some(switch.identity().clone());
@@ -301,11 +321,11 @@ impl SessionStore for ExternalStore {
                 id: session_id.to_string(),
             })?;
         session.recover();
-        let latest_completed = session.positions.iter().copied().max();
+        let latest_finished = session.positions.iter().copied().max();
         let stale =
             session.loaded.model_generation != checkpoint.model_generation()
-                || latest_completed
-                    .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
+                || latest_finished
+                    .is_none_or(|latest_finished| checkpoint.covered_through() > latest_finished)
                 || session.loaded.checkpoint.as_ref().is_some_and(|existing| {
                     existing.covered_through() > checkpoint.covered_through()
                 });
@@ -354,6 +374,19 @@ impl SessionStore for ExternalStore {
         Ok(deadline)
     }
 
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let session = sessions.get_mut(owner.session_id()).expect("session");
+        session.validate(owner)?;
+        session.pending.extend_from_slice(messages);
+
+        Ok(())
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,
@@ -366,13 +399,21 @@ impl SessionStore for ExternalStore {
         let mut sessions = self.sessions.lock().expect("sessions");
         let session = sessions.get_mut(owner.session_id()).expect("session");
         session.validate(owner)?;
+        let error_type = format!("{:?}", error.error_type());
         session.set_status(
             owner,
             HostTurnStatus::Failed {
-                error_type: format!("{:?}", error.error_type()),
+                error_type: error_type.clone(),
             },
         );
-        session.owner = None;
+        session.finish(
+            owner,
+            Some(TurnStop {
+                error_type,
+                failed: true,
+                ..TurnStop::default()
+            }),
+        );
 
         Ok(())
     }
@@ -391,7 +432,13 @@ impl SessionStore for ExternalStore {
                     error_type: owner.interruption_error_type().into(),
                 },
             );
-            session.owner = None;
+            session.finish(
+                owner,
+                Some(TurnStop {
+                    error_type: owner.interruption_error_type().into(),
+                    ..TurnStop::default()
+                }),
+            );
         }
 
         Ok(())

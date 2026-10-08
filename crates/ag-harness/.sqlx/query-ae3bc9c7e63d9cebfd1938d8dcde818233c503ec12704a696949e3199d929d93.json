@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT message.turn_position AS \"turn_position!: i64\",\n       message.message_position AS \"message_position!: i64\",\n       message.kind AS \"kind!: String\",\n       message.payload AS \"payload!: String\",\n       turn.status AS \"status!: String\",\n       turn.error_type\nFROM session_message AS message\nJOIN session_turn AS turn\n  ON turn.session_id = message.session_id\n AND turn.turn_position = message.turn_position\nWHERE message.session_id = ?\n  AND message.turn_position >= ?\n  AND turn.status IN ('completed', 'failed', 'interrupted')\nORDER BY message.turn_position, message.message_position\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "turn_position!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "turn_position"
+          }
+        }
+      },
+      {
+        "name": "message_position!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "message_position"
+          }
+        }
+      },
+      {
+        "name": "kind!: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "payload!: String",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_message",
+            "name": "payload"
+          }
+        }
+      },
+      {
+        "name": "status!: String",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "error_type",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_turn",
+            "name": "error_type"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ae3bc9c7e63d9cebfd1938d8dcde818233c503ec12704a696949e3199d929d93"
+}

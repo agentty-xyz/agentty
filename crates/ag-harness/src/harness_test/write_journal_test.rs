@@ -5,9 +5,10 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::support::{model, object_schema, response_without_metadata, write_call};
+use crate::context::HistoryTurn;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
-use crate::model::{ModelError, ModelMessage, ModelResponse};
+use crate::model::{ModelError, ModelResponse};
 use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::tool::Tool;
@@ -93,7 +94,7 @@ async fn session_exposes_writes_after_failed_or_evicted_turns_and_reopen() {
                 .expect("file"),
             b"new\n"
         );
-        assert_eq!(history.turns, Vec::<Vec<ModelMessage>>::new());
+        assert_eq!(history.turns, Vec::<HistoryTurn>::new());
         assert!(reopened.history.turns().is_empty());
     }
 }

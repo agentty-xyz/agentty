@@ -11,7 +11,9 @@ use tokio::sync::OnceCell;
 
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::compaction::{self, SessionCheckpoint};
-use crate::context::{self, ContextBudget, ContextEstimator, HeuristicContextEstimator};
+use crate::context::{
+    self, ContextBudget, ContextEstimator, HeuristicContextEstimator, HistoryTurn,
+};
 use crate::effect::Effects;
 use crate::engine::Engine;
 use crate::file_system::{FileSystem, LocalFileSystem};
@@ -111,7 +113,7 @@ impl Session {
     /// Explicitly asserts that a stopped turn's command no longer prevents safe
     /// execution. The host must first stop or otherwise account for its
     /// effects. This never runs a command, erases its unknown outcome, or
-    /// rolls back writes. Prefer retained `TurnControl::retry_commands`
+    /// rolls back writes. Prefer retained `TurnControl::retry_settlement`
     /// while a control is available.
     ///
     /// # Errors
@@ -136,7 +138,7 @@ impl Session {
     }
 
     /// Generates and publishes a compaction checkpoint covering every
-    /// completed turn, replacing covered turns with a structured summary in
+    /// finished turn, replacing covered turns with a structured summary in
     /// later outgoing requests.
     ///
     /// Generation runs the session's current model through the shared engine
@@ -150,7 +152,7 @@ impl Session {
     /// history. Canonical messages, host requests, model provenance, and
     /// write journals always remain intact.
     ///
-    /// Returns `None` without a model call when no completed turn is
+    /// Returns `None` without a model call when no finished turn is
     /// uncovered.
     ///
     /// # Errors
@@ -164,7 +166,7 @@ impl Session {
             loaded.model_generation,
             self.model_generation,
         )?;
-        let Some(boundary) = loaded.latest_completed_turn else {
+        let Some(boundary) = loaded.latest_finished_turn else {
             return Ok(None);
         };
         if loaded
@@ -208,7 +210,8 @@ impl Session {
         loaded: &LoadedSession,
         options: &TurnOptions,
     ) -> Result<TurnInput, SessionError> {
-        let mut turns: Vec<&Vec<ModelMessage>> = loaded.turns.iter().collect();
+        let mut turns: Vec<Vec<ModelMessage>> =
+            loaded.turns.iter().map(HistoryTurn::replay).collect();
 
         loop {
             let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
@@ -503,17 +506,20 @@ impl Session {
         };
         outcome.set_history(history);
         let turn = messages.split_off(retained_messages);
+        // Earlier exchanges were appended as they finished; the final output
+        // commits atomically with completion.
+        let output = turn.last().map_or(&[][..], std::slice::from_ref);
         let persistence = if host_request {
-            guard.complete_request(&turn[1..], &outcome).await
+            guard.complete_request(output, &outcome).await
         } else {
-            guard.complete(&turn[1..]).await
+            guard.complete(output).await
         };
         if let Err(error) = persistence {
             guard.mark_interrupted();
 
             return Err(error);
         }
-        self.history.push(turn);
+        self.history.push(HistoryTurn::from(turn));
 
         Ok(outcome)
     }
@@ -677,7 +683,7 @@ impl SessionBuilder {
 pub(crate) struct SessionHistory {
     bytes: usize,
     max_bytes: usize,
-    turns: VecDeque<Vec<ModelMessage>>,
+    turns: VecDeque<HistoryTurn>,
 }
 
 impl SessionHistory {
@@ -689,24 +695,24 @@ impl SessionHistory {
         }
     }
 
-    pub(crate) fn turns(&self) -> &VecDeque<Vec<ModelMessage>> {
+    pub(crate) fn turns(&self) -> &VecDeque<HistoryTurn> {
         &self.turns
     }
 
-    pub(crate) fn push(&mut self, turn: Vec<ModelMessage>) {
-        self.bytes = self.bytes.saturating_add(retained_bytes(&turn));
+    pub(crate) fn push(&mut self, turn: HistoryTurn) {
+        self.bytes = self.bytes.saturating_add(retained_bytes(&turn.messages));
         self.turns.push_back(turn);
 
         while self.bytes > self.max_bytes && !self.turns.is_empty() {
             let evicted_bytes = self
                 .turns
                 .pop_front()
-                .map_or(self.bytes, |evicted| retained_bytes(&evicted));
+                .map_or(self.bytes, |evicted| retained_bytes(&evicted.messages));
             self.bytes = self.bytes.saturating_sub(evicted_bytes);
         }
     }
 
-    fn replace(&mut self, turns: Vec<Vec<ModelMessage>>) {
+    fn replace(&mut self, turns: Vec<HistoryTurn>) {
         self.bytes = 0;
         self.turns.clear();
         for turn in turns {
@@ -763,8 +769,8 @@ impl<'a> SessionTurn<'a> {
     /// Prepares the turn with a retained cancellation control.
     ///
     /// The returned future starts execution when polled, and dropping it
-    /// requests cancellation. Its control observes persistence and managed
-    /// effect settlement even after the future is dropped. Cancellation may
+    /// requests cancellation. Its control observes settlement of persistence,
+    /// writes, and commands even after the future is dropped. Cancellation may
     /// race a successful terminal commit; inspect stored history, or
     /// [`Session::recover`] a host ID, after settlement.
     ///
@@ -827,9 +833,8 @@ impl<'a> OneShotTurn<'a> {
     /// Prepares the turn with a retained cancellation control.
     ///
     /// Dropping the returned future requests cancellation. Observe
-    /// persistence settlement and managed filesystem-effect settlement
-    /// separately through the retained control. Neither waits for remote
-    /// provider work.
+    /// settlement of writes and commands through the retained control; it
+    /// does not wait for remote provider work.
     ///
     /// # Errors
     ///
@@ -1076,7 +1081,7 @@ impl Harness {
         }
     }
 
-    /// Resumes a durable session and restores its bounded completed history.
+    /// Resumes a durable session and restores its bounded finished history.
     ///
     /// Captures current harness defaults while retaining the stored schema,
     /// system prompt, and history budget.

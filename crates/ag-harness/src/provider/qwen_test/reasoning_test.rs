@@ -23,7 +23,8 @@ async fn sends_tool_result_history_for_continuation() {
     .expect("read arguments should be valid");
     let call = tool::ToolCall::read("call_qwen_read".to_string(), arguments, None);
     let mut model_request = read_request(prompt);
-    model_request.record_tool_result(call, result.to_string());
+    model_request.record_tool_call(call.clone());
+    model_request.record_tool_result(&call, result.to_string());
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
@@ -103,7 +104,8 @@ async fn preserves_qwen_3_8_reasoning_for_tool_continuation() {
         .expect("initial response should contain a tool call")
         .clone();
     let mut model_request = read_request(prompt);
-    model_request.record_tool_result(call, result.to_string());
+    model_request.record_tool_call(call.clone());
+    model_request.record_tool_result(&call, result.to_string());
     let response = model
         .complete(model_request)
         .await

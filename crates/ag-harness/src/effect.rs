@@ -11,18 +11,8 @@ use crate::command_settlement::{CommandLease, Commands};
 /// outcome.
 #[derive(Clone, Debug, Error)]
 #[error("managed filesystem effect settlement failed: {message}")]
-pub struct EffectSettlementError {
+pub(crate) struct EffectSettlementError {
     message: String,
-    unresolved: bool,
-}
-
-impl EffectSettlementError {
-    /// Whether filesystem completion itself is unknown. Such a turn keeps local
-    /// admission blocked for the lifetime of this process. A recording failure
-    /// alone does not imply that the filesystem operation is still running.
-    pub fn is_unresolved(&self) -> bool {
-        self.unresolved
-    }
 }
 
 type Admission = Arc<OwnedMutexGuard<()>>;
@@ -69,7 +59,6 @@ impl Effects {
         self.0.send_modify(|state| {
             state.failure = Some(EffectSettlementError {
                 message: crate::schema_contract::bounded_diagnostic(error),
-                unresolved: false,
             });
         });
     }
@@ -118,10 +107,11 @@ impl Drop for EffectLease {
         }
         self.effects.0.send_modify(|state| {
             if self.unresolved {
+                // An unknown completion keeps local admission blocked for the
+                // lifetime of this process; a recording failure alone does not.
                 state.failure = Some(EffectSettlementError {
                     message: "replacement worker ended without acknowledging filesystem completion"
                         .into(),
-                    unresolved: true,
                 });
                 // A failed worker may have detached blocking work. Retain the
                 // admission even if every host control is dropped; no retry can

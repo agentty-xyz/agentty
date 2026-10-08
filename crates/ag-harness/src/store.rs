@@ -15,6 +15,7 @@ pub use crate::admission::{
     Admission, AdmissionState, ModelSwitch, NewTurn, Reservation, ReservedTurn, TurnAdmission,
 };
 pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
+pub use crate::context::{HistoryTurn, TurnStop};
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::HostTurnRecord;
@@ -31,11 +32,11 @@ pub use crate::write_journal::{WriteRecord, WriteStatus};
 /// Stores supply atomic record operations; the harness applies admission
 /// rules and owns every reservation's lease. Owner-scoped mutations validate
 /// ownership in the transaction applying their effects. History returned by
-/// loads and reservations contains only complete turns within the stored byte
-/// budget and, when a compaction checkpoint exists, only turns after its
-/// covered boundary; both return the current checkpoint alongside that
-/// history. Implementations preserve the existing
-/// options codec and fingerprints.
+/// loads and reservations contains the most recent finished turns within the
+/// stored byte budget, as [`LoadedSession::turns`] describes, and, when a
+/// compaction checkpoint exists, only turns after its covered boundary; both
+/// return the current checkpoint alongside that history. Implementations
+/// preserve the existing options codec and fingerprints.
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Returns command records independently of completed history. Stores that
@@ -96,12 +97,12 @@ pub trait SessionStore: Send + Sync {
         metadata: Option<ModelMetadata>,
         max_history_bytes: usize,
     ) -> Result<(), SessionError>;
-    /// Loads configuration and bounded completed history; recovers expired
+    /// Loads configuration and bounded finished history; recovers expired
     /// turns. Return the current registration identity in [`LoadedSession`];
     /// a load or turn must never assign or switch that identity.
     async fn load_session(&self, id: &str) -> Result<LoadedSession, SessionError>;
     /// Switches an idle session's model in one atomic section: recover
-    /// expired turns and validate every completed canonical message with
+    /// expired turns and validate every finished turn's canonical message with
     /// [`ModelSwitch::check_history`], including turns outside the replay
     /// budget, so unsupported history is reported before stale or busy
     /// admission. Then read [`AdmissionState`], apply [`ModelSwitch::admit`]
@@ -155,9 +156,10 @@ pub trait SessionStore: Send + Sync {
         host_id: &str,
     ) -> Result<Option<HostTurnRecord>, SessionError>;
 
-    /// Commit the complete result together with messages and terminal state
-    /// under live ownership. An acknowledgment failure must not overwrite a
-    /// committed result during subsequent interrupt/cleanup.
+    /// Commit the complete result together with the final messages and
+    /// terminal state under live ownership, as [`Self::complete_turn`] does.
+    /// An acknowledgment failure must not overwrite a committed result during
+    /// subsequent interrupt/cleanup.
     async fn complete_request(
         &self,
         owner: &TurnOwner,
@@ -167,7 +169,16 @@ pub trait SessionStore: Send + Sync {
 
     /// Renew only an unexpired owner; return a conservative confirmed deadline.
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError>;
-    /// Atomically commits messages under an unexpired owner.
+    /// Atomically appends a running turn's finished model response or tool
+    /// result after its persisted messages under an unexpired owner, so a
+    /// stopped turn keeps what it already did.
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError>;
+    /// Atomically appends the final messages after the turn's persisted
+    /// messages and marks it completed under an unexpired owner.
     async fn complete_turn(
         &self,
         owner: &TurnOwner,

@@ -20,6 +20,7 @@ use crate::admission::{
     Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
 use crate::compaction::{CheckpointError, SessionCheckpoint};
+use crate::context::{HistoryTurn, TurnStop};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
@@ -120,8 +121,11 @@ struct ModelIdentityRow {
 }
 
 struct SessionMessageRow {
+    error_type: Option<String>,
     kind: String,
+    message_position: i64,
     payload: String,
+    status: String,
     turn_position: i64,
 }
 
@@ -145,7 +149,14 @@ struct TurnConfigurationRow {
 }
 
 struct TurnSizeRow {
+    input_bytes: i64,
     retained_bytes: i64,
+    stopped: bool,
+    turn_position: i64,
+}
+
+struct UnfinishedEffectRow {
+    effect: String,
     turn_position: i64,
 }
 
@@ -418,7 +429,7 @@ impl Database {
         let max_history_bytes =
             decode_max_history_bytes(session_id, configuration.max_history_bytes)?;
         let turn_position = next_turn_position(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let latest_finished_turn = latest_finished_turn(&mut transaction, session_id).await?;
         let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
         let turns = load_turns_from(
             &mut transaction,
@@ -435,7 +446,7 @@ impl Database {
         Ok(TurnAcquisition {
             checkpoint,
             configuration,
-            latest_completed_turn,
+            latest_finished_turn,
             turn_position,
             turns,
         })
@@ -484,19 +495,14 @@ WHERE session_id = ? AND turn_position = ? AND status = 'running'
         if result.rows_affected() == 0 {
             return Err(owner.lost());
         }
-        for (index, message) in encoded_messages.iter().enumerate() {
-            let message_position = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
-            insert_message(
-                &mut transaction,
-                session_id,
-                turn_position,
-                message_position,
-                message,
-                now,
-                "complete persistent session turn",
-            )
-            .await?;
-        }
+        append_encoded_messages(
+            &mut transaction,
+            owner,
+            &encoded_messages,
+            now,
+            "complete persistent session turn",
+        )
+        .await?;
         sqlx::query("UPDATE session SET updated_at = ? WHERE id = ?")
             .bind(now)
             .bind(session_id)
@@ -648,21 +654,14 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         &self,
         session_id: &str,
         max_history_bytes: usize,
-    ) -> Result<
-        (
-            Option<SessionCheckpoint>,
-            Option<i64>,
-            Vec<Vec<ModelMessage>>,
-        ),
-        SessionError,
-    > {
+    ) -> Result<(Option<SessionCheckpoint>, Option<i64>, Vec<HistoryTurn>), SessionError> {
         let mut connection = self
             .pool
             .acquire()
             .await
             .session_context("load persistent session history")?;
         let checkpoint = load_checkpoint_from(&mut connection, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut connection, session_id).await?;
+        let latest_finished_turn = latest_finished_turn(&mut connection, session_id).await?;
         let turns = load_turns_from(
             &mut connection,
             session_id,
@@ -671,7 +670,7 @@ RETURNING owner_token AS "owner_token!: Vec<u8>"
         )
         .await?;
 
-        Ok((checkpoint, latest_completed_turn, turns))
+        Ok((checkpoint, latest_finished_turn, turns))
     }
 
     fn validate_owner(&self, owner: &TurnOwner) -> Result<(), SessionError> {
@@ -894,14 +893,14 @@ WHERE id = ?
         if let Some(snapshot) = row.turn_options {
             StoredTurnOptions::decode(&snapshot)?;
         }
-        let (checkpoint, latest_completed_turn, turns) =
+        let (checkpoint, latest_finished_turn, turns) =
             self.load_history(id, max_history_bytes).await?;
         let registration_identity =
             decode_registration_identity(id, row.registration_key, row.registration_revision)?;
 
         Ok(LoadedSession {
             checkpoint,
-            latest_completed_turn,
+            latest_finished_turn,
             model_generation: row.model_generation,
             max_history_bytes,
             model: row.model,
@@ -925,11 +924,11 @@ WHERE id = ?
             .await
             .session_context(operation)?;
         let configuration = load_turn_configuration(&mut transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(&mut transaction, session_id).await?;
+        let latest_finished_turn = latest_finished_turn(&mut transaction, session_id).await?;
         let existing = load_checkpoint_from(&mut transaction, session_id).await?;
         let stale = configuration.model_generation != checkpoint.model_generation()
-            || latest_completed_turn
-                .is_none_or(|latest_completed| checkpoint.covered_through() > latest_completed)
+            || latest_finished_turn
+                .is_none_or(|latest_finished| checkpoint.covered_through() > latest_finished)
             || existing
                 .is_some_and(|existing| existing.covered_through() > checkpoint.covered_through());
         if stale {
@@ -980,10 +979,10 @@ ON CONFLICT(session_id) DO UPDATE SET
         let operation = "switch session model";
         loop {
             // Validate canonical history outside the writer transaction, then
-            // revalidate its completed-turn boundary under the admission lock.
+            // revalidate its finished-turn boundary under the admission lock.
             let mut snapshot = self.pool.begin().await.session_context(operation)?;
             load_turn_configuration(&mut snapshot, id).await?;
-            let revision = latest_completed_turn(&mut snapshot, id).await?;
+            let revision = latest_finished_turn(&mut snapshot, id).await?;
             check_switch_history(&mut snapshot, id, switch).await?;
             snapshot.commit().await.session_context(operation)?;
             self.reservation_observer.model_validated().await;
@@ -994,7 +993,7 @@ ON CONFLICT(session_id) DO UPDATE SET
                 .session_context(operation)?;
             let now = self.timestamp_source.now_timestamp_seconds();
             recover_stale_turns(&mut transaction, id, now).await?;
-            if latest_completed_turn(&mut transaction, id).await? != revision {
+            if latest_finished_turn(&mut transaction, id).await? != revision {
                 transaction.commit().await.session_context(operation)?;
                 continue;
             }
@@ -1070,6 +1069,43 @@ ON CONFLICT(session_id) DO UPDATE SET
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
         self.complete(owner, messages, Some(outcome)).await
+    }
+
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        let operation = "append persistent session messages";
+        self.validate_owner(owner)?;
+        let encoded_messages = messages
+            .iter()
+            .map(EncodedMessage::from_message)
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .session_context(operation)?;
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let live = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM session_turn WHERE session_id = ? AND turn_position = ? \
+             AND owner_token = ? AND status = 'running' AND lease_expires_at > ?)",
+        )
+        .bind(&owner.session_id)
+        .bind(owner.turn_position)
+        .bind(&owner.token)
+        .bind(now)
+        .fetch_one(&mut *transaction)
+        .await
+        .session_context(operation)?;
+        if !live {
+            return Err(owner.lost());
+        }
+        append_encoded_messages(&mut transaction, owner, &encoded_messages, now, operation).await?;
+        transaction.commit().await.session_context(operation)?;
+
+        Ok(())
     }
 
     async fn complete_turn(
@@ -1443,13 +1479,14 @@ impl From<StoredTurnOptionsError> for SessionError {
     }
 }
 
-/// Session configuration and bounded completed turns returned by a store.
+/// Session configuration and bounded finished turns returned by a store.
 #[derive(Clone)]
 pub struct LoadedSession {
     /// Current compaction checkpoint, replayed ahead of `turns`.
     pub checkpoint: Option<SessionCheckpoint>,
-    /// Highest completed turn position, used as the next coverage boundary.
-    pub latest_completed_turn: Option<i64>,
+    /// Highest completed, failed, or interrupted turn position, used as the
+    /// next coverage boundary.
+    pub latest_finished_turn: Option<i64>,
     /// Maximum history payload bytes, counted with
     /// `ModelMessage::retained_bytes`.
     pub max_history_bytes: usize,
@@ -1466,9 +1503,11 @@ pub struct LoadedSession {
     pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
-    /// Recent complete turns after the checkpoint boundary, oldest first;
-    /// never split tool-call/result groups.
-    pub turns: Vec<Vec<ModelMessage>>,
+    /// Recent finished turns after the checkpoint boundary, oldest first.
+    /// A completed turn carries all its messages. A failed or interrupted
+    /// turn carries its persisted messages and stop record, or only its input
+    /// when its messages do not fit the byte budget.
+    pub turns: Vec<HistoryTurn>,
 }
 
 impl LoadedSession {
@@ -1486,9 +1525,9 @@ impl LoadedSession {
 struct TurnAcquisition {
     checkpoint: Option<SessionCheckpoint>,
     configuration: TurnConfigurationRow,
-    latest_completed_turn: Option<i64>,
+    latest_finished_turn: Option<i64>,
     turn_position: i64,
-    turns: Vec<Vec<ModelMessage>>,
+    turns: Vec<HistoryTurn>,
 }
 
 impl TurnAcquisition {
@@ -1499,14 +1538,14 @@ impl TurnAcquisition {
     ) -> Result<bool, SessionError> {
         let configuration = load_turn_configuration(transaction, session_id).await?;
         let turn_position = next_turn_position(transaction, session_id).await?;
-        let latest_completed_turn = latest_completed_turn(transaction, session_id).await?;
+        let latest_finished_turn = latest_finished_turn(transaction, session_id).await?;
         let checkpoint_boundary = load_checkpoint_from(transaction, session_id)
             .await?
             .map(|checkpoint| checkpoint.covered_through());
 
         Ok(configuration == self.configuration
             && turn_position == self.turn_position
-            && latest_completed_turn == self.latest_completed_turn
+            && latest_finished_turn == self.latest_finished_turn
             && checkpoint_boundary
                 == self
                     .checkpoint
@@ -1884,7 +1923,8 @@ async fn check_switch_history(
             r#"SELECT message.id AS "id!: i64", message.kind AS "kind!: String", message.payload AS "payload!: String"
                FROM session_message AS message JOIN session_turn AS turn
                  ON turn.session_id = message.session_id AND turn.turn_position = message.turn_position
-               WHERE message.session_id = ? AND turn.status = 'completed' AND message.id > ?
+               WHERE message.session_id = ? AND turn.status IN ('completed', 'failed', 'interrupted')
+                 AND message.id > ?
                  AND message.kind NOT IN ('user', 'assistant')
                ORDER BY message.id LIMIT 64"#, id, after)
             .fetch_all(&mut *connection).await.session_context("validate model switch history")?;
@@ -1927,9 +1967,9 @@ async fn load_turns_from(
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Vec<Vec<ModelMessage>>, SessionError> {
-    let Some(oldest_turn) =
-        oldest_turn_within_budget(connection, session_id, max_history_bytes, after_turn).await?
+) -> Result<Vec<HistoryTurn>, SessionError> {
+    let Some((oldest_turn, brief_turns)) =
+        history_window(connection, session_id, max_history_bytes, after_turn).await?
     else {
         return Ok(Vec::new());
     };
@@ -1937,15 +1977,18 @@ async fn load_turns_from(
         SessionMessageRow,
         r#"
 SELECT message.turn_position AS "turn_position!: i64",
+       message.message_position AS "message_position!: i64",
        message.kind AS "kind!: String",
-       message.payload AS "payload!: String"
+       message.payload AS "payload!: String",
+       turn.status AS "status!: String",
+       turn.error_type
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
  AND turn.turn_position = message.turn_position
 WHERE message.session_id = ?
   AND message.turn_position >= ?
-  AND turn.status = 'completed'
+  AND turn.status IN ('completed', 'failed', 'interrupted')
 ORDER BY message.turn_position, message.message_position
 "#,
         session_id,
@@ -1954,31 +1997,109 @@ ORDER BY message.turn_position, message.message_position
     .fetch_all(&mut *connection)
     .await
     .session_context("load persistent session history")?;
-    let mut turns = Vec::<Vec<ModelMessage>>::new();
-    let mut current_position = None;
+    let mut turns = Vec::<(i64, HistoryTurn)>::new();
 
     for row in rows {
-        if current_position != Some(row.turn_position) {
-            turns.push(Vec::new());
-            current_position = Some(row.turn_position);
+        if row.message_position != 0 && brief_turns.contains(&row.turn_position) {
+            continue;
         }
         let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
-        if let Some(turn) = turns.last_mut() {
-            turn.push(message);
+        match turns.last_mut() {
+            Some((position, turn)) if *position == row.turn_position => {
+                turn.messages.push(message);
+            }
+            _ => {
+                let stop = (row.status != "completed").then(|| TurnStop {
+                    error_type: row.error_type.clone().unwrap_or_default(),
+                    failed: row.status == "failed",
+                    ..TurnStop::default()
+                });
+                turns.push((
+                    row.turn_position,
+                    HistoryTurn {
+                        messages: vec![message],
+                        stop,
+                    },
+                ));
+            }
+        }
+    }
+    if turns.iter().any(|(_, turn)| turn.stop.is_some()) {
+        attach_unfinished_effects(connection, session_id, oldest_turn, &mut turns).await?;
+    }
+
+    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+}
+
+/// Names the writes and commands of loaded stopped turns that have no
+/// recorded outcome.
+async fn attach_unfinished_effects(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    oldest_turn: i64,
+    turns: &mut [(i64, HistoryTurn)],
+) -> Result<(), SessionError> {
+    let writes = sqlx::query_as!(
+        UnfinishedEffectRow,
+        r#"
+SELECT turn_position AS "turn_position!: i64", path AS "effect!: String"
+FROM session_write
+WHERE session_id = ? AND turn_position >= ? AND status = 'pending'
+ORDER BY id
+"#,
+        session_id,
+        oldest_turn
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .session_context("load unfinished session writes")?;
+    let commands = sqlx::query_as!(
+        UnfinishedEffectRow,
+        r#"
+SELECT turn_position AS "turn_position!: i64", intent AS "effect!: String"
+FROM session_command
+WHERE session_id = ? AND turn_position >= ? AND outcome IS NULL
+ORDER BY id
+"#,
+        session_id,
+        oldest_turn
+    )
+    .fetch_all(&mut *connection)
+    .await
+    .session_context("load unfinished session commands")?;
+    for write in writes {
+        if let Some(stop) = loaded_stop(turns, write.turn_position) {
+            stop.unfinished_writes.push(write.effect);
+        }
+    }
+    for command in commands {
+        if let Some(stop) = loaded_stop(turns, command.turn_position) {
+            let intent = deserialize_payload::<crate::bash::CommandIntent>(&command.effect)?;
+            stop.unfinished_commands.push(intent.command);
         }
     }
 
-    Ok(turns)
+    Ok(())
 }
 
-async fn oldest_turn_within_budget(
+fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut TurnStop> {
+    turns
+        .iter_mut()
+        .find(|(turn_position, _)| *turn_position == position)
+        .and_then(|(_, turn)| turn.stop.as_mut())
+}
+
+/// Returns the oldest turn position whose most recent finished turns fit
+/// `max_history_bytes`, and the stopped turns that fit only as their input.
+async fn history_window(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Option<i64>, SessionError> {
+) -> Result<Option<(i64, Vec<i64>)>, SessionError> {
     let mut retained_bytes = 0_usize;
     let mut oldest_turn = None;
+    let mut brief_turns = Vec::new();
     let mut before_turn = None;
 
     'pages: loop {
@@ -1990,18 +2111,24 @@ async fn oldest_turn_within_budget(
         let page_is_full =
             turn_sizes.len() == usize::try_from(TURN_SIZE_PAGE_SIZE).unwrap_or(usize::MAX);
 
-        for (turn_position, turn_bytes) in turn_sizes {
-            let turn_bytes =
-                usize::try_from(turn_bytes).map_err(|_| SessionError::InvalidData {
+        for turn_size in turn_sizes {
+            let decode = |bytes: i64| {
+                usize::try_from(bytes).map_err(|_| SessionError::InvalidData {
                     reason: format!("session `{session_id}` has an invalid retained byte count"),
-                })?;
-            let next_retained_bytes = retained_bytes.saturating_add(turn_bytes);
-            if next_retained_bytes > max_history_bytes {
+                })
+            };
+            let full_bytes = retained_bytes.saturating_add(decode(turn_size.retained_bytes)?);
+            let input_bytes = retained_bytes.saturating_add(decode(turn_size.input_bytes)?);
+            if full_bytes <= max_history_bytes {
+                retained_bytes = full_bytes;
+            } else if turn_size.stopped && input_bytes <= max_history_bytes {
+                retained_bytes = input_bytes;
+                brief_turns.push(turn_size.turn_position);
+            } else {
                 break 'pages;
             }
-            retained_bytes = next_retained_bytes;
-            oldest_turn = Some(turn_position);
-            before_turn = Some(turn_position);
+            oldest_turn = Some(turn_size.turn_position);
+            before_turn = Some(turn_size.turn_position);
         }
 
         if !page_is_full {
@@ -2009,7 +2136,7 @@ async fn oldest_turn_within_budget(
         }
     }
 
-    Ok(oldest_turn)
+    Ok(oldest_turn.map(|oldest_turn| (oldest_turn, brief_turns)))
 }
 
 async fn load_turn_size_page(
@@ -2017,17 +2144,21 @@ async fn load_turn_size_page(
     session_id: &str,
     before_turn: Option<i64>,
     after_turn: Option<i64>,
-) -> Result<Vec<(i64, i64)>, SessionError> {
+) -> Result<Vec<TurnSizeRow>, SessionError> {
     let Some(inclusive_end) =
         before_turn.map_or(Some(i64::MAX), |position| position.checked_sub(1))
     else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query_as!(
+
+    sqlx::query_as!(
         TurnSizeRow,
         r#"
 SELECT message.turn_position AS "turn_position!: i64",
-       SUM(message.retained_bytes) AS "retained_bytes!: i64"
+       SUM(message.retained_bytes) AS "retained_bytes!: i64",
+       SUM(CASE WHEN message.message_position = 0 THEN message.retained_bytes ELSE 0 END)
+           AS "input_bytes!: i64",
+       MAX(turn.status <> 'completed') AS "stopped!: bool"
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
@@ -2035,7 +2166,7 @@ JOIN session_turn AS turn
 WHERE message.session_id = ?
   AND message.turn_position <= ?
   AND (? IS NULL OR message.turn_position > ?)
-  AND turn.status = 'completed'
+  AND turn.status IN ('completed', 'failed', 'interrupted')
 GROUP BY message.turn_position
 ORDER BY message.turn_position DESC
 LIMIT ?
@@ -2048,12 +2179,7 @@ LIMIT ?
     )
     .fetch_all(&mut *connection)
     .await
-    .session_context("load persistent session history")?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| (row.turn_position, row.retained_bytes))
-        .collect())
+    .session_context("load persistent session history")
 }
 
 fn decode_max_history_bytes(id: &str, max_history_bytes: i64) -> Result<usize, SessionError> {
@@ -2093,7 +2219,7 @@ WHERE session_id = ?
     .session_context("append persistent session turn")
 }
 
-async fn latest_completed_turn(
+async fn latest_finished_turn(
     connection: &mut SqliteConnection,
     session_id: &str,
 ) -> Result<Option<i64>, SessionError> {
@@ -2101,7 +2227,7 @@ async fn latest_completed_turn(
         r"
 SELECT MAX(turn_position)
 FROM session_turn
-WHERE session_id = ? AND status = 'completed'
+WHERE session_id = ? AND status IN ('completed', 'failed', 'interrupted')
 ",
     )
     .bind(session_id)
@@ -2112,7 +2238,7 @@ WHERE session_id = ? AND status = 'completed'
 
 /// Exclusive lower turn bound applied to history loading: positions at or
 /// below a published checkpoint's boundary are replayed through its summary.
-/// `None` loads all completed turns.
+/// `None` loads all finished turns.
 fn checkpoint_boundary(checkpoint: Option<&SessionCheckpoint>) -> Option<i64> {
     checkpoint.map(SessionCheckpoint::covered_through)
 }
@@ -2185,6 +2311,42 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
     .execute(&mut **transaction)
     .await
     .session_context(operation)?;
+
+    Ok(())
+}
+
+/// Inserts `messages` after the owner's persisted turn messages; the caller
+/// has validated ownership in the same transaction.
+async fn append_encoded_messages(
+    transaction: &mut Transaction<'_, sqlx::Sqlite>,
+    owner: &TurnOwner,
+    messages: &[EncodedMessage],
+    now: i64,
+    operation: &'static str,
+) -> Result<(), SessionError> {
+    let next_position = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(MAX(message_position), -1) + 1 FROM session_message WHERE session_id = ? \
+         AND turn_position = ?",
+    )
+    .bind(&owner.session_id)
+    .bind(owner.turn_position)
+    .fetch_one(&mut **transaction)
+    .await
+    .session_context(operation)?;
+    for (offset, message) in messages.iter().enumerate() {
+        let message_position =
+            next_position.saturating_add(i64::try_from(offset).unwrap_or(i64::MAX));
+        insert_message(
+            transaction,
+            &owner.session_id,
+            owner.turn_position,
+            message_position,
+            message,
+            now,
+            operation,
+        )
+        .await?;
+    }
 
     Ok(())
 }

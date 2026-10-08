@@ -15,7 +15,7 @@ use crate::reservation::WriteJournal;
 /// only its documented best-effort process-group scope, never all descendants.
 #[derive(Clone, Debug, Error)]
 #[error("command cleanup or outcome recording remains unresolved")]
-pub struct CommandSettlementError;
+pub(crate) struct CommandSettlementError;
 
 #[derive(Clone)]
 pub(crate) struct Commands(watch::Sender<State>);
@@ -88,6 +88,18 @@ impl Commands {
             }
             let _ = receiver.changed().await;
         }
+    }
+
+    /// Whether no command is still executing and some command's cleanup or
+    /// outcome recording remains unresolved.
+    pub(crate) fn retryable(&self) -> bool {
+        let state = self.0.borrow();
+
+        state.pending == 0
+            && state
+                .operations
+                .iter()
+                .any(|operation| !operation.settled())
     }
 
     pub(crate) async fn retry(&self) -> Result<(), CommandSettlementError> {

@@ -81,15 +81,10 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
             () = wait_file(&ready) => {}
         }
         drop(turn);
-        tokio::time::timeout(Duration::from_secs(5), control.commands_settled())
+        tokio::time::timeout(Duration::from_secs(5), control.settled())
             .await
             .expect("bounded cleanup")
             .expect("cleanup");
-        control
-            .effects_settled()
-            .await
-            .expect("filesystem settlement");
-        control.settled().await.expect("persistence settlement");
         let timeout = harness
             .turn(
                 "/bin/sleep 30",
@@ -107,7 +102,7 @@ async fn timeout_and_caller_drop_settle_through_retained_control() {
             "{selected:?}: {timeout:?}"
         );
         assert!(!timeout.cleanup_failed, "{selected:?}: {timeout:?}");
-        control.retry_commands().await.expect("stale cleanup");
+        control.retry_settlement().await.expect("stale cleanup");
     }
 }
 
@@ -155,7 +150,7 @@ async fn native_detached_fork_and_posix_spawn_keep_access_confinement_and_report
         };
         let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
         wait_file(&workspace.path().join("output/result")).await;
-        control.commands_settled().await.expect("cleanup");
+        control.settled().await.expect("cleanup");
         drop(descendant);
 
         // Assert

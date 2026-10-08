@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use super::support::{
     SessionTimestampsRow, create_version_one_database, read_call, schema, turn, write_call,
 };
+use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::{SessionCheckpoint, SessionStore as _};
@@ -177,7 +178,10 @@ ORDER BY turn_position, message_position
     );
     assert_eq!(
         loaded.turns,
-        vec![turn("first", "one"), turn("second", "two")]
+        vec![
+            HistoryTurn::from(turn("first", "one")),
+            HistoryTurn::from(turn("second", "two")),
+        ]
     );
 }
 
@@ -254,7 +258,7 @@ LIMIT 1
         loaded.system_prompt.as_deref(),
         Some("persistent instructions")
     );
-    assert_eq!(loaded.turns, vec![messages]);
+    assert_eq!(loaded.turns, vec![HistoryTurn::from(messages)]);
     assert_eq!(timestamps.message_timestamp, 456);
     assert_eq!(timestamps.session_created_at, 456);
     assert_eq!(timestamps.session_updated_at, 456);
