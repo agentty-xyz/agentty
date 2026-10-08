@@ -58,10 +58,12 @@ let mut session = harness.resume("review-42").await?;
 let outcome = session.send("Now focus on error handling").await?;
 ```
 
-Every request replays the most recent completed turns that fit the context budget; the
-provider never holds conversation state. Failed and interrupted turns stay visible in
-the store but never re-enter model context. Sessions run concurrently, with one active
-turn per session. The library never picks a database location for you.
+Every request replays the most recent finished turns that fit the context budget; the
+provider never holds conversation state. Each model response and tool result is stored
+as soon as it finishes. A failed or interrupted turn replays what it recorded plus a
+note naming why it stopped and any writes or commands whose outcome is unknown; when it
+does not fit, only its input and note are replayed. Sessions run concurrently, with one
+active turn per session. The library never picks a database location for you.
 
 ## Turns
 
@@ -89,8 +91,9 @@ let outcome = session
   request returns the recorded outcome without calling the model or tools again. This
   requires an `ExecutionIdentity` on the harness (or a registered model).
 - **`start()` returns a `ControlledTurn`.** Its `control()` can `cancel()` the turn and
-  then wait on `settled()`, `effects_settled()`, and `commands_settled()` independently
-  of the caller's future.
+  then wait on `settled()`, independently of the caller's future, until persistence,
+  writes, and command cleanup have finished. A failure names its `SettlementPhase`;
+  `retry_settlement()` retries persistence and command cleanup.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn:
   once tool traffic grows the next request past the budget, the turn fails with
   `TurnError::ContextBudgetExceeded`.
@@ -123,8 +126,8 @@ The workspace is read-only unless you grant `with_write`. External reads (`with_
 environment values (`with_environment`), and host details (`with_host_information`) are
 explicit too. Networking is always denied. Long output keeps each stream's start and end
 within the capture budget, with the omitted byte counts on the `CommandOutcome`. Command
-intents are recorded before spawning; await `commands_settled()` (and `retry_commands()`
-after failures) so unresolved commands never block new turns silently.
+intents are recorded before spawning; await `settled()` (and `retry_settlement()` after
+failures) so unresolved commands never block new turns silently.
 
 ## Models
 

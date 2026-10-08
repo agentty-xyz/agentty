@@ -148,7 +148,7 @@ async fn projection_bounds_requests_on_every_handle() {
         let loaded = store.load_session("projected").await.expect("canonical");
         assert_eq!(loaded.turns.len(), 3);
         assert!(matches!(
-            &loaded.turns[0][0],
+            &loaded.turns[0].messages[0],
             ModelMessage::User(text) if text == "one"
         ));
         let recovered = session
@@ -386,7 +386,7 @@ async fn image_history_projects_at_its_encoded_weight() {
         // Assert
         let loaded = store.load_session("imaged").await.expect("canonical");
         assert!(matches!(
-            &loaded.turns[0][0],
+            &loaded.turns[0].messages[0],
             ModelMessage::UserInput(input) if input.has_images()
         ));
         let requests = requests.lock().expect("requests");

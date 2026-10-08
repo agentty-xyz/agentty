@@ -137,6 +137,14 @@ impl SessionStore for Gate {
         self.store.renew(owner).await
     }
 
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.store.append_messages(owner, messages).await
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,

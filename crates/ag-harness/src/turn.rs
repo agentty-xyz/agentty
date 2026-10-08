@@ -14,9 +14,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::bash::{BashConfig, BashError};
-pub use crate::cancellation::{ControlledTurn, SettlementError, TurnControl};
+pub use crate::cancellation::{ControlledTurn, SettlementError, SettlementPhase, TurnControl};
 use crate::comparison::ComparisonBase;
-pub use crate::effect::EffectSettlementError;
 pub use crate::harness::{OneShotTurn, SessionTurn};
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, ModelError};
@@ -459,6 +458,14 @@ pub enum TurnError {
     /// A sandbox policy, execution, or cleanup failed.
     #[error(transparent)]
     Bash(#[from] BashError),
+    /// Persisting a finished model response or tool result failed; the turn
+    /// stops before any further model or tool call.
+    #[error("message journal failed: {source}")]
+    MessageJournal {
+        /// Underlying transactional store error.
+        #[source]
+        source: Box<crate::SessionError>,
+    },
     /// Cancellation stopped the waiter; persistence may still be settling.
     #[error("turn cancelled")]
     Cancelled,
@@ -510,6 +517,7 @@ impl TurnError {
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
+            Self::MessageJournal { .. } => TurnErrorType::Session,
         }
     }
 }

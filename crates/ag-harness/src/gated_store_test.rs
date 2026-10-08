@@ -156,6 +156,14 @@ impl SessionStore for GatedStore {
         Ok(renewed)
     }
 
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        SessionStore::append_messages(&self.database, owner, messages).await
+    }
+
     async fn complete_turn(
         &self,
         owner: &TurnOwner,

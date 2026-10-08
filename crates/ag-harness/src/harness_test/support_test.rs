@@ -137,14 +137,22 @@ impl Model for InterruptionModel {
                 std::future::pending().await
             }
             _ => {
+                // The interrupted turn replays its input and stop note.
+                let messages = request.messages();
+                assert_eq!(messages.len(), 5);
                 assert_eq!(
-                    request.messages(),
+                    messages[..2],
                     [
                         ModelMessage::User("first".to_string()),
                         ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
-                        ModelMessage::User("retry".to_string()),
                     ]
                 );
+                assert!(matches!(
+                    &messages[3],
+                    ModelMessage::User(note)
+                        if note.starts_with("[harness] The turn above was interrupted")
+                ));
+                assert_eq!(messages[4], ModelMessage::User("retry".to_string()));
 
                 Ok(response_without_metadata(ModelResponse::Output(json!({
                     "summary": "recovered"

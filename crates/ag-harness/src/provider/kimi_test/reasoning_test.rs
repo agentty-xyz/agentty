@@ -93,7 +93,8 @@ async fn preserves_reasoning_and_named_tool_result_for_continuation() {
         .expect("initial response should contain a tool call")
         .clone();
     let mut model_request = read_request(prompt);
-    model_request.record_tool_result(call, result.to_string());
+    model_request.record_tool_call(call.clone());
+    model_request.record_tool_result(&call, result.to_string());
     let response = model
         .complete(model_request)
         .await

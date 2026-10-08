@@ -836,6 +836,12 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
         .and(body_json(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
+                {"content": "first question", "role": "user"},
+                {
+                    "content": "[harness] The turn above failed (Model(Provider)) before \
+                                completing and shows only what it recorded.",
+                    "role": "user"
+                },
                 {"content": "retry question", "role": "user"}
             ],
             "model": "muse-test",
@@ -850,6 +856,7 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
             "tools": [read_tool()]
         })))
         .respond_with(response("recovered answer", 5, 2))
+        .with_priority(1)
         .expect(1)
         .mount(&server)
         .await;

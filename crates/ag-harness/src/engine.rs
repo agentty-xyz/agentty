@@ -42,6 +42,7 @@ impl Engine<'_> {
         journal: Option<WriteJournal>,
     ) -> Result<(TurnOutcome, Vec<ModelMessage>), TurnError> {
         let started_at = Instant::now();
+        let recorder = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
@@ -62,8 +63,11 @@ impl Engine<'_> {
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
                 ModelResponse::ToolCall(call) => {
+                    Self::persist(recorder.as_ref(), request.record_tool_call(call.clone()))
+                        .await?;
                     let (result, activity) = self.execute_tool_call(&call, &tools, turn_id).await?;
-                    request.record_tool_result(call, result);
+                    Self::persist(recorder.as_ref(), request.record_tool_result(&call, result))
+                        .await?;
                     tool_calls.push(activity);
                 }
                 ModelResponse::ToolCalls(calls) => {
@@ -71,14 +75,15 @@ impl Engine<'_> {
                         return Err(ModelError::MissingToolCall.into());
                     }
                     ensure_unique_tool_call_ids(&calls)?;
-                    let mut results = Vec::with_capacity(calls.len());
+                    Self::persist(recorder.as_ref(), request.record_tool_calls(calls.clone()))
+                        .await?;
                     for call in &calls {
                         let (result, activity) =
                             self.execute_tool_call(call, &tools, turn_id).await?;
-                        results.push(result);
+                        Self::persist(recorder.as_ref(), request.record_tool_result(call, result))
+                            .await?;
                         tool_calls.push(activity);
                     }
-                    request.record_tool_results(calls, results);
                 }
             }
             // Tool traffic grows the request between model calls; a grown
@@ -86,6 +91,24 @@ impl Engine<'_> {
             // overflowing the provider context.
             context::admit_grown_request(self.context_estimator, self.context_budget, &request)?;
         }
+    }
+
+    /// Appends one finished model response or tool result to a durable
+    /// turn before the loop continues, so a stopped turn keeps it.
+    async fn persist(
+        recorder: Option<&WriteJournal>,
+        message: &ModelMessage,
+    ) -> Result<(), TurnError> {
+        let Some(recorder) = recorder else {
+            return Ok(());
+        };
+
+        recorder
+            .append_messages(std::slice::from_ref(message))
+            .await
+            .map_err(|source| TurnError::MessageJournal {
+                source: Box::new(source),
+            })
     }
 
     fn prepare_request(

@@ -208,7 +208,7 @@ fn render_source_carries_forward_every_message_kind_without_reasoning() {
     ];
 
     // Act
-    let source = render_source(Some(&previous), &[&turn]);
+    let source = render_source(Some(&previous), &[turn]);
 
     // Assert
     assert!(source.contains("carry its content forward"));

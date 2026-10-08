@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use tempfile::tempdir;
 
 use crate::TurnError;
+use crate::context::{HistoryTurn, TurnStop};
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
@@ -102,7 +103,16 @@ async fn expired_and_wrong_owners_cannot_mutate_but_existing_writes_can_settle()
     assert_eq!(database.identity(), reopened.identity());
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].status, WriteStatus::Applied);
-    assert_eq!(loaded.turns, Vec::<Vec<ModelMessage>>::new());
+    assert_eq!(
+        loaded.turns,
+        vec![HistoryTurn {
+            messages: vec![ModelMessage::User("prompt".to_string())],
+            stop: Some(TurnStop {
+                error_type: "cancelled".to_string(),
+                ..TurnStop::default()
+            }),
+        }]
+    );
 }
 
 #[tokio::test]

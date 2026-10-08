@@ -22,6 +22,7 @@ use tokio::time::Instant;
 use crate::admission::{ModelSwitch, Reservation, ReservedTurn, TurnAdmission};
 use crate::cancellation::{Settlement, SettlementLease};
 use crate::compaction::SessionCheckpoint;
+use crate::context::HistoryTurn;
 use crate::effect::Effects;
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelMetadata};
@@ -155,7 +156,7 @@ pub(crate) fn lease_deadline() -> Instant {
 pub struct AcquiredTurn {
     pub(crate) checkpoint: Option<SessionCheckpoint>,
     pub(crate) guard: TurnGuard,
-    pub(crate) turns: Vec<Vec<ModelMessage>>,
+    pub(crate) turns: Vec<HistoryTurn>,
 }
 
 impl AcquiredTurn {
@@ -328,6 +329,13 @@ impl WriteJournal {
 
     pub(crate) async fn finish(&self, id: i64, applied: bool) -> Result<(), SessionError> {
         self.database.finish_write(&self.owner, id, applied).await
+    }
+
+    pub(crate) async fn append_messages(
+        &self,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.database.append_messages(&self.owner, messages).await
     }
 }
 
@@ -763,6 +771,14 @@ impl SessionStore for AdmittedStore {
         outcome: &TurnOutcome,
     ) -> Result<(), SessionError> {
         self.settled(self.store.complete_request(owner, messages, outcome).await)
+    }
+
+    async fn append_messages(
+        &self,
+        owner: &TurnOwner,
+        messages: &[ModelMessage],
+    ) -> Result<(), SessionError> {
+        self.store.append_messages(owner, messages).await
     }
 
     async fn renew(&self, owner: &TurnOwner) -> Result<Instant, SessionError> {

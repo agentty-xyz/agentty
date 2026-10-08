@@ -289,10 +289,7 @@ async fn native_external_contents_require_a_read_grant_and_precancel_never_spawn
 
     // Act
     let cancelled = cancelled.await;
-    control
-        .commands_settled()
-        .await
-        .expect("no command effects");
+    control.settled().await.expect("no command effects");
     let denied = harness
         .turn(command.as_str(), options.clone())
         .await
@@ -646,10 +643,7 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
         let outcome = result.expect("victim");
         let outcome: CommandOutcome =
             serde_json::from_value(outcome.into_output()).expect("outcome");
-        control
-            .commands_settled()
-            .await
-            .expect("best-effort cleanup");
+        control.settled().await.expect("best-effort cleanup");
         assert_eq!(outcome.exit_code, Some(0), "{outcome:?}");
         assert_eq!(outcome.stdout, "confined");
         assert_eq!(
@@ -665,7 +659,7 @@ async fn native_alias_created_by_another_command_after_validation_cannot_expose_
         );
         // The failed launcher exits before confirming its namespace scope, so
         // settlement reports the retained cleanup instead of erasing it.
-        assert!(control.commands_settled().await.is_err());
+        assert!(control.settled().await.is_err());
     }
     assert_eq!(
         std::fs::read_to_string(root.join(".git/config")).expect("metadata"),

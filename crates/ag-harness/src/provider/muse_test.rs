@@ -398,11 +398,13 @@ async fn continues_after_read_tool_result() {
         .complete(request.clone())
         .await
         .expect("Muse read request should decode");
+    let call = response
+        .call()
+        .expect("response should contain a tool call")
+        .clone();
+    request.record_tool_call(call.clone());
     request.record_tool_result(
-        response
-            .call()
-            .expect("response should contain a tool call")
-            .clone(),
+        &call,
         r#"{"content":"[package]\nname = \"ag-harness\"","next_offset":null}"#.to_string(),
     );
     Mock::given(method("POST"))

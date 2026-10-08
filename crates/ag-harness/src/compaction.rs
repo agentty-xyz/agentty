@@ -15,7 +15,7 @@ pub const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 
 const CHECKPOINT_VERSION: u64 = 1;
 
-/// Versioned compaction record covering a session's oldest completed turns.
+/// Versioned compaction record covering a session's oldest finished turns.
 ///
 /// A checkpoint stores the covered-history boundary, the structured summary
 /// validated against the embedded checkpoint schema, and the model selection
@@ -81,7 +81,7 @@ impl SessionCheckpoint {
         })
     }
 
-    /// Highest completed turn position covered by the summary.
+    /// Highest finished turn position covered by the summary.
     pub fn covered_through(&self) -> i64 {
         self.covered_through
     }
@@ -243,7 +243,7 @@ fn compile_summary_schema() -> Result<OutputSchema, OutputSchemaError> {
 /// the ordered turns selected for coverage.
 pub(crate) fn render_source(
     previous: Option<&SessionCheckpoint>,
-    turns: &[&Vec<ModelMessage>],
+    turns: &[Vec<ModelMessage>],
 ) -> String {
     let mut source = String::from("Conversation source to summarize.\n");
     if let Some(previous) = previous {
@@ -253,7 +253,7 @@ pub(crate) fn render_source(
     }
     for turn in turns {
         source.push_str("--- turn ---\n");
-        for message in *turn {
+        for message in turn {
             source.push_str(&render_message(message));
             source.push('\n');
         }

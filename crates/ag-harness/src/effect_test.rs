@@ -4,6 +4,8 @@ use tokio::sync::Mutex;
 
 use crate::effect::Effects;
 
+const UNACKNOWLEDGED_COMPLETION: &str = "without acknowledging filesystem completion";
+
 #[tokio::test]
 async fn unacknowledged_worker_retains_admission_after_all_controls_drop() {
     // Arrange
@@ -19,7 +21,7 @@ async fn unacknowledged_worker_retains_admission_after_all_controls_drop() {
     drop(effects);
 
     // Assert
-    assert!(error.is_unresolved());
+    assert!(error.to_string().contains(UNACKNOWLEDGED_COMPLETION));
     assert!(admission.try_lock().is_err());
 }
 
@@ -39,7 +41,8 @@ async fn unacknowledged_ephemeral_worker_is_observable() {
             .settled()
             .await
             .expect_err("unresolved")
-            .is_unresolved()
+            .to_string()
+            .contains(UNACKNOWLEDGED_COMPLETION)
     );
 }
 
@@ -56,6 +59,6 @@ async fn dropped_outcome_recording_reports_failure_without_claiming_unknown_effe
 
     // Assert
     let error = effects.settled().await.expect_err("recording failed");
-    assert!(!error.is_unresolved());
+    assert!(!error.to_string().contains(UNACKNOWLEDGED_COMPLETION));
     assert!(error.to_string().contains("outcome recording"));
 }

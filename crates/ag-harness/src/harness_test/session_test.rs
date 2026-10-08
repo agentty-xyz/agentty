@@ -10,6 +10,7 @@ use super::support::{
     model, object_schema, read_call, response_without_metadata, send_with_resumed_session,
     turn_started_id, wait_for_stored_turn_state,
 };
+use crate::context::HistoryTurn;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::{Harness, SessionHistory, retained_bytes};
 use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
@@ -199,18 +200,13 @@ fn chat_history_evicts_complete_tool_turns() {
     let mut history = SessionHistory::new(max_bytes);
 
     // Act
-    history.push(tool_turn);
-    history.push(latest_turn.clone());
+    history.push(HistoryTurn::from(tool_turn));
+    history.push(HistoryTurn::from(latest_turn.clone()));
 
     // Assert
     assert_eq!(
-        history
-            .turns()
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<Vec<_>>(),
-        latest_turn
+        history.turns().iter().cloned().collect::<Vec<_>>(),
+        vec![HistoryTurn::from(latest_turn)]
     );
     assert!(history.bytes <= max_bytes);
 }
@@ -334,7 +330,7 @@ async fn sequential_resumed_handles_reload_completed_canonical_history() {
 }
 
 #[tokio::test]
-async fn session_does_not_replay_a_failed_turn() {
+async fn session_replays_a_failed_turn_with_its_stop_note() {
     // Arrange
     let mut model = model();
     let mut sequence = Sequence::new();
@@ -350,7 +346,15 @@ async fn session_does_not_replay_a_failed_turn() {
         .returning(|request| {
             assert_eq!(
                 request.messages(),
-                &[ModelMessage::User("retry".to_string())]
+                &[
+                    ModelMessage::User("failed question".to_string()),
+                    ModelMessage::User(
+                        "[harness] The turn above failed (Model(InvalidResponse)) before \
+                         completing and shows only what it recorded."
+                            .to_string()
+                    ),
+                    ModelMessage::User("retry".to_string()),
+                ]
             );
 
             Ok(response_without_metadata(ModelResponse::Output(json!({
@@ -374,7 +378,7 @@ async fn session_does_not_replay_a_failed_turn() {
     let recovered = session
         .send("retry")
         .await
-        .expect("the next turn should start from clean history");
+        .expect("the next turn should see the failed turn");
 
     // Assert
     assert!(matches!(
@@ -385,7 +389,7 @@ async fn session_does_not_replay_a_failed_turn() {
 }
 
 #[tokio::test]
-async fn session_replays_only_completed_turns_after_a_failed_turn() {
+async fn session_replays_a_failed_turn_after_completed_turns() {
     // Arrange
     let mut model = model();
     let mut sequence = Sequence::new();
@@ -417,6 +421,12 @@ async fn session_replays_only_completed_turns_after_a_failed_turn() {
                 == [
                     ModelMessage::User("first".to_string()),
                     ModelMessage::Assistant(r#"{"summary":"first"}"#.to_string()),
+                    ModelMessage::User("failed".to_string()),
+                    ModelMessage::User(
+                        "[harness] The turn above failed (Model(InvalidOutput)) before completing \
+                         and shows only what it recorded."
+                            .to_string(),
+                    ),
                     ModelMessage::User("retry".to_string()),
                 ]
         })

@@ -70,21 +70,28 @@ longer fits.
 
 ```mermaid
 flowchart TD
-    Prompt["Receive prompt"] --> Pending["Persist pending turn"]
+    Prompt["Receive prompt"] --> Pending["Persist running turn"]
     Pending --> Model["Call model"]
     Model --> Tool{"Tool requested?"}
-    Tool -->|yes| Execute["Check policy and run tool"]
+    Tool -->|yes| Execute["Persist call, run tool, persist result"]
     Execute --> Model
-    Tool -->|no| Complete["Persist completed turn"]
+    Tool -->|no| Complete["Persist output, complete turn"]
     Model -->|error| Failed["Persist failed turn"]
 ```
+
+Each finished model response and tool result is persisted before the loop continues, so
+a stopped turn keeps everything it already did.
 
 ## Sessions
 
 - The selected store is canonical. Every request replays projected history; providers
   never hold conversation state.
 - One active turn per session. Renewable leases fence concurrent processes; expired
-  leases mark turns `interrupted`, and only completed turns re-enter model context.
+  leases mark turns `interrupted`.
+- Failed and interrupted turns re-enter model context with what they recorded, never as
+  completed history: tool calls without a result get a placeholder result in the request
+  only, and a closing stop note names the cause and the writes and commands whose
+  outcome is unknown. A stopped turn that does not fit replays only its input and note.
 - Reservation and model switching run in one store-owned atomic section that reads the
   admission state and records the harness's decision: recorded host requests first, then
   the model generation, an idle session, and no unresolved command.
@@ -108,11 +115,12 @@ flowchart TD
 ## Cancellation and settlement
 
 Started turns (`turn(...).start()`) separate the caller's future from the turn's fate.
-`TurnControl` cancels promptly, then `settled()`, `effects_settled()`, and
-`commands_settled()` observe persistence cleanup, filesystem replacements, and command
-cleanup independently. Retained work survives caller drop, and unresolved effects block
-new durable turns rather than being forgotten. Neither boundary provides rollback or
-distributed workspace fencing.
+`TurnControl` cancels promptly, then one `settled()` waits for persistence cleanup,
+filesystem replacements, and command cleanup in that order, reporting the
+`SettlementPhase` that failed; one `retry_settlement()` retries persistence and command
+cleanup. Retained work survives caller drop, and unresolved effects block new durable
+turns rather than being forgotten. Settlement provides neither rollback nor distributed
+workspace fencing.
 
 ## Permissions and tools
 
@@ -174,30 +182,23 @@ the host's span; a started turn keeps the context current at its first poll.
 
 ## Next iterations
 
-Planned, not shipped. Each step lands as its own change, in this order:
+Planned, not shipped: an Agentty `AgentKind::Harness` backend, one release behind
+Agentty's existing boundaries and offered only when Agentty starts with
+`--experimental-harness`.
 
-1. **The acquired turn owns request projection and commit** — host-request and plain
-   turns become commit variants instead of flags.
-1. **Stopped-turn replay** — each finished tool exchange persists under the turn owner.
-   Failed and interrupted turns replay with a stop note, never as completed history; one
-   too large for the history budget replays only its input and note.
-1. **One settlement tracker behind `TurnControl`** — one phased tracker replaces the
-   persistence, effect, and command trackers. This breaking change lands before Agentty
-   depends on it.
-1. **Agentty `AgentKind::Harness`** — one release behind Agentty's existing boundaries:
-   - A native backend beside the CLI and app-server transports provides a durable
-     `AgentChannel` and the one-shot path. The harness session shares the Agentty
-     session ID and is canonical; a missing database restarts from Agentty's replay
-     transcript.
-   - `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
-     inherits Agentty's full environment except the `MODEL_*`, `KIMI_*`, and
-     `DASHSCOPE_*` provider key and URL variables. Like Codex full access, and unlike
-     Claude, `bash` does not keep the main checkout read-only.
-   - API keys come from environment variables; the harness is available when any
-     provider key is set. Each session's database lives under the Agentty data root,
-     outside the session worktree, so session commits and worktree cleanup never include
-     it; session deletion removes it explicitly.
-   - Deterministic `FeatureTest` coverage uses a scripted provider.
+- A native backend beside the CLI and app-server transports provides a durable
+  `AgentChannel` and the one-shot path. The harness session shares the Agentty session
+  ID and is canonical; a missing database restarts from Agentty's replay transcript.
+- `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
+  inherits Agentty's full environment except the `MODEL_*`, `KIMI_*`, and `DASHSCOPE_*`
+  provider key and URL variables. Like Codex full access, and unlike Claude, `bash` does
+  not keep the main checkout read-only.
+- API keys come from environment variables; the harness is available when any provider
+  key is set. Each session's database lives under the Agentty data root, outside the
+  session worktree, so session commits and worktree cleanup never include it; session
+  deletion removes it explicitly.
+- Agentty commits a turn's worktree only after `TurnControl::settled` succeeds.
+- Deterministic `FeatureTest` coverage uses a scripted provider.
 
 Later: proactive compaction, and one correlator shared by `LifecycleTraceObserver` and
 `LifecycleMetrics`.

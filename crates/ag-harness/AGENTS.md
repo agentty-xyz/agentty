@@ -30,9 +30,11 @@ tools, independent of Agentty UI and orchestration.
 - Return explicit errors for unsupported capabilities; never weaken the shared contract.
 - Validate and retain provider metadata at construction.
 - Keep response bodies and diagnostics bounded, and apply duration telemetry uniformly.
-- Allow only one active turn per durable session. Report completion only after messages
-  are committed; retain failed/interrupted turns without replaying them as completed
-  history. Durable write records describe past operations, not current filesystem state.
+- Allow only one active turn per durable session. Persist each finished model response
+  and tool result before continuing, and report completion only after the final messages
+  are committed. Replay failed/interrupted turns only with their stop note, never as
+  completed history. Durable write records describe past operations, not current
+  filesystem state.
 
 ## SQLite Invariants
 

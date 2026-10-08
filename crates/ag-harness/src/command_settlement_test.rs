@@ -8,12 +8,13 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
+use crate::cancellation::{ControlledTurn, SettlementPhase, TurnControl};
 use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore};
 use crate::store_conformance_test::{options, schema};
-use crate::{OutputSchema, ToolPolicy, TurnInput, TurnOptions, reservation};
+use crate::{OutputSchema, ToolPolicy, TurnError, TurnInput, TurnOptions, reservation};
 
 struct Control {
     calls: AtomicUsize,
@@ -403,4 +404,50 @@ fn completion_racing_retention_does_not_keep_a_settled_control_alive() {
     // Assert
     assert!(reached_retention);
     assert!(weak.upgrade().is_none());
+}
+
+#[tokio::test]
+async fn turn_control_reports_and_retries_unresolved_command_cleanup() {
+    // Arrange
+    let control = Arc::new(Control {
+        calls: AtomicUsize::new(0),
+        failure: AtomicBool::new(true),
+    });
+    let turn = ControlledTurn::<TurnError>::new({
+        let control = Arc::clone(&control);
+        move |turn_control: TurnControl| async move {
+            let commands = turn_control.effects.commands().clone();
+            let _worker = commands.retain();
+            let operation = commands.register(control, None);
+            operation.admitted(None);
+            operation.observed(outcome(true));
+
+            Err(TurnError::Cancelled)
+        }
+    });
+    let turn_control = turn.control();
+    let _ = turn.await;
+
+    // Act
+    let unresolved = turn_control.settled().await;
+    let failed_retry = turn_control.retry_settlement().await;
+    control.failure.store(false, Ordering::SeqCst);
+    let retry = turn_control.retry_settlement().await;
+    let settled = turn_control.settled().await;
+
+    // Assert
+    let unresolved = unresolved.expect_err("unresolved cleanup");
+    assert_eq!(unresolved.phase(), SettlementPhase::Commands);
+    assert!(
+        unresolved
+            .to_string()
+            .starts_with("turn commands settlement failed")
+    );
+    assert_eq!(
+        failed_retry.expect_err("cleanup still fails").phase(),
+        SettlementPhase::Commands
+    );
+    retry.expect("cleanup recovered");
+    settled.expect("settled");
+    assert_eq!(control.calls.load(Ordering::SeqCst), 2);
 }

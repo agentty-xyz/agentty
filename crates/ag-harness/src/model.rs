@@ -608,39 +608,24 @@ impl ModelRequest {
         self.lifecycle_observed = true;
     }
 
-    pub(crate) fn record_tool_result(&mut self, call: tool::ToolCall, content: String) {
-        let call_id = call.id().to_string();
-        let name = call.name().to_string();
-        self.messages.push(ModelMessage::AssistantToolCall(call));
-        self.messages.push(ModelMessage::ToolResult {
-            call_id,
-            content,
-            name,
-        });
+    pub(crate) fn record_tool_call(&mut self, call: tool::ToolCall) -> &ModelMessage {
+        self.record(ModelMessage::AssistantToolCall(call))
     }
 
-    pub(crate) fn record_tool_results(
+    pub(crate) fn record_tool_calls(&mut self, calls: Vec<tool::ToolCall>) -> &ModelMessage {
+        self.record(ModelMessage::AssistantToolCalls(calls))
+    }
+
+    pub(crate) fn record_tool_result(
         &mut self,
-        calls: Vec<tool::ToolCall>,
-        contents: Vec<String>,
-    ) {
-        debug_assert_eq!(calls.len(), contents.len());
-        let results: Vec<_> = calls
-            .iter()
-            .zip(contents)
-            .map(|(call, content)| (call.id().to_string(), call.name().to_string(), content))
-            .collect();
-        self.messages.push(ModelMessage::AssistantToolCalls(calls));
-        self.messages
-            .extend(
-                results
-                    .into_iter()
-                    .map(|(call_id, name, content)| ModelMessage::ToolResult {
-                        call_id,
-                        content,
-                        name,
-                    }),
-            );
+        call: &tool::ToolCall,
+        content: String,
+    ) -> &ModelMessage {
+        self.record(ModelMessage::ToolResult {
+            call_id: call.id().to_string(),
+            content,
+            name: call.name().to_string(),
+        })
     }
 
     pub(crate) fn record_output_with_reasoning(
@@ -660,6 +645,12 @@ impl ModelRequest {
 
     pub(crate) fn into_messages(self) -> Vec<ModelMessage> {
         self.messages
+    }
+
+    fn record(&mut self, message: ModelMessage) -> &ModelMessage {
+        self.messages.push(message);
+
+        &self.messages[self.messages.len() - 1]
     }
 }
 

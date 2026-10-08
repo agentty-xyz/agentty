@@ -9,9 +9,10 @@ use super::support::{
     ReservationCommitControl, acquire, active_turn_owner, allow_interrupts, complete_first_turn,
     reject_interrupts, schema, turn, turn_options, wait_for_interrupted_turn,
 };
+use crate::context::{HistoryTurn, TurnStop};
 use crate::gated_store_test::{GatedStore, PauseAt};
 use crate::input::TurnInput;
-use crate::model::ModelError;
+use crate::model::{ModelError, ModelMessage};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::session::{
     Database, NewSession, SessionError, TimestampSource, connect_options, interrupt_owned_turn,
@@ -570,7 +571,19 @@ async fn database_recovers_expired_active_turns_as_interrupted() {
     .expect("turn status should load");
 
     // Assert
-    assert_eq!(loaded.turns, vec![turn("first", "first")]);
+    assert_eq!(
+        loaded.turns,
+        vec![
+            HistoryTurn::from(turn("first", "first")),
+            HistoryTurn {
+                messages: vec![ModelMessage::User("abandoned".to_string())],
+                stop: Some(TurnStop {
+                    error_type: "interrupted".to_string(),
+                    ..TurnStop::default()
+                }),
+            },
+        ]
+    );
     assert_eq!(status, "interrupted");
     assert_eq!(
         replacement.guard.owner().turn_position,

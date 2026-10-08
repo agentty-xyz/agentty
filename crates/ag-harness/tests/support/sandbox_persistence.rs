@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use ag_harness::bash::CommandTermination;
 use ag_harness::store::{MemoryStore, SessionStore, SqliteStore};
+use ag_harness::turn::SettlementPhase;
 use ag_harness::{Session, SessionError, TurnError, TurnOptions, TurnOutcome};
 
 use super::fixture::{CONFORMANCE_EXECUTORS, Selected, Workspace, fault_store, schema, wait_file};
@@ -170,11 +171,7 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
         .start();
     let control = turn.control();
     let failed = turn.await;
-    control
-        .settled()
-        .await
-        .expect("persistence independently settled");
-    let settlement = control.commands_settled().await;
+    let settlement = control.settled().await;
     let pending = session.commands().await.expect("pending intent");
     let blocked = submit(&mut session, "successor", command, options.clone()).await;
     sqlx::query("DROP TRIGGER fail_outcome")
@@ -182,16 +179,16 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
         .await
         .expect("remove outcome fault");
     control
-        .retry_commands()
+        .retry_settlement()
         .await
         .expect("retry original recording");
-    control.commands_settled().await.expect("settled command");
+    control.settled().await.expect("settled command");
     let recorded = session.commands().await.expect("observed outcome");
     let duplicate = submit(&mut session, "outcome", command, options.clone()).await;
     submit(&mut session, "successor", "printf next", options)
         .await
         .expect("successor admission");
-    control.retry_commands().await.expect("stale retry");
+    control.retry_settlement().await.expect("stale retry");
 
     // Assert
     assert!(matches!(
@@ -210,7 +207,10 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
             ..
         }))
     ));
-    assert!(settlement.is_err());
+    assert_eq!(
+        settlement.expect_err("unresolved command").phase(),
+        SettlementPhase::Commands
+    );
     assert_eq!(pending.len(), 1);
     assert!(pending[0].outcome.is_none());
     assert!(matches!(blocked, Err(SessionError::Busy { .. })));
@@ -271,8 +271,7 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .await
         .expect("renewal failure");
     drop(turn);
-    control.settled().await.expect("persistence settlement");
-    control.commands_settled().await.expect("command cleanup");
+    control.settled().await.expect("command cleanup");
     let records = session.commands().await.expect("late record");
 
     // Assert
