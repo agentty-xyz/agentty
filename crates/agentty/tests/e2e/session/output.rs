@@ -13,13 +13,16 @@ use crate::{common, test_support};
 const LOADER_SESSION_ID: &str = "loader-session-0001";
 
 /// Returns every scrollbar row and the subset occupied by its thumb in the
-/// session output's rightmost column.
+/// session output's rightmost column, excluding the composer below it.
 fn session_output_scrollbar_rows(frame: &TerminalFrame) -> (Vec<u16>, Vec<u16>) {
     let scrollbar_column = frame.cols().saturating_sub(2);
+    let output_end_row = (0..frame.rows())
+        .find(|row| frame.cell_text(*row, 1) == "╭")
+        .unwrap_or(frame.rows());
     let mut scrollbar_rows = Vec::new();
     let mut thumb_rows = Vec::new();
 
-    for row in 0..frame.rows() {
+    for row in 0..output_end_row {
         match frame.cell_text(row, scrollbar_column) {
             "█" => {
                 scrollbar_rows.push(row);

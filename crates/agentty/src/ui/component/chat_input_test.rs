@@ -90,10 +90,11 @@ fn test_render_uses_rounded_focused_frame_for_prompt_input() {
 #[test]
 fn test_render_shows_session_status_beside_prompt_title() {
     // Arrange
-    let width = 32;
+    let width = 80;
     let backend = ratatui::backend::TestBackend::new(width, 5);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let chat_input = ChatInput::new("Prompt", "", 0).status("Fast");
+    let chat_input =
+        ChatInput::new("codex/gpt-5.4 [high]", "", 0).status("Balanced · Fast · Auto Edit");
 
     // Act
     terminal
@@ -105,7 +106,7 @@ fn test_render_shows_session_status_beside_prompt_title() {
 
     // Assert
     let top_row = buffer_row_text(terminal.backend().buffer(), 0, width);
-    assert!(top_row.contains(" Prompt · Fast "));
+    assert!(top_row.contains(" codex/gpt-5.4 [high] · Balanced · Fast · Auto Edit "));
 }
 
 #[test]

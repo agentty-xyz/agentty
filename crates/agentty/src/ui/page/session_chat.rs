@@ -309,7 +309,7 @@ impl<'a> SessionChatPage<'a> {
         f.render_widget(header, header_area);
     }
 
-    /// Renders the context-aware bottom panel for prompt and question modes.
+    /// Renders the composer and footer, or the interactive question panel.
     fn render_bottom_panel(
         &self,
         f: &mut Frame,
@@ -388,6 +388,14 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
+        let title = session_composer_title(session);
+        let status = session_format::prompt_session_status(session);
+        let panel_areas = layout::prompt_panel_areas(bottom_area);
+        ChatInput::new(&title, "", 0)
+            .status(&status)
+            .active(false)
+            .render(f, panel_areas.input_area);
+
         let can_start_staged_session =
             can_start_staged_session_in_stack(self.sessions, session.id.as_str());
         let can_reply_to_session =
@@ -414,8 +422,18 @@ impl<'a> SessionChatPage<'a> {
         };
         let help_message =
             Paragraph::new(session_format::session_view_footer_line(view_help_state));
-        f.render_widget(help_message, bottom_area);
+        f.render_widget(help_message, panel_areas.footer_area);
     }
+}
+
+/// Returns the session settings title shared by active and inactive composers.
+fn session_composer_title(session: &Session) -> String {
+    format!(
+        "{}/{} [{}]",
+        session.agent.kind(),
+        session.agent.model().as_str(),
+        session.effective_reasoning_level().as_str()
+    )
 }
 
 /// Session-chat geometry inputs available outside a render pass.
@@ -513,7 +531,7 @@ fn prepare_prompt_panel(
         is_pasting_image: attachment_state.is_pasting_image(),
         status: Some(session_format::prompt_session_status(session)),
         suggestion_list,
-        title: format!("[{}]", session.agent.model().as_str()),
+        title: session_composer_title(session),
         total_height: desired_bottom_height.min(max_bottom_height),
     })
 }
@@ -521,7 +539,8 @@ fn prepare_prompt_panel(
 /// Returns the bottom-panel height reserved for non-prompt page modes.
 ///
 /// Question mode derives its height from the question layout helper and the
-/// visible option list. All other modes reserve a single footer row.
+/// visible option list. All other modes reserve an empty inactive composer
+/// and a footer row, matching the height of an empty prompt panel.
 fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
     let AppMode::Question {
         questions,
@@ -531,7 +550,9 @@ fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
         ..
     } = mode
     else {
-        return SINGLE_ROW_FOOTER_HEIGHT;
+        return calculate_input_height(area.width.saturating_sub(2), "")
+            .saturating_add(SINGLE_ROW_FOOTER_HEIGHT)
+            .min(area.height.saturating_sub(1));
     };
 
     let question_item = questions.get(*current_index);

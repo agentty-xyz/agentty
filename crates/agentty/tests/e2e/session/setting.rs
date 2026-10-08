@@ -362,12 +362,8 @@ async fn session_speed_mode_selection() -> E2eResult {
                     )
                     .press_key("Down")
                     .press_key("Enter")
-                    .wait_for_text("· Fast", 5000)
-                    .wait_for_text("Reasoning: high  Speed: Fast", 5000)
-                    .capture_labeled(
-                        "fast_mode_selected",
-                        "Session header and composer reflect fast mode",
-                    )
+                    .wait_for_text("· Balanced · Fast · Auto Edit", 5000)
+                    .capture_labeled("fast_mode_selected", "Composer reflects fast mode")
                     .press_key("/")
                     .write_text("model")
                     .wait_for_text("/model", 3000)
@@ -376,10 +372,7 @@ async fn session_speed_mode_selection() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("gemini-3.1-pro-preview", 3000)
                     .press_key("Enter")
-                    .wait_for_text(
-                        "Model: gemini-3.1-pro-preview  Reasoning: high  Style: Balanced  Tokens:",
-                        5000,
-                    )
+                    .wait_for_text("gemini/gemini-3.1-pro-preview [high]", 5000)
                     .capture_labeled(
                         "incompatible_model_normalizes_speed",
                         "Switching to Gemini drops fast mode and its speed display",
@@ -394,19 +387,25 @@ async fn session_speed_mode_selection() -> E2eResult {
 
                     let fast_frame = common::frame_from_capture(&report.captures[1]);
                     let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
-                    assertion::assert_text_in_region(&fast_frame, "· Fast", &fast_full);
                     assertion::assert_text_in_region(
                         &fast_frame,
-                        "Reasoning: high  Speed: Fast",
+                        "· Balanced · Fast · Auto Edit",
                         &fast_full,
                     );
+                    assertion::assert_text_in_region(
+                        &fast_frame,
+                        &format!("codex/{} [high]", model_fixture::CODEX_MODEL_ID),
+                        &fast_full,
+                    );
+                    assertion::assert_not_visible(&fast_frame, "Speed:");
+                    assertion::assert_not_visible(&fast_frame, "Reasoning:");
 
-                    // Gemini has no speed control, so the header and composer
-                    // retain the style while dropping the speed status.
+                    // Gemini keeps response style in the composer while
+                    // dropping the unsupported speed status.
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(
                         frame,
-                        "Model: gemini-3.1-pro-preview  Reasoning: high  Style: Balanced  Tokens:",
+                        "gemini/gemini-3.1-pro-preview [high]",
                         &full,
                     );
                     assertion::assert_not_visible(frame, "· Fast");
@@ -451,12 +450,11 @@ async fn test_session_response_style() -> E2eResult {
                     )
                     .press_key("Enter")
                     .wait_for_text("· Detailed · Normal · Auto Edit", 5000)
-                    .wait_for_text("Style: Detailed", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
                         "detailed_style_selected",
-                        "Header and composer show the detailed response style",
+                        "Composer shows the detailed response style",
                     )
             },
             |frame, report| {
@@ -478,7 +476,7 @@ async fn test_session_response_style() -> E2eResult {
                         "· Detailed · Normal · Auto Edit",
                         &full,
                     );
-                    assertion::assert_text_in_region(frame, "Style: Detailed", &full);
+                    assertion::assert_not_visible(frame, "Style:");
                 })
             },
         )
@@ -488,7 +486,7 @@ async fn test_session_response_style() -> E2eResult {
 }
 
 /// Verify switching from Detailed to Balanced keeps the response style
-/// visible in both the session header and prompt input.
+/// visible in the prompt input.
 #[tokio::test]
 async fn test_balanced_response_style_remains_visible() -> E2eResult {
     // Arrange, Act, Assert
@@ -510,7 +508,6 @@ async fn test_balanced_response_style_remains_visible() -> E2eResult {
                     .press_key("Up")
                     .press_key("Enter")
                     .wait_for_text("· Balanced · Normal · Auto Edit", 5000)
-                    .wait_for_text("Style: Balanced", 5000)
                     .press_key("Escape")
                     .press_key("Enter")
                     .wait_for_text("· Balanced · Normal · Auto Edit", 5000)
@@ -524,7 +521,7 @@ async fn test_balanced_response_style_remains_visible() -> E2eResult {
                         "· Balanced · Normal · Auto Edit",
                         &full,
                     );
-                    assertion::assert_text_in_region(frame, "Style: Balanced", &full);
+                    assertion::assert_not_visible(frame, "Style:");
                 })
             },
         )
@@ -549,14 +546,14 @@ async fn test_narrow_session_preserves_style_tokens_and_permission() -> E2eResul
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .wait_for_text("Balanced · Normal · Auto Edit", 5000)
-                    .wait_for_text("Style: Balanced  Tokens: 0/0", 5000)
+                    .wait_for_text("Tokens: 0/0", 5000)
                     .wait_for_stable_frame(300, 5000)
             },
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Balanced · Normal · Auto Edit", &full);
-                    assertion::assert_text_in_region(frame, "Style: Balanced  Tokens: 0/0", &full);
+                    assertion::assert_text_in_region(frame, "Tokens: 0/0", &full);
                 })
             },
         )

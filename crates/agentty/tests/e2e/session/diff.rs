@@ -810,17 +810,19 @@ fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
     scenario
         .wait_for_text("s: submit comments", 3000)
         .press_key("s")
+        .wait_for_text("Ctrl+c: stop", 5000)
+        .press_key("g")
         .wait_for_text("File comments:", 5000)
         .wait_for_text("src/main.rs: Review the whole file.", 5000)
         .wait_for_text("| Check the tests too.", 5000)
         .wait_for_text("| Add regression coverage.", 5000)
+        .press_key("Ctrl+d")
         .wait_for_text("Line comments:", 5000)
         .wait_for_text(
             "src/main.rs:1 [new]: Explain the entry point. Updated.",
             5000,
         )
         .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
-        .wait_for_text("Ctrl+c: stop", 5000)
         .wait_for_text("Enter: reply", 5000)
         // VHS reuses the reviewed diff, so automatic review may be skipped.
         .write_text("G")
@@ -831,6 +833,8 @@ fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
             "Line comment submitted in the next session turn",
         )
         .press_key("Ctrl+u")
+        .press_key("Ctrl+u")
+        .wait_for_text("Line comment received.", 5000)
         .wait_for_stable_frame(1000, 5000)
         .capture_labeled(
             "line_comment_response",
