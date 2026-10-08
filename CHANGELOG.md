@@ -7,6 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-10-07
+
+### Added
+
+- `agentty`: show tool and skill activity after agent responses, display a loading
+  indicator while pasting clipboard images, and paginate archived sessions with a total
+  count.
+- `ag-harness`: support Kimi K3 and Qwen3.8 Max; add `/model` switching and opt-in OTLP
+  trace export to the CLI.
+
+### Changed
+
+- `agentty`: replace Claude Sonnet 5 with Sonnet 5.5 and migrate saved model selections.
+- `agentty`: move agent metadata into the composer and prefix session titles with size.
+- `ag-harness`: simplify session storage to atomic record operations, inherit the
+  caller's trace context for new turns, and retain the head and tail of Bash output.
+- workspace: update dependencies, GitHub Actions, and the Rust toolchain; bring
+  installation instructions forward on the landing page.
+- release: bump workspace crate metadata and lockfile package versions to `0.17.0`.
+
+### Fixed
+
+- `agentty`: restore running focused review progress after synchronization.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.16.7] - 2026-10-02
 
 ### Changed
