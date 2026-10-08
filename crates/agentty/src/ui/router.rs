@@ -6,7 +6,8 @@ use ratatui::widgets::TableState;
 
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
-use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::{ProjectListItem, ordered_project_items};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
@@ -30,8 +31,12 @@ struct RouteSharedContext<'a> {
     archived_session_count: usize,
     /// Locally available agent CLI executables and detected versions.
     available_agent_clis: &'a [AgentCliInfo],
+    /// Startup-validated agent CLIs that can run new sessions.
+    available_agent_kinds: &'a [AgentKind],
     current_tab: Tab,
     default_reasoning_level: ReasoningLevel,
+    /// Whether this launch offers Harness sessions.
+    harness_availability: HarnessAvailability,
     has_more_archived_sessions: bool,
     is_archive_expanded: bool,
     /// Cached most-recently-opened ordering over `projects`.
@@ -228,8 +233,10 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         is_archive_expanded,
         active_prompt_outputs,
         available_agent_clis,
+        available_agent_kinds,
         current_tab,
         default_reasoning_level,
+        harness_availability,
         mode,
         mru_project_order,
         render_cache_store,
@@ -255,8 +262,10 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
         active_project_id,
         archived_session_count,
         available_agent_clis,
+        available_agent_kinds,
         current_tab,
         default_reasoning_level,
+        harness_availability,
         has_more_archived_sessions,
         is_archive_expanded,
         mru_project_order,
@@ -537,6 +546,8 @@ fn render_mode_overlay(
             *selected_option_index,
             shared.can_create_stacked_session(),
             shared.can_append_selected_session(),
+            shared.harness_availability,
+            !shared.available_agent_kinds.is_empty(),
         )
         .render(f, area),
         AppMode::StackAppendParentSelection {

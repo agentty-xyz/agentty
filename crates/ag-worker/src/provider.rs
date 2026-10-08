@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ag_contracts::{AgentError, ExecutionPolicy, McpPolicy, ToolPolicy};
 use ag_scheduler::SessionAdmission;
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
+use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
 
 /// Provider configuration used by the worker to compose its runtimes.
 #[derive(Clone)]
@@ -20,6 +20,19 @@ impl RuntimeConfig {
     #[must_use]
     pub fn with_session_parallelism(mut self, limit: NonZeroUsize) -> Self {
         self.session_admission = SessionAdmission::new(limit);
+
+        self
+    }
+
+    /// Enables in-process [`AgentKind::Harness`] sessions and utilities for
+    /// subsequently constructed workers.
+    ///
+    /// Each session keeps its durable harness history in
+    /// `<data_root>/<session id>/`; hosts remove that directory when they
+    /// delete the session. Without this, harness work fails before execution.
+    #[must_use]
+    pub fn with_native_harness(mut self, data_root: PathBuf) -> Self {
+        self.factory = self.factory.with_native_harness(data_root);
 
         self
     }
@@ -95,6 +108,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
 
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         ag_runtime::RealAgentAvailabilityProbe.available_agent_clis()
+    }
+
+    fn native_harness_default_model(&self) -> Option<AgentModel> {
+        ag_runtime::RealAgentAvailabilityProbe.native_harness_default_model()
     }
 }
 

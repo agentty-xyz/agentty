@@ -21,3 +21,17 @@ fn static_discovery_preserves_provider_order_without_inventing_versions() {
             .all(|cli| cli.version == AgentCliVersion::Unknown)
     );
 }
+
+#[test]
+fn probes_without_credential_discovery_report_no_harness_credentials() {
+    // Arrange
+    let probe = StaticAgentAvailabilityProbe {
+        available_agent_kinds: AgentKind::ALL.to_vec(),
+    };
+
+    // Act
+    let default_model = probe.native_harness_default_model();
+
+    // Assert
+    assert_eq!(default_model, None);
+}

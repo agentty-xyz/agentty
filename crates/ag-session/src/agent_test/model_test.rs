@@ -298,3 +298,27 @@ fn test_reasoning_metadata_matches_runtime_preferences() {
         level.description()
     );
 }
+
+#[test]
+/// Ensures the harness has its own identity and default model but no CLI
+/// executable or speed control.
+fn test_harness_kind_metadata() {
+    // Arrange
+    let harness_kind = AgentKind::Harness;
+
+    // Act
+    let parsed_kind = "harness".parse::<AgentKind>();
+
+    // Assert
+    assert_eq!(parsed_kind, Ok(AgentKind::Harness));
+    assert_eq!(harness_kind.to_string(), "harness");
+    assert_eq!(
+        AgentSelectionMetadata::description(&harness_kind),
+        "Native Agentty harness agent."
+    );
+    assert_eq!(harness_kind.executable_name(), None);
+    assert_eq!(AgentKind::Codex.executable_name(), Some("codex"));
+    assert_eq!(harness_kind.default_model(), AgentModel::MuseSpark13);
+    assert!(!harness_kind.supports_speed_mode());
+    assert!(!AgentKind::ALL.contains(&harness_kind));
+}

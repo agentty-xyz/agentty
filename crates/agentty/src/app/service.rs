@@ -21,6 +21,7 @@ use crate::app::prompt_intent::PromptImagePasteUpdate;
 use crate::app::session::SessionManager;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::session::SessionId;
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
@@ -41,6 +42,7 @@ pub struct AppServices {
     event_tx: mpsc::UnboundedSender<AppEvent>,
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
+    harness_availability: HarnessAvailability,
     personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
@@ -102,6 +104,7 @@ impl AppServices {
             event_tx,
             fs_client,
             git_client,
+            harness_availability: HarnessAvailability::Hidden,
             run_client,
             run_worker,
             session_run_factory,
@@ -112,6 +115,16 @@ impl AppServices {
             session_worker_tasks: Arc::default(),
             telemetry_task_handles: Arc::default(),
         }
+    }
+
+    /// Records whether this launch offers Harness sessions.
+    pub(crate) fn set_harness_availability(&mut self, harness_availability: HarnessAvailability) {
+        self.harness_availability = harness_availability;
+    }
+
+    /// Returns whether this launch offers Harness sessions.
+    pub(crate) fn harness_availability(&self) -> HarnessAvailability {
+        self.harness_availability
     }
 
     /// Replaces the optional telemetry sender before session work starts.
@@ -154,6 +167,15 @@ impl AppServices {
     /// Returns the cached locally runnable agent kinds.
     pub(crate) fn available_agent_kinds(&self) -> Vec<AgentKind> {
         self.available_agent_kinds.as_ref().to_vec()
+    }
+
+    /// Returns whether any agent CLI can run new sessions.
+    ///
+    /// Reads the startup-validated agent kinds that session defaults and
+    /// `/model` use, not the refreshed CLI rows, which also list an `agy`
+    /// too old to run.
+    pub(crate) fn has_agent_cli(&self) -> bool {
+        !self.available_agent_kinds.is_empty()
     }
 
     /// Returns the cached locally runnable agent CLIs and detected versions.

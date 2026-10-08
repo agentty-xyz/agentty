@@ -2000,7 +2000,7 @@ impl SessionManager {
     ///
     /// When `LastUsedModelAsDefault` is enabled, this also persists the chosen
     /// session agent/model pair as `DefaultSmartAgent` and
-    /// `DefaultSmartModel`.
+    /// `DefaultSmartModel`, except for Harness selections.
     ///
     /// When the model changes, this also clears any persisted provider-native
     /// conversation identifier so incompatible runtimes do not attempt resume
@@ -2189,9 +2189,12 @@ impl SessionManager {
         } else {
             None
         };
+        // Harness models never become CLI defaults for Regular sessions.
+        let persist_default =
+            persist_last_used_model_as_default && session_agent.kind() != AgentKind::Harness;
         // Hold scheduling across lookups as well as the write. Any failure
         // drops the reversible hold without discarding pending user work.
-        let default_project_id = if persist_last_used_model_as_default {
+        let default_project_id = if persist_default {
             let project_id = services
                 .db()
                 .sessions()
@@ -2450,6 +2453,7 @@ impl SessionManager {
                 "failed to remove staged draft directory during session deletion"
             );
         }
+        Self::cleanup_session_harness_directory(Arc::clone(&fs_client), &cleanup.session_id).await;
         Self::cleanup_session_temp_directory(fs_client, &cleanup.session_id).await;
     }
 
@@ -3624,6 +3628,7 @@ impl SessionManager {
             );
         }
 
+        Self::cleanup_session_harness_directory(services.fs_client(), session_id).await;
         Self::cleanup_session_temp_directory(services.fs_client(), session_id).await;
     }
 
@@ -3892,6 +3897,7 @@ impl SessionManager {
                 Self::warn_cleanup_errors(&session_id, &cleanup_errors);
             }
 
+            Self::cleanup_session_harness_directory(Arc::clone(&fs_client), &session_id).await;
             Self::cleanup_session_temp_directory(fs_client, &session_id).await;
         });
         services.track_cleanup_task(cleanup_task_handle);
@@ -4039,6 +4045,19 @@ impl SessionManager {
         }
     }
 
+    /// Removes the session's durable harness history, which Harness sessions
+    /// keep outside their worktree. Sessions without one have nothing to
+    /// remove.
+    async fn cleanup_session_harness_directory(fs_client: Arc<dyn FsClient>, session_id: &str) {
+        if let Err(error) = fs_client
+            .remove_dir_all(session_harness_directory(session_id))
+            .await
+            && !matches!(&error, FsError::Io(io_error) if io_error.kind() == std::io::ErrorKind::NotFound)
+        {
+            warn!(session_id, %error, "failed to remove session harness directory");
+        }
+    }
+
     /// Removes the session-scoped temp directory used for pasted prompt
     /// images.
     async fn cleanup_session_temp_directory(fs_client: Arc<dyn FsClient>, session_id: &str) {
@@ -4079,6 +4098,13 @@ fn replace_first(haystack: &str, needle: &str, replacement: &str) -> String {
 /// Returns the session-scoped temp directory used for pasted prompt images.
 fn session_prompt_temp_directory(session_id: &str) -> PathBuf {
     agentty_home().join("tmp").join(session_id)
+}
+
+/// Returns the directory holding one Harness session's durable history.
+fn session_harness_directory(session_id: &str) -> PathBuf {
+    agentty_home()
+        .join(crate::app::AGENTTY_HARNESS_DIR)
+        .join(session_id)
 }
 
 /// Returns the Agentty-owned tmp root used for pasted prompt attachments.

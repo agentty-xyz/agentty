@@ -351,9 +351,12 @@ side effects. Recoverable failures remain visible instead of claiming terminal s
 Startup fails abandoned queued operations without dismissing pending clarification.
 Unstarted queued work does not change a session's `Question` status.
 
-The standalone harness has separate store, lease, and effect-settlement contracts. See
-[`ag-harness` Design](@/docs/architecture/ag-harness-design.md); it is not yet wired
-into Agentty's runtime.
+The native harness has its own store, lease, and effect-settlement contracts. Each
+Harness session keeps its durable history in `harness/<session id>/` under the Agentty
+root, outside the worktree; a turn returns only after its settlement, and failed cleanup
+is retried once and again before the session's next turn. Deleting, canceling, or
+rolling back the session removes that directory. See
+[`ag-harness` Design](@/docs/architecture/ag-harness-design.md).
 
 ## Headless execution ownership
 

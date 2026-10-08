@@ -20,7 +20,7 @@ use crate::app::SessionState;
 use crate::app::session::SessionLoadInput;
 use crate::app::session::workflow::task::SessionTaskService;
 use crate::app::test_support::TestSessionRunFactory;
-use crate::domain::agent::{AgentKind, AgentModel, ReasoningLevel, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{SESSION_DATA_DIR, SessionHandles, SessionId, SessionRole, Status};
@@ -252,6 +252,63 @@ async fn test_create_session_persists_default_smart_model_setting_when_last_used
         .expect("missing second session");
     assert_eq!(second_session.agent.kind(), AgentKind::Codex);
     assert_eq!(second_session.agent.model(), model_fixture::CODEX_MODEL);
+}
+
+#[tokio::test]
+async fn test_set_session_model_keeps_default_smart_model_when_harness_model_is_selected() {
+    // Arrange
+    let dir = tempdir().expect("failed to create temp dir");
+    let mut app = new_test_app_with_git(dir.path()).await;
+    let active_project_id = app.active_project_id();
+    app.services
+        .db()
+        .settings()
+        .upsert_project_setting(
+            active_project_id,
+            SettingName::LastUsedModelAsDefault,
+            "true",
+        )
+        .await
+        .expect("failed to upsert last-used-model setting");
+    let session_id = app
+        .create_session()
+        .await
+        .expect("failed to create session");
+    app.set_session_model(&session_id, model_fixture::codex_selection())
+        .await
+        .expect("failed to set codex model");
+
+    // Act
+    app.set_session_model(
+        &session_id,
+        AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3),
+    )
+    .await
+    .expect("failed to set harness model");
+
+    // Assert
+    let settings = app.services.db().settings();
+    assert_eq!(
+        settings
+            .get_project_setting(active_project_id, SettingName::DefaultSmartModel)
+            .await
+            .expect("failed to load model setting"),
+        Some(model_fixture::CODEX_MODEL.as_str().to_string())
+    );
+    assert_eq!(
+        settings
+            .get_project_setting(active_project_id, SettingName::DefaultSmartAgent)
+            .await
+            .expect("failed to load agent setting"),
+        Some(AgentKind::Codex.name().to_string())
+    );
+    let session = app
+        .sessions
+        .sessions()
+        .iter()
+        .find(|session| session.id == session_id)
+        .expect("missing session");
+    assert_eq!(session.agent.model(), AgentModel::KimiK3);
 }
 
 #[tokio::test]

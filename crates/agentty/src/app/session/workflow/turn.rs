@@ -19,7 +19,7 @@ use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, SessionRole, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -828,11 +828,11 @@ async fn spawn_turn_title_generation(
     prompt: &str,
     session_agent: AgentSelection,
 ) {
-    let title_agent = setting::load_default_fast_agent_selection_from_repositories(
+    let title_agent = setting::load_session_utility_agent_selection_from_repositories(
         &context.db,
         session_project_id,
         session_agent,
-        AgentKind::ALL,
+        &context.available_agent_kinds,
     )
     .await;
     let title_reasoning_level = load_title_reasoning_level(&context.db, session_project_id).await;

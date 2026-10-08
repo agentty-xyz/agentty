@@ -1,16 +1,21 @@
+use std::sync::Arc;
+
 use ag_session::{CreateSessionMode, CreateSessionRequest};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use super::super::{
     current_session_creation_selection, handle_confirmation_decision, handle_key_event,
-    handle_pre_commit_hook_warning_key, handle_session_creation_key,
+    handle_pre_commit_hook_warning_key, handle_session_creation_key, session_creation_mode,
     session_creation_option_is_enabled, update_session_creation_selection,
 };
 use super::support::appendable_stack_test_app;
+use crate::domain::agent::{AgentCliInfo, AgentKind, AgentModel};
+use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, PresentationState};
+use crate::ui::component::session_creation_overlay::HARNESS_OPTION_INDEX;
 
 #[tokio::test]
 async fn test_session_creation_rejection_stays_in_terminal_ui() {
@@ -363,5 +368,131 @@ async fn test_handle_confirmation_decision_confirm_opens_continuation_draft_prom
     assert_eq!(
         continued_session.prompt,
         format!("Use {merged_commit_hash} commit as an initial context for this session")
+    );
+}
+
+#[tokio::test]
+async fn test_handle_session_creation_key_creates_harness_session_when_available() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+    app.services
+        .set_harness_availability(crate::domain::harness::HarnessAvailability::Available(
+            AgentModel::QwenPlus,
+        ));
+    app.mode = AppMode::SessionCreation {
+        selected_option_index: 0,
+    };
+    update_session_creation_selection(&mut app, HARNESS_OPTION_INDEX);
+
+    // Act
+    let result =
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !app.pending_session_creations.is_empty() {
+            let event = app.next_app_event().await.expect("creation event");
+            app.apply_app_events(event).await;
+        }
+    })
+    .await
+    .expect("creation should finish");
+
+    // Assert
+    assert!(matches!(result, Ok(EventResult::Continue)));
+    assert_eq!(app.sessions.sessions().len(), 1);
+    let session = &app.sessions.sessions()[0];
+    assert_eq!(session.agent.kind(), AgentKind::Harness);
+    assert_eq!(session.agent.model(), AgentModel::QwenPlus);
+    assert!(!session.is_draft_session());
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { slash_state, .. }
+            if slash_state.available_agent_kinds == [AgentKind::Harness]
+    ));
+}
+
+#[tokio::test]
+async fn test_harness_option_is_disabled_without_availability() {
+    for availability in [
+        crate::domain::harness::HarnessAvailability::Hidden,
+        crate::domain::harness::HarnessAvailability::MissingCredentials,
+    ] {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        app.services.set_harness_availability(availability);
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: 0,
+        };
+
+        // Act
+        update_session_creation_selection(&mut app, HARNESS_OPTION_INDEX);
+        let clamped_selection = current_session_creation_selection(&app);
+        app.mode = AppMode::SessionCreation {
+            selected_option_index: HARNESS_OPTION_INDEX,
+        };
+        let result = handle_session_creation_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .await;
+
+        // Assert
+        assert_eq!(clamped_selection, 2);
+        assert!(!session_creation_option_is_enabled(
+            &app,
+            HARNESS_OPTION_INDEX
+        ));
+        assert!(matches!(result, Ok(EventResult::Continue)));
+        assert!(app.sessions.sessions().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn test_harness_only_launch_offers_only_harness_session_option() {
+    // Arrange
+    let harness_root = tempfile::tempdir().expect("harness data root");
+    let clients =
+        crate::test_support::harness_only_test_app_clients(harness_root.path().to_path_buf())
+            .with_app_server_client_override(crate::test_support::mock_app_server())
+            .with_tmux_client(Arc::new(MockTmuxClient::new()));
+    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
+    // The CLI refresh lists an `agy` too old for startup to accept.
+    app.services
+        .replace_available_agent_clis(vec![AgentCliInfo::loading(AgentKind::Antigravity)]);
+
+    // Act
+    let opened_mode = session_creation_mode(&app);
+    let cli_options_enabled = (0..HARNESS_OPTION_INDEX)
+        .any(|option_index| session_creation_option_is_enabled(&app, option_index));
+    app.mode = AppMode::SessionCreation {
+        selected_option_index: 0,
+    };
+    let regular_result =
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await;
+    let down_result =
+        handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .await;
+
+    // Assert
+    assert!(matches!(
+        opened_mode,
+        AppMode::SessionCreation {
+            selected_option_index: HARNESS_OPTION_INDEX,
+        }
+    ));
+    assert!(!cli_options_enabled);
+    assert_eq!(
+        app.view_snapshot().available_agent_kinds,
+        Vec::<AgentKind>::new()
+    );
+    assert!(matches!(regular_result, Ok(EventResult::Continue)));
+    assert!(matches!(down_result, Ok(EventResult::Continue)));
+    assert!(app.sessions.sessions().is_empty());
+    assert!(app.pending_session_creations.is_empty());
+    assert_eq!(
+        current_session_creation_selection(&app),
+        HARNESS_OPTION_INDEX
     );
 }

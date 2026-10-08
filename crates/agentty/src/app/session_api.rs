@@ -25,6 +25,7 @@ use crate::app::{
     App, AppError, AppEvent, SessionError, SessionRuntimeAccess, SessionRuntimeCommand,
     SessionRuntimeHandle,
 };
+use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::orchestration::{
     IntegrationApproach, OrchestrationStatus, OrchestrationTaskStatus,
 };
@@ -332,6 +333,7 @@ impl App {
             .map_or((None, None), |inherited| {
                 (Some(inherited.base_branch), Some(inherited.settings))
             });
+        let runs_on_harness = request.mode == CreateSessionMode::Harness;
         let creation_kind = match request.mode {
             CreateSessionMode::Draft => {
                 let project = self.api_project_creation_context(base_branch_override)?;
@@ -366,7 +368,7 @@ impl App {
 
                 return Ok(PreparedSessionCreation::Persisted(session_id));
             }
-            CreateSessionMode::Regular => SessionCreationKind::Worker,
+            CreateSessionMode::Regular | CreateSessionMode::Harness => SessionCreationKind::Worker,
             CreateSessionMode::Orchestrator => SessionCreationKind::Orchestrator,
             CreateSessionMode::OrchestrationChild { task_id } => {
                 SessionCreationKind::OrchestrationChild { task_id }
@@ -385,6 +387,18 @@ impl App {
             )
             .await
             .map_err(api_error_from_session)?;
+        let harness_model = runs_on_harness
+            .then(|| self.services.harness_availability().default_model())
+            .flatten();
+        let settings = if let Some(harness_model) = harness_model {
+            SessionCreationSettings {
+                agent: AgentSelection::new(AgentKind::Harness, harness_model),
+                speed_mode: SpeedMode::Normal,
+                ..settings
+            }
+        } else {
+            settings
+        };
 
         Ok(PreparedSessionCreation::Materialized {
             base_branch: project.base_branch,
@@ -403,6 +417,22 @@ impl App {
                 "Project `{}` is not active",
                 request.project_id
             )));
+        }
+        if request.mode == CreateSessionMode::Harness
+            && !self.services.harness_availability().is_available()
+        {
+            return Err(ApiSessionError::Operation(
+                "Harness sessions need `agentty --experimental-harness` and a configured \
+                 provider: `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or \
+                 `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`."
+                    .to_string(),
+            ));
+        }
+        if request.mode != CreateSessionMode::Harness && !self.services.has_agent_cli() {
+            return Err(ApiSessionError::Operation(
+                "No supported backend CLI found on `PATH`; only Harness sessions are available."
+                    .to_string(),
+            ));
         }
         if let CreateSessionMode::Stacked { parent_session_id } = &request.mode {
             let parent_project_id = self

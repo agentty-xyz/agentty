@@ -11,6 +11,8 @@ use super::super::state::{App, AppClients};
 use super::{E2E_DISPLAY_VERSION, current_version_display_text};
 use crate::app::AppError;
 use crate::app::startup::AppStartup;
+use crate::domain::agent::AgentModel;
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db;
@@ -167,13 +169,42 @@ async fn test_new_uses_production_client_bundle() {
             .await
             .expect("failed to open in-memory database");
 
-        // Act
-        let app = App::new(false, base_path.clone(), base_path, None, database)
+        let harness_database = Database::open_in_memory()
             .await
-            .expect("public constructor should build app");
+            .expect("failed to open in-memory database");
+
+        // Act
+        let app = App::new(
+            false,
+            false,
+            base_path.clone(),
+            base_path.clone(),
+            None,
+            database,
+        )
+        .await
+        .expect("public constructor should build app");
+        let harness_app = App::new(
+            false,
+            true,
+            base_path.clone(),
+            base_path,
+            None,
+            harness_database,
+        )
+        .await
+        .expect("public constructor should build a harness app");
 
         // Assert
         assert!(app.selected_session().is_none());
+        assert_eq!(
+            app.services.harness_availability(),
+            HarnessAvailability::Hidden
+        );
+        assert_eq!(
+            harness_app.services.harness_availability(),
+            HarnessAvailability::Available(AgentModel::MuseSpark13)
+        );
 
         return;
     }
@@ -202,6 +233,7 @@ async fn test_new_uses_production_client_bundle() {
         .arg("--nocapture")
         .env(PUBLIC_CONSTRUCTOR_COVERAGE_ENV, "1")
         .env("HOME", base_dir.path())
+        .env("MODEL_API_KEY", "test-key")
         .env("PATH", child_path);
     if let Some(profile) = child_coverage_profile {
         child.env("LLVM_PROFILE_FILE", profile);

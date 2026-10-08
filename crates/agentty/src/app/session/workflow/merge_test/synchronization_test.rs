@@ -284,6 +284,7 @@ async fn test_rebase_assist_input_clone() {
     let input = RebaseAssistInput {
         app_event_tx: tx,
         assist_mode: RebaseAssistMode::OneShot,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db,
         folder: temp_dir.path().to_path_buf(),

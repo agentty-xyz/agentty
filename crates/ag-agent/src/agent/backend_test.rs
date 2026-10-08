@@ -89,3 +89,15 @@ fn test_backend_errors_preserve_diagnostics_at_runtime_boundary() {
         );
     }
 }
+
+#[test]
+fn test_agent_transport_native_does_not_use_app_server() {
+    // Arrange
+    let transport = AgentTransport::Native;
+
+    // Act
+    let result = transport.uses_app_server();
+
+    // Assert
+    assert!(!result);
+}

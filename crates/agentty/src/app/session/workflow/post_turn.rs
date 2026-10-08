@@ -23,6 +23,7 @@ use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
+use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session::{
     QueuedMessage, SessionFollowUpTask, SessionId, SessionRole, SessionStats, Status,
 };
@@ -50,6 +51,8 @@ pub(super) struct TurnPersonalityPersistence {
 pub(super) struct PostTurnContext {
     /// Reducer event sender used for output and post-turn projections.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Locally installed agent CLIs that auto-commit prompts may target.
+    pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Serializes post-turn publish ownership with queued branch operations.
     pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Shared child-process PID slot reused by auto-commit cancellation.
@@ -84,6 +87,7 @@ impl PostTurnContext {
     ) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
+            available_agent_kinds: Arc::clone(&context.available_agent_kinds),
             branch_operation_lock: Arc::clone(&context.branch_operation_lock),
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
@@ -181,7 +185,7 @@ struct TurnPersistence<'a> {
     context: &'a PostTurnContext,
     personality: TurnPersonalityPersistence,
     review_comment_resolutions: &'a [NewSessionReviewCommentResolution],
-    session_agent: crate::domain::agent::AgentSelection,
+    session_agent: AgentSelection,
 }
 
 impl TurnPersistence<'_> {
@@ -667,12 +671,13 @@ async fn session_owns_branch_changes(db: &AppRepositories, session_id: &str) -> 
 /// may continue plus the optional generated commit message.
 async fn run_auto_commit(
     context: &PostTurnContext,
-    session_agent: crate::domain::agent::AgentSelection,
+    session_agent: AgentSelection,
     has_review_comment_targets: bool,
     review_comment_resolutions: &[NewSessionReviewCommentResolution],
 ) -> Result<(bool, Option<String>), SessionError> {
     let outcome = SessionTaskService::handle_auto_commit(AssistContext {
         app_event_tx: context.app_event_tx.clone(),
+        available_agent_kinds: Arc::clone(&context.available_agent_kinds),
         child_pid: Arc::clone(&context.child_pid),
         db: context.db.clone(),
         folder: context.folder.clone(),

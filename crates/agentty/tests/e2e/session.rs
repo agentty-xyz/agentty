@@ -3,6 +3,7 @@
 mod archive;
 mod diff;
 mod fixture;
+mod harness;
 mod lifecycle;
 mod model;
 mod orchestration;

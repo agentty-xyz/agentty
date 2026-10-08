@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_contracts::{
@@ -12,20 +13,41 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Default)]
 pub struct RuntimeFactory {
     app_server: Option<Arc<dyn ag_agent::AppServerClient>>,
+    native_harness: Option<ag_agent::NativeHarnessConfig>,
 }
 
 impl RuntimeFactory {
+    /// Enables in-process [`AgentKind::Harness`] runtimes that keep each
+    /// session's durable history in `<data_root>/<session id>/`. Without
+    /// this, harness turns fail before execution.
+    #[must_use]
+    pub fn with_native_harness(mut self, data_root: PathBuf) -> Self {
+        self.native_harness = Some(ag_agent::NativeHarnessConfig::new(data_root));
+
+        self
+    }
+
     /// Composes a fresh runtime for one worker-owned session.
     pub fn session(&self, kind: AgentKind) -> SessionRuntime {
         SessionRuntime {
-            channel: ag_agent::create_agent_channel(kind, self.app_server.clone()),
+            channel: ag_agent::create_agent_channel(
+                kind,
+                self.app_server.clone(),
+                self.native_harness.as_ref(),
+            ),
         }
     }
 
     /// Composes pooled utility execution with adapter-owned cleanup.
     pub fn utility(&self) -> UtilityRuntime {
+        let client = ag_agent::RealOneShotClient::pooled(self.app_server.clone());
+        let client = match &self.native_harness {
+            Some(config) => client.with_native_harness(config.clone()),
+            None => client,
+        };
+
         UtilityRuntime {
-            client: Arc::new(ag_agent::RealOneShotClient::pooled(self.app_server.clone())),
+            client: Arc::new(client),
         }
     }
 }

@@ -49,6 +49,7 @@ async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commi
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -136,6 +137,7 @@ async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_pus
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -246,6 +248,7 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         .never();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

@@ -94,8 +94,8 @@ fn tool_call_from_json_rejects_unsupported_names_and_invalid_arguments() {
     let inputs = [
         ("unknown-tool", "{}"),
         ("read", "{"),
-        ("read", r#"{"path":"../secret"}"#),
         ("read", r#"{"path":"name.txt","limit":0}"#),
+        ("write", r#"{"path":"../secret","patch":"patch"}"#),
         ("write", r#"{"path":"name.txt","patch":""}"#),
         (
             "write",
@@ -452,10 +452,12 @@ fn tool_call_exposes_matching_typed_arguments_and_serialization() {
 }
 
 #[test]
-fn read_arguments_reject_invalid_repository_paths() {
+fn read_arguments_retain_invalid_repository_paths_for_feedback() {
     // Arrange
     let invalid_paths = [
         "",
+        ".",
+        "/",
         "/Cargo.toml",
         "C:\\Cargo.toml",
         "server\\share",
@@ -469,17 +471,37 @@ fn read_arguments_reject_invalid_repository_paths() {
     ];
 
     // Act
-    let errors = invalid_paths.map(|path| {
+    let arguments = invalid_paths.map(|path| {
         serde_json::from_value::<ReadArguments>(json!({ "action": "file", "path": path }))
-            .expect_err("invalid path should be rejected")
+            .expect("invalid path should reach tool feedback")
     });
 
     // Assert
-    assert!(
-        errors
-            .into_iter()
-            .all(|error| !error.to_string().is_empty())
-    );
+    for (arguments, path) in arguments.iter().zip(invalid_paths) {
+        assert_eq!(arguments.path(), path);
+        assert!(
+            arguments
+                .validation_error()
+                .is_some_and(|error| error.contains("omit it to inspect the repository root"))
+        );
+    }
+}
+
+#[test]
+fn read_arguments_reject_oversized_paths_before_feedback() {
+    // Arrange
+    let oversized_paths = ["a".repeat(MAX_PATH_BYTES + 1), "../".repeat(MAX_PATH_BYTES)];
+
+    // Act
+    let errors = oversized_paths.map(|path| {
+        serde_json::from_value::<ReadArguments>(json!({ "action": "file", "path": path }))
+            .expect_err("oversized path should fail decoding")
+    });
+
+    // Assert
+    for error in errors {
+        assert!(error.to_string().contains("path exceeds the byte limit"));
+    }
 }
 
 #[test]

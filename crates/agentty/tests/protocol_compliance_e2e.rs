@@ -1,4 +1,4 @@
-//! Provider contract compliance tests against mock app-server transports.
+//! Live provider contract compliance tests through the worker runtime.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -41,7 +41,9 @@ async fn codex_protocol_compliance_e2e() {
     }
 
     // Act
-    let result = assert_provider_protocol_compliance(AgentKind::Codex, model).await;
+    let result =
+        assert_provider_protocol_compliance(AgentKind::Codex, model, &RuntimeConfig::default())
+            .await;
 
     // Assert
     if let Err(error) = result {
@@ -67,7 +69,9 @@ async fn gemini_flash_protocol_compliance_e2e() {
     }
 
     // Act
-    let result = assert_provider_protocol_compliance(AgentKind::Gemini, model).await;
+    let result =
+        assert_provider_protocol_compliance(AgentKind::Gemini, model, &RuntimeConfig::default())
+            .await;
 
     // Assert
     if let Err(error) = result {
@@ -93,7 +97,12 @@ async fn antigravity_protocol_compliance_e2e() {
     }
 
     // Act
-    let result = assert_provider_protocol_compliance(AgentKind::Antigravity, model).await;
+    let result = assert_provider_protocol_compliance(
+        AgentKind::Antigravity,
+        model,
+        &RuntimeConfig::default(),
+    )
+    .await;
 
     // Assert
     if let Err(error) = result {
@@ -119,7 +128,9 @@ async fn claude_sonnet_protocol_compliance_e2e() {
     }
 
     // Act
-    let result = assert_provider_protocol_compliance(AgentKind::Claude, model).await;
+    let result =
+        assert_provider_protocol_compliance(AgentKind::Claude, model, &RuntimeConfig::default())
+            .await;
 
     // Assert
     if let Err(error) = result {
@@ -130,6 +141,31 @@ async fn claude_sonnet_protocol_compliance_e2e() {
     }
 }
 
+/// Verifies every Harness model whose provider is configured answers a real
+/// in-process turn through the worker runtime with a non-empty protocol
+/// `answer`.
+#[tokio::test]
+#[ignore = "requires Harness provider credentials and network"]
+async fn harness_protocol_compliance_e2e() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("harness data root");
+    let config = RuntimeConfig::default().with_native_harness(data_root.path().to_path_buf());
+    let mut failures = Vec::new();
+
+    // Act
+    for &model in AgentKind::Harness.models() {
+        let result = assert_provider_protocol_compliance(AgentKind::Harness, model, &config).await;
+        if let Err(error) = result
+            && !error.contains("before starting Agentty")
+        {
+            failures.push(error);
+        }
+    }
+
+    // Assert
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Returns a skip reason when the provider CLI is unavailable or unhealthy.
 async fn provider_preflight_skip_reason(kind: AgentKind) -> Option<String> {
     let (provider_name, executable_name) = match kind {
@@ -137,6 +173,7 @@ async fn provider_preflight_skip_reason(kind: AgentKind) -> Option<String> {
         AgentKind::Codex => ("Codex", "codex"),
         AgentKind::Gemini => ("Gemini", "gemini"),
         AgentKind::Claude => ("Claude", "claude"),
+        AgentKind::Harness => return Some("The harness has no CLI to preflight.".to_string()),
     };
     let mut command = tokio::process::Command::new(executable_name);
     command.arg("--version");
@@ -175,10 +212,11 @@ async fn provider_preflight_skip_reason(kind: AgentKind) -> Option<String> {
 async fn assert_provider_protocol_compliance(
     kind: AgentKind,
     model: AgentModel,
+    config: &RuntimeConfig,
 ) -> Result<(), String> {
     let folder = resolve_workspace_folder()?;
     let session_id = format!("protocol-e2e-{}", model.provider_model_str());
-    let channel = SessionRunClient::new(session_id.clone(), kind, &RuntimeConfig::default());
+    let channel = SessionRunClient::new(session_id.clone(), kind, config);
     let (events_tx, _events_rx) = mpsc::unbounded_channel();
     let turn_request = build_turn_request(folder, model);
     let run_result = timeout(

@@ -157,6 +157,7 @@ struct MergeStartRestoreContext<'a> {
 struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     archive_diff: bool,
+    available_agent_kinds: Arc<[AgentKind]>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
     clock: Arc<dyn Clock>,
@@ -198,6 +199,7 @@ struct SuccessfulMergeCompletion<'a> {
 struct RebaseAssistInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
     assist_mode: RebaseAssistMode,
+    available_agent_kinds: Arc<[AgentKind]>,
     child_pid: Arc<Mutex<Option<u32>>>,
     db: AppRepositories,
     folder: PathBuf,
@@ -217,6 +219,9 @@ pub(super) struct RebaseCommandInput {
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Agent submission mode used when rebase conflicts need edits.
     pub(super) assist_mode: RebaseAssistMode,
+    /// Locally installed agent CLIs that pre-rebase auto-commit prompts may
+    /// target.
+    pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Stored base branch for the session worktree.
     pub(super) base_branch: String,
     /// Serializes post-rebase publish ownership with other queued/running
@@ -783,6 +788,7 @@ impl SessionMergeService {
         let merge_task_input = MergeTaskInput {
             app_event_tx,
             archive_diff,
+            available_agent_kinds: services.available_agent_kinds().into(),
             base_branch,
             child_pid,
             clock,
@@ -1478,6 +1484,7 @@ impl SessionManager {
         RebaseAssistInput {
             app_event_tx: input.app_event_tx.clone(),
             assist_mode: RebaseAssistMode::OneShot,
+            available_agent_kinds: Arc::clone(&input.available_agent_kinds),
             child_pid: Arc::clone(&input.child_pid),
             db: input.db.clone(),
             folder: input.folder.clone(),
@@ -1896,6 +1903,7 @@ impl SessionManager {
         let RebaseCommandInput {
             app_event_tx,
             assist_mode,
+            available_agent_kinds,
             base_branch,
             branch_operation_lock,
             child_pid,
@@ -1941,6 +1949,7 @@ impl SessionManager {
             let rebase_input = RebaseAssistInput {
                 app_event_tx: app_event_tx.clone(),
                 assist_mode,
+                available_agent_kinds,
                 child_pid: Arc::clone(&child_pid),
                 db: db.clone(),
                 folder: folder.clone(),
@@ -2082,6 +2091,7 @@ impl SessionManager {
             &input.db,
             &input.id,
             input.session_agent,
+            &input.available_agent_kinds,
         )
         .await;
         let auto_commit_reasoning_level =
@@ -3003,6 +3013,7 @@ impl SessionManager {
     fn assist_context(input: &RebaseAssistInput) -> AssistContext {
         AssistContext {
             app_event_tx: input.app_event_tx.clone(),
+            available_agent_kinds: Arc::clone(&input.available_agent_kinds),
             child_pid: Arc::clone(&input.child_pid),
             db: input.db.clone(),
             folder: input.folder.clone(),

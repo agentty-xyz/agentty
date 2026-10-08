@@ -14,6 +14,8 @@ pub enum AgentKind {
     Claude,
     /// `OpenAI` Codex CLI/backend.
     Codex,
+    /// Native in-process `ag-harness` backend, which has no CLI executable.
+    Harness,
 }
 
 // Generate typed identities, exhaustive metadata, and ordered provider lists
@@ -158,6 +160,43 @@ define_model_catalog! {
             context: Some(ModelContextLimits::CODEX_SPARK),
         },
     }
+    Harness {
+        /// Muse model backed by `muse-spark-1.3`.
+        MuseSpark13 = 12 => {
+            id: "muse-spark-1.3",
+            description: "Muse Spark model served through the native harness.",
+            fast: false,
+            context: Some(ModelContextLimits::HARNESS),
+        },
+        /// Kimi model backed by `kimi-k3`.
+        KimiK3 = 13 => {
+            id: "kimi-k3",
+            description: "Latest Kimi model served through the native harness.",
+            fast: false,
+            context: Some(ModelContextLimits::HARNESS),
+        },
+        /// Kimi model backed by `kimi-k2.6`.
+        KimiK26 = 14 => {
+            id: "kimi-k2.6",
+            description: "Previous Kimi model served through the native harness.",
+            fast: false,
+            context: Some(ModelContextLimits::HARNESS),
+        },
+        /// Qwen model backed by `qwen3.8-max`.
+        Qwen38Max = 15 => {
+            id: "qwen3.8-max",
+            description: "Most capable Qwen model served through the native harness.",
+            fast: false,
+            context: Some(ModelContextLimits::HARNESS),
+        },
+        /// Qwen model backed by `qwen-plus`.
+        QwenPlus = 16 => {
+            id: "qwen-plus",
+            description: "Balanced Qwen model served through the native harness.",
+            fast: false,
+            context: Some(ModelContextLimits::HARNESS),
+        },
+    }
 }
 
 /// Declared context capacity and Agentty's proactive input-budget reserve.
@@ -178,6 +217,12 @@ impl ModelContextLimits {
     const CODEX_SPARK: Self = Self {
         context_window_tokens: 128_000,
         input_headroom_tokens: 8_000,
+    };
+    /// Conservative window shared by harness models, whose provider catalog
+    /// declares none; the headroom matches the harness CLI's reserved output.
+    const HARNESS: Self = Self {
+        context_window_tokens: 128_000,
+        input_headroom_tokens: 16_384,
     };
 
     /// Returns the input-token budget after reserving output and overhead.
@@ -250,7 +295,7 @@ impl AgentSelection {
         match self.kind {
             AgentKind::Claude => Self::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
             AgentKind::Codex => Self::new(AgentKind::Codex, AgentKind::Codex.default_model()),
-            AgentKind::Antigravity | AgentKind::Gemini => self,
+            AgentKind::Antigravity | AgentKind::Gemini | AgentKind::Harness => self,
         }
     }
 }
@@ -412,6 +457,7 @@ fn legacy_agent_kind_for_model_value(model_value: &str, model: AgentModel) -> Ag
     AgentKind::ALL
         .iter()
         .copied()
+        .chain([AgentKind::Harness])
         .find(|agent_kind| agent_kind.supports_model(model))
         .unwrap_or(AgentKind::Antigravity)
 }
@@ -546,7 +592,10 @@ impl AgentSelectionMetadata for AgentModel {
 }
 
 impl AgentKind {
-    /// All available agent kinds, in display order.
+    /// All CLI-backed agent kinds, in display order.
+    ///
+    /// [`AgentKind::Harness`] runs in process, so it is never discovered from
+    /// `PATH` and stays out of this list.
     pub const ALL: &[AgentKind] = &[
         AgentKind::Gemini,
         AgentKind::Antigravity,
@@ -554,13 +603,15 @@ impl AgentKind {
         AgentKind::Codex,
     ];
 
-    /// Returns the provider CLI executable name.
-    pub fn executable_name(self) -> &'static str {
+    /// Returns the provider CLI executable name, or `None` for the in-process
+    /// harness.
+    pub fn executable_name(self) -> Option<&'static str> {
         match self {
-            Self::Antigravity => "agy",
-            Self::Gemini => "gemini",
-            Self::Claude => "claude",
-            Self::Codex => "codex",
+            Self::Antigravity => Some("agy"),
+            Self::Gemini => Some("gemini"),
+            Self::Claude => Some("claude"),
+            Self::Codex => Some("codex"),
+            Self::Harness => None,
         }
     }
 
@@ -570,6 +621,7 @@ impl AgentKind {
             Self::Antigravity | Self::Gemini => AgentModel::Gemini31Pro,
             Self::Claude => AgentModel::ClaudeFable51,
             Self::Codex => AgentModel::Gpt61Sol,
+            Self::Harness => AgentModel::MuseSpark13,
         }
     }
 
@@ -617,6 +669,7 @@ impl AgentSelectionMetadata for AgentKind {
             Self::Gemini => "gemini",
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Harness => "harness",
         }
     }
 
@@ -626,6 +679,7 @@ impl AgentSelectionMetadata for AgentKind {
             Self::Gemini => "Google Gemini CLI agent.",
             Self::Claude => "Anthropic Claude Code agent.",
             Self::Codex => "OpenAI Codex CLI agent.",
+            Self::Harness => "Native Agentty harness agent.",
         }
     }
 }
@@ -655,6 +709,7 @@ impl FromStr for AgentKind {
             "gemini" => Ok(Self::Gemini),
             "claude" => Ok(Self::Claude),
             "codex" => Ok(Self::Codex),
+            "harness" => Ok(Self::Harness),
             other => Err(format!("unknown agent kind: {other}")),
         }
     }

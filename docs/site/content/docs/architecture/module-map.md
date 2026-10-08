@@ -21,10 +21,10 @@ For file-level detail, read the module docstrings directly.
 | `ag-runtime`       | Adapter composition and dispatch                                 |
 | `ag-scheduler`     | Shared session admission and campaign task selection             |
 | `ag-worker`        | Scheduling, cancellation, heartbeats, recovery, execution policy |
-| `ag-agent`         | External CLI and app-server adapters, policy enforcement         |
+| `ag-agent`         | CLI, app-server, and native harness adapters; policy enforcement |
 | `ag-forge`         | GitHub/GitLab review requests and comments                       |
 | `ag-git`           | Worktrees, captured diff parsing, sync, rebase, merge            |
-| `ag-harness`       | Standalone model loop, tools, durable sessions                   |
+| `ag-harness`       | Native model loop, tools, durable sessions                       |
 | `ag-harness-cli`   | Companion harness CLI                                            |
 | `ag-orchestration` | Campaign planning, verification, integration                     |
 | `ag-protocol`      | Response schemas, parsing, prompt envelopes                      |

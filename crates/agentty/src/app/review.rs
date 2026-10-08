@@ -247,6 +247,7 @@ fn review_agent_kind_label(agent_kind: AgentKind) -> &'static str {
         AgentKind::Gemini => "Gemini",
         AgentKind::Claude => "Claude",
         AgentKind::Codex => "Codex",
+        AgentKind::Harness => "Harness",
     }
 }
 

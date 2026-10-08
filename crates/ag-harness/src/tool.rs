@@ -30,6 +30,9 @@ const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
 const MAX_QUERY_BYTES: usize = 4 * 1024;
 const MAX_TOOL_CALL_ID_BYTES: usize = 1024;
+/// Corrective feedback for a read path that is not a safe repository path.
+const INVALID_READ_PATH: &str = "path must be repository-relative without empty, `.`, `..`, or \
+                                 `.git` components; omit it to inspect the repository root";
 pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 const WRITE_DESCRIPTION: &str = concat!(
     "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
@@ -205,14 +208,15 @@ impl ToolCall {
     /// The call identifier must contain non-whitespace text and be at most
     /// 1,024 UTF-8 bytes. Accepted identifiers are preserved verbatim.
     /// Arguments and optional provider reasoning are bounded before decoding.
-    /// Structurally valid read-action mistakes are retained for corrective
-    /// tool feedback. The harness separately enforces tool permissions,
-    /// repository containment, batch identifiers, and execution limits.
+    /// Structurally valid read-action mistakes, including unsafe read paths,
+    /// are retained for corrective tool feedback. The harness separately
+    /// enforces tool permissions, repository containment, batch identifiers,
+    /// and execution limits.
     ///
     /// # Errors
     /// Returns [`crate::ModelError`] for an invalid call identifier,
     /// unsupported tool name, oversized content, or invalid JSON arguments,
-    /// including unsafe repository paths.
+    /// including oversized read paths and unsafe write paths.
     pub fn from_json(
         id: String,
         name: &str,
@@ -367,8 +371,9 @@ pub enum ToolCallArguments<'a> {
 /// Structurally validated arguments for one native read-only repository action.
 ///
 /// Omitting `action` preserves the original file-read contract. The other
-/// fields are action-specific. Schema-valid field combinations rejected by an
-/// action are retained so the harness can return corrective tool feedback.
+/// fields are action-specific. Unsafe paths and field combinations rejected by
+/// an action are retained so the harness can return corrective tool feedback
+/// instead of executing them.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReadArguments {
     #[serde(default, skip_serializing_if = "is_default")]
@@ -437,7 +442,7 @@ struct ReadArgumentsWire {
     limit: Option<NonZeroU64>,
     #[serde(default, deserialize_with = "deserialize_optional_positive_integer")]
     offset: Option<NonZeroU64>,
-    #[serde(default, deserialize_with = "deserialize_optional_repository_path")]
+    #[serde(default, deserialize_with = "deserialize_optional_bounded_path")]
     path: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_query")]
     query: Option<String>,
@@ -450,7 +455,12 @@ impl<'de> Deserialize<'de> for ReadArguments {
         D: Deserializer<'de>,
     {
         let arguments = ReadArgumentsWire::deserialize(deserializer)?;
-        let validation_error = match arguments.action {
+        let path_error = arguments
+            .path
+            .as_deref()
+            .is_some_and(|path| validate_repository_path(path).is_err())
+            .then_some(INVALID_READ_PATH);
+        let validation_error = path_error.or(match arguments.action {
             ReadAction::Diff
                 if arguments.limit.is_none()
                     && arguments.offset.is_none()
@@ -496,7 +506,7 @@ impl<'de> Deserialize<'de> for ReadArguments {
             ReadAction::Show => {
                 Some("show requires a path and side and accepts only offset and limit")
             }
-        };
+        });
 
         Ok(Self {
             action: arguments.action,
@@ -608,14 +618,21 @@ where
         .ok_or_else(|| de::Error::custom("number must be an integer from 1 through u64::MAX"))
 }
 
-fn deserialize_optional_repository_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+/// Bounds a read path before it can be echoed in corrective feedback; other
+/// unsafe paths are retained for that feedback.
+fn deserialize_optional_bounded_path<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Option::<String>::deserialize(deserializer)?
-        .map(validate_repository_path)
-        .transpose()
-        .map_err(de::Error::custom)
+    let path = Option::<String>::deserialize(deserializer)?;
+    if path
+        .as_ref()
+        .is_some_and(|path| path.len() > MAX_PATH_BYTES)
+    {
+        return Err(de::Error::custom("path exceeds the byte limit"));
+    }
+
+    Ok(path)
 }
 
 fn deserialize_optional_query<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -684,10 +701,12 @@ where
     D: Deserializer<'de>,
 {
     let path = String::deserialize(deserializer)?;
-    validate_repository_path(path).map_err(de::Error::custom)
+    validate_repository_path(&path).map_err(de::Error::custom)?;
+
+    Ok(path)
 }
 
-fn validate_repository_path(path: String) -> Result<String, &'static str> {
+fn validate_repository_path(path: &str) -> Result<(), &'static str> {
     if path.is_empty() {
         return Err("path must not be empty");
     }
@@ -715,7 +734,7 @@ fn validate_repository_path(path: String) -> Result<String, &'static str> {
         return Err("path must not access Git administrative state");
     }
 
-    Ok(path)
+    Ok(())
 }
 
 #[cfg(test)]

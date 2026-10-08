@@ -45,6 +45,17 @@ fn cli_defaults_to_automatic_updates() {
     // Assert
     assert!(!cli.no_update);
     assert!(!cli.otlp_capture_content);
+    assert!(!cli.experimental_harness);
+}
+
+#[test]
+fn cli_parses_experimental_harness_flag() {
+    // Arrange / Act
+    let cli = Cli::try_parse_from(["agentty", "--experimental-harness"])
+        .expect("--experimental-harness should parse");
+
+    // Assert
+    assert!(cli.experimental_harness);
 }
 
 #[test]
@@ -173,6 +184,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
     if env::var_os(LOCK_FAILURE_CHILD_ENV).is_some() {
         // Arrange
         let cli = Cli {
+            experimental_harness: false,
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: None,
@@ -220,6 +232,7 @@ async fn run_reports_instance_lock_parent_creation_failure() {
 async fn run_rejects_an_incomplete_otlp_endpoint_before_startup() {
     // Arrange
     let cli = Cli {
+        experimental_harness: false,
         no_update: false,
         otlp_capture_content: false,
         otlp_endpoint: Some("http://localhost:4318".to_string()),
@@ -240,6 +253,7 @@ async fn run_installs_trace_export_and_flushes_after_startup_failure() {
     if env::var_os(TRACED_STARTUP_CHILD_ENV).is_some() {
         // Arrange
         let cli = Cli {
+            experimental_harness: false,
             no_update: false,
             otlp_capture_content: false,
             otlp_endpoint: Some("http://127.0.0.1:9/v1/traces".to_string()),
@@ -288,6 +302,7 @@ async fn run_rejects_an_owned_root_before_opening_the_database() {
         // Arrange / Act
         let error = run(
             Cli {
+                experimental_harness: false,
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
@@ -339,6 +354,7 @@ async fn run_releases_instance_lock_after_database_open_failure() {
         // Arrange / Act
         let error = run(
             Cli {
+                experimental_harness: false,
                 no_update: true,
                 otlp_capture_content: false,
                 otlp_endpoint: None,
@@ -383,6 +399,7 @@ async fn startup_runs_application_through_telemetry_wrapper() {
         // Arrange / Act
         let error = run(
             Cli {
+                experimental_harness: false,
                 no_update: true,
                 otlp_capture_content: env::var_os("AGENTTY_TEST_CAPTURE_CONTENT").is_some(),
                 otlp_endpoint: env::var("AGENTTY_TEST_OTLP_ENDPOINT").ok(),
