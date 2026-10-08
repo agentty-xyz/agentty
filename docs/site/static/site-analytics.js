@@ -6,7 +6,7 @@
   var host = script.dataset.posthogApiHost;
   var notice = document.querySelector('[data-analytics-notice]');
   var settings = document.querySelector('[data-analytics-settings]');
-  var choiceKey = 'agentty-site-posthog-choice';
+  var choiceKey = 'agentty-site-posthog-choice-v2';
   var allowedEvents = new Set([
     '$pageview', 'get_started_clicked', 'github_clicked',
     'install_method_selected', 'install_command_copied'
@@ -30,7 +30,13 @@
 
   try {
     choice = localStorage.getItem(choiceKey);
-  } catch (_) {
+    // Earlier consent covered events only. Keep refusals, but ask again before replay.
+    if (choice !== 'allowed' && choice !== 'declined') {
+      choice = localStorage.getItem('agentty-site-posthog-choice') === 'declined'
+        ? 'declined' : null;
+    }
+  } catch {
+    // Browser privacy settings can block storage; ask again and keep replay disabled.
     choice = null;
   }
 
@@ -94,7 +100,11 @@
 
   function startPosthog() {
     if (window.posthog) {
-      window.posthog.set_config({ persistence: persistence() });
+      window.posthog.set_config({
+        persistence: persistence(),
+        disable_session_recording: choice !== 'allowed',
+        disable_external_dependency_loading: choice !== 'allowed'
+      });
       window.posthog.opt_in_capturing();
       return;
     }
@@ -107,13 +117,25 @@
       capture_pageview: false,
       capture_pageleave: false,
       capture_exceptions: false,
-      disable_session_recording: true,
-      disable_external_dependency_loading: true,
+      disable_session_recording: choice !== 'allowed',
+      disable_external_dependency_loading: choice !== 'allowed',
+      enable_recording_console_log: false,
+      session_recording: {
+        maskAllInputs: true,
+        blockSelector: '[data-search-dialog], input[type="hidden"], input[type="file"]',
+        recordHeaders: false,
+        recordBody: false,
+        // Replay navigation and network URLs must not contain query text or fragments.
+        maskCapturedNetworkRequestFn: function (request) {
+          return { ...request, name: request.name.split(/[?#]/)[0] };
+        }
+      },
       persistence: persistence(),
       person_profiles: 'identified_only',
       save_campaign_params: false,
       before_send: function (event) {
-        if (choice === 'declined' || !allowedEvents.has(event.event)) {
+        var allowedReplay = event.event === '$snapshot' && choice === 'allowed';
+        if (choice === 'declined' || (!allowedEvents.has(event.event) && !allowedReplay)) {
           return null;
         }
 
@@ -147,6 +169,10 @@
     if (value === 'allowed') {
       startPosthog();
     } else if (window.posthog) {
+      window.posthog.set_config({
+        disable_session_recording: true,
+        disable_external_dependency_loading: true
+      });
       window.posthog.opt_out_capturing();
     }
   }

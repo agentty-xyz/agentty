@@ -66,7 +66,9 @@ zola --root docs/site serve
 ```
 
 The local preview uses the production PostHog project from `docs/site/config.toml`, so
-local visits send real events; exclude them in PostHog by filtering on `$host`.
+local visits send real events; exclude them in PostHog by filtering on `$host`. Session
+replay starts only after allowing analytics and requires Session Replay to be enabled in
+the PostHog project's settings.
 
 Use the cataloged `zola-check` hook for validation. Intentional feature recording also
 needs a running Podman environment; follow `docs/contributing/feature-test/recording.md`
