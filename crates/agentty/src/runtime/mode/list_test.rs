@@ -6,6 +6,7 @@ use crate::app::{App, AppEvent, ProjectSyncPhase, Tab};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::Status;
+use crate::domain::session_order::ArchiveAction;
 use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
@@ -1599,7 +1600,10 @@ async fn archive_load_more_enter_survives_programmatic_creation() {
 
         // Assert
         assert_eq!(app.sessions.sessions().len(), 11);
-        assert!(app.sessions.is_load_more_selected());
+        assert_eq!(
+            app.sessions.selected_archive_action(),
+            Some(ArchiveAction::LoadMore)
+        );
         assert!(app.selected_session().is_none());
 
         // Act
@@ -1718,4 +1722,66 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
     assert_eq!(app.sessions.sessions().len(), 10);
     assert!(app.sessions.has_more_archived_sessions());
     assert_eq!(app.view_snapshot().archived_session_count, 21);
+}
+
+#[tokio::test]
+async fn archive_show_less_enter_collapses_to_first_page() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let project = app.projects.active_project_id();
+    for index in 0..21 {
+        let id = format!("archive-{index:02}");
+        app.services
+            .db()
+            .sessions()
+            .insert_session(&id, "gpt-5.6-sol", "main", "Done", project)
+            .await
+            .expect("row");
+        app.services
+            .db()
+            .sessions()
+            .update_session_updated_at(&id, 100 - index)
+            .await
+            .expect("timestamp");
+    }
+    app.refresh_sessions_now().await;
+    app.tabs.set(Tab::Sessions);
+    let load_more_index = app.sessions.sessions().len();
+    app.sessions.select_session_index(Some(load_more_index));
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("load page");
+    let show_less_index = app.sessions.sessions().len() + 1;
+    app.sessions.select_session_index(Some(show_less_index));
+
+    // Act
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("help");
+
+    // Assert
+    assert!(app.view_snapshot().is_archive_expanded);
+    assert!(
+        matches!(&app.mode, AppMode::Help { context: HelpContext::List { keybindings }, .. }
+        if keybindings.iter().any(|action| action.key == "Enter" && action.footer_label == "show less"))
+    );
+
+    // Act
+    app.mode = AppMode::List;
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("show less");
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
+    assert_eq!(app.sessions.sessions().len(), 10);
+    assert!(!app.view_snapshot().is_archive_expanded);
+    assert_eq!(app.view_snapshot().archived_session_count, 21);
+    assert_eq!(
+        app.sessions.selected_archive_action(),
+        Some(ArchiveAction::LoadMore)
+    );
 }

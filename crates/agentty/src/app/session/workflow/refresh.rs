@@ -11,6 +11,7 @@ use super::load::SessionLoadInput;
 use crate::app::session::SessionError;
 use crate::app::{AppServices, ProjectManager, SessionManager};
 use crate::domain::session::{ForgeKind, ReviewRequest, SessionId, Status};
+use crate::domain::session_order::{self, ArchiveAction};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
 impl SessionManager {
@@ -74,27 +75,49 @@ impl SessionManager {
             .map(|session| session.id.clone())
             .collect();
         let previous_limit = self.state.archive_limit;
-        self.state.archive_limit =
-            previous_limit.saturating_add(crate::domain::session_order::ARCHIVE_PAGE_SIZE);
+        self.state.archive_limit = previous_limit.saturating_add(session_order::ARCHIVE_PAGE_SIZE);
         if !self.reload_sessions(mode, projects, services, None).await {
             self.state.archive_limit = previous_limit;
 
             return;
         }
-        let next_index =
-            crate::domain::session_order::selectable_session_indexes(&self.state.sessions)
-                .into_iter()
-                .find(|index| {
-                    let session = &self.state.sessions[*index];
+        let next_index = session_order::selectable_session_indexes(&self.state.sessions)
+            .into_iter()
+            .find(|index| {
+                let session = &self.state.sessions[*index];
 
-                    matches!(session.status, Status::Done | Status::Canceled)
-                        && !previous_ids.contains(&session.id)
-                });
+                matches!(session.status, Status::Done | Status::Canceled)
+                    && !previous_ids.contains(&session.id)
+            });
         self.state.table_state.select(next_index.or_else(|| {
-            crate::domain::session_order::selectable_session_indexes(&self.state.sessions)
+            session_order::selectable_session_indexes(&self.state.sessions)
                 .last()
                 .copied()
         }));
+    }
+
+    /// Collapses the archive back to its first page and focuses the
+    /// `Load more...` action so the archive can be expanded again.
+    pub(crate) async fn show_less_archived_sessions(
+        &mut self,
+        mode: &mut AppMode,
+        projects: &ProjectManager,
+        services: &AppServices,
+    ) {
+        let previous_limit = self.state.archive_limit;
+        self.state.archive_limit = session_order::ARCHIVE_PAGE_SIZE;
+        if !self.reload_sessions(mode, projects, services, None).await {
+            self.state.archive_limit = previous_limit;
+
+            return;
+        }
+        if !self.state.select_archive_action(ArchiveAction::LoadMore) {
+            self.state.table_state.select(
+                session_order::selectable_session_indexes(&self.state.sessions)
+                    .last()
+                    .copied(),
+            );
+        }
     }
 
     /// Refreshes one linked review request and persists the latest normalized
@@ -142,7 +165,7 @@ impl SessionManager {
         services: &AppServices,
         sessions_metadata: Option<(i64, i64)>,
     ) -> bool {
-        let load_more_selected = self.is_load_more_selected();
+        let selected_archive_action = self.selected_archive_action();
         let selected_index = self.state.table_state.selected();
         let selected_session_id = selected_index
             .and_then(|index| self.state.sessions.get(index))
@@ -196,10 +219,8 @@ impl SessionManager {
         self.refresh_session_branch_names().await;
         self.stats_activity = stats_activity;
         self.restore_table_selection(selected_session_id.as_deref(), selected_index);
-        if load_more_selected && self.state.has_more_archived_sessions {
-            self.state
-                .table_state
-                .select(Some(self.state.sessions.len()));
+        if let Some(action) = selected_archive_action {
+            self.state.select_archive_action(action);
         }
         self.ensure_mode_session_exists(mode);
 

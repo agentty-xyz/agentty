@@ -10,6 +10,7 @@ use crate::domain::session::{
     Session, SessionDiffState, SessionDiffStats, SessionHandles, SessionId, SessionSize, Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
+use crate::domain::session_order::ArchiveAction;
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
@@ -321,6 +322,35 @@ fn push_session_preserves_archive_pagination_selection() {
         assert_eq!(state.table_state.selected(), expected);
         assert_eq!(state.session_index_for_id("created-first"), Some(1));
         assert_eq!(state.session_index_for_id("created-second"), Some(2));
+    }
+}
+
+#[test]
+/// Keeps each archive action selected through appends when both are shown.
+fn push_session_preserves_each_archive_action_selection() {
+    for (selected, expected_action) in [
+        (Some(1), Some(ArchiveAction::LoadMore)),
+        (Some(2), Some(ArchiveAction::ShowLess)),
+        (Some(0), None),
+    ] {
+        // Arrange
+        let mut state = SessionState::new(
+            HashMap::new(),
+            vec![state_session_fixture("archive", Status::Done)],
+            SelectionState::default(),
+            Arc::new(FixedClock::new()),
+            0,
+            0,
+        );
+        state.has_more_archived_sessions = true;
+        state.archive_limit = 20;
+        state.table_state.select(selected);
+
+        // Act
+        state.push_session(state_session_fixture("created", Status::Draft));
+
+        // Assert
+        assert_eq!(state.selected_archive_action(), expected_action);
     }
 }
 

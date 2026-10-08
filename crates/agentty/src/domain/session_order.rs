@@ -7,6 +7,15 @@ use crate::domain::session::{Session, Status};
 /// Number of archived sessions loaded per request.
 pub(crate) const ARCHIVE_PAGE_SIZE: usize = 10;
 
+/// Selectable archive pagination row rendered below the loaded sessions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArchiveAction {
+    /// Loads the next archive page.
+    LoadMore,
+    /// Collapses the archive back to its first page.
+    ShowLess,
+}
+
 /// Group bucket used to organize sessions in the list before rendering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionGroup {
@@ -59,12 +68,14 @@ pub fn preferred_initial_session_index(sessions: &[Session]) -> Option<usize> {
         .or_else(|| selectable_session_indexes(sessions).first().copied())
 }
 
-/// Returns the next raw-session selection index in grouped list order.
-pub fn next_selectable_session_index(
+/// Returns the next raw selection index in grouped list order, followed by
+/// `archive_action_count` archive action slots.
+pub fn next_selectable_index(
     sessions: &[Session],
+    archive_action_count: usize,
     selected_index: Option<usize>,
 ) -> Option<usize> {
-    let indexes = selectable_session_indexes(sessions);
+    let indexes = selectable_list_indexes(sessions, archive_action_count);
 
     if indexes.is_empty() {
         None
@@ -81,12 +92,14 @@ pub fn next_selectable_session_index(
     }
 }
 
-/// Returns the previous raw-session selection index in grouped list order.
-pub fn previous_selectable_session_index(
+/// Returns the previous raw selection index in grouped list order, followed
+/// by `archive_action_count` archive action slots.
+pub fn previous_selectable_index(
     sessions: &[Session],
+    archive_action_count: usize,
     selected_index: Option<usize>,
 ) -> Option<usize> {
-    let indexes = selectable_session_indexes(sessions);
+    let indexes = selectable_list_indexes(sessions, archive_action_count);
 
     if indexes.is_empty() {
         None
@@ -101,6 +114,20 @@ pub fn previous_selectable_session_index(
 
         Some(indexes[previous_position])
     }
+}
+
+/// Returns available archive pagination actions in display order.
+///
+/// Action rows follow the loaded sessions, so the action at position `n` is
+/// selected through raw index `sessions.len() + n`.
+pub fn archive_actions(has_more: bool, is_expanded: bool) -> Vec<ArchiveAction> {
+    [
+        has_more.then_some(ArchiveAction::LoadMore),
+        is_expanded.then_some(ArchiveAction::ShowLess),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// Returns session indexes in the same order as selectable grouped rows.
@@ -134,6 +161,15 @@ pub fn grouped_session_rows(sessions: &[Session]) -> Vec<GroupedSessionRow<'_>> 
     );
 
     rows
+}
+
+/// Returns selectable grouped session indexes followed by archive action
+/// slots.
+fn selectable_list_indexes(sessions: &[Session], archive_action_count: usize) -> Vec<usize> {
+    let mut indexes = selectable_session_indexes(sessions);
+    indexes.extend(sessions.len()..sessions.len() + archive_action_count);
+
+    indexes
 }
 
 /// Lookup of stacked or orchestrated children by display parent session id.

@@ -355,33 +355,25 @@ pub(super) struct SessionTitleGenerationTaskInput {
 }
 
 impl SessionManager {
-    /// Moves selection forward, including the archive pagination action.
+    /// Moves selection forward, including archive pagination actions.
     ///
     /// Group header rows are non-selectable and are skipped by design.
     pub fn next(&mut self) {
-        let indexes = session_order::selectable_session_indexes(&self.state.sessions);
-        let selected = self.state.table_state.selected();
-        let next = if self.is_load_more_selected() {
-            indexes.first().copied()
-        } else if self.state.has_more_archived_sessions && selected == indexes.last().copied() {
-            Some(self.state.sessions.len())
-        } else {
-            session_order::next_selectable_session_index(&self.state.sessions, selected)
-        };
+        let next = session_order::next_selectable_index(
+            &self.state.sessions,
+            self.state.archive_actions().len(),
+            self.state.table_state.selected(),
+        );
         self.state.table_state.select(next);
     }
 
-    /// Moves selection backward, including the archive pagination action.
+    /// Moves selection backward, including archive pagination actions.
     pub fn previous(&mut self) {
-        let indexes = session_order::selectable_session_indexes(&self.state.sessions);
-        let selected = self.state.table_state.selected();
-        let previous = if self.is_load_more_selected() {
-            indexes.last().copied()
-        } else if self.state.has_more_archived_sessions && selected == indexes.first().copied() {
-            Some(self.state.sessions.len())
-        } else {
-            session_order::previous_selectable_session_index(&self.state.sessions, selected)
-        };
+        let previous = session_order::previous_selectable_index(
+            &self.state.sessions,
+            self.state.archive_actions().len(),
+            self.state.table_state.selected(),
+        );
         self.state.table_state.select(previous);
     }
 

@@ -5,6 +5,7 @@ use std::time::{Instant, SystemTime};
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{Session, SessionDiffStats, SessionHandles, SessionId, Status};
+use crate::domain::session_order::{self, ArchiveAction};
 use crate::domain::transient_message::{TransientMessage, TransientMessageSlot};
 
 /// Cached ahead/behind snapshots for one session branch.
@@ -88,7 +89,7 @@ impl SessionState {
         let _state_created_at = clock.now_system_time();
         let refresh_deadline = clock.now_instant() + SESSION_REFRESH_INTERVAL;
         let mut state = Self {
-            archive_limit: crate::domain::session_order::ARCHIVE_PAGE_SIZE,
+            archive_limit: session_order::ARCHIVE_PAGE_SIZE,
             archived_session_count: sessions
                 .iter()
                 .filter(|session| matches!(session.status, Status::Done | Status::Canceled))
@@ -227,17 +228,53 @@ impl SessionState {
         self.sessions = sessions;
     }
 
+    /// Returns whether the archive window extends beyond its first page.
+    pub(crate) fn is_archive_expanded(&self) -> bool {
+        self.archive_limit > session_order::ARCHIVE_PAGE_SIZE
+    }
+
+    /// Returns available archive pagination actions in display order.
+    pub(crate) fn archive_actions(&self) -> Vec<ArchiveAction> {
+        session_order::archive_actions(self.has_more_archived_sessions, self.is_archive_expanded())
+    }
+
+    /// Returns the archive pagination action under the current selection.
+    pub(crate) fn selected_archive_action(&self) -> Option<ArchiveAction> {
+        let action_position = self
+            .table_state
+            .selected()?
+            .checked_sub(self.sessions.len())?;
+
+        self.archive_actions().get(action_position).copied()
+    }
+
+    /// Selects one archive pagination action when it is available.
+    ///
+    /// Returns `false` without changing selection when the action is hidden.
+    pub(crate) fn select_archive_action(&mut self, action: ArchiveAction) -> bool {
+        let Some(action_position) = self
+            .archive_actions()
+            .iter()
+            .position(|available_action| *available_action == action)
+        else {
+            return false;
+        };
+        self.table_state
+            .select(Some(self.sessions.len() + action_position));
+
+        true
+    }
+
     /// Appends one session snapshot and records its new stable identifier
-    /// lookup entry, preserving selection on the archive pagination action.
+    /// lookup entry, preserving selection on archive pagination actions.
     pub(crate) fn push_session(&mut self, session: Session) {
         let session_index = self.sessions.len();
-        let load_more_selected =
-            self.has_more_archived_sessions && self.table_state.selected() == Some(session_index);
+        let selected_action = self.selected_archive_action();
         self.session_index_by_id
             .insert(session.id.clone(), session_index);
         self.sessions.push(session);
-        if load_more_selected {
-            self.table_state.select(Some(self.sessions.len()));
+        if let Some(action) = selected_action {
+            self.select_archive_action(action);
         }
     }
 

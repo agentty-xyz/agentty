@@ -37,6 +37,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) git_upstream_ref: Option<&'a str>,
     /// Whether the session list has an archive pagination action.
     pub(crate) has_more_archived_sessions: bool,
+    /// Whether loaded archived rows extend beyond the first page.
+    pub(crate) is_archive_expanded: bool,
     pub(crate) is_tmux_session: bool,
     pub(crate) latest_available_version: Option<&'a str>,
     pub(crate) mode: &'a AppMode,
@@ -102,6 +104,7 @@ impl App {
             git_upstream_ref: project.git_upstream_ref,
             archived_session_count: self.sessions.state().archived_session_count,
             has_more_archived_sessions: self.sessions.has_more_archived_sessions(),
+            is_archive_expanded: self.sessions.is_archive_expanded(),
             is_tmux_session: self.is_tmux_session(),
             latest_available_version: self.latest_available_version.as_deref(),
             mode: &self.mode,
