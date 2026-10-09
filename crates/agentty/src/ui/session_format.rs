@@ -4,16 +4,23 @@ use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
+use time::{OffsetDateTime, UtcOffset};
 use unicode_width::UnicodeWidthStr;
 
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::resource::SessionResources;
 use crate::domain::review;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionId, Status};
+use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
 use crate::ui::{markdown, style};
 
+/// Minimum blank columns between a row and its right-aligned suffix.
+const RIGHT_ALIGNED_SUFFIX_MIN_GAP: usize = 2;
+const SECONDS_PER_MINUTE: i64 = 60;
+const SECONDS_PER_HOUR: i64 = 3_600;
+const SECONDS_PER_DAY: i64 = 86_400;
 const REVIEW_PROJECT_IMPACT_HEADER: &str = "### Project Impact";
 const REVIEW_SUGGESTIONS_HEADER: &str = "### Suggestions";
 const REVIEW_SUGGESTIONS_HEADER_WITH_HINT: &str =
@@ -51,6 +58,93 @@ pub(crate) fn session_resources_line(
         text_util::truncate_with_ellipsis(&text, usize::from(width)),
         Style::default().fg(style::palette::text_muted()),
     )
+}
+
+/// Formats when a session started in local time and how old it is, for
+/// example `Started 2026-07-01 09:30 (2d 4h ago)`.
+///
+/// Uses the offset `frame_time` resolved for `created_at` so the start hour
+/// stays correct across daylight-saving transitions. Falls back to the age
+/// alone when the timestamp or offset cannot be represented as a local date.
+pub(crate) fn session_started_label(created_at: i64, frame_time: FrameTime) -> String {
+    let age_seconds = frame_time.unix_seconds().saturating_sub(created_at);
+    let age = if age_seconds < SECONDS_PER_MINUTE {
+        "just now".to_string()
+    } else {
+        format!("{} ago", session_age_text(age_seconds))
+    };
+    let Some(started_at) = local_date_time_text(
+        created_at,
+        frame_time.local_utc_offset_seconds_at(created_at),
+    ) else {
+        return format!("Started {age}");
+    };
+
+    format!("Started {started_at} ({age})")
+}
+
+/// Appends `suffix` right-aligned within `width` columns, keeping `line`
+/// unchanged when both cannot fit with a two-column gap.
+pub(crate) fn line_with_right_aligned_suffix(
+    mut line: Line<'static>,
+    suffix: &str,
+    width: u16,
+) -> Line<'static> {
+    let line_width = line.width();
+    let suffix_width = suffix.width();
+    let available_width = usize::from(width);
+    let required_width = line_width
+        .saturating_add(RIGHT_ALIGNED_SUFFIX_MIN_GAP)
+        .saturating_add(suffix_width);
+
+    if required_width > available_width {
+        return line;
+    }
+
+    line.spans.push(Span::raw(
+        " ".repeat(available_width - line_width - suffix_width),
+    ));
+    line.spans.push(Span::styled(
+        suffix.to_string(),
+        Style::default().fg(style::palette::text_muted()),
+    ));
+
+    line
+}
+
+/// Formats a session age with its two most significant units, such as
+/// `12m`, `3h 5m`, or `2d 4h`.
+fn session_age_text(age_seconds: i64) -> String {
+    let minute_count = age_seconds / SECONDS_PER_MINUTE;
+    let hour_count = age_seconds / SECONDS_PER_HOUR;
+    let day_count = age_seconds / SECONDS_PER_DAY;
+
+    if day_count > 0 {
+        return format!("{day_count}d {}h", hour_count % 24);
+    }
+
+    if hour_count > 0 {
+        return format!("{hour_count}h {}m", minute_count % 60);
+    }
+
+    format!("{minute_count}m")
+}
+
+/// Formats a Unix timestamp as `YYYY-MM-DD HH:MM` at one UTC offset.
+fn local_date_time_text(unix_seconds: i64, utc_offset_seconds: i64) -> Option<String> {
+    let utc_offset = UtcOffset::from_whole_seconds(i32::try_from(utc_offset_seconds).ok()?).ok()?;
+    let date_time = OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .ok()?
+        .checked_to_offset(utc_offset)?;
+
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        date_time.year(),
+        u8::from(date_time.month()),
+        date_time.day(),
+        date_time.hour(),
+        date_time.minute(),
+    ))
 }
 
 /// Formats the size-prefixed session title and metadata lines rendered above

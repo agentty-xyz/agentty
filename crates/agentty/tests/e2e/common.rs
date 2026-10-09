@@ -608,6 +608,13 @@ async fn insert_session_seed(
         }
     }
 
+    // Session chat renders the start time, so it must match the pinned clock
+    // instead of the host time at seeding.
+    database
+        .sessions()
+        .update_session_created_at(seed.session_id, PINNED_CLOCK_UNIX_SECONDS)
+        .await?;
+
     if let Some(title) = seed.title {
         database
             .sessions()

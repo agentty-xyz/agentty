@@ -22,11 +22,13 @@ merge locally or publish a review request. See
 
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
 title, followed by changed-line totals, active-work timer, token usage, and linked
-review request. The composer shows `agent/model [reasoning]`, response style, speed when
-supported, and permissions. It stays visible and inactive while viewing a session; press
-`Enter` to activate a reply when available. The footer shows the active directory,
-branch, and ahead/behind counts. Up to eight session agent turns can execute at once;
-additional turns wait for capacity while their sessions remain responsive.
+review request. When the terminal is wide enough, the shortcut row below the composer
+also shows when the session started and how long ago. The composer shows
+`agent/model [reasoning]`, response style, speed when supported, and permissions. It
+stays visible and inactive while viewing a session; press `Enter` to activate a reply
+when available. The footer shows the active directory, branch, and ahead/behind counts.
+Up to eight session agent turns can execute at once; additional turns wait for capacity
+while their sessions remain responsive.
 
 ### Resource Usage
 

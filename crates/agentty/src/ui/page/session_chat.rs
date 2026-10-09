@@ -298,7 +298,9 @@ impl<'a> SessionChatPage<'a> {
             output = output.active_progress(active_progress);
         }
         output.render(f, layout_plan.areas.output_area);
-        self.render_bottom_panel(f, session, &layout_plan);
+        let started_label =
+            session_format::session_started_label(session.created_at, self.frame_time);
+        self.render_bottom_panel(f, session, &layout_plan, &started_label);
         Self::render_session_header(f, layout_plan.areas.header_area, layout_plan.header_lines);
     }
 
@@ -310,11 +312,14 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Renders the composer and footer, or the interactive question panel.
+    ///
+    /// Every footer variant right-aligns `started_label` when it fits.
     fn render_bottom_panel(
         &self,
         f: &mut Frame,
         session: &Session,
         layout_plan: &SessionChatLayoutPlan,
+        started_label: &str,
     ) {
         let bottom_area = layout_plan.areas.bottom_area;
 
@@ -346,7 +351,11 @@ impl<'a> SessionChatPage<'a> {
 
             chat_input.render(f, panel_areas.input_area);
             f.render_widget(
-                Paragraph::new(prepared_prompt_panel.footer_text.clone()),
+                Paragraph::new(session_format::line_with_right_aligned_suffix(
+                    prepared_prompt_panel.footer_text.clone(),
+                    started_label,
+                    panel_areas.footer_area.width,
+                )),
                 panel_areas.footer_area,
             );
             if prepared_prompt_panel.is_pasting_image {
@@ -382,6 +391,7 @@ impl<'a> SessionChatPage<'a> {
                     input,
                     questions,
                     selected_option_index: *selected_option_index,
+                    started_label,
                 },
             );
 
@@ -396,6 +406,17 @@ impl<'a> SessionChatPage<'a> {
             .active(false)
             .render(f, panel_areas.input_area);
 
+        let help_message = Paragraph::new(session_format::line_with_right_aligned_suffix(
+            session_format::session_view_footer_line(self.view_help_state(session)),
+            started_label,
+            panel_areas.footer_area.width,
+        ));
+        f.render_widget(help_message, panel_areas.footer_area);
+    }
+
+    /// Resolves which view-mode footer actions apply to `session` within its
+    /// stack.
+    fn view_help_state(&self, session: &Session) -> ViewHelpState {
         let can_start_staged_session =
             can_start_staged_session_in_stack(self.sessions, session.id.as_str());
         let can_reply_to_session =
@@ -406,7 +427,8 @@ impl<'a> SessionChatPage<'a> {
             can_mutate_session_branch_in_stack(self.sessions, session.id.as_str());
         let can_rebase_session_branch =
             can_rebase_session_branch_in_stack(self.sessions, session.id.as_str());
-        let view_help_state = ViewHelpState {
+
+        ViewHelpState {
             can_fork_session: ViewActionAvailability::from_bool(session.allows_fork_action()),
             can_merge_session_branch: ViewActionAvailability::from_bool(can_merge_session_branch),
             can_mutate_session_branch: ViewActionAvailability::from_bool(can_mutate_session_branch),
@@ -419,10 +441,7 @@ impl<'a> SessionChatPage<'a> {
             can_start_staged_session: ViewActionAvailability::from_bool(can_start_staged_session),
             publish_pull_request_action: session.publish_pull_request_action(),
             session_state: help_action::session_view_state(session),
-        };
-        let help_message =
-            Paragraph::new(session_format::session_view_footer_line(view_help_state));
-        f.render_widget(help_message, panel_areas.footer_area);
+        }
     }
 }
 
@@ -611,6 +630,7 @@ struct QuestionPanelState<'a> {
     input: &'a input::InputState,
     questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
+    started_label: &'a str,
 }
 
 /// Renders the question-mode bottom panel with question text, options, input,
@@ -629,6 +649,7 @@ fn render_question_panel(
         input,
         questions,
         selected_option_index,
+        started_label,
     } = *state;
     let question_item = questions.get(current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
@@ -706,15 +727,16 @@ fn render_question_panel(
     render_question_help_footer(
         f,
         panel_areas.help_area,
-        panel_areas.help_area.height,
         focus,
         has_session_diff,
         !is_free_text_mode,
         lookup_state,
+        started_label,
     );
 }
 
-/// Renders the question-mode help footer with context-aware action hints.
+/// Renders the question-mode help footer with context-aware action hints and
+/// the right-aligned `started_label` when it fits.
 ///
 /// `has_session_diff` controls whether the chat-focused footer advertises the
 /// diff preview.
@@ -726,21 +748,25 @@ fn render_question_panel(
 fn render_question_help_footer(
     f: &mut Frame,
     area: Rect,
-    help_height: u16,
     focus: ChatFocus,
     has_session_diff: bool,
     is_navigating_options: bool,
     lookup_state: question_format::QuestionLookupState,
+    started_label: &str,
 ) {
-    if help_height == 0 {
+    if area.height == 0 {
         return;
     }
 
-    let help_para = Paragraph::new(question_format::question_help_footer_line(
-        focus,
-        has_session_diff,
-        is_navigating_options,
-        lookup_state,
+    let help_para = Paragraph::new(session_format::line_with_right_aligned_suffix(
+        question_format::question_help_footer_line(
+            focus,
+            has_session_diff,
+            is_navigating_options,
+            lookup_state,
+        ),
+        started_label,
+        area.width,
     ))
     .alignment(ratatui::layout::Alignment::Left);
     f.render_widget(help_para, area);

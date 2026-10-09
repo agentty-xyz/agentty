@@ -7,6 +7,9 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FrameTime {
     local_utc_offset_seconds: i64,
+    /// Offset the host clock resolved for one displayed past timestamp, such
+    /// as the visible session's start, stored as `(timestamp, offset)`.
+    resolved_utc_offset: Option<(i64, i64)>,
     unix_millis: u128,
     unix_seconds: i64,
 }
@@ -21,14 +24,42 @@ impl FrameTime {
     ) -> Self {
         Self {
             local_utc_offset_seconds,
+            resolved_utc_offset: None,
             unix_millis,
             unix_seconds,
         }
     }
 
+    /// Records the local UTC offset the clock boundary resolved for
+    /// `timestamp_seconds`, which can differ from the frame offset across
+    /// daylight-saving transitions.
+    #[must_use]
+    pub(crate) const fn with_local_utc_offset_at(
+        mut self,
+        timestamp_seconds: i64,
+        utc_offset_seconds: i64,
+    ) -> Self {
+        self.resolved_utc_offset = Some((timestamp_seconds, utc_offset_seconds));
+
+        self
+    }
+
     /// Returns the local UTC offset active at this frame timestamp.
     pub(crate) const fn local_utc_offset_seconds(self) -> i64 {
         self.local_utc_offset_seconds
+    }
+
+    /// Returns the local UTC offset for `timestamp_seconds`, falling back to
+    /// the frame offset when no offset was resolved for that timestamp.
+    pub(crate) fn local_utc_offset_seconds_at(self, timestamp_seconds: i64) -> i64 {
+        match self.resolved_utc_offset {
+            Some((resolved_timestamp, utc_offset_seconds))
+                if resolved_timestamp == timestamp_seconds =>
+            {
+                utc_offset_seconds
+            }
+            _ => self.local_utc_offset_seconds,
+        }
     }
 
     /// Returns the frame timestamp as Unix milliseconds for animations.

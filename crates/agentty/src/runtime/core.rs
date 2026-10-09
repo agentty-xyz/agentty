@@ -15,12 +15,13 @@ use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
 
 use crate::app::App;
-use crate::infra::clock::Clock;
+use crate::infra::clock::{self, Clock};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
 const FORCED_REDRAW_INTERVAL: Duration = Duration::from_millis(200);
+const SECONDS_PER_MINUTE: i64 = 60;
 /// Coordinator polling cadence while the terminal runtime is active.
 const ORCHESTRATION_RECONCILE_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -177,12 +178,12 @@ where
     let orchestration_task =
         tokio::spawn(orchestration_coordinator.run(RuntimeOrchestrationSchedule::new()));
     let clock = app.services.clock();
-    let last_draw_at = clock.now_instant();
+    let last_draw = DrawStamp::now(clock.as_ref());
     let mut main_loop_state = MainLoopState {
         app,
         clock,
         event_rx,
-        last_draw_at,
+        last_draw,
         presentation: Rc::new(PresentationState::default()),
         terminal,
         tick,
@@ -209,12 +210,30 @@ async fn stop_orchestration_task(
     }
 }
 
+/// Clock readings captured when the latest frame was drawn.
+#[derive(Clone, Copy)]
+struct DrawStamp {
+    instant: Instant,
+    wall_clock_minute: i64,
+}
+
+impl DrawStamp {
+    /// Captures the injected clock's current monotonic instant and wall-clock
+    /// minute.
+    fn now(clock: &dyn Clock) -> Self {
+        Self {
+            instant: clock.now_instant(),
+            wall_clock_minute: wall_clock_minute(clock::unix_timestamp_seconds(clock)),
+        }
+    }
+}
+
 /// Borrowed runtime state required to process one main-loop cycle.
 struct MainLoopState<'a, B: Backend, Message> {
     app: &'a mut App,
     clock: Arc<dyn Clock>,
     event_rx: &'a mut mpsc::UnboundedReceiver<Message>,
-    last_draw_at: Instant,
+    last_draw: DrawStamp,
     presentation: Rc<PresentationState>,
     terminal: &'a mut Terminal<B>,
     tick: &'a mut tokio::time::Interval,
@@ -240,7 +259,7 @@ where
             self.app,
             self.terminal,
             self.clock.as_ref(),
-            &mut self.last_draw_at,
+            &mut self.last_draw,
             self.presentation.as_ref(),
         )?;
 
@@ -274,24 +293,27 @@ where
 
 /// Renders one frame of the TUI application into the terminal buffer.
 ///
-/// Idle redraws are skipped unless the app explicitly requested a fresh frame
-/// or one visible spinner/timer has reached the forced redraw cadence. Both
-/// the elapsed-time comparison and the `last_draw_at` stamp read through the
-/// injected `Clock` so test runs can virtualize the render-throttle clock
-/// without mutating production timing behavior.
+/// Idle redraws are skipped unless the app explicitly requested a fresh frame,
+/// one visible spinner/timer has reached the forced redraw cadence, or the
+/// wall-clock minute changed so minute-granular labels such as session ages
+/// stay current. Elapsed-time comparisons and the `last_draw` stamp read
+/// through the injected `Clock` so test runs can virtualize the
+/// render-throttle clock without mutating production timing behavior.
 fn render_frame<B: Backend>(
     app: &mut App,
     terminal: &mut Terminal<B>,
     clock: &dyn Clock,
-    last_draw_at: &mut Instant,
+    last_draw: &mut DrawStamp,
     presentation: &PresentationState,
 ) -> io::Result<()>
 where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let forced_redraw_due =
-        app.has_visible_tick_driven_ui() && forced_redraw_elapsed(clock, *last_draw_at);
-    if !app.needs_redraw() && !forced_redraw_due {
+        app.has_visible_tick_driven_ui() && forced_redraw_elapsed(clock, last_draw.instant);
+    let current_wall_clock_minute = wall_clock_minute(clock::unix_timestamp_seconds(clock));
+    let wall_clock_minute_changed = current_wall_clock_minute != last_draw.wall_clock_minute;
+    if !app.needs_redraw() && !forced_redraw_due && !wall_clock_minute_changed {
         return Ok(());
     }
 
@@ -306,7 +328,10 @@ where
         .map_err(backend_err)?;
     presentation.record_rendered_surface(&snapshot);
     app.clear_redraw();
-    *last_draw_at = clock.now_instant();
+    *last_draw = DrawStamp {
+        instant: clock.now_instant(),
+        wall_clock_minute: current_wall_clock_minute,
+    };
 
     Ok(())
 }
@@ -335,6 +360,11 @@ where
 /// least `FORCED_REDRAW_INTERVAL`.
 fn forced_redraw_elapsed(clock: &dyn Clock, last_draw_at: Instant) -> bool {
     clock.now_instant().saturating_duration_since(last_draw_at) >= FORCED_REDRAW_INTERVAL
+}
+
+/// Returns the whole wall-clock minute containing one Unix timestamp.
+fn wall_clock_minute(unix_seconds: i64) -> i64 {
+    unix_seconds.div_euclid(SECONDS_PER_MINUTE)
 }
 
 #[cfg(test)]
