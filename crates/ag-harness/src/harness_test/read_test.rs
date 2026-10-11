@@ -18,11 +18,12 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType};
-use crate::model::{ModelMessage, ModelResponse, ReasoningEffort};
+use crate::model::{ModelMessage, ModelRequest, ModelResponse, ReasoningEffort};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::read::ReadError;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
+use crate::store::MemoryStore;
 use crate::tool::{ReadAction, Tool, ToolCall, ToolDefinition};
 use crate::turn::{ToolActivity, TurnError};
 
@@ -579,6 +580,149 @@ async fn emits_correlated_lifecycle_for_read_tool_round_trip() {
     assert!(!event_debug.contains("[workspace]"));
 }
 
+#[tokio::test]
+async fn long_tool_loops_refit_the_request_and_complete_the_turn() {
+    // Arrange
+    let budget = ContextBudget::new(NonZeroU64::new(4_000).expect("nonzero budget"));
+    let manifest = (0..120)
+        .map(|line| format!("line {line:03} of the manifest\n"))
+        .collect::<Vec<_>>()
+        .concat();
+    let mut file_system = MockFileSystem::new();
+    file_system.expect_canonicalize().returning(|path| {
+        Ok(if path.ends_with("Cargo.toml") {
+            PathBuf::from("/repo/Cargo.toml")
+        } else {
+            PathBuf::from("/repo")
+        })
+    });
+    file_system
+        .expect_open_beneath()
+        .returning(move |_, _| Ok(Box::new(Cursor::new(manifest.clone().into_bytes()))));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        recorded.lock().expect("requests").push(request.clone());
+        if matches!(
+            request.messages().first(),
+            Some(ModelMessage::System(instructions)) if instructions.contains("checkpointing")
+        ) {
+            return Ok(response_without_metadata(ModelResponse::Output(json!({
+                "context": "read the manifest repeatedly",
+                "decisions": [],
+                "state": "keep reading"
+            }))));
+        }
+        let read = reads.fetch_add(1, Ordering::SeqCst);
+        if read < 16 {
+            return Ok(response_without_metadata(ModelResponse::ToolCall(
+                inspection_call(
+                    &format!("call_{read}"),
+                    json!({"action": "file", "path": "Cargo.toml"}),
+                ),
+            )));
+        }
+
+        Ok(response_without_metadata(ModelResponse::Output(json!({
+            "summary": "done"
+        }))))
+    });
+    let harness = Harness::new(model, budget)
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(file_system);
+
+    // Act
+    let outcome = harness
+        .run_once("read the manifest sixteen times", object_schema())
+        .await
+        .expect("a long tool loop should refit instead of failing");
+
+    // Assert
+    assert_eq!(outcome.output(), &json!({ "summary": "done" }));
+    let requests = requests.lock().expect("requests");
+    let estimator = crate::context::HeuristicContextEstimator;
+    for request in requests.iter() {
+        let weight =
+            crate::context::request_weight(&estimator, budget, request.messages(), request.tools());
+        assert!(weight <= 4_000, "request weighs {weight}");
+    }
+    let summaries = requests
+        .iter()
+        .filter(|request| request.tools().is_empty())
+        .count();
+    assert!(summaries >= 1);
+    let last = requests.last().expect("final request");
+    assert!(last.messages().iter().any(|message| matches!(
+        message,
+        ModelMessage::User(note) if note.starts_with("[harness] Context checkpoint")
+    )));
+    assert_eq!(outcome.report().model_requests().len(), requests.len());
+}
+
+#[tokio::test]
+async fn summary_requests_answered_with_a_tool_call_fail_the_turn_typed() {
+    // Arrange
+    let mut model = model();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    model.expect_complete().returning(move |request| {
+        let mut recorded = recorded.lock().expect("requests");
+        recorded.push(request);
+
+        Ok(response_without_metadata(ModelResponse::ToolCall(
+            read_call(&format!("call_{}", recorded.len())),
+        )))
+    });
+    let mut file_system = MockFileSystem::new();
+    file_system.expect_canonicalize().returning(|path| {
+        Ok(if path.ends_with("Cargo.toml") {
+            PathBuf::from("/repo/Cargo.toml")
+        } else {
+            PathBuf::from("/repo")
+        })
+    });
+    file_system
+        .expect_open_beneath()
+        .returning(|_, _| Ok(Box::new(Cursor::new(b"[workspace]\n".to_vec()))));
+    let harness = Harness::new(
+        model,
+        ContextBudget::new(NonZeroU64::new(40).expect("nonzero budget")),
+    )
+    .repository(Repository::fixture("repo"))
+    .allow(Tool::Read)
+    .file_system(file_system)
+    .context_estimator(FlatEstimator);
+
+    // Act
+    let rejected = harness.run_once("inspect", object_schema()).await;
+
+    // Assert
+    // The 7-weight input, 2-weight tool, and three 14-weight groups reach 51
+    // of 40; flat weights leave elision nothing to shed, and the summary
+    // request then receives a tool call instead of a summary.
+    assert!(
+        matches!(
+            rejected,
+            Err(TurnError::ContextBudgetExceeded {
+                budget: 40,
+                required: 51,
+            })
+        ),
+        "{rejected:?}"
+    );
+    let requests = requests.lock().expect("requests");
+    assert_eq!(requests.len(), 4);
+    let summary_request = requests.last().expect("summary request");
+    assert_eq!(summary_request.tools(), []);
+    assert!(matches!(
+        summary_request.messages().first(),
+        Some(ModelMessage::System(instructions)) if instructions.contains("checkpointing")
+    ));
+}
+
 /// Deterministic flat weights so in-turn budget arithmetic stays readable.
 struct FlatEstimator;
 
@@ -637,4 +781,73 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
             required: 23,
         })
     ));
+}
+
+#[tokio::test]
+async fn crowded_session_history_is_shed_before_tool_output_fails_the_turn() {
+    // Arrange
+    let requests = Arc::new(Mutex::new(Vec::<ModelRequest>::new()));
+    let recorded = Arc::clone(&requests);
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        recorded.lock().expect("requests").push(request.clone());
+        let inspecting = request.prompt() == "inspect";
+        let answered = matches!(
+            request.messages().last(),
+            Some(ModelMessage::ToolResult { .. })
+        );
+        if inspecting && !answered {
+            return Ok(response_without_metadata(ModelResponse::ToolCall(
+                read_call("call_read"),
+            )));
+        }
+
+        Ok(response_without_metadata(ModelResponse::Output(json!({
+            "summary": "done"
+        }))))
+    });
+    let harness = Harness::new(
+        model,
+        ContextBudget::new(NonZeroU64::new(40).expect("nonzero budget")),
+    )
+    .store(Arc::new(MemoryStore::new()))
+    .repository(Repository::fixture("repo"))
+    .allow(Tool::Read)
+    .file_system(readable_file_system())
+    .context_estimator(FlatEstimator);
+    let mut session = harness
+        .session("crowded", object_schema())
+        .create()
+        .await
+        .expect("session");
+    session.send("first").await.expect("first turn");
+    session.send("second").await.expect("second turn");
+
+    // Act
+    let outcome = session
+        .send("inspect")
+        .await
+        .expect("shedding history should fit the tool result");
+
+    // Assert
+    // Two 14-weight history turns, the 7-weight input, and the 2-weight tool
+    // fit 40 at first; the call and result grow the request to 51, and the
+    // single tool group leaves nothing to summarize, so the oldest history
+    // turn is shed.
+    assert_eq!(outcome.output(), &json!({ "summary": "done" }));
+    let requests = requests.lock().expect("requests");
+    let user_texts = |request: &ModelRequest| {
+        request
+            .messages()
+            .iter()
+            .filter_map(|message| match message {
+                ModelMessage::User(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(requests.len(), 4);
+    assert_eq!(user_texts(&requests[2]), ["first", "second", "inspect"]);
+    assert_eq!(user_texts(&requests[3]), ["second", "inspect"]);
+    assert_eq!(outcome.report().history().replayed_turns(), 2);
 }

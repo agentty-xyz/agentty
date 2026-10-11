@@ -351,6 +351,34 @@ fn read_arguments_reject_schema_invalid_input() {
 }
 
 #[test]
+fn read_arguments_accept_integers_sent_as_strings() {
+    // Arrange
+    let stringly =
+        json!({ "action": "file", "path": "src/lib.rs", "offset": "270", "limit": " 40 " });
+    let invalid = [
+        json!({ "path": "src/lib.rs", "offset": "two" }),
+        json!({ "path": "src/lib.rs", "offset": "0" }),
+        json!({ "path": "src/lib.rs", "limit": "-3" }),
+    ];
+
+    // Act
+    let arguments =
+        serde_json::from_value::<ReadArguments>(stringly).expect("numeric strings should decode");
+    let errors = invalid.map(serde_json::from_value::<ReadArguments>);
+
+    // Assert
+    assert_eq!(
+        (arguments.offset(), arguments.limit()),
+        (Some(270), Some(40))
+    );
+    assert_eq!(
+        serde_json::to_value(&arguments).expect("arguments should serialize"),
+        json!({ "path": "src/lib.rs", "offset": 270, "limit": 40 })
+    );
+    assert!(errors.iter().all(Result::is_err));
+}
+
+#[test]
 fn write_definition_exposes_native_function_contract() {
     // Arrange and Act
     let definition = ToolDefinition::write();
@@ -362,8 +390,12 @@ fn write_definition_exposes_native_function_contract() {
     assert_eq!(
         definition.description(),
         concat!(
-            "Apply one unified diff to one repository-relative text file. To create an empty ",
-            "file, use only `--- /dev/null` and `+++ b/<path>` headers."
+            "Apply one unified diff to one repository-relative text file. Each hunk is located ",
+            "by its context and removed lines, so `@@` line numbers are only hints and counts ",
+            "are not checked; keep hunks in file order, copy context lines exactly, and include ",
+            "enough context to match one place. A hunk with only `+` lines needs a `-N,0` ",
+            "header to insert after line N. To create an empty file, use only ",
+            "`--- /dev/null` and `+++ b/<path>` headers."
         )
     );
     assert!(validator.is_valid(&json!({

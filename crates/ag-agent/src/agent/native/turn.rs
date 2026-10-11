@@ -5,7 +5,6 @@ use ag_contracts::{
     OneShotRequest, OneShotSubmission, PersonalityPromptUpdate, SessionDiffState, SessionStats,
     TurnEvent,
 };
-use ag_harness::turn::TurnReport;
 use ag_harness::{TurnControl, TurnOutcome};
 use ag_protocol::{
     AgentResponse, ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPromptAttachment,
@@ -14,7 +13,7 @@ use ag_session::AgentKind;
 use tokio_util::sync::CancellationToken;
 
 use super::activity::ActivityBridge;
-use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig};
+use super::config::{self, HarnessContext, ModelSelection, NativeHarnessConfig, UsageMeter};
 use super::failure;
 use crate::agent::{
     InstructionDeliveryMode, PromptPreparationRequest, execution_policy, parse_turn_response,
@@ -112,20 +111,6 @@ pub(crate) fn parse_outcome(
     parse_turn_response(AgentKind::Harness, &outcome.output().to_string(), profile)
 }
 
-/// Sums provider-reported input and output tokens across model requests.
-pub(crate) fn token_usage(report: &TurnReport) -> (u64, u64) {
-    report
-        .model_requests()
-        .iter()
-        .filter_map(|request| request.completion()?.usage().copied())
-        .fold((0, 0), |(input, output), usage| {
-            (
-                input + usage.input_tokens().unwrap_or(0),
-                output + usage.output_tokens().unwrap_or(0),
-            )
-        })
-}
-
 /// Runs one stateless utility prompt with the request's permissions and
 /// provider-call budget.
 ///
@@ -145,12 +130,14 @@ pub(crate) async fn run_one_shot(
     let options = config::turn_options(profile, request.permission_mode, &environment)?;
     let repository = config::repository(&request.folder, &environment)?;
     let activity_tx = request.activity_tx.clone();
+    let usage = UsageMeter::default();
     let harness = selection.harness(
         &HarnessContext {
             environment: &environment,
             provider_call_budget: request.provider_call_budget.as_ref(),
             reasoning_level: request.reasoning_level,
             repository: &repository,
+            usage: &usage,
         },
         ActivityBridge::new(move |event| {
             if let (TurnEvent::Activity(activity), Some(activity_tx)) = (event, &activity_tx) {
@@ -178,7 +165,7 @@ pub(crate) async fn run_one_shot(
     settle(&control).await?;
     let outcome = outcome?;
     let response = parse_outcome(&outcome, profile)?;
-    let (input_tokens, output_tokens) = token_usage(outcome.report());
+    let (input_tokens, output_tokens) = usage.totals();
 
     Ok(OneShotSubmission {
         response,

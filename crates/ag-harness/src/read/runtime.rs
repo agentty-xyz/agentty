@@ -8,7 +8,7 @@ use crate::file_system::FileSystem;
 use crate::tool::{ReadAction, ReadArguments, ReadSide};
 
 pub(super) const DEFAULT_RESULT_LINES: u64 = 200;
-pub(super) const MAX_READ_BYTES: usize = 50 * 1024;
+pub(super) const MAX_READ_BYTES: usize = 12 * 1024;
 pub(super) const MAX_READ_LINES: u64 = 2_000;
 pub(super) const MAX_SCAN_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_UNTRACKED_DIFF_FILES: usize = 100;

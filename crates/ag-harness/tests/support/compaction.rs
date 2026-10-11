@@ -218,6 +218,43 @@ async fn checkpoint_projects_summary_and_survives_reopen() {
 }
 
 #[tokio::test]
+async fn needs_compaction_tracks_replayed_history_against_half_the_budget() {
+    for store in stores().await {
+        // Arrange
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let model = CompactingModel::shared("pressure", &requests);
+        let registry = registry(Arc::clone(&model), budget(400));
+        let harness = Harness::from_registry(&registry, "pressure")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness
+            .session("pressure", schema())
+            .create()
+            .await
+            .expect("session");
+        let empty = session.needs_compaction().await.expect("pressure");
+        session.send("short").await.expect("short turn");
+        let light = session.needs_compaction().await.expect("pressure");
+        session.send("x".repeat(800)).await.expect("heavy turn");
+
+        // Act
+        let heavy = session.needs_compaction().await.expect("pressure");
+        session
+            .compact()
+            .await
+            .expect("compact")
+            .expect("checkpoint");
+        let compacted = session.needs_compaction().await.expect("pressure");
+
+        // Assert
+        assert!(!empty);
+        assert!(!light);
+        assert!(heavy);
+        assert!(!compacted);
+    }
+}
+
+#[tokio::test]
 async fn repeated_compaction_extends_coverage_without_gaps() {
     for store in stores().await {
         // Arrange

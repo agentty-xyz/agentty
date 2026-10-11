@@ -3,12 +3,16 @@
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
 
+use serde_json::json;
 use thiserror::Error;
 
 use crate::input::TurnInput;
-use crate::model::{ModelMessage, ModelRequest};
+use crate::model::ModelMessage;
 use crate::tool::{Tool, ToolCall, ToolDefinition};
 use crate::turn::{TurnError, TurnOptions};
+
+/// Placeholder sent instead of provider reasoning that no longer fits.
+const ELIDED_REASONING: &str = "[earlier reasoning elided to fit the context window]";
 
 /// Approximate request-weight budget for one registered model configuration.
 ///
@@ -18,9 +22,11 @@ use crate::turn::{TurnError, TurnOptions};
 /// [`crate::model::ModelCapabilities`], and revise the effective
 /// [`crate::recovery::ExecutionIdentity`] when it changes. The budget governs
 /// every provider request of a turn: the initial request keeps the most recent
-/// whole turns that fit, and requests grown by in-turn tool traffic are
-/// re-admitted before each follow-up model call. The stored byte-based replay
-/// budget still bounds how much history is loaded.
+/// whole turns that fit, and a request grown by in-turn tool traffic is
+/// refitted before each follow-up model call by eliding older tool output and
+/// reasoning, then by summarizing the turn's earlier progress, and finally by
+/// shedding the oldest replayed turns. The stored byte-based replay budget
+/// still bounds how much history is loaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextBudget {
     max_request_weight: NonZeroU64,
@@ -173,6 +179,21 @@ impl HistoryTurn {
         replay
     }
 
+    /// Returns this turn's replay with every tool result and provider
+    /// reasoning elided, keeping its calls, inputs, and answer. Projection
+    /// uses it when the full replay does not fit, so a long tool loop keeps
+    /// its outline instead of dropping out of history.
+    pub(crate) fn elided_replay(&self) -> Vec<ModelMessage> {
+        self.replay()
+            .into_iter()
+            .map(|message| {
+                let message = elide_tool_result(&message).unwrap_or(message);
+
+                elide_reasoning(&message).unwrap_or(message)
+            })
+            .collect()
+    }
+
     /// Returns a stopped turn's input and stop note, replayed when its full
     /// replay does not fit; `None` for a completed turn.
     pub(crate) fn brief_replay(&self) -> Option<Vec<ModelMessage>> {
@@ -280,7 +301,7 @@ impl TurnStop {
 /// weight left for history.
 ///
 /// The current input is weighed as the canonical user message the request
-/// sends, so this admission matches [`admit_grown_request`]'s per-message
+/// sends, so this admission matches [`request_weight`]'s per-message
 /// accounting for the same content.
 ///
 /// # Errors
@@ -314,45 +335,106 @@ pub(crate) fn admit_mandatory_content(
     Ok(budget_weight - required)
 }
 
-/// Re-admits a request that in-turn tool traffic has grown since projection.
-///
-/// # Errors
-/// Returns [`TurnError::ContextBudgetExceeded`] when the accumulated
-/// messages, advertised tool definitions, and reserved output no longer fit.
-pub(crate) fn admit_grown_request(
+/// Returns the approximate weight of sending `messages` with `tools`,
+/// including the reserved output.
+pub(crate) fn request_weight(
     estimator: &dyn ContextEstimator,
     budget: ContextBudget,
-    request: &ModelRequest,
-) -> Result<(), TurnError> {
-    let mut required = budget.reserved_output_weight();
-    for message in request.messages() {
-        required = required.saturating_add(estimator.message_weight(message));
-    }
-    for tool in request.tools() {
-        required = required.saturating_add(estimator.tool_definition_weight(tool));
-    }
-    let budget_weight = budget.max_request_weight().get();
-    if required > budget_weight {
-        return Err(TurnError::ContextBudgetExceeded {
-            budget: budget_weight,
-            required,
-        });
+    messages: &[ModelMessage],
+    tools: &[ToolDefinition],
+) -> u64 {
+    let messages_weight = messages.iter().fold(0_u64, |weight, message| {
+        weight.saturating_add(estimator.message_weight(message))
+    });
+
+    tools.iter().fold(
+        budget
+            .reserved_output_weight()
+            .saturating_add(messages_weight),
+        |weight, tool| weight.saturating_add(estimator.tool_definition_weight(tool)),
+    )
+}
+
+/// Returns `message` with a tool result's output replaced by a short note
+/// naming its size, or `None` for any other message or a result the note
+/// would not shrink. The model can rerun the tool when it needs the output.
+pub(crate) fn elide_tool_result(message: &ModelMessage) -> Option<ModelMessage> {
+    let ModelMessage::ToolResult {
+        call_id,
+        content,
+        name,
+    } = message
+    else {
+        return None;
+    };
+    let note = json!({
+        "elided": format!(
+            "{} bytes of earlier `{name}` output were removed to fit the context window; call \
+             the tool again if you still need them",
+            content.len()
+        )
+    })
+    .to_string();
+    if note.len() >= content.len() {
+        return None;
     }
 
-    Ok(())
+    Some(ModelMessage::ToolResult {
+        call_id: call_id.clone(),
+        content: note,
+        name: name.clone(),
+    })
+}
+
+/// Returns `message` with replayed provider reasoning replaced by a short
+/// placeholder, or `None` when it carries no reasoning longer than that.
+/// The field stays present for providers that expect reasoning on every
+/// assistant tool call.
+pub(crate) fn elide_reasoning(message: &ModelMessage) -> Option<ModelMessage> {
+    let bulky =
+        |reasoning: Option<&str>| reasoning.is_some_and(|text| text.len() > ELIDED_REASONING.len());
+    let elide_call = |call: &ToolCall| {
+        if bulky(call.reasoning_content()) {
+            call.with_reasoning_content(Some(ELIDED_REASONING.to_string()))
+        } else {
+            call.clone()
+        }
+    };
+
+    match message {
+        ModelMessage::AssistantReasoning {
+            content,
+            reasoning_content,
+        } if bulky(Some(reasoning_content)) => Some(ModelMessage::AssistantReasoning {
+            content: content.clone(),
+            reasoning_content: ELIDED_REASONING.to_string(),
+        }),
+        ModelMessage::AssistantToolCall(call) if bulky(call.reasoning_content()) => {
+            Some(ModelMessage::AssistantToolCall(elide_call(call)))
+        }
+        ModelMessage::AssistantToolCalls(calls)
+            if calls.iter().any(|call| bulky(call.reasoning_content())) =>
+        {
+            Some(ModelMessage::AssistantToolCalls(
+                calls.iter().map(elide_call).collect(),
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Flattens the most recent finished turns whose combined weight fits
 /// `available_weight`, dropping every turn older than the first that does
-/// not, so a turn's tool groups are never split. A stopped turn whose full
-/// replay does not fit keeps only its input and stop note. Returns the
-/// projected messages with the number of loaded turns that projection
-/// evicted.
+/// not, so a turn's tool groups are never split. A turn whose full replay
+/// does not fit is replayed with its tool output and reasoning elided, and a
+/// stopped turn that still does not fit keeps only its input and stop note.
+/// Returns the projected messages of each kept turn, oldest first, with the
+/// number of loaded turns that projection evicted.
 pub(crate) fn select_recent_turns(
     estimator: &dyn ContextEstimator,
     turns: &VecDeque<HistoryTurn>,
     available_weight: u64,
-) -> (Vec<ModelMessage>, usize) {
+) -> (Vec<Vec<ModelMessage>>, usize) {
     let weigh = |messages: &[ModelMessage]| {
         messages.iter().fold(0_u64, |weight, message| {
             weight.saturating_add(estimator.message_weight(message))
@@ -365,8 +447,12 @@ pub(crate) fn select_recent_turns(
         let replay = if weigh(&full) <= remaining {
             Some(full)
         } else {
-            turn.brief_replay()
-                .filter(|brief| weigh(brief) <= remaining)
+            Some(turn.elided_replay())
+                .filter(|elided| weigh(elided) <= remaining)
+                .or_else(|| {
+                    turn.brief_replay()
+                        .filter(|brief| weigh(brief) <= remaining)
+                })
         };
         let Some(replay) = replay else {
             break;
@@ -375,9 +461,9 @@ pub(crate) fn select_recent_turns(
         kept.push(replay);
     }
     let dropped_turns = turns.len().saturating_sub(kept.len());
-    let messages = kept.into_iter().rev().flatten().collect();
+    kept.reverse();
 
-    (messages, dropped_turns)
+    (kept, dropped_turns)
 }
 
 /// Returns the definitions the engine advertises for these options, in order.

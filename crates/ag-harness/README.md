@@ -62,8 +62,9 @@ Every request replays the most recent finished turns that fit the context budget
 provider never holds conversation state. Each model response and tool result is stored
 as soon as it finishes. A failed or interrupted turn replays what it recorded plus a
 note naming why it stopped and any writes or commands whose outcome is unknown; when it
-does not fit, only its input and note are replayed. Sessions run concurrently, with one
-active turn per session. The library never picks a database location for you.
+does not fit, its tool output and reasoning are elided, and a stopped turn that still
+does not fit replays only its input and note. Sessions run concurrently, with one active
+turn per session. The library never picks a database location for you.
 
 ## Turns
 
@@ -94,9 +95,11 @@ let outcome = session
   then wait on `settled()`, independently of the caller's future, until persistence,
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
-- **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn:
-  once tool traffic grows the next request past the budget, the turn fails with
-  `TurnError::ContextBudgetExceeded`.
+- **Turns have no tool-call limit.** When tool traffic grows the next request past the
+  `ContextBudget`, the harness refits the outgoing copy: it elides older tool output,
+  then older provider reasoning, then replaces the turn's earlier steps with a
+  model-written progress summary. Stored messages stay intact. The turn fails with
+  `TurnError::ContextBudgetExceeded` only when nothing more can be shed.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.
@@ -108,6 +111,13 @@ PNG/JPEG images for models that declare image support.
 | `Tool::Read`  | Read, list, search, and show files | A `Repository`                                |
 | `Tool::Write` | Apply one bounded unified diff     | A `Repository`                                |
 | `Tool::Bash`  | Run a command in a sandbox         | `TurnOptions::with_bash(BashConfig)` per turn |
+
+Write hunks are located by their context and removed lines, tolerating trailing and
+surrounding whitespace; `@@` line numbers are only hints and counts are not checked.
+Exact matches are preferred over whitespace-tolerant ones; hunks matching several places
+equally well, or matching nearer the hint only after ignoring whitespace, are rejected.
+A hunk without context or removed lines needs a `-N,0` header unless the target is
+empty.
 
 `Repository::new` requires a trusted Git executable outside the worktree. Comparisons
 (`diff`, `show` of the base side) additionally need a host-pinned `ComparisonBase` in
@@ -168,7 +178,8 @@ let harness = Harness::from_registry(&models, "review-model")?;
   the most recent whole turns that fit and fails before any provider call when mandatory
   content cannot fit. `TurnReport::history` says what was replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
-  `session.compact()` stores a schema-validated summary that later turns replay first.
+  `session.compact()` stores a schema-validated summary that later turns replay first;
+  `session.needs_compaction()` reports when stored history fills half the budget.
 - Bump the registration revision whenever configuration or credentials scope changes.
   Never put secrets in it.
 

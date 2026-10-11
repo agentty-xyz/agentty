@@ -606,20 +606,17 @@ impl Record {
             })
         {
             let stop = self.stop(turn);
-            let mut messages = turn.messages.as_slice();
-            let mut bytes = retained_bytes(messages);
-            if bytes > remaining && stop.is_some() {
-                messages = &messages[..messages.len().min(1)];
-                bytes = retained_bytes(messages);
-            }
+            let messages = if retained_bytes(&turn.messages) <= remaining {
+                turn.messages.clone()
+            } else {
+                brief_messages(&turn.messages, stop.is_some())
+            };
+            let bytes = retained_bytes(&messages);
             if bytes > remaining {
                 break;
             }
             remaining -= bytes;
-            turns.push(HistoryTurn {
-                messages: messages.to_vec(),
-                stop,
-            });
+            turns.push(HistoryTurn { messages, stop });
         }
         turns.reverse();
 
@@ -690,6 +687,21 @@ fn retained_bytes(messages: &[ModelMessage]) -> usize {
     messages.iter().fold(0_usize, |bytes, message| {
         bytes.saturating_add(message.retained_bytes())
     })
+}
+
+/// Returns what history keeps of a turn whose messages do not fit the byte
+/// budget: its input, followed by the final answer of a completed turn.
+fn brief_messages(messages: &[ModelMessage], stopped: bool) -> Vec<ModelMessage> {
+    let answer = (!stopped)
+        .then(|| messages.get(1..).and_then(<[ModelMessage]>::last))
+        .flatten();
+
+    messages
+        .first()
+        .into_iter()
+        .chain(answer)
+        .cloned()
+        .collect()
 }
 
 fn lost(owner: &TurnOwner) -> SessionError {

@@ -647,6 +647,19 @@ impl ModelRequest {
         self.messages
     }
 
+    /// Returns this request with `messages` in place of its conversation,
+    /// keeping the schema, tools, prompt, and reasoning settings.
+    pub(crate) fn with_messages(&self, messages: Vec<ModelMessage>) -> Self {
+        Self {
+            lifecycle_observed: self.lifecycle_observed,
+            messages,
+            model_reasoning_effort: self.model_reasoning_effort,
+            prompt: self.prompt.clone(),
+            schema: self.schema.clone(),
+            tools: self.tools.clone(),
+        }
+    }
+
     fn record(&mut self, message: ModelMessage) -> &ModelMessage {
         self.messages.push(message);
 

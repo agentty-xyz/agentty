@@ -138,11 +138,17 @@ fn declared_context_limits_preserve_proactive_compaction_budgets() {
         assert_eq!(limits.input_token_budget(), expected.2);
     }
     for model in AgentKind::Harness.models() {
+        let expected = match model {
+            AgentModel::KimiK26 => 182_144,
+            AgentModel::QwenPlus => 111_616,
+            _ => 700_000,
+        };
         assert_eq!(
             model
                 .context_limits()
                 .map(ModelContextLimits::input_token_budget),
-            Some(111_616)
+            Some(expected),
+            "{model:?}"
         );
     }
     for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {

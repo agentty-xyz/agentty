@@ -491,13 +491,14 @@ pub enum TurnError {
     #[error(transparent)]
     Write(#[from] WriteError),
     /// Mandatory content exceeds the effective model's declared context
-    /// budget, before any history is considered.
-    #[error("mandatory request content weighs {required} but the model context budget is {budget}")]
+    /// budget before any history is considered, or a turn's grown request
+    /// still exceeds it after eliding and summarizing everything allowed.
+    #[error("request content weighs {required} but the model context budget is {budget}")]
     ContextBudgetExceeded {
         /// Total declared budget in approximate weight units.
         budget: u64,
-        /// Approximate weight of instructions, current input, advertised tool
-        /// definitions, and reserved output.
+        /// Approximate weight of the request that did not fit, including
+        /// reserved output.
         required: u64,
     },
 }

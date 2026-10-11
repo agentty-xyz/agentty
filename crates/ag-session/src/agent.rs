@@ -166,28 +166,28 @@ define_model_catalog! {
             id: "muse-spark-1.3",
             description: "Muse Spark model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::HARNESS_1M),
         },
         /// Kimi model backed by `kimi-k3`.
         KimiK3 = 13 => {
             id: "kimi-k3",
             description: "Latest Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::HARNESS_1M),
         },
         /// Kimi model backed by `kimi-k2.6`.
         KimiK26 = 14 => {
             id: "kimi-k2.6",
             description: "Previous Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::HARNESS_256K),
         },
         /// Qwen model backed by `qwen3.8-max`.
         Qwen38Max = 15 => {
             id: "qwen3.8-max",
             description: "Most capable Qwen model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::HARNESS_1M),
         },
         /// Qwen model backed by `qwen-plus`.
         QwenPlus = 16 => {
@@ -218,11 +218,24 @@ impl ModelContextLimits {
         context_window_tokens: 128_000,
         input_headroom_tokens: 8_000,
     };
-    /// Conservative window shared by harness models, whose provider catalog
-    /// declares none; the headroom matches the harness CLI's reserved output.
+    /// Conservative window for a harness model without a published window;
+    /// the headroom matches the harness CLI's reserved output.
     const HARNESS: Self = Self {
         context_window_tokens: 128_000,
         input_headroom_tokens: 16_384,
+    };
+    /// Harness model with a published window of about one million tokens.
+    /// The harness weighs requests at four bytes per unit, which undercounts
+    /// tokens for dense code, so the headroom also absorbs estimate error.
+    const HARNESS_1M: Self = Self {
+        context_window_tokens: 1_000_000,
+        input_headroom_tokens: 300_000,
+    };
+    /// Harness model with a published 256K-token window, reserving the same
+    /// share for output and estimate error as [`Self::HARNESS_1M`].
+    const HARNESS_256K: Self = Self {
+        context_window_tokens: 262_144,
+        input_headroom_tokens: 80_000,
     };
 
     /// Returns the input-token budget after reserving output and overhead.

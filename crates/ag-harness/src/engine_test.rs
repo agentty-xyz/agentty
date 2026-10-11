@@ -29,6 +29,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         context_estimator: &HeuristicContextEstimator,
         effects: Effects::default(),
         file_system: &file_system,
+        history_turns: Vec::new(),
         lifecycle: &lifecycle,
         model: &model,
         model_reasoning_effort: Some(ReasoningEffort::Low),

@@ -98,7 +98,7 @@ async fn bounds_serialized_read_result_with_escaping_heavy_content() {
 #[tokio::test]
 async fn rejects_one_escaping_heavy_line_that_cannot_fit_encoded_result() {
     // Arrange
-    let tool = ReadTool::new(file_system("\u{1}".repeat(20_000)), "repo".into());
+    let tool = ReadTool::new(file_system("\u{1}".repeat(MAX_READ_BYTES)), "repo".into());
     let arguments = arguments(serde_json::json!({ "path": "input.txt" }));
 
     // Act

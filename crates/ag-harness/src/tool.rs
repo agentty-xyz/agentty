@@ -33,10 +33,15 @@ const MAX_TOOL_CALL_ID_BYTES: usize = 1024;
 /// Corrective feedback for a read path that is not a safe repository path.
 const INVALID_READ_PATH: &str = "path must be repository-relative without empty, `.`, `..`, or \
                                  `.git` components; omit it to inspect the repository root";
-pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
+/// Maximum serialized read result. Every result stays in the turn's request
+/// until compaction, so paging small results keeps long tool loops affordable.
+pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 16 * 1024;
 const WRITE_DESCRIPTION: &str = concat!(
-    "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
-    "only `--- /dev/null` and `+++ b/<path>` headers."
+    "Apply one unified diff to one repository-relative text file. Each hunk is located by its ",
+    "context and removed lines, so `@@` line numbers are only hints and counts are not checked; ",
+    "keep hunks in file order, copy context lines exactly, and include enough context to match ",
+    "one place. A hunk with only `+` lines needs a `-N,0` header to insert after line N. To ",
+    "create an empty file, use only `--- /dev/null` and `+++ b/<path>` headers."
 );
 const WRITE_NAME: &str = "write";
 
@@ -308,6 +313,15 @@ impl ToolCall {
     /// tool call. This sensitive content is redacted from debug output.
     pub fn reasoning_content(&self) -> Option<&str> {
         self.reasoning_content.as_deref()
+    }
+
+    /// Returns a copy of this call carrying `reasoning_content` instead.
+    pub(crate) fn with_reasoning_content(&self, reasoning_content: Option<String>) -> Self {
+        Self {
+            arguments: self.arguments.clone(),
+            id: self.id.clone(),
+            reasoning_content,
+        }
     }
 
     pub(crate) fn read(
@@ -603,19 +617,33 @@ where
     Ok(patch)
 }
 
+/// Accepts a positive integer as a JSON number or as a string of digits,
+/// which models such as `qwen3.8-max` send for line offsets and limits.
 fn deserialize_optional_positive_integer<'de, D>(
     deserializer: D,
 ) -> Result<Option<NonZeroU64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let Some(number) = Option::<Number>::deserialize(deserializer)? else {
+    let Some(integer) = Option::<JsonInteger>::deserialize(deserializer)? else {
         return Ok(None);
     };
-    parse_positive_json_integer(&number.to_string())
+    let text = match integer {
+        JsonInteger::Number(number) => number.to_string(),
+        JsonInteger::Text(text) => text.trim().to_string(),
+    };
+    parse_positive_json_integer(&text)
         .and_then(NonZeroU64::new)
         .map(Some)
         .ok_or_else(|| de::Error::custom("number must be an integer from 1 through u64::MAX"))
+}
+
+/// A JSON integer argument, possibly sent as a string.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum JsonInteger {
+    Number(Number),
+    Text(String),
 }
 
 /// Bounds a read path before it can be echoed in corrective feedback; other

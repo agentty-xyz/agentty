@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ag_harness::bash::{BashConfig, CommandTermination, UnsandboxedExecutor};
+use ag_harness::lifecycle::ModelResponseType;
 use ag_harness::model::{
     ContextBudget, ContextEstimator, HeuristicContextEstimator, ModelCapabilities, ModelClient,
     ModelMessage, ModelRegistry,
@@ -674,6 +675,102 @@ async fn test_compaction_checkpoint() -> Result<(), DynError> {
                 provider.name(),
                 round,
                 compaction_checkpoint(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
+// In-turn refitting: elision and progress summaries
+// ---------------------------------------------------------------------------
+
+async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
+    let codes = [
+        "amber-17",
+        "basalt-29",
+        "cobalt-31",
+        "dune-43",
+        "ember-59",
+        "fjord-61",
+        "granite-73",
+        "harbor-89",
+    ];
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    for (index, code) in codes.iter().enumerate() {
+        let seed = u8::try_from(index)?;
+        let mut lines: Vec<String> = (0..72).map(|line| filler(seed + line, 80)).collect();
+        lines.insert(36, format!("The code word of this part is {code}."));
+        std::fs::write(
+            root.join(format!("part{}.txt", index + 1)),
+            lines.join("\n"),
+        )?;
+    }
+    // Four recent reads alone outweigh the budget, so the turn must elide
+    // older results and then summarize its progress more than once.
+    let budget = ContextBudget::new(NonZeroU64::new(6_000).ok_or("budget")?);
+    let harness = Harness::new(provider.client()?, budget)
+        .repository(Repository::new(&root, GIT_EXECUTABLE)?)
+        .allow(Tool::Read);
+    provider.pace().await;
+    let outcome = harness
+        .run_once(
+            "Read part1.txt through part8.txt in order with the read tool, one file per call and \
+             never several in one response. Each file contains one sentence naming its code word. \
+             After reading all eight, set answer to the eight code words in file order, separated \
+             by commas.",
+            answer_schema()?,
+        )
+        .await?;
+    let found = answer(outcome.output());
+    let missing: Vec<&str> = codes
+        .iter()
+        .copied()
+        .filter(|code| !found.contains(code))
+        .collect();
+    let summaries = outcome
+        .report()
+        .model_requests()
+        .iter()
+        .filter(|request| request.response_type() == ModelResponseType::Output)
+        .count()
+        .saturating_sub(1);
+    let reads = outcome.report().tool_calls().len();
+    if summaries == 0 {
+        return Err(format!("no progress summary after {reads} reads: {found}").into());
+    }
+    if !missing.is_empty() {
+        return Err(format!(
+            "lost code words {missing:?} across {summaries} summaries and {reads} reads: {found}"
+        )
+        .into());
+    }
+
+    Ok(format!("summaries={summaries} reads={reads}"))
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_long_tool_loop_refit() -> Result<(), DynError> {
+    let mut report = Report::new("long_tool_loop");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                provider.name(),
+                round,
+                long_tool_loop(provider).await,
                 started,
             );
         }

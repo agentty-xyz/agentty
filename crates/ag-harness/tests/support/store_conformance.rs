@@ -615,6 +615,76 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
 }
 
 #[tokio::test]
+async fn journaled_backends_keep_input_and_answer_of_a_completed_turn_over_the_byte_budget() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("long", schema()), None, 12)
+            .await
+            .expect("create");
+        let older = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "long",
+            &TurnInput::from("old"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("older turn");
+        store
+            .complete_turn(older.owner(), &[ModelMessage::Assistant("ok".to_string())])
+            .await
+            .expect("complete older");
+        drop(older);
+        let long = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "long",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("long turn");
+        store
+            .append_messages(
+                long.owner(),
+                &[
+                    ModelMessage::AssistantToolCall(write_call("call")),
+                    ModelMessage::ToolResult {
+                        call_id: "call".to_string(),
+                        content: "x".repeat(64),
+                        name: "write".to_string(),
+                    },
+                ],
+            )
+            .await
+            .expect("append");
+        store
+            .complete_turn(long.owner(), &[ModelMessage::Assistant("done".to_string())])
+            .await
+            .expect("complete long");
+        drop(long);
+
+        // Act
+        let loaded = store.load_session("long").await.expect("history");
+
+        // Assert
+        // The long turn's input and answer take 8 of the 12 bytes, so the
+        // older 5-byte turn no longer fits.
+        assert_eq!(
+            loaded.turns,
+            vec![HistoryTurn {
+                messages: vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::Assistant("done".to_string()),
+                ],
+                stop: None,
+            }]
+        );
+    }
+}
+
+#[tokio::test]
 async fn all_backends_preserve_ordered_image_input_in_history() {
     // Arrange
     for store in stores().await {

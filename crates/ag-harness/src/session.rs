@@ -149,6 +149,8 @@ struct TurnConfigurationRow {
 }
 
 struct TurnSizeRow {
+    final_bytes: i64,
+    final_position: i64,
     input_bytes: i64,
     retained_bytes: i64,
     stopped: bool,
@@ -1504,9 +1506,10 @@ pub struct LoadedSession {
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
     /// Recent finished turns after the checkpoint boundary, oldest first.
-    /// A completed turn carries all its messages. A failed or interrupted
-    /// turn carries its persisted messages and stop record, or only its input
-    /// when its messages do not fit the byte budget.
+    /// A completed turn carries all its messages, or only its input and
+    /// final answer when its messages do not fit the byte budget. A failed or
+    /// interrupted turn carries its persisted messages and stop record, or
+    /// only its input when its messages do not fit.
     pub turns: Vec<HistoryTurn>,
 }
 
@@ -2000,7 +2003,13 @@ ORDER BY message.turn_position, message.message_position
     let mut turns = Vec::<(i64, HistoryTurn)>::new();
 
     for row in rows {
-        if row.message_position != 0 && brief_turns.contains(&row.turn_position) {
+        let omitted = brief_turns
+            .iter()
+            .find(|(turn_position, _)| *turn_position == row.turn_position)
+            .is_some_and(|(_, kept_position)| {
+                row.message_position != 0 && row.message_position != *kept_position
+            });
+        if omitted {
             continue;
         }
         let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
@@ -2090,13 +2099,15 @@ fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut T
 }
 
 /// Returns the oldest turn position whose most recent finished turns fit
-/// `max_history_bytes`, and the stopped turns that fit only as their input.
+/// `max_history_bytes`, and the turns that fit only in brief, each with the
+/// one message position kept besides the input: a completed turn keeps its
+/// final answer and a stopped turn only its input.
 async fn history_window(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Option<(i64, Vec<i64>)>, SessionError> {
+) -> Result<Option<(i64, Vec<(i64, i64)>)>, SessionError> {
     let mut retained_bytes = 0_usize;
     let mut oldest_turn = None;
     let mut brief_turns = Vec::new();
@@ -2118,12 +2129,20 @@ async fn history_window(
                 })
             };
             let full_bytes = retained_bytes.saturating_add(decode(turn_size.retained_bytes)?);
-            let input_bytes = retained_bytes.saturating_add(decode(turn_size.input_bytes)?);
+            let (brief_bytes, kept_position) = if turn_size.stopped {
+                (decode(turn_size.input_bytes)?, 0)
+            } else {
+                (
+                    decode(turn_size.input_bytes)?.saturating_add(decode(turn_size.final_bytes)?),
+                    turn_size.final_position,
+                )
+            };
+            let brief_bytes = retained_bytes.saturating_add(brief_bytes);
             if full_bytes <= max_history_bytes {
                 retained_bytes = full_bytes;
-            } else if turn_size.stopped && input_bytes <= max_history_bytes {
-                retained_bytes = input_bytes;
-                brief_turns.push(turn_size.turn_position);
+            } else if brief_bytes <= max_history_bytes {
+                retained_bytes = brief_bytes;
+                brief_turns.push((turn_size.turn_position, kept_position));
             } else {
                 break 'pages;
             }
@@ -2158,6 +2177,13 @@ SELECT message.turn_position AS "turn_position!: i64",
        SUM(message.retained_bytes) AS "retained_bytes!: i64",
        SUM(CASE WHEN message.message_position = 0 THEN message.retained_bytes ELSE 0 END)
            AS "input_bytes!: i64",
+       MAX(message.message_position) AS "final_position!: i64",
+       SUM(CASE WHEN message.message_position = (
+               SELECT MAX(latest.message_position)
+               FROM session_message AS latest
+               WHERE latest.session_id = message.session_id
+                 AND latest.turn_position = message.turn_position)
+           THEN message.retained_bytes ELSE 0 END) AS "final_bytes!: i64",
        MAX(turn.status <> 'completed') AS "stopped!: bool"
 FROM session_message AS message
 JOIN session_turn AS turn

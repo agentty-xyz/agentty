@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::future::{Future, IntoFuture};
 use std::num::NonZeroUsize;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -33,6 +34,9 @@ use crate::turn::{HistoryActivity, TurnError, TurnOptions, TurnOutcome};
 use crate::write_journal::WriteRecord;
 
 const DEFAULT_MAX_HISTORY_BYTES: usize = 256 * 1024;
+/// Percent of the request capacity that replayed history may fill before
+/// [`Session::needs_compaction`] asks the host to compact.
+const COMPACTION_HISTORY_PERCENT: u64 = 50;
 /// Former default per-turn tool-call limit, still hashed into host-request
 /// fingerprints so requests recorded before its removal stay recognizable.
 const LEGACY_FINGERPRINT_MAX_TOOL_CALLS: usize = 8;
@@ -195,6 +199,37 @@ impl Session {
         self.checkpoint = Some(checkpoint.clone());
 
         Ok(Some(checkpoint))
+    }
+
+    /// Returns whether the stored finished history the next turn would
+    /// replay, including the checkpoint summary, outweighs half of the
+    /// request budget, so the host should [`Self::compact`] it to leave the
+    /// next turn's tool loop room. Always `false` without an uncovered turn.
+    ///
+    /// # Errors
+    /// Returns [`SessionError`] when the session cannot be loaded.
+    pub async fn needs_compaction(&self) -> Result<bool, SessionError> {
+        let loaded = self.database.load_session(&self.id).await?;
+        if loaded.turns.is_empty() {
+            return Ok(false);
+        }
+        let estimator = self.harness.context_estimator.as_ref();
+        let budget = self.harness.context_budget;
+        let history: Vec<ModelMessage> = loaded
+            .checkpoint
+            .iter()
+            .map(SessionCheckpoint::history_message)
+            .chain(loaded.turns.iter().flat_map(HistoryTurn::replay))
+            .collect();
+        let history_weight = context::request_weight(estimator, budget, &history, &[])
+            .saturating_sub(budget.reserved_output_weight());
+        let request_capacity = budget
+            .max_request_weight()
+            .get()
+            .saturating_sub(budget.reserved_output_weight());
+
+        Ok(history_weight.saturating_mul(100)
+            > request_capacity.saturating_mul(COMPACTION_HISTORY_PERCENT))
     }
 
     /// Returns the checkpoint this handle currently projects ahead of recent
@@ -473,11 +508,12 @@ impl Session {
         }
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         self.history.replace(turns);
-        let (request, retained_messages, history) =
+        let (request, retained_messages, history, history_turns) =
             self.build_request(input, options, available_history_weight);
         let journal = guard.write_journal();
         let mut engine = self.harness.engine(options);
         engine.effects = effects;
+        engine.history_turns = history_turns;
         let result = tokio::select! {
             biased;
             () = cancelled(control) => return Err(TurnError::Cancelled.into()),
@@ -526,14 +562,14 @@ impl Session {
 
     /// Projects the checkpoint summary and loaded uncovered history into one
     /// request under the effective context budget, keeping the count of
-    /// retained messages that precede new output and the observable
-    /// projection facts.
+    /// retained messages that precede new output, the observable projection
+    /// facts, and each replayed turn's message range.
     fn build_request(
         &self,
         input: TurnInput,
         options: &TurnOptions,
         available_history_weight: u64,
-    ) -> (ModelRequest, usize, HistoryActivity) {
+    ) -> (ModelRequest, usize, HistoryActivity, Vec<Range<usize>>) {
         let estimator = self.harness.context_estimator.as_ref();
         let checkpoint_message = self
             .checkpoint
@@ -553,23 +589,29 @@ impl Session {
             }
             None => (None, available_history_weight),
         };
-        let (mut messages, evicted_turns) =
+        let (turns, evicted_turns) =
             context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
         let history = HistoryActivity::new(
             checkpoint_message.is_some(),
             evicted_turns,
             loaded_turns.saturating_sub(evicted_turns),
         );
-        if let Some(checkpoint_message) = checkpoint_message {
-            messages.insert(0, checkpoint_message);
-        }
-        if let Some(system_prompt) = &self.system_prompt {
-            messages.insert(0, ModelMessage::System(system_prompt.clone()));
+        let mut messages: Vec<ModelMessage> = self
+            .system_prompt
+            .iter()
+            .map(|system_prompt| ModelMessage::System(system_prompt.clone()))
+            .chain(checkpoint_message)
+            .collect();
+        let mut history_turns = Vec::with_capacity(turns.len());
+        for turn in turns {
+            let start = messages.len();
+            messages.extend(turn);
+            history_turns.push(start..messages.len());
         }
         let retained_messages = messages.len();
         let request = ModelRequest::with_history(messages, input, options.schema().clone());
 
-        (request, retained_messages, history)
+        (request, retained_messages, history, history_turns)
     }
 
     /// Rejects image-bearing input the history budget would evict at once,
@@ -1289,6 +1331,7 @@ impl Harness {
             context_estimator: self.context_estimator.as_ref(),
             effects: Effects::default(),
             file_system: &self.file_system,
+            history_turns: Vec::new(),
             lifecycle: &self.lifecycle,
             model: &self.model,
             model_reasoning_effort: self.model_reasoning_effort,

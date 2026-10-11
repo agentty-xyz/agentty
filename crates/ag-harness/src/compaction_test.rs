@@ -216,10 +216,32 @@ fn render_source_carries_forward_every_message_kind_without_reasoning() {
     assert!(source.contains("system: policy"));
     assert!(source.contains("user: plain"));
     assert!(source.contains(&format!("[image image/png sha256:{digest}]")));
-    assert!(source.contains("[tool call read]"));
-    assert!(source.contains("[tool calls read]"));
+    assert!(source.contains("[tool call read {"));
+    assert!(source.contains("\"path\":\"a\""));
+    assert!(source.contains("[tool calls read {"));
+    assert!(source.contains("\"path\":\"b\""));
     assert!(source.contains("tool read: contents"));
     assert!(source.contains("{\"answer\":\"done\"}"));
     assert!(source.contains("{\"answer\":\"final\"}"));
     assert!(!source.contains("secret chain"));
+}
+
+#[test]
+fn render_source_bounds_tool_payloads() {
+    // Arrange
+    let turn = vec![ModelMessage::ToolResult {
+        call_id: "call-1".to_string(),
+        content: format!("{}é{}", "a".repeat(1_023), "b".repeat(4_000)),
+        name: "bash".to_string(),
+    }];
+
+    // Act
+    let source = render_source(None, &[turn]);
+
+    // Assert
+    assert!(source.contains(&format!(
+        "tool bash: {}… [4002 more bytes omitted]",
+        "a".repeat(1_023)
+    )));
+    assert!(!source.contains("bb"));
 }

@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -19,6 +20,7 @@ use crate::turn::{
     ModelRequestActivity, ToolActivity, TurnError, TurnOptions, TurnOutcome, TurnReport,
     sanitize_report_text, sanitized_completion_metadata,
 };
+use crate::turn_window::{Fit, TurnWindow};
 use crate::write::{WriteError, WriteTool};
 
 /// Shared execution dependencies and the immutable configuration for one turn.
@@ -27,6 +29,8 @@ pub(crate) struct Engine<'a> {
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
+    /// Message range of each replayed session history turn, oldest first.
+    pub(crate) history_turns: Vec<Range<usize>>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
     pub(crate) model: &'a Arc<dyn Model>,
     pub(crate) model_reasoning_effort: Option<ReasoningEffort>,
@@ -44,13 +48,26 @@ impl Engine<'_> {
         let started_at = Instant::now();
         let recorder = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
+        let mut window = TurnWindow::new(&request).with_history_turns(self.history_turns.clone());
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut tool_calls = Vec::new();
 
         loop {
+            // Tool traffic grows the request between model calls; refitting
+            // elides or summarizes earlier steps in the outgoing copy and
+            // fails typed only when nothing more can be shed.
+            let outgoing = self
+                .fit_request(
+                    &mut window,
+                    &request,
+                    &mut model_request_index,
+                    &mut model_requests,
+                    turn_id,
+                )
+                .await?;
             let (response, activity, reasoning_content) = self
-                .complete_model_request(&request, model_request_index, turn_id)
+                .complete_model_request(&outgoing, model_request_index, turn_id)
                 .await?;
             model_request_index = model_request_index.saturating_add(1);
             model_requests.push(activity);
@@ -86,10 +103,48 @@ impl Engine<'_> {
                     }
                 }
             }
-            // Tool traffic grows the request between model calls; a grown
-            // request that no longer fits fails typed here instead of
-            // overflowing the provider context.
-            context::admit_grown_request(self.context_estimator, self.context_budget, &request)?;
+        }
+    }
+
+    /// Returns the outgoing request for `request`, generating progress
+    /// summaries through the model while elision alone cannot fit it, then
+    /// shedding the oldest replayed history turns once no step is left to
+    /// summarize.
+    async fn fit_request(
+        &self,
+        window: &mut TurnWindow,
+        request: &ModelRequest,
+        model_request_index: &mut u64,
+        model_requests: &mut Vec<ModelRequestActivity>,
+        turn_id: Option<LifecycleId>,
+    ) -> Result<ModelRequest, TurnError> {
+        loop {
+            let required = match window.fit(self.context_estimator, self.context_budget, request) {
+                Fit::Fits(outgoing) => return Ok(outgoing),
+                Fit::NeedsSummary { required } => required,
+            };
+            let exceeded = TurnError::ContextBudgetExceeded {
+                budget: self.context_budget.max_request_weight().get(),
+                required,
+            };
+            let Some(summary_request) =
+                window.summary_request(self.context_estimator, self.context_budget, request)
+            else {
+                if window.shed_history_turn() {
+                    continue;
+                }
+
+                return Err(exceeded);
+            };
+            let (response, activity, _) = self
+                .complete_model_request(&summary_request.request, *model_request_index, turn_id)
+                .await?;
+            *model_request_index = model_request_index.saturating_add(1);
+            model_requests.push(activity);
+            let Some(summary) = response.output() else {
+                return Err(exceeded);
+            };
+            window.record_summary(request, &summary_request, summary);
         }
     }
 

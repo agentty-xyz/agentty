@@ -4,15 +4,19 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
-use ag_harness::model::{ModelRequest, ReasoningEffort};
+use ag_harness::model::{ModelClient, ModelRequest, ReasoningEffort};
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::{Model, TurnInput};
 use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentModel;
+use serde_json::json;
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::{
-    BudgetedModel, ModelSelection, NativeHarnessConfig, ResumeOnlyModel, bash_environment,
-    default_model, output_schema, reasoning_effort, repository, turn_options, unicode_environment,
+    MeteredModel, ModelSelection, NativeHarnessConfig, ResumeOnlyModel, UsageMeter,
+    bash_environment, default_model, output_schema, reasoning_effort, repository, turn_options,
+    unicode_environment,
 };
 
 /// Builds an environment snapshot from string pairs.
@@ -292,17 +296,23 @@ fn reasoning_levels_map_one_to_one() {
     }
 }
 
+/// Builds a Muse client sending requests to `base_url`.
+fn muse_client(base_url: &str) -> ModelClient {
+    ModelConfiguration::new(ModelProvider::Muse, "muse-spark-1.3")
+        .base_url(base_url)
+        .client_from_environment(|_| Ok("key".to_string()))
+        .expect("client should build")
+}
+
 #[tokio::test]
 /// Delegates validation and metadata, and stops when the budget is spent.
-async fn budgeted_model_charges_before_each_request() {
+async fn metered_model_charges_before_each_request() {
     // Arrange
-    let client = ModelConfiguration::new(ModelProvider::Muse, "muse-spark-1.3")
-        .base_url("http://127.0.0.1:9")
-        .client_from_environment(|_| Ok("key".to_string()))
-        .expect("client should build");
-    let model = BudgetedModel {
-        budget: ProviderCallBudget::new(0),
-        inner: client,
+    let usage = UsageMeter::default();
+    let model = MeteredModel {
+        budget: Some(ProviderCallBudget::new(0)),
+        inner: muse_client("http://127.0.0.1:9"),
+        usage: usage.clone(),
     };
     let schema = output_schema(ProtocolRequestProfile::UtilityPrompt).expect("schema");
 
@@ -325,4 +335,58 @@ async fn budgeted_model_charges_before_each_request() {
         error.to_string().contains("provider call limit reached"),
         "{error}"
     );
+    assert_eq!(usage.totals(), (0, 0));
+}
+
+#[tokio::test]
+/// Sums reported tokens across requests into every clone of the meter, and
+/// counts missing usage or a missing output count as zero.
+async fn metered_model_records_reported_usage() {
+    // Arrange
+    let server = MockServer::start().await;
+    for (marker, usage) in [
+        (
+            "First",
+            Some(json!({"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37})),
+        ),
+        (
+            "Second",
+            Some(json!({"prompt_tokens": 12, "total_tokens": 12})),
+        ),
+        ("Third", None),
+    ] {
+        let mut body = json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": json!({"answer": "Done"}).to_string()}
+            }]
+        });
+        if let Some(usage) = usage {
+            body["usage"] = usage;
+        }
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(body_string_contains(marker))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+    }
+    let usage = UsageMeter::default();
+    let model = MeteredModel {
+        budget: None,
+        inner: muse_client(&server.uri()),
+        usage: usage.clone(),
+    };
+    let schema = output_schema(ProtocolRequestProfile::UtilityPrompt).expect("schema");
+
+    // Act
+    for prompt in ["First", "Second", "Third"] {
+        model
+            .complete(ModelRequest::new(prompt, schema.clone()))
+            .await
+            .expect("the scripted provider should answer");
+    }
+
+    // Assert
+    assert_eq!(usage.totals(), (42, 7));
 }

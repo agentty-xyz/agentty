@@ -275,50 +275,81 @@ async fn stale_instruction_key_resends_the_full_session_contract() {
     assert!(!bodies[1].contains(REFRESH_REMINDER));
 }
 
-#[tokio::test]
-async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
-    // Arrange
+/// Marker present only in a between-turn compaction request.
+const COMPACTION_SOURCE: &str = "Conversation source to summarize";
+
+/// Returns a structured compaction summary.
+fn summary_answer() -> ResponseTemplate {
+    ResponseTemplate::new(200).set_body_json(json!({
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"content": json!({
+                "context": "Answered the first two questions",
+                "decisions": [],
+                "state": "Waiting for the next question"
+            }).to_string()}
+        }],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+    }))
+}
+
+/// What a provider and host observed across [`run_crowded_session`].
+struct CrowdedSession {
+    /// Provider requests that asked for a compaction summary.
+    compactions: usize,
+    /// Whether each of the three turns announced a compaction.
+    compacting_turns: [bool; 3],
+    /// Conversation id the second turn returned.
+    second_id: Option<String>,
+    /// Input and output tokens the third turn reported.
+    third_tokens: (u64, u64),
+    /// Every provider request body except compaction requests.
+    turn_bodies: Vec<String>,
+}
+
+/// Runs two turns whose inputs crowd the 128K `qwen-plus` budget, then a
+/// third.
+async fn run_crowded_session(compaction: ResponseTemplate) -> Result<CrowdedSession, String> {
     let server = MockServer::start().await;
-    respond(&server, "Third question", answer("Third answer"), 1).await;
-    respond(&server, "Second question", answer("Second answer"), 2).await;
-    respond(&server, "First question", answer("First answer"), 3).await;
-    let data_root = tempfile::tempdir().expect("data root");
-    let worktree = tempfile::tempdir().expect("worktree");
+    respond(&server, COMPACTION_SOURCE, compaction, 1).await;
+    respond(&server, "Third question", answer("Third answer"), 2).await;
+    respond(&server, "Second question", answer("Second answer"), 3).await;
+    respond(&server, "First question", answer("First answer"), 4).await;
+    let data_root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let worktree = tempfile::tempdir().map_err(|error| error.to_string())?;
     let config = config(data_root.path(), environment(&server));
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
     let resume_request = |prompt: String, provider_conversation_id: Option<String>| {
-        let mut request = turn_request(worktree.path(), MUSE_MODEL, &prompt);
+        let mut request = turn_request(worktree.path(), QWEN_MODEL, &prompt);
         request.request_kind = AgentRequestKind::SessionResume;
         request.continuation = continuing(provider_conversation_id);
 
         request
     };
-    // Each large turn fits the history byte budget alone, but the second
-    // turn's input leaves too little context budget to replay the first.
-    let (first, _) = run_turn(
+    // Each large turn fits the context budget alone, but the second turn's
+    // input leaves too little budget to replay the first.
+    let (first, first_events) = run_turn(
         &channel,
         "session-evict",
         turn_request(
             worktree.path(),
-            MUSE_MODEL,
-            &format!("First question {}", "x".repeat(220_000)),
+            QWEN_MODEL,
+            &format!("First question {}", "x".repeat(210_000)),
         ),
     )
     .await;
-    let first = first.expect("first turn should succeed");
-    let (second, _) = run_turn(
+    let first = first?;
+    let (second, second_events) = run_turn(
         &channel,
         "session-evict",
         resume_request(
-            format!("Second question {}", "y".repeat(230_000)),
+            format!("Second question {}", "y".repeat(240_000)),
             first.provider_conversation_id,
         ),
     )
     .await;
-    let second = second.expect("second turn should succeed");
-
-    // Act
-    let (third, _) = run_turn(
+    let second = second?;
+    let (third, third_events) = run_turn(
         &channel,
         "session-evict",
         resume_request(
@@ -327,14 +358,42 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
         ),
     )
     .await;
+    let third = third?;
+    let (compactions, turn_bodies): (Vec<String>, Vec<String>) = request_bodies(&server)
+        .await
+        .into_iter()
+        .partition(|body| body.contains(COMPACTION_SOURCE));
+    let compacting = TurnEvent::ThoughtDelta("Compacting session history".to_string());
+
+    Ok(CrowdedSession {
+        compactions: compactions.len(),
+        compacting_turns: [first_events, second_events, third_events]
+            .map(|events| events.contains(&compacting)),
+        second_id: second.provider_conversation_id,
+        third_tokens: (third.input_tokens, third.output_tokens),
+        turn_bodies,
+    })
+}
+
+#[tokio::test]
+async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
+    // Arrange
+    let rejected = ResponseTemplate::new(400).set_body_string("compaction rejected");
+
+    // Act
+    let session = run_crowded_session(rejected)
+        .await
+        .expect("crowded session should run");
 
     // Assert
-    third.expect("third turn should succeed");
-    assert_eq!(
-        second.provider_conversation_id.as_deref(),
-        Some("session-evict")
-    );
-    let bodies = request_bodies(&server).await;
+    // A failed compaction before the third turn leaves projection to evict
+    // the oldest turn without failing the turn.
+    assert_eq!(session.compactions, 1);
+    assert_eq!(session.compacting_turns, [false, false, true]);
+    assert_eq!(session.second_id.as_deref(), Some("session-evict"));
+    // The rejected compaction reported no usage.
+    assert_eq!(session.third_tokens, (30, 7));
+    let bodies = session.turn_bodies;
     assert_eq!(bodies.len(), 3);
     assert!(!bodies[1].contains("First answer"));
     assert!(bodies[1].contains(REFRESH_REMINDER));
@@ -342,6 +401,56 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
     assert_eq!(bodies[2].matches(FULL_CONTRACT).count(), 1);
     // Only the replayed second turn carries a reminder.
     assert_eq!(bodies[2].matches(REFRESH_REMINDER).count(), 1);
+}
+
+#[tokio::test]
+async fn crowded_history_is_compacted_and_the_contract_resent() {
+    // Arrange, Act
+    let session = run_crowded_session(summary_answer())
+        .await
+        .expect("crowded session should run");
+
+    // Assert
+    // Compaction runs before the crowded turn, never between a finished
+    // turn and its result.
+    assert_eq!(session.compactions, 1);
+    assert_eq!(session.compacting_turns, [false, false, true]);
+    // The turn reports its compaction's tokens with its own.
+    assert_eq!(session.third_tokens, (60, 14));
+    let bodies = session.turn_bodies;
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies[2].contains("Answered the first two questions"));
+    assert!(!bodies[2].contains("yyyy"));
+    assert_eq!(bodies[2].matches(FULL_CONTRACT).count(), 1);
+}
+
+#[tokio::test]
+async fn failed_compaction_tokens_count_toward_the_next_turn() {
+    // Arrange
+    // Every field fits the summary schema, but together they exceed the
+    // checkpoint size limit, so compaction fails after the completion.
+    let oversized_summary = ResponseTemplate::new(200).set_body_json(json!({
+        "choices": [{
+            "finish_reason": "stop",
+            "message": {"content": json!({
+                "context": "c".repeat(4000),
+                "decisions": vec!["d".repeat(400); 32],
+                "state": "s".repeat(2000)
+            }).to_string()}
+        }],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 7, "total_tokens": 37}
+    }));
+
+    // Act
+    let session = run_crowded_session(oversized_summary)
+        .await
+        .expect("crowded session should run");
+
+    // Assert
+    assert_eq!(session.compactions, 1);
+    assert_eq!(session.compacting_turns, [false, false, true]);
+    assert!(!session.turn_bodies[2].contains("cccc"));
+    assert_eq!(session.third_tokens, (60, 14));
 }
 
 #[tokio::test]

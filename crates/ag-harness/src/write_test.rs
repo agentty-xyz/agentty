@@ -156,10 +156,8 @@ fn rejects_malformed_unified_diffs() {
         "bad\n+++ b/file\n@@ -0,0 +1 @@\n+x\n",
         "--- \n+++ b/file\n@@ -0,0 +1 @@\n+x\n",
         "--- a/file\n+++ b/file\nnot-a-hunk\n",
-        "--- a/file\n+++ b/file\n@@ -1 1 @@\n x\n",
-        "--- a/file\n+++ b/file\n@@ -x +1 @@\n x\n",
-        "--- a/file\n+++ b/file\n@@ -1 +x @@\n x\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\n\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n?x\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n\\ No newline at end of file\n",
         concat!(
@@ -175,8 +173,6 @@ fn rejects_malformed_unified_diffs() {
             "-old\n\\ No newline at end of file\n",
             "\\ No newline at end of file\n",
         ),
-        "--- a/file\n+++ b/file\n@@ -1,2 +1 @@\n x\n",
-        "--- a/file\n+++ b/file\n@@ -1 +1,2 @@\n x\n",
         "--- a/file\r+++ b/file\r@@ -1 +1 @@\r x",
     ];
 
@@ -267,9 +263,9 @@ fn rejects_hunks_that_do_not_match_target() {
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n other\n",
         "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-other\n+new\n",
         "--- a/file\n+++ b/file\n@@ -3,0 +3,1 @@\n+new\n",
-        "--- a/file\n+++ b/file\n@@ -0 +1 @@\n-old\n+new\n",
-        "--- a/file\n+++ b/file\n@@ -1,0 +0,1 @@\n+new\n",
         "--- a/file\n+++ b/file\n@@ -2,0 +2,1 @@\n+new\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n-extra\n+new\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n",
     ];
 
     // Act
@@ -287,9 +283,173 @@ fn rejects_hunks_that_do_not_match_target() {
 }
 
 #[test]
-fn rejects_out_of_order_hunks_before_offset_adjustment() {
+fn applies_hunks_with_miscounted_or_missing_header_ranges() {
     // Arrange
-    let patch = concat!(
+    let current = b"first\nsecond\nthird\n";
+    let patches = [
+        "--- a/file\n+++ b/file\n@@ -2,7 +2,9 @@\n second\n-third\n+changed\n",
+        "--- a/file\n+++ b/file\n@@ -40 +40 @@\n second\n-third\n+changed\n",
+        "--- a/file\n+++ b/file\n@@\n second\n-third\n+changed\n",
+        "--- a/file\n+++ b/file\n@@ -x +1 @@ fn main\n second\n-third\n+changed\n",
+        "--- a/file\n+++ b/file\n@@ -0 +1 @@\n second\n-third\n+changed\n",
+    ];
+
+    // Act
+    let outputs = patches.map(|patch| {
+        apply_unified_diff("file", Some(current), patch).expect("miscounted hunk should apply")
+    });
+
+    // Assert
+    assert!(
+        outputs
+            .iter()
+            .all(|output| output == b"first\nsecond\nchanged\n")
+    );
+}
+
+#[test]
+fn locates_hunks_by_whitespace_tolerant_context_nearest_the_hint() {
+    // Arrange
+    let current = b"fn a() {\n    value\n}\nfn b() {\n    value\n}\n";
+    let trailing =
+        "--- a/file\n+++ b/file\n@@ -4,3 +4,3 @@\n fn b() {   \n-    value\n+    other\n";
+    let indented = "--- a/file\n+++ b/file\n@@ -5 +5 @@\n-value\n+    other\n";
+    let blank_context = "--- a/file\n+++ b/file\n@@ -1,3 +1,4 @@\n one\n\n-two\n+three\n\n";
+
+    // Act
+    let trailing_output =
+        apply_unified_diff("file", Some(current), trailing).expect("trailing spaces tolerated");
+    let indented_output =
+        apply_unified_diff("file", Some(current), indented).expect("indentation tolerated");
+    let blank_output = apply_unified_diff("file", Some(b"one\n\ntwo\n"), blank_context)
+        .expect("bare blank context line should apply");
+
+    // Assert
+    assert_eq!(
+        trailing_output,
+        b"fn a() {\n    value\n}\nfn b() {\n    other\n}\n"
+    );
+    assert_eq!(
+        indented_output,
+        b"fn a() {\n    value\n}\nfn b() {\n    other\n}\n"
+    );
+    assert_eq!(blank_output, b"one\n\nthree\n");
+}
+
+#[test]
+fn rejects_insertion_hunks_without_a_zero_count_anchor() {
+    // Arrange
+    let patches = [
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n+inserted\n",
+        "--- a/file\n+++ b/file\n@@ -1,1 +1,2 @@\n+inserted\n",
+        "--- a/file\n+++ b/file\n@@ -1,x +1,2 @@\n+inserted\n",
+        "--- a/file\n+++ b/file\n@@\n+inserted\n",
+    ];
+
+    // Act
+    let errors = patches.map(|patch| {
+        apply_unified_diff("file", Some(b"first\nsecond\n"), patch)
+            .expect_err("unanchored insertion hunk should be rejected")
+    });
+
+    // Assert
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.to_string().contains("`-N,0` header"))
+    );
+}
+
+#[test]
+fn applies_unanchored_insertion_hunk_to_an_empty_target() {
+    // Arrange
+    let create = "--- /dev/null\n+++ b/file\n@@\n+created\n";
+    let fill = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n+filled\n";
+
+    // Act
+    let created = apply_unified_diff("file", None, create).expect("bare create should apply");
+    let filled = apply_unified_diff("file", Some(b""), fill).expect("empty fill should apply");
+
+    // Assert
+    assert_eq!(created, b"created\n");
+    assert_eq!(filled, b"filled\n");
+}
+
+#[test]
+fn rejects_hunks_whose_context_matches_ambiguously() {
+    // Arrange
+    let current = b"one\nend\ntwo\nmid\nthree\nend\n";
+    let patches = [
+        "--- a/file\n+++ b/file\n@@\n-end\n+finish\n",
+        "--- a/file\n+++ b/file\n@@ -4 +4 @@\n-end\n+finish\n",
+    ];
+
+    // Act
+    let errors = patches.map(|patch| {
+        apply_unified_diff("file", Some(current), patch)
+            .expect_err("ambiguous hunk should be rejected")
+    });
+    let hinted = apply_unified_diff(
+        "file",
+        Some(current),
+        "--- a/file\n+++ b/file\n@@ -6 +6 @@\n-end\n+finish\n",
+    )
+    .expect("hint nearest one match should apply");
+
+    // Assert
+    // Without a hint both matches tie; line 4 sits two lines from each.
+    assert!(
+        errors
+            .iter()
+            .all(|error| error.to_string().contains("more than one position"))
+    );
+    assert_eq!(hinted, b"one\nend\ntwo\nmid\nthree\nfinish\n");
+}
+
+#[test]
+fn prefers_exact_context_unless_a_looser_match_sits_nearer_the_hint() {
+    // Arrange
+    let current = b"foo()  \nbar\nfoo()\nbar\n";
+    let unhinted = "--- a/file\n+++ b/file\n@@\n foo()\n-bar\n+baz\n";
+    let hinted_exact = "--- a/file\n+++ b/file\n@@ -3,2 +3,2 @@\n foo()\n-bar\n+baz\n";
+    let hinted_loose = "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n foo()\n-bar\n+baz\n";
+
+    // Act
+    let unhinted_output =
+        apply_unified_diff("file", Some(current), unhinted).expect("exact match should win");
+    let hinted_output = apply_unified_diff("file", Some(current), hinted_exact)
+        .expect("exact match at the hint should apply");
+    let conflict = apply_unified_diff("file", Some(current), hinted_loose)
+        .expect_err("a looser match nearer the hint should be rejected");
+
+    // Assert
+    assert_eq!(unhinted_output, b"foo()  \nbar\nfoo()\nbaz\n");
+    assert_eq!(hinted_output, b"foo()  \nbar\nfoo()\nbaz\n");
+    assert!(conflict.to_string().contains("ignoring whitespace"));
+}
+
+#[test]
+fn rejects_hunks_too_repetitive_to_locate() {
+    // Arrange
+    let current = b"x\n".repeat(MAX_FILE_BYTES / 2);
+    let patch = format!(
+        "--- a/file\n+++ b/file\n@@ -1 +1 @@\n{}-y\n+z\n",
+        " x\n".repeat(16)
+    );
+
+    // Act
+    let error = apply_unified_diff("file", Some(&current), &patch)
+        .expect_err("repetitive hunk should exhaust the comparison budget");
+
+    // Assert
+    assert!(error.is_model_correctable());
+    assert!(error.to_string().contains("comparison limit"));
+}
+
+#[test]
+fn rejects_out_of_order_hunks() {
+    // Arrange
+    let context_patch = concat!(
         "--- a/file\n",
         "+++ b/file\n",
         "@@ -3 +3,2 @@\n",
@@ -299,14 +459,26 @@ fn rejects_out_of_order_hunks_before_offset_adjustment() {
         "-first\n",
         "+changed\n",
     );
+    let insertion_patch = concat!(
+        "--- a/file\n",
+        "+++ b/file\n",
+        "@@ -3 +3 @@\n",
+        "-target\n",
+        "+changed\n",
+        "@@ -1,0 +2 @@\n",
+        "+inserted\n",
+    );
 
     // Act
-    let error = apply_unified_diff("file", Some(b"first\nfirst\ntarget\n"), patch)
-        .expect_err("out-of-order hunks should fail");
+    let context_error = apply_unified_diff("file", Some(b"first\nfirst\ntarget\n"), context_patch)
+        .expect_err("out-of-order context hunk should fail");
+    let insertion_error =
+        apply_unified_diff("file", Some(b"first\nfirst\ntarget\n"), insertion_patch)
+            .expect_err("out-of-order insertion hunk should fail");
 
     // Assert
-    assert!(matches!(error, WriteError::Patch { .. }));
-    assert!(error.to_string().contains("ascending"));
+    assert!(context_error.to_string().contains("file order"));
+    assert!(insertion_error.to_string().contains("ordered"));
 }
 
 #[test]
@@ -320,20 +492,6 @@ fn applies_zero_count_hunk_at_unified_diff_boundary() {
 
     // Assert
     assert_eq!(output, b"first\ninserted\nsecond\n");
-}
-
-#[test]
-fn rejects_inconsistent_modified_hunk_boundary() {
-    // Arrange
-    let patch = "--- a/file\n+++ b/file\n@@ -2,0 +2,1 @@\n+inserted\n";
-
-    // Act
-    let error = apply_unified_diff("file", Some(b"first\nsecond\n"), patch)
-        .expect_err("inconsistent modified range should fail");
-
-    // Assert
-    assert!(matches!(error, WriteError::Patch { .. }));
-    assert!(error.to_string().contains("modified range"));
 }
 
 #[test]

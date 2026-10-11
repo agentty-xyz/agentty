@@ -5,10 +5,11 @@ use serde_json::json;
 
 use super::{
     ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn,
-    TurnStop, admit_grown_request, admit_mandatory_content, advertised_tools, select_recent_turns,
+    TurnStop, admit_mandatory_content, advertised_tools, elide_reasoning, elide_tool_result,
+    request_weight, select_recent_turns,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
-use crate::model::{ModelMessage, ModelRequest};
+use crate::model::ModelMessage;
 use crate::policy::ToolPolicy;
 use crate::schema_contract::OutputSchema;
 use crate::tool::{Tool, ToolCall, ToolDefinition};
@@ -225,6 +226,7 @@ fn selection_keeps_the_most_recent_whole_turns() {
 
     // Act
     let (projected, evicted) = select_recent_turns(&FixedEstimator, &turns, 21);
+    let projected = projected.concat();
 
     // Assert
     // The two-message oldest turn is dropped wholesale.
@@ -256,39 +258,29 @@ fn selection_stops_at_the_first_turn_that_does_not_fit() {
     // Assert
     // The older single-message turn would fit, but selection never skips the
     // two-message turn between it and the retained suffix.
-    assert_eq!(partial, (vec![ModelMessage::User("recent".into())], 2));
+    assert_eq!(
+        partial,
+        (vec![vec![ModelMessage::User("recent".into())]], 2)
+    );
     assert_eq!(empty, (Vec::new(), 3));
 }
 
 #[test]
-fn grown_requests_are_re_admitted_against_the_whole_budget() {
+fn request_weight_counts_reserved_output_messages_and_tools() {
     // Arrange
     let budget = budget(20).with_reserved_output(2).expect("reserve");
-    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
-    let mut request = ModelRequest::new("prompt", schema).with_tool(ToolDefinition::read());
-    let call = ToolCall::read(
-        "call-1".to_string(),
-        serde_json::from_value(json!({"action": "file", "path": "name.txt"})).expect("arguments"),
-        None,
-    );
+    let messages = [
+        ModelMessage::User("prompt".to_string()),
+        ModelMessage::User("next".to_string()),
+    ];
+    let tools = [ToolDefinition::read()];
 
     // Act
-    let initial = admit_grown_request(&FixedEstimator, budget, &request);
-    request.record_tool_call(call.clone());
-    request.record_tool_result(&call, "content".to_string());
-    let grown = admit_grown_request(&FixedEstimator, budget, &request);
+    let weight = request_weight(&FixedEstimator, budget, &messages, &tools);
 
     // Assert
-    // Reserved 2 + one user message 7 + one tool definition 2 = 11 of 20.
-    initial.expect("initial request fits");
-    // The recorded call and result add two 7-weight messages: 25 of 20.
-    assert!(matches!(
-        grown,
-        Err(TurnError::ContextBudgetExceeded {
-            budget: 20,
-            required: 25,
-        })
-    ));
+    // Reserved 2 + two 7-weight messages + one 2-weight tool definition.
+    assert_eq!(weight, 18);
 }
 
 fn read_call(id: &str) -> ToolCall {
@@ -432,6 +424,7 @@ fn selection_keeps_only_input_and_note_of_a_stopped_turn_that_does_not_fit() {
     let (projected, evicted) = select_recent_turns(&FixedEstimator, &turns, 20);
     let (full, full_evicted) = select_recent_turns(&FixedEstimator, &turns, 35);
     let (empty, empty_evicted) = select_recent_turns(&FixedEstimator, &turns, 13);
+    let (projected, full) = (projected.concat(), full.concat());
 
     // Assert
     assert_eq!(
@@ -451,4 +444,139 @@ fn selection_keeps_only_input_and_note_of_a_stopped_turn_that_does_not_fit() {
     );
     assert_eq!(full_evicted, 0);
     assert_eq!((empty, empty_evicted), (Vec::new(), 2));
+}
+
+fn reasoning_call(id: &str, reasoning: &str) -> ToolCall {
+    ToolCall::from_json(
+        id.to_string(),
+        "read",
+        r#"{"action":"file","path":"name.txt"}"#,
+        Some(reasoning.to_string()),
+    )
+    .expect("tool call")
+}
+
+#[test]
+fn elide_tool_result_replaces_only_bulky_results() {
+    // Arrange
+    let bulky = ModelMessage::ToolResult {
+        call_id: "call-1".to_string(),
+        content: "x".repeat(500),
+        name: "bash".to_string(),
+    };
+    let small = ModelMessage::ToolResult {
+        call_id: "call-2".to_string(),
+        content: "ok".to_string(),
+        name: "bash".to_string(),
+    };
+
+    // Act
+    let elided = elide_tool_result(&bulky);
+    let kept = elide_tool_result(&small);
+    let other = elide_tool_result(&ModelMessage::User("x".repeat(500)));
+
+    // Assert
+    assert!(matches!(
+        &elided,
+        Some(ModelMessage::ToolResult { call_id, content, name })
+            if call_id == "call-1"
+                && name == "bash"
+                && serde_json::from_str::<serde_json::Value>(content).is_ok_and(|note| {
+                    note["elided"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("500 bytes of earlier `bash` output"))
+                })
+    ));
+    assert_eq!(kept, None);
+    assert_eq!(other, None);
+}
+
+#[test]
+fn elide_reasoning_keeps_a_placeholder_on_every_reasoning_message() {
+    // Arrange
+    let long = "because ".repeat(20);
+    let answer = ModelMessage::AssistantReasoning {
+        content: "{}".to_string(),
+        reasoning_content: long.clone(),
+    };
+    let batch = ModelMessage::AssistantToolCalls(vec![
+        reasoning_call("call-1", &long),
+        reasoning_call("call-2", "short"),
+    ]);
+    let short = ModelMessage::AssistantToolCall(reasoning_call("call-3", "short"));
+
+    // Act
+    let elided_answer = elide_reasoning(&answer);
+    let elided_batch = elide_reasoning(&batch);
+    let elided_short = elide_reasoning(&short);
+
+    // Assert
+    let placeholder = "[earlier reasoning elided to fit the context window]";
+    assert_eq!(
+        elided_answer,
+        Some(ModelMessage::AssistantReasoning {
+            content: "{}".to_string(),
+            reasoning_content: placeholder.to_string(),
+        })
+    );
+    assert!(matches!(
+        &elided_batch,
+        Some(ModelMessage::AssistantToolCalls(calls))
+            if calls[0].reasoning_content() == Some(placeholder)
+                && calls[1].reasoning_content() == Some("short")
+    ));
+    assert_eq!(elided_short, None);
+}
+
+#[test]
+fn projection_replays_an_oversized_turn_with_its_tool_output_elided() {
+    // Arrange
+    let call = reasoning_call("call-1", &"why ".repeat(200));
+    let turns = VecDeque::from([
+        HistoryTurn::from(vec![ModelMessage::User("older".to_string())]),
+        HistoryTurn::from(vec![
+            ModelMessage::User("inspect".to_string()),
+            ModelMessage::AssistantToolCall(call),
+            ModelMessage::ToolResult {
+                call_id: "call-1".to_string(),
+                content: "x".repeat(4_000),
+                name: "read".to_string(),
+            },
+            ModelMessage::Assistant("{\"answer\":\"done\"}".to_string()),
+        ]),
+    ]);
+
+    let elided_weight = turns[1]
+        .elided_replay()
+        .iter()
+        .map(|message| HeuristicContextEstimator.message_weight(message))
+        .sum::<u64>();
+    let full_weight = turns[1]
+        .replay()
+        .iter()
+        .map(|message| HeuristicContextEstimator.message_weight(message))
+        .sum::<u64>();
+
+    // Act
+    let (projected, evicted) =
+        select_recent_turns(&HeuristicContextEstimator, &turns, elided_weight);
+    let projected = projected.concat();
+
+    // Assert
+    assert!(full_weight > elided_weight);
+    assert_eq!(evicted, 1);
+    assert_eq!(projected.len(), 4);
+    assert_eq!(projected[0], ModelMessage::User("inspect".to_string()));
+    assert!(matches!(
+        &projected[1],
+        ModelMessage::AssistantToolCall(call) if call.reasoning_content().is_some_and(|text| text.starts_with("[earlier"))
+    ));
+    assert!(matches!(
+        &projected[2],
+        ModelMessage::ToolResult { content, .. } if content.contains("4000 bytes")
+    ));
+    assert_eq!(
+        projected[3],
+        ModelMessage::Assistant("{\"answer\":\"done\"}".to_string())
+    );
 }

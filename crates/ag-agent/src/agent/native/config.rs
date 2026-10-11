@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::{env, io};
 
@@ -13,8 +14,8 @@ use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
 use ag_harness::lifecycle::LifecycleObserver;
 use ag_harness::model::{
-    ContextBudget, ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelRegistry,
-    ModelRequest, ReasoningEffort,
+    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelClient,
+    ModelCompletion, ModelMetadata, ModelRegistry, ModelRequest, ReasoningEffort,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
@@ -34,6 +35,10 @@ const FALLBACK_CONTEXT_LIMITS: ModelContextLimits = ModelContextLimits {
     context_window_tokens: 128_000,
     input_headroom_tokens: 16_384,
 };
+/// Finished-history bytes new sessions load for replay. One long tool loop
+/// can exceed the harness default on its own, which would drop it from both
+/// replay and compaction; the context budget still bounds what is sent.
+const MAX_HISTORY_BYTES: NonZeroUsize = NonZeroUsize::MIN.saturating_add(4 * 1024 * 1024 - 1);
 /// Placeholder endpoint for resume-only registrations, which never send
 /// requests.
 const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";
@@ -216,7 +221,8 @@ impl ModelSelection {
         format!("{}/{}", self.provider, self.model)
     }
 
-    /// Registers this model's provider client under its key.
+    /// Registers this model's provider client under its key, charging
+    /// `provider_call_budget` and recording into `usage` for every request.
     ///
     /// # Errors
     /// Returns an actionable error when credentials or the endpoint are
@@ -225,6 +231,7 @@ impl ModelSelection {
         &self,
         environment: &BTreeMap<String, String>,
         provider_call_budget: Option<&ProviderCallBudget>,
+        usage: &UsageMeter,
     ) -> Result<ModelRegistry, String> {
         let client = ModelConfiguration::new(self.provider, &self.model)
             .client_from_environment(|name| {
@@ -241,13 +248,11 @@ impl ModelSelection {
                 )
             })?;
 
-        match provider_call_budget {
-            Some(budget) => self.register(BudgetedModel {
-                budget: budget.clone(),
-                inner: client,
-            }),
-            None => self.register(client),
-        }
+        self.register(MeteredModel {
+            budget: provider_call_budget.cloned(),
+            inner: client,
+            usage: usage.clone(),
+        })
     }
 
     /// Builds a harness for this model with Agentty's defaults.
@@ -259,7 +264,11 @@ impl ModelSelection {
         context: &HarnessContext<'_>,
         observer: impl LifecycleObserver + 'static,
     ) -> Result<Harness, String> {
-        let registry = self.registry(context.environment, context.provider_call_budget)?;
+        let registry = self.registry(
+            context.environment,
+            context.provider_call_budget,
+            context.usage,
+        )?;
 
         self.harness_from(&registry, context, observer)
     }
@@ -311,6 +320,7 @@ impl ModelSelection {
     ) -> Result<Harness, String> {
         Ok(Harness::from_registry(registry, &self.key())
             .map_err(failure("Invalid harness model registration"))?
+            .max_history_bytes(MAX_HISTORY_BYTES)
             .repository(context.repository.clone())
             .model_reasoning_effort(reasoning_effort(context.reasoning_level))
             .with_lifecycle_observer(observer))
@@ -340,6 +350,35 @@ pub(crate) struct HarnessContext<'a> {
     pub(crate) reasoning_level: ReasoningLevel,
     /// Validated worktree available to tools.
     pub(crate) repository: &'a Repository,
+    /// Token totals every model request adds to.
+    pub(crate) usage: &'a UsageMeter,
+}
+
+/// Provider-reported tokens summed across every request the harnesses
+/// sharing it send, including compactions and context refits outside a
+/// turn's report.
+#[derive(Clone, Default)]
+pub(crate) struct UsageMeter {
+    input_tokens: Arc<AtomicU64>,
+    output_tokens: Arc<AtomicU64>,
+}
+
+impl UsageMeter {
+    /// Returns the input and output tokens recorded so far.
+    pub(crate) fn totals(&self) -> (u64, u64) {
+        (
+            self.input_tokens.load(Ordering::Relaxed),
+            self.output_tokens.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Adds one completion's reported tokens; missing counts add nothing.
+    fn record(&self, usage: CompletionUsage) {
+        self.input_tokens
+            .fetch_add(usage.input_tokens().unwrap_or(0), Ordering::Relaxed);
+        self.output_tokens
+            .fetch_add(usage.output_tokens().unwrap_or(0), Ordering::Relaxed);
+    }
 }
 
 /// Returns the instructions stored with new harness sessions.
@@ -467,14 +506,16 @@ fn reasoning_effort(reasoning_level: ReasoningLevel) -> ReasoningEffort {
     }
 }
 
-/// Model wrapper that charges one provider call before every request.
-struct BudgetedModel {
-    budget: ProviderCallBudget,
+/// Model wrapper that charges the provider call budget, when set, before
+/// every request and records the tokens each completion reports.
+struct MeteredModel {
+    budget: Option<ProviderCallBudget>,
     inner: ModelClient,
+    usage: UsageMeter,
 }
 
 #[async_trait]
-impl Model for BudgetedModel {
+impl Model for MeteredModel {
     fn metadata(&self) -> Option<ModelMetadata> {
         Model::metadata(&self.inner)
     }
@@ -488,9 +529,15 @@ impl Model for BudgetedModel {
     }
 
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
-        self.budget.consume().map_err(ModelError::request)?;
+        if let Some(budget) = &self.budget {
+            budget.consume().map_err(ModelError::request)?;
+        }
+        let completion = Model::complete(&self.inner, request).await?;
+        if let Some(usage) = completion.metadata().and_then(CompletionMetadata::usage) {
+            self.usage.record(*usage);
+        }
 
-        Model::complete(&self.inner, request).await
+        Ok(completion)
     }
 }
 

@@ -65,9 +65,17 @@ crates/
 ## Agent loop
 
 A turn continues until the model responds without requesting a tool, and the terminal
-response must satisfy the caller's schema. There is no tool-call limit: cancellation and
-the required `ContextBudget` bound a turn, which fails typed once the next request no
-longer fits.
+response must satisfy the caller's schema. There is no tool-call limit. Before each
+model call the harness refits a request that tool traffic grew past the required
+`ContextBudget`, cheapest step first: it elides the oldest tool results and then the
+oldest provider reasoning down to 60% of the budget, keeping the four most recent of
+each; then it asks the model for structured progress summaries that replace the turn's
+oldest tool groups, never its latest one. Each summary covers as many whole groups as
+fit with their full output and carries the previous summary forward, so elided results
+still reach it. When nothing in the turn is left to summarize, it sheds the oldest
+replayed history turns. Refitting changes only outgoing requests and never moves back,
+so a stable prefix serves later calls. The turn fails typed only when no step can shed
+more.
 
 ```mermaid
 flowchart TD
@@ -92,7 +100,9 @@ a stopped turn keeps everything it already did.
 - Failed and interrupted turns re-enter model context with what they recorded, never as
   completed history: tool calls without a result get a placeholder result in the request
   only, and a closing stop note names the cause and the writes and commands whose
-  outcome is unknown. A stopped turn that does not fit replays only its input and note.
+  outcome is unknown. A turn whose full replay does not fit replays with its tool output
+  and reasoning elided; a stopped turn that still does not fit replays only its input
+  and note.
 - Reservation and model switching run in one store-owned atomic section that reads the
   admission state and records the harness's decision: recorded host requests first, then
   the model generation, an idle session, and no unresolved command.
@@ -105,10 +115,14 @@ a stopped turn keeps everything it already did.
   request, so matching retries return recorded outcomes instead of executing again.
 - `switch_model` selects another registration for an idle session. `compact` publishes a
   schema-validated summary checkpoint that request projection replays ahead of the
-  remaining recent turns.
+  remaining recent turns. Its source renders tool arguments and results cut to 1 KiB
+  each. `needs_compaction` reports when stored history fills half the request budget.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
   by its registration: requests keep the most recent whole turns that fit, and mandatory
   content that cannot fit fails with a typed error before any provider call.
+- Built-in stores load the most recent finished turns within the session's history byte
+  limit. A turn too large for it loads only its input and, when completed, its final
+  answer, so a long tool loop stays in replay and compaction instead of dropping out.
 - Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
   turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
   observe context projection instead of inferring it from model answers.
@@ -127,8 +141,15 @@ workspace fencing.
 
 All tools are denied by default; per-turn policy enables them explicitly.
 
-- `read` — bounded file, list, search, and `show(head)` inspection.
-- `write` — applies one bounded git-style unified diff.
+- `read` — bounded file, list, search, and `show(head)` inspection. `offset` and `limit`
+  also accept integers sent as strings.
+- `write` — applies one bounded git-style unified diff. Each hunk is located by its
+  context and removed lines, in file order, preferring exact over trailing-whitespace
+  over surrounding-whitespace matches and then the match nearest its header hint; header
+  counts are ignored. Ties for nearest, and a looser match nearer the hint than the
+  preferred one, are rejected as ambiguous; an insertion-only hunk into a non-empty file
+  needs a `-N,0` header. A per-patch comparison limit rejects targets too repetitive to
+  search.
 - Comparisons (`diff`, `show(base)`) additionally require a host-pinned `ComparisonBase`
   commit; no base is ever chosen implicitly.
 - `bash` — requires an explicit per-turn `BashConfig` naming an executor: the native
@@ -192,7 +213,11 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
   Follow-up session turns send only the refresh reminder while Agentty passes back the
   turn's versioned instruction key and the harness still replays the turn that carried
   the full contract. Utility and review turns, policy changes, model switches, and
-  history eviction re-send the full contract.
+  history eviction or compaction re-send the full contract.
+- Before a turn starts, Agentty compacts the session when `needs_compaction` reports
+  crowded history, so finished answers never wait on compaction and cancelling it loses
+  no turn. A failed compaction keeps the previous checkpoint and is retried before the
+  next turn. New sessions load up to 4 MiB of finished history for replay.
 - `ReadOnly` maps to `read`. Edit modes add `write` and unsandboxed `bash`, which
   inherits Agentty's environment except the `MODEL_*`, `KIMI_*`, and `DASHSCOPE_*`
   provider key and URL variables. Like Codex full access, and unlike Claude, `bash` does
@@ -207,5 +232,5 @@ only when Agentty starts with `--experimental-harness` and a provider is configu
 ## Next iterations
 
 Planned: a comparison base pinned to the session's base commit, idempotent host request
-IDs for Agentty operations, the native Bash sandbox, proactive compaction, and one
-correlator shared by `LifecycleTraceObserver` and `LifecycleMetrics`.
+IDs for Agentty operations, the native Bash sandbox, and one correlator shared by
+`LifecycleTraceObserver` and `LifecycleMetrics`.

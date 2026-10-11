@@ -26,9 +26,9 @@ use ag_session::AgentKind;
 use tokio::sync::mpsc;
 
 use crate::agent::native::{
-    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, failure,
-    output_schema, parse_outcome, reject_attachments, repository, settle, system_prompt,
-    token_usage, turn_options,
+    ActivityBridge, HarnessContext, ModelSelection, NativeHarnessConfig, NativePrompt, UsageMeter,
+    failure, output_schema, parse_outcome, reject_attachments, repository, settle, system_prompt,
+    turn_options,
 };
 use crate::agent::{
     InstructionDeliveryMode, apply_response_style_prompt, execution_policy,
@@ -138,6 +138,7 @@ async fn run_session_turn(
     let bootstrap = BootstrapMarker::parse(continuation.provider_conversation_id.as_deref());
     settle_previous_turn(active, &session_id).await?;
     let database = config.session_database(&session_id).await?;
+    let usage = UsageMeter::default();
     let opener = SessionOpener {
         database: &database,
         environment: &environment,
@@ -146,8 +147,12 @@ async fn run_session_turn(
         reasoning_level: req.reasoning_level,
         repository: &repository,
         session_id: &session_id,
+        usage: &usage,
     };
-    let (mut session, history) = opener.open(&selection).await?;
+    let (mut session, mut history) = opener.open(&selection).await?;
+    if compact_crowded_history(&mut session, &events).await {
+        history = opener.history().await?;
+    }
     // Turns since the last full contract, counting its own turn; `None` once
     // the harness no longer loads it.
     let bootstrap_age = bootstrap
@@ -179,7 +184,8 @@ async fn run_session_turn(
     lock(active).remove(&session_id);
     let outcome = outcome.map_err(|error| format!("Harness turn failed: {error}"))?;
     let assistant_message = parse_outcome(&outcome, profile)?;
-    let (input_tokens, output_tokens) = token_usage(outcome.report());
+    // Counts this turn's compaction, even a failed one, with its own requests.
+    let (input_tokens, output_tokens) = usage.totals();
     // An unversioned id makes the next session turn re-send the session
     // contract: a utility or review turn bootstrapped its own, or the
     // context budget dropped the turn that carried it from this request.
@@ -202,6 +208,27 @@ async fn run_session_turn(
         output_tokens,
         provider_conversation_id,
     })
+}
+
+/// Summarizes finished history into a checkpoint before a turn whose replay
+/// would crowd its room for tool traffic, returning whether a checkpoint was
+/// published. Running before the turn keeps a slow compaction off a finished
+/// answer's path, and cancelling it loses no completed turn. A failed
+/// compaction keeps the previous checkpoint and recent-history projection
+/// usable, so it never fails the turn; it is retried once the next turn has
+/// grown the history.
+async fn compact_crowded_history(
+    session: &mut Session,
+    events: &mpsc::UnboundedSender<TurnEvent>,
+) -> bool {
+    if !session.needs_compaction().await.unwrap_or(false) {
+        return false;
+    }
+    let _ = events.send(TurnEvent::ThoughtDelta(
+        "Compacting session history".to_string(),
+    ));
+
+    matches!(session.compact().await, Ok(Some(_)))
 }
 
 /// Versioned instruction key and input digest of the session turn that last
@@ -263,6 +290,7 @@ struct SessionOpener<'a> {
     reasoning_level: ReasoningLevel,
     repository: &'a Repository,
     session_id: &'a str,
+    usage: &'a UsageMeter,
 }
 
 impl SessionOpener<'_> {
@@ -285,7 +313,7 @@ impl SessionOpener<'_> {
             }
             Err(error) => return Err(failure("Failed to load the harness session")(error)),
         };
-        let history = LoadedHistory::new(loaded.latest_finished_turn.is_some(), &loaded.turns);
+        let history = LoadedHistory::from_session(&loaded);
         let stored_selection = loaded
             .registration_identity
             .as_ref()
@@ -298,6 +326,17 @@ impl SessionOpener<'_> {
         };
 
         Ok((session, history))
+    }
+
+    /// Reloads the history the harness loads, after compaction moved
+    /// covered turns behind a checkpoint.
+    async fn history(&self) -> Result<LoadedHistory, String> {
+        let loaded = self
+            .load()
+            .await
+            .map_err(failure("Failed to load the harness session"))?;
+
+        Ok(LoadedHistory::from_session(&loaded))
     }
 
     /// Loads the stored session's model identity and finished-turn state.
@@ -315,7 +354,7 @@ impl SessionOpener<'_> {
         stored_selection: &ModelSelection,
         selection: &ModelSelection,
     ) -> Result<Session, String> {
-        let registry = selection.registry(self.environment, None)?;
+        let registry = selection.registry(self.environment, None, self.usage)?;
         let harness = self.build_harness(|context, observer| {
             stored_selection.resume_only_harness(context, observer)
         })?;
@@ -355,6 +394,7 @@ impl SessionOpener<'_> {
                 provider_call_budget: None,
                 reasoning_level: self.reasoning_level,
                 repository: self.repository,
+                usage: self.usage,
             },
             ActivityBridge::new(move |event| {
                 let _ = events.send(event);
@@ -375,6 +415,11 @@ struct LoadedHistory {
 }
 
 impl LoadedHistory {
+    /// Summarizes the history `loaded` holds for the next turn.
+    fn from_session(loaded: &LoadedSession) -> Self {
+        Self::new(loaded.latest_finished_turn.is_some(), &loaded.turns)
+    }
+
     /// Summarizes the turns the store loads within the session's byte budget.
     fn new(has_finished_turn: bool, turns: &[HistoryTurn]) -> Self {
         let input_digests = turns

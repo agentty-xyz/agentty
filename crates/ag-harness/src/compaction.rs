@@ -9,9 +9,13 @@ use thiserror::Error;
 use crate::input::InputBlock;
 use crate::model::ModelMessage;
 use crate::schema_contract::{OutputSchema, OutputSchemaError};
+use crate::tool::ToolCall;
 
 /// Maximum serialized summary payload accepted by checkpoint construction.
 pub const MAX_SUMMARY_BYTES: usize = 16 * 1024;
+/// Maximum tool-call argument or tool-result bytes rendered into a summary
+/// source.
+const MAX_RENDERED_PAYLOAD_BYTES: usize = 1024;
 
 const CHECKPOINT_VERSION: u64 = 1;
 
@@ -262,21 +266,43 @@ pub(crate) fn render_source(
     source
 }
 
-/// Renders one historical message as bounded plain text. Image content is
-/// identified by digest and provider reasoning is never carried forward.
-fn render_message(message: &ModelMessage) -> String {
+/// Renders one historical message as bounded plain text, cutting tool
+/// payloads to [`MAX_RENDERED_PAYLOAD_BYTES`] so one long tool loop cannot
+/// crowd out the rest of a session source.
+pub(crate) fn render_message(message: &ModelMessage) -> String {
+    render_message_within(message, MAX_RENDERED_PAYLOAD_BYTES)
+}
+
+/// Renders one historical message as plain text. Tool calls show their
+/// arguments and tool results their output, each cut to `max_payload_bytes`.
+/// Image content is identified by digest and provider reasoning is never
+/// carried forward.
+pub(crate) fn render_message_within(message: &ModelMessage, max_payload_bytes: usize) -> String {
     match message {
         ModelMessage::Assistant(content) | ModelMessage::AssistantReasoning { content, .. } => {
             format!("assistant: {content}")
         }
-        ModelMessage::AssistantToolCall(call) => format!("assistant: [tool call {}]", call.name()),
+        ModelMessage::AssistantToolCall(call) => {
+            format!(
+                "assistant: [tool call {}]",
+                render_call(call, max_payload_bytes)
+            )
+        }
         ModelMessage::AssistantToolCalls(calls) => {
-            let names: Vec<&str> = calls.iter().map(crate::tool::ToolCall::name).collect();
+            let calls: Vec<String> = calls
+                .iter()
+                .map(|call| render_call(call, max_payload_bytes))
+                .collect();
 
-            format!("assistant: [tool calls {}]", names.join(", "))
+            format!("assistant: [tool calls {}]", calls.join("; "))
         }
         ModelMessage::System(content) => format!("system: {content}"),
-        ModelMessage::ToolResult { content, name, .. } => format!("tool {name}: {content}"),
+        ModelMessage::ToolResult { content, name, .. } => {
+            format!(
+                "tool {name}: {}",
+                bounded_payload(content, max_payload_bytes)
+            )
+        }
         ModelMessage::User(content) => format!("user: {content}"),
         ModelMessage::UserInput(input) => {
             let blocks: Vec<String> = input
@@ -295,6 +321,34 @@ fn render_message(message: &ModelMessage) -> String {
             format!("user: {}", blocks.join(" "))
         }
     }
+}
+
+/// Renders one tool call as its name and bounded JSON arguments.
+fn render_call(call: &ToolCall, max_payload_bytes: usize) -> String {
+    let arguments = call.arguments_json().unwrap_or_default();
+
+    format!(
+        "{} {}",
+        call.name(),
+        bounded_payload(&arguments, max_payload_bytes)
+    )
+}
+
+/// Keeps the start of `payload` and names how many bytes were cut.
+pub(crate) fn bounded_payload(payload: &str, max_payload_bytes: usize) -> String {
+    if payload.len() <= max_payload_bytes {
+        return payload.to_string();
+    }
+    let mut end = max_payload_bytes;
+    while !payload.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    format!(
+        "{}… [{} more bytes omitted]",
+        &payload[..end],
+        payload.len() - end
+    )
 }
 
 #[cfg(test)]
