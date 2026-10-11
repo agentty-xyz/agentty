@@ -177,7 +177,7 @@ fn test_session_creation_overlay_lines_disable_stacked_option() {
         stacked_line
             .spans
             .iter()
-            .all(|span| span.style.bg != Some(palette::accent()))
+            .all(|span| span.style.bg != Some(palette::surface_selection()))
     );
     assert!(
         stacked_line
@@ -201,7 +201,7 @@ fn test_session_creation_overlay_lines_enable_stacked_option() {
         stacked_line
             .spans
             .iter()
-            .any(|span| span.style.bg == Some(palette::accent()))
+            .any(|span| span.style.bg == Some(palette::surface_selection()))
     );
     assert!(
         stacked_line
@@ -229,11 +229,11 @@ fn test_session_creation_overlay_lines_gate_append_to_stack_option() {
     assert!(disabled_line.spans.iter().any(|span| {
         span.content
             .contains(APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL)
-            && span.style.bg != Some(palette::accent())
+            && span.style.bg != Some(palette::surface_selection())
     }));
     assert!(enabled_line.spans.iter().any(|span| {
         span.content.contains(APPEND_TO_STACK_PREVIEW_DETAIL)
-            && span.style.bg == Some(palette::accent())
+            && span.style.bg == Some(palette::surface_selection())
     }));
 }
 
@@ -318,7 +318,20 @@ fn test_session_creation_overlay_harness_row_follows_availability() {
             .content
             .contains(HARNESS_SESSION_PREVIEW_DETAIL)
     );
-    assert_eq!(harness_line.spans[0].style.bg, Some(palette::accent()));
+    assert_eq!(
+        harness_line.spans[0].style.bg,
+        Some(palette::surface_selection())
+    );
+    assert_eq!(
+        harness_line.spans[0].style.fg,
+        Some(palette::text_selection())
+    );
+    assert!(
+        harness_line.spans[0]
+            .style
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
     assert!(rendered_text(&available).contains(HARNESS_SESSION_PREVIEW_DETAIL));
 }
 
@@ -345,7 +358,7 @@ fn test_session_creation_overlay_disables_cli_rows_without_agent_cli() {
                 .any(|span| span.content.contains(AGENT_CLI_REQUIRED_DETAIL))
         );
         assert!(cli_line.spans.iter().all(|span| {
-            span.style.bg != Some(palette::accent())
+            span.style.bg != Some(palette::surface_selection())
                 && !span.style.add_modifier.contains(Modifier::BOLD)
         }));
     }

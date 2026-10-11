@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::domain::session::Session;
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 /// Minimum popup width sized for the action hint and useful session titles.
 const MIN_OVERLAY_WIDTH: u16 = 52;
@@ -109,12 +109,10 @@ impl<'a> StackAppendParentOverlay<'a> {
         label_width: usize,
     ) -> Line<'static> {
         let label = truncate_with_ellipsis(session.display_title(), label_width);
+        let is_selected = row_index == self.selected_parent_index;
         let row_text = format!(" {label:<label_width$} ");
-        let style = if row_index == self.selected_parent_index {
-            Style::default()
-                .fg(palette::surface_overlay())
-                .bg(palette::accent())
-                .add_modifier(Modifier::BOLD)
+        let style = if is_selected {
+            style::selection_style()
         } else {
             Style::default().fg(palette::text())
         };

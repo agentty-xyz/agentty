@@ -232,6 +232,7 @@ async fn quit_confirm_dismiss_returns() {
     // Arrange, Act, Assert
     FeatureTest::new("quit_dismiss")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Quit dismiss",
             "Dismiss the quit dialog to stay in the session.",

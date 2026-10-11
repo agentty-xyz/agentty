@@ -6,9 +6,9 @@ use ratatui::widgets::TableState;
 
 use super::{
     ActiveProjectStats, HEATMAP_CONTENT_HEIGHT, PROJECT_DASHBOARD_PANEL_HEIGHT, ProjectListPage,
-    ROW_HIGHLIGHT_SYMBOL, TABLE_COLUMN_SPACING, agent_cli_summary_lines, display_project_path,
-    left_aligned_line, project_dashboard_panel_constraints, project_list_footer_line,
-    project_row_style, project_row_values, project_table_column_constraints, session_count_line,
+    TABLE_COLUMN_SPACING, agent_cli_summary_lines, display_project_path, left_aligned_line,
+    project_dashboard_panel_constraints, project_list_footer_line, project_row_style,
+    project_row_values, project_table_column_constraints, session_count_line,
     work_stats_summary_lines,
 };
 use crate::domain::agent::{AgentCliInfo, AgentKind};
@@ -21,18 +21,6 @@ use crate::ui::render::Page;
 use crate::ui::style;
 
 const TEST_ACTIVITY_DAY_KEY: i64 = 20_000;
-
-#[test]
-fn test_row_highlight_symbol_uses_background_only_selection() {
-    // Arrange
-    let highlight_symbol = ROW_HIGHLIGHT_SYMBOL;
-
-    // Act
-    let is_empty_symbol = highlight_symbol.is_empty();
-
-    // Assert
-    assert!(is_empty_symbol);
-}
 
 #[test]
 fn test_project_table_column_spacing_is_wider_for_readability() {

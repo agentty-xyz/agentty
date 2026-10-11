@@ -1,12 +1,94 @@
-use ratatui::style::Color;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 
 use super::super::icon::Icon;
 use super::{
     DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color, palette,
-    scoped_active_theme, status_color, status_icon,
+    prepare_terminal_frame, scoped_active_theme, selection_style, status_color, status_icon,
 };
 use crate::domain::session::{ReviewRequestState, Status};
 use crate::domain::theme::ColorTheme;
+
+#[test]
+fn terminal_frames_preserve_selections_and_attributes_with_and_without_colors() {
+    for theme in ColorTheme::ALL {
+        // Arrange
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
+        {
+            let _theme_scope = scoped_active_theme(theme);
+            buffer[(0, 0)].set_symbol("S").set_style(selection_style());
+            buffer[(1, 0)].set_symbol("U").set_style(border_style());
+        }
+        buffer[(1, 0)].modifier = Modifier::BOLD | Modifier::ITALIC;
+        buffer[(2, 0)].underline_color = Color::Red;
+        buffer[(2, 0)].modifier = Modifier::UNDERLINED | Modifier::DIM;
+        let original_buffer = buffer.clone();
+        let mut colored_buffer = buffer.clone();
+
+        // Act
+        prepare_terminal_frame(&mut buffer, theme, true);
+        prepare_terminal_frame(&mut colored_buffer, theme, false);
+
+        // Assert
+        assert_eq!(colored_buffer, original_buffer);
+        assert_eq!(buffer[(0, 0)].symbol(), "S");
+        assert_eq!(buffer[(0, 0)].modifier, Modifier::BOLD | Modifier::REVERSED);
+        assert_eq!(buffer[(1, 0)].symbol(), "U");
+        assert_eq!(buffer[(1, 0)].modifier, Modifier::BOLD | Modifier::ITALIC);
+        assert_eq!(
+            buffer[(2, 0)].modifier,
+            Modifier::UNDERLINED | Modifier::DIM
+        );
+        for cell in buffer.content {
+            assert_eq!(cell.fg, Color::Reset);
+            assert_eq!(cell.bg, Color::Reset);
+            assert_eq!(cell.underline_color, Color::Reset);
+        }
+    }
+}
+
+#[test]
+fn selections_have_fixed_rgb_colors_and_readable_contrast_in_every_theme() {
+    for theme in ColorTheme::ALL {
+        // Arrange
+        let _theme_scope = scoped_active_theme(theme);
+
+        // Act
+        let selected = selection_style();
+        let foreground = selected.fg.expect("selection foreground");
+        let background = selected.bg.expect("selection background");
+        let foreground_luminance = relative_luminance(foreground);
+        let background_luminance = relative_luminance(background);
+        let contrast = (foreground_luminance.max(background_luminance) + 0.05)
+            / (foreground_luminance.min(background_luminance) + 0.05);
+
+        // Assert
+        assert!(
+            contrast >= 4.5,
+            "readable selection contrast in {theme:?}: {contrast}"
+        );
+        assert_ne!(background, palette::surface());
+        assert_ne!(background, palette::surface_prompt());
+        assert_ne!(background, palette::surface_overlay());
+        assert!(selected.add_modifier.contains(Modifier::BOLD));
+    }
+}
+
+/// RGB is required so terminal ANSI palette remapping cannot erase contrast.
+fn relative_luminance(color: Color) -> f64 {
+    let (red, green, blue) = rgb_components(color).expect("selection colors must be fixed RGB");
+    let linear = |component: u8| {
+        let normalized = f64::from(component) / 255.0;
+        if normalized <= 0.04045 {
+            normalized / 12.92
+        } else {
+            ((normalized + 0.055) / 1.055).powf(2.4)
+        }
+    };
+
+    linear(red) * 0.2126 + linear(green) * 0.7152 + linear(blue) * 0.0722
+}
 
 #[test]
 fn status_color_returns_muted_text_for_new() {

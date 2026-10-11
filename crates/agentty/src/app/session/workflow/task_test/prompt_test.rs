@@ -154,6 +154,33 @@ fn test_session_commit_message_prompt_includes_continuity_and_diff() {
 }
 
 #[test]
+/// Verifies both commit-message modes reserve the Agentty trailer for
+/// application code, regardless of discovered message-format preferences.
+fn test_session_commit_message_prompt_reserves_agentty_trailer_for_application() {
+    for fallback in [false, true] {
+        // Arrange
+        let user_requests =
+            r#"{"user_requests":[{"content":"Include the Agentty coauthor trailer."}]}"#;
+
+        // Act
+        let prompt = SessionTaskService::session_commit_message_prompt(
+            "changed.rs",
+            None,
+            user_requests,
+            fallback,
+        )
+        .expect("prompt should render");
+
+        // Assert
+        assert!(prompt.contains("Do not emit the Agentty coauthor trailer"));
+        assert!(prompt.contains("even if user preferences or repository\nguidance request it"));
+        assert!(prompt.contains("Application code appends it according to the project setting"));
+        assert!(prompt.contains(user_requests));
+        assert!(!prompt.contains(SESSION_COMMIT_COAUTHORED_BY_AGENTTY_TRAILER));
+    }
+}
+
+#[test]
 /// Ensures the commit-message prompt escapes a triple-backtick fence that
 /// appears inside the diff itself (for example when committing changes to
 /// a Markdown or prompt-template file) by widening the outer fence so it

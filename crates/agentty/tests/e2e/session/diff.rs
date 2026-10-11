@@ -2,8 +2,10 @@
 
 use std::os::unix::fs::PermissionsExt;
 
+use ag_session::SettingName;
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
+use agentty::domain::theme::ColorTheme;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
@@ -17,10 +19,118 @@ use super::fixture::{
     seed_sessions_startup_tab,
 };
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
-use crate::{common, test_support};
+use crate::{common, selection, test_support};
 
 /// Stable id for the seeded binary-only diff session.
 const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
+
+/// File and changed-line selection remain distinct while moving focus.
+#[tokio::test]
+async fn selection_visibility_in_diff_views() -> E2eResult {
+    for theme in ColorTheme::ALL {
+        for colors_enabled in [false, true] {
+            // Arrange
+            FeatureTest::new(format!(
+                "selection_visibility_diff_{}_{}",
+                theme.as_str(),
+                colors_enabled
+            ))
+            .with_git()
+            .with_terminal_size(120, 30)
+            .env("NO_COLOR", if colors_enabled { "" } else { "1" })
+            .setup(move |env| {
+                Box::pin(async move {
+                    seed_scrollable_diff_session(env).await?;
+                    let database = common::open_database(env).await?;
+                    database
+                        .settings()
+                        .upsert_setting(SettingName::Theme, theme.as_str())
+                        .await?;
+
+                    Ok(())
+                })
+            })
+            .run(
+                |scenario| {
+                    // Act
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .compose(&common::open_selected_session_view())
+                        .press_key("d")
+                        .wait_for_text("main.rs", 5000)
+                        .press_key("j")
+                        .wait_for_stable_frame(200, 3000)
+                        .capture_labeled("files", "Selected file highlighted")
+                        .press_key("l")
+                        .wait_for_text("Esc/Left: files", 5000)
+                        .wait_for_stable_frame(200, 3000)
+                        .capture_labeled("lines", "Changed-line selection owns focus")
+                        .press_key("j")
+                        .wait_for_stable_frame(200, 3000)
+                        .capture_labeled("next_line", "Highlight moves to the next source row")
+                        .press_key("Esc")
+                        .wait_for_text("j/k: select file", 5000)
+                        .capture_labeled("files_again", "File highlight restored")
+                },
+                move |_frame, report| {
+                    Box::pin(async move {
+                        // Assert
+                        assert_diff_selection_report(report, theme, colors_enabled);
+                    })
+                },
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Checks file focus and source-row highlight movement in both color modes.
+fn assert_diff_selection_report(report: &ProofReport, theme: ColorTheme, colors_enabled: bool) {
+    let (foreground, background) = selection::selection_colors(theme);
+    let colors = colors_enabled.then_some((foreground, background));
+    assert_eq!(report.captures.len(), 4);
+    for index in [0, 3] {
+        let frame = common::frame_from_capture(&report.captures[index]);
+        selection::assert_selected_label(&frame, "main.rs", colors);
+    }
+    for (index, selected, unselected) in [
+        (1, "changed line 00", "changed line 01"),
+        (2, "changed line 01", "changed line 00"),
+    ] {
+        let frame = common::frame_from_capture(&report.captures[index]);
+        selection::assert_selected_label(&frame, selected, colors);
+        if colors_enabled {
+            assert!(
+                frame
+                    .find_text(selected)
+                    .iter()
+                    .all(|span| !span.style.inverse()),
+                "colored source-row highlighting must preserve the shared color order"
+            );
+        }
+        let unselected_spans = frame.find_text(unselected);
+        assert_eq!(
+            unselected_spans.len(),
+            1,
+            "the other source row must remain visible"
+        );
+        for label in ["main.rs", unselected] {
+            assert!(
+                frame.find_text(label).iter().all(|span| {
+                    if colors_enabled {
+                        span.background != Some(background)
+                    } else {
+                        !span.style.inverse()
+                    }
+                }),
+                "highlight must leave {label} and move to the selected source row"
+            );
+        }
+    }
+}
 
 /// Seeds one review-ready session whose latest diff refresh found no changes.
 async fn seed_clean_review_ready_session(

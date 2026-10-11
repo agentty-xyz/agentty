@@ -151,13 +151,13 @@ fn test_project_switcher_overlay_lines_highlight_selected_row() {
         selected_line
             .spans
             .iter()
-            .all(|span| span.style.bg == Some(palette::accent()))
+            .all(|span| span.style.bg == Some(palette::surface_selection()))
     );
     assert!(
         unselected_line
             .spans
             .iter()
-            .all(|span| span.style.bg != Some(palette::accent()))
+            .all(|span| span.style.bg != Some(palette::surface_selection()))
     );
 }
 

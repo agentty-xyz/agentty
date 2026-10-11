@@ -6,7 +6,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::domain::harness::HarnessAvailability;
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 /// Minimum popup height that leaves room for title, options, and hints
 /// without adding unused vertical space.
@@ -167,14 +167,8 @@ impl SessionCreationOverlay {
         let row_text = format!(" {label:<OPTION_LABEL_WIDTH$}  {detail:<OPTION_DETAIL_WIDTH$} ");
 
         if is_selected {
-            return Line::from(vec![Span::styled(
-                row_text,
-                Style::default()
-                    .fg(palette::surface_overlay())
-                    .bg(palette::accent())
-                    .add_modifier(Modifier::BOLD),
-            )])
-            .alignment(Alignment::Center);
+            return Line::from(vec![Span::styled(row_text, style::selection_style())])
+                .alignment(Alignment::Center);
         }
 
         let (label_style, detail_style) = if is_disabled {
@@ -192,7 +186,7 @@ impl SessionCreationOverlay {
         };
 
         Line::from(vec![
-            Span::styled(" ", Style::default().fg(palette::text_subtle())),
+            Span::raw(" "),
             Span::styled(format!("{label:<OPTION_LABEL_WIDTH$}"), label_style),
             Span::styled("  ", Style::default().fg(palette::text_subtle())),
             Span::styled(format!("{detail:<OPTION_DETAIL_WIDTH$}"), detail_style),

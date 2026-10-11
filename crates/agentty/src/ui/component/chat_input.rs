@@ -255,11 +255,8 @@ impl<'a> ChatInput<'a> {
             .enumerate()
             .map(|(index, item)| {
                 let is_selected = index == suggestion_list.selected_index;
-                let prefix = if is_selected { ">" } else { " " };
                 let label_style = if is_selected {
-                    Style::default()
-                        .fg(style::palette::accent())
-                        .add_modifier(Modifier::BOLD)
+                    style::selection_style()
                 } else {
                     Style::default().fg(style::palette::text_muted())
                 };
@@ -270,7 +267,7 @@ impl<'a> ChatInput<'a> {
                 };
 
                 let mut spans = Vec::new();
-                spans.push(Span::styled(format!("{prefix} "), label_style));
+                spans.push(Span::styled(" ", label_style));
 
                 if let Some(badge) = &item.badge {
                     spans.push(Span::styled(format!("[{badge}] "), description_style));

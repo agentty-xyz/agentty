@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
 const MIN_OVERLAY_WIDTH: u16 = 50;
@@ -62,16 +62,10 @@ impl<'a> LaunchConfigurationOverlay<'a> {
 
             let line = if is_selected {
                 let selected_label = format!(" {command_label:<command_width$}");
-                Line::from(Span::styled(
-                    selected_label,
-                    Style::default()
-                        .fg(palette::surface_overlay())
-                        .bg(palette::accent())
-                        .add_modifier(Modifier::BOLD),
-                ))
+                Line::from(Span::styled(selected_label, style::selection_style()))
             } else {
                 Line::from(vec![
-                    Span::styled(" ", Style::default().fg(palette::text_subtle())),
+                    Span::raw(" "),
                     Span::styled(command_label, Style::default().fg(palette::text())),
                 ])
             };

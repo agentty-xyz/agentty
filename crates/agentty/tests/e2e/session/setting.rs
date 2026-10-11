@@ -285,6 +285,7 @@ async fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("slash_command_selection_wraps")
         .with_git()
+        .env("NO_COLOR", "1")
         .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
@@ -322,11 +323,20 @@ async fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
                         .copied()
                         .expect("slash-command menu should render at least one option");
 
-                    assert_eq!(
-                        frame.cell_text(last_option_row, slash_menu_left_col + 1),
-                        ">",
-                        "expected the final visible slash command to be selected after wrapping up"
-                    );
+                    for row in option_rows {
+                        let style = frame
+                            .cell_style(row, slash_menu_left_col + 2)
+                            .expect("slash-command option should have styling");
+                        assert_eq!(
+                            style.inverse(),
+                            row == last_option_row,
+                            "only the last slash-command option should be highlighted after \
+                             wrapping"
+                        );
+                        if row == last_option_row {
+                            assert!(style.bold(), "the selected command should also be bold");
+                        }
+                    }
                 })
             },
         )

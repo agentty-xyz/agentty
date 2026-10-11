@@ -21,6 +21,9 @@ commit-message guidance requested below.
 Return the full response as the required protocol JSON object. Put the plain-text commit
 message in `answer`; include no other fields.
 
+Do not emit the Agentty coauthor trailer, even if user preferences or repository
+guidance request it. Application code appends it according to the project setting.
+
 First inspect applicable repository commit-message guidance in agent instruction files
 (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and relevant skills under shared or
 agent-specific directories such as `skills/`, `.agents/skills/`, `.claude/skills/`, and

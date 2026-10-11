@@ -19,9 +19,6 @@ use crate::presentation::help_action;
 use crate::ui::input_layout::first_table_column_width;
 use crate::ui::{Page, layout, markdown, style};
 
-/// Uses row-background highlighting without a textual cursor glyph.
-const ROW_HIGHLIGHT_SYMBOL: &str = "";
-
 /// Horizontal spacing between table columns in the session list.
 const TABLE_COLUMN_SPACING: u16 = 2;
 
@@ -267,7 +264,7 @@ impl Page for SessionListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
-        let selected_style = Style::default().bg(style::palette::surface_selection());
+        let selected_style = style::selection_style();
         let header_style = Style::default()
             .bg(style::palette::surface())
             .fg(style::palette::text_muted())
@@ -338,8 +335,7 @@ impl Page for SessionListPage<'_> {
             .column_spacing(TABLE_COLUMN_SPACING)
             .header(header)
             .block(block)
-            .row_highlight_style(selected_style)
-            .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
+            .row_highlight_style(selected_style);
 
         let previous_selection = self.table_state.selected();
         prepare_grouped_table_state(self.table_state, selected_row);

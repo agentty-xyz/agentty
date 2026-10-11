@@ -609,9 +609,14 @@ fn test_diff_page_distinguishes_cursor_inside_commented_range() {
         })
         .collect::<Vec<_>>();
     assert_eq!(commented_source_rows.len(), 2);
-    assert!(commented_source_rows.iter().all(|row| {
-        row.iter()
+    assert!(
+        commented_source_rows[0]
+            .iter()
             .any(|cell| cell.bg == style::palette::surface_prompt())
+    );
+    assert!(commented_source_rows[1].iter().any(|cell| {
+        cell.fg == style::palette::text_selection()
+            && cell.bg == style::palette::surface_selection()
     }));
     assert!(
         commented_source_rows[0]
@@ -621,7 +626,7 @@ fn test_diff_page_distinguishes_cursor_inside_commented_range() {
     assert!(
         commented_source_rows[1]
             .iter()
-            .any(|cell| cell.modifier.contains(Modifier::REVERSED))
+            .all(|cell| !cell.modifier.contains(Modifier::REVERSED))
     );
 }
 
@@ -713,6 +718,7 @@ fn test_diff_page_shows_comment_submission_in_file_window() {
 #[test]
 fn test_inline_comment_editor_shows_added_range_title_and_state_highlighting() {
     // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let comment = DiffLineComment {
         input: crate::domain::input::InputState::with_text("Explain this".to_string()),
         target: DiffLineCommentTarget::from_anchors(vec![
@@ -751,21 +757,14 @@ fn test_inline_comment_editor_shows_added_range_title_and_state_highlighting() {
             .flat_map(|line| &line.spans)
             .all(|span| span.style.bg == Some(style::palette::surface_prompt()))
     );
-    assert!(
-        selected_lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .all(|span| span.style.add_modifier.contains(Modifier::REVERSED))
-    );
-    assert!(
-        active_lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .all(|span| {
-                span.style.bg == Some(style::palette::surface_selection())
-                    && !span.style.add_modifier.contains(Modifier::REVERSED)
-            })
-    );
+    for lines in [selected_lines, active_lines] {
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .all(|span| span.style == style::selection_style())
+        );
+    }
 }
 
 #[test]
@@ -1027,8 +1026,9 @@ fn test_diff_content_snapshot_identifies_files() {
 }
 
 #[test]
-fn test_borrowed_visible_lines_reverses_selected_rendered_range() {
+fn test_borrowed_visible_lines_uses_shared_selection_style_for_rendered_range() {
     // Arrange
+    let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let lines = [
         Line::from(Span::raw("first")),
         Line::from(Span::raw("selected")),
@@ -1039,24 +1039,10 @@ fn test_borrowed_visible_lines_reverses_selected_rendered_range() {
     let paint_lines = DiffPage::borrowed_visible_lines(&lines, 0, 3, Some(&(1..2)));
 
     // Assert
-    assert!(
-        !paint_lines[0]
-            .style
-            .add_modifier
-            .contains(Modifier::REVERSED)
-    );
-    assert!(
-        paint_lines[1]
-            .style
-            .add_modifier
-            .contains(Modifier::REVERSED)
-    );
-    assert!(
-        paint_lines[1].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::REVERSED)
-    );
+    assert_eq!(paint_lines[0].style, Style::default());
+    assert_eq!(paint_lines[1].style, style::selection_style());
+    assert_eq!(paint_lines[1].spans[0].style, style::selection_style());
+    assert_eq!(paint_lines[2].style, Style::default());
 }
 
 #[test]
@@ -1605,7 +1591,12 @@ fn test_render_highlights_selected_changed_line_in_content_focus() {
 
     // Assert
     let buffer = terminal.backend().buffer();
-    assert!(modifier_cell_count(buffer, Modifier::REVERSED) > 0);
+    assert_eq!(modifier_cell_count(buffer, Modifier::REVERSED), 0);
+    assert!(buffer.content().iter().any(|cell| {
+        cell.fg == style::palette::text_selection()
+            && cell.bg == style::palette::surface_selection()
+            && cell.modifier.contains(Modifier::BOLD)
+    }));
     assert!(buffer.content().iter().any(|cell| {
         cell.symbol() == "┌"
             && cell.fg == style::palette::accent()

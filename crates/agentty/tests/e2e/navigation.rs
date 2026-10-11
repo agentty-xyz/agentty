@@ -139,6 +139,7 @@ async fn tab_key_switches_tabs() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("tab_switch")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Tab switching",
             "Jump between workspace tabs with a single keypress.",
@@ -153,11 +154,25 @@ async fn tab_key_switches_tabs() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2500)
                     .capture_labeled("after", "Sessions tab selected")
+                    // Restore the persisted startup tab before VHS replays the journey.
+                    .compose(&common::switch_to_tab("Settings"))
+                    .compose(&common::switch_to_tab("Projects"))
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    assert_eq!(report.captures.len(), 2);
+                    let projects_frame = common::frame_from_capture(&report.captures[0]);
+                    let projects_full = Region::full(projects_frame.cols(), projects_frame.rows());
+                    assertion::assert_text_in_region(&projects_frame, "Activity", &projects_full);
+                    let sessions_frame = common::frame_from_capture(&report.captures[1]);
+                    let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
+                    assertion::assert_text_in_region(
+                        &sessions_frame,
+                        "No sessions",
+                        &sessions_full,
+                    );
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "No sessions", &full);
+                    assertion::assert_text_in_region(frame, "Activity", &full);
                 })
             },
         )
@@ -235,6 +250,7 @@ async fn quit_shows_confirmation_dialog() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("quit_confirmation")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Quit confirmation",
             "Confirm before quitting to prevent accidental exits.",
@@ -269,6 +285,7 @@ async fn startup_shows_footer_hints() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("footer_hints")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Footer hints",
             "Context-sensitive hints in the footer guide available actions.",
@@ -365,6 +382,7 @@ async fn help_overlay_toggle() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("help_overlay")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Help overlay",
             "Press ? to see available keybindings for the current view.",

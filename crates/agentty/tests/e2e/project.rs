@@ -285,6 +285,7 @@ async fn projects_page_shows_cwd() {
     // Arrange, Act, Assert
     FeatureTest::new("projects_cwd")
         .with_git()
+        .setup(|env| Box::pin(common::seed_projects_startup_tab(env)))
         .zola(
             "Project dashboard",
             "See project activity and switch between registered projects.",

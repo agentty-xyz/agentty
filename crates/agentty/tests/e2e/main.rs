@@ -15,6 +15,7 @@ mod demo;
 mod navigation;
 mod orchestration;
 mod project;
+mod selection;
 mod session;
 mod setting;
 mod update;

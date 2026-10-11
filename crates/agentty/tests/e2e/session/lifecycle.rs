@@ -188,31 +188,38 @@ async fn seed_canceled_session_for_continuation(
 
 /// Verify that the Sessions tab hides empty groups and guides session creation.
 ///
-/// Starts Agentty with no sessions, then creates an active session and verifies
-/// that only the populated group is visible.
+/// Empty-state guidance and populated-group visibility use separate fixtures.
+/// The published empty-state demo leaves its database unchanged for VHS replay.
 #[tokio::test]
 async fn session_list_empty_state() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_empty")
         .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                common::seed_active_project_setting(env).await?;
+                seed_sessions_tab(env).await
+            })
+        })
         .zola(
             "Empty session state",
-            "See how Agentty guides session creation and hides empty groups.",
+            "See empty-session guidance and the available session types.",
             40,
         )
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .viewing_pause_ms(2000)
-                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("No sessions. Press 'a' to start one.", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions_tab", "Sessions tab with no sessions")
-                    .compose(&common::create_session_with_prompt_and_return_to_list(
-                        "Keep only populated groups",
-                    ))
+                    .press_key("a")
+                    .wait_for_text("Select session type", 5000)
                     .viewing_pause_ms(2000)
-                    .capture_labeled("active_group", "Only the populated group is visible")
+                    .capture_labeled(
+                        "session_types",
+                        "Session types available from the empty list",
+                    )
             },
             |frame, report| {
                 Box::pin(async move {
@@ -226,7 +233,31 @@ async fn session_list_empty_state() -> E2eResult {
                     assertion::assert_not_visible(&empty_frame, "MERGE QUEUE");
                     assertion::assert_not_visible(&empty_frame, "ACTIVE");
                     assertion::assert_not_visible(&empty_frame, "ARCHIVE");
+                    assertion::assert_not_visible(frame, "ACTIVE");
+                    assertion::assert_not_visible(frame, "ARCHIVE");
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Regular", &full);
+                    assertion::assert_text_in_region(frame, "Draft", &full);
+                })
+            },
+        )
+        .await?;
 
+    // Arrange, Act, Assert
+    FeatureTest::new("session_populated_groups")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::create_session_with_prompt_and_return_to_list(
+                        "Keep only populated groups",
+                    ))
+                    .capture_labeled("active_group", "Only the populated group is visible")
+            },
+            |frame, _report| {
+                Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "ACTIVE —— 1", &full);
                     assertion::assert_not_visible(frame, "MERGE QUEUE");
@@ -1387,16 +1418,32 @@ async fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
 /// Verify that `j` and `k` navigate the session list and that `Enter`
 /// opens the currently selected session.
 ///
-/// Creates two sessions ("alpha" and "beta"), navigates down with `j`,
-/// opens the selection with `Enter`, returns with `q`, navigates back
-/// up with `k`, and opens again. Asserts that the list shows display-only
-/// size prefixes and that both navigations still land on openable session
-/// views after moving the cursor in the list.
+/// Navigates two seeded review sessions with j/k and opens each selection.
+/// Stable sessions keep the PTY proof and VHS replay independent of worker
+/// timing.
 #[tokio::test]
 async fn session_list_jk_navigation() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_navigation")
         .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                for (id, title) in [("nav-alpha", "alpha"), ("nav-beta", "beta")] {
+                    common::seed_session(
+                        env,
+                        SessionSeed::regular(id, model_fixture::CODEX_MODEL_ID, "main", "Review")
+                            .with_title(title),
+                    )
+                    .await?;
+                    std::fs::create_dir_all(test_support::session_folder(
+                        &env.agentty_root.join("wt"),
+                        id,
+                    ))?;
+                }
+                common::seed_active_project_setting(env).await?;
+                seed_sessions_tab(env).await
+            })
+        })
         .zola(
             "Session list navigation",
             "Navigate sessions with j/k keys to select and open different entries.",
@@ -1406,13 +1453,8 @@ async fn session_list_jk_navigation() -> E2eResult {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::create_session_with_prompt_and_return_to_list(
-                        "alpha",
-                    ))
-                    .compose(&common::create_session_with_prompt_and_return_to_list(
-                        "beta",
-                    ))
+                    .wait_for_text("alpha", 5000)
+                    .wait_for_text("beta", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("two_sessions", "Two sessions in list")
                     // Navigate down with j, open the selection, and capture.
@@ -1479,6 +1521,11 @@ async fn session_list_jk_navigation() -> E2eResult {
                     assert!(
                         up_navigation_text.contains("alpha") || up_navigation_text.contains("beta"),
                         "Session opened after k must contain alpha or beta"
+                    );
+                    assert_ne!(
+                        down_navigation_text.contains("alpha"),
+                        up_navigation_text.contains("alpha"),
+                        "j and k must open different sessions"
                     );
                 })
             },

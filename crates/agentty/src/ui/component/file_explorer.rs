@@ -468,7 +468,7 @@ impl Component for FileExplorer {
                     ))
                     .border_style(style::border_style()),
             )
-            .highlight_style(Style::default().bg(style::palette::surface_selection()));
+            .highlight_style(style::selection_style());
 
         let mut state = ListState::default();
         if self.is_focused {
