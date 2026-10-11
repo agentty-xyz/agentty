@@ -113,6 +113,10 @@ impl AgentAvailabilityProbe for RealAgentAvailabilityProbe {
     fn native_harness_default_model(&self) -> Option<AgentModel> {
         ag_runtime::RealAgentAvailabilityProbe.native_harness_default_model()
     }
+
+    fn harness_model_setup_instructions(&self, model: AgentModel) -> Option<String> {
+        ag_runtime::RealAgentAvailabilityProbe.harness_model_setup_instructions(model)
+    }
 }
 
 /// Prepares a provider's workspace before work is admitted.

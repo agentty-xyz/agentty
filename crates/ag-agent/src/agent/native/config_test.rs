@@ -12,7 +12,8 @@ use ag_session::AgentModel;
 
 use super::{
     BudgetedModel, ModelSelection, NativeHarnessConfig, ResumeOnlyModel, bash_environment,
-    default_model, output_schema, reasoning_effort, repository, turn_options, unicode_environment,
+    default_model, harness_model_setup_instructions, output_schema, reasoning_effort, repository,
+    turn_options, unicode_environment,
 };
 
 /// Builds an environment snapshot from string pairs.
@@ -325,4 +326,38 @@ async fn budgeted_model_charges_before_each_request() {
         error.to_string().contains("provider call limit reached"),
         "{error}"
     );
+}
+
+#[test]
+/// Reports setup instructions only for harness models whose providers lack
+/// credentials in the given environment.
+fn harness_model_setup_instructions_follow_provider_configuration() {
+    // Arrange
+    let kimi_key_only = environment(&[("KIMI_API_KEY", "key")]);
+    let kimi_configured = environment(&[("KIMI_API_KEY", "key"), ("KIMI_BASE_URL", "http://kimi")]);
+    let muse_configured = environment(&[("MODEL_API_KEY", "key")]);
+
+    // Act
+    let missing = harness_model_setup_instructions(AgentModel::KimiK3, &kimi_key_only);
+    let missing_base_url = harness_model_setup_instructions(AgentModel::KimiK3, &environment(&[]));
+    let configured = harness_model_setup_instructions(AgentModel::KimiK3, &kimi_configured);
+    let configured_muse =
+        harness_model_setup_instructions(AgentModel::MuseSpark13, &muse_configured);
+    let unknown = harness_model_setup_instructions(AgentModel::Gpt61Sol, &environment(&[]));
+
+    // Assert
+    assert!(
+        missing.is_some_and(|instructions| instructions.contains("export KIMI_API_KEY")),
+        "keyless provider should report instructions"
+    );
+    assert!(
+        missing_base_url.is_some_and(|instructions| instructions.contains("KIMI_BASE_URL")),
+        "missing base URL should be required in instructions"
+    );
+    assert_eq!(configured, None, "configured provider should report none");
+    assert_eq!(
+        configured_muse, None,
+        "configured provider should report none"
+    );
+    assert_eq!(unknown, None, "non-harness model should report none");
 }

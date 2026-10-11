@@ -238,3 +238,23 @@ fn configuration_rejects_an_empty_model() {
         ModelConfigurationError::Metadata(ModelMetadataError::EmptyModel)
     ));
 }
+
+#[test]
+fn setup_instructions_name_each_required_variable() {
+    // Arrange and Act
+    let kimi = ModelProvider::Kimi.setup_instructions();
+    let muse = ModelProvider::Muse.setup_instructions();
+    let qwen = ModelProvider::Qwen.setup_instructions();
+
+    // Assert
+    assert!(kimi.contains("Kimi models need credentials"));
+    assert!(kimi.contains("export KIMI_API_KEY=\"YOUR_API_KEY\""));
+    assert!(kimi.contains("export KIMI_BASE_URL=\"YOUR_BASE_URL\" (required)"));
+    assert!(!muse.contains("MODEL_API_BASE_URL"));
+    assert!(muse.contains("export MODEL_API_KEY=\"YOUR_API_KEY\""));
+    assert!(qwen.contains("export DASHSCOPE_API_KEY=\"YOUR_API_KEY\""));
+    assert!(qwen.contains("export DASHSCOPE_BASE_URL=\"YOUR_BASE_URL\" (required)"));
+    for instructions in [&kimi, &muse, &qwen] {
+        assert!(instructions.contains("Restart the app"));
+    }
+}

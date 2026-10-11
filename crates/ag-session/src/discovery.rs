@@ -80,6 +80,14 @@ pub trait AgentAvailabilityProbe: Send + Sync {
     fn native_harness_default_model(&self) -> Option<AgentModel> {
         None
     }
+
+    /// Returns setup instructions for `model`'s harness provider when its
+    /// credentials are missing, or `None` when the provider is configured.
+    /// Probes without credential discovery report none.
+    fn harness_model_setup_instructions(&self, model: AgentModel) -> Option<String> {
+        let _ = model;
+        None
+    }
 }
 
 /// Availability probe that returns one caller-provided snapshot.

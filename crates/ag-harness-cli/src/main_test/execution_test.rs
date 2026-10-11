@@ -1,6 +1,5 @@
 use std::env;
 
-use ag_harness::provider::ModelConfigurationError;
 use serde_json::json;
 use tokio::io::BufReader;
 use wiremock::matchers::{body_string_contains, method, path};
@@ -190,7 +189,8 @@ async fn execute_reports_missing_provider_credentials_before_creating_a_session(
     // Assert
     assert!(matches!(
         error,
-        CliError::ModelConfiguration(ModelConfigurationError::ApiKey { .. })
+        CliError::ProviderSetupRequired { instructions }
+        if instructions.contains("export MODEL_API_KEY")
     ));
     assert_eq!(output, [] as [u8; 0]);
 }

@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::str::FromStr;
 use std::{env, fmt};
 
@@ -67,6 +68,28 @@ impl ModelProvider {
             Self::Muse => Some(muse::DEFAULT_BASE_URL),
             Self::Kimi | Self::Qwen => None,
         }
+    }
+
+    /// Renders copy-pasteable setup instructions naming each environment
+    /// variable this provider requires. Providers without a built-in base
+    /// URL mark their endpoint variable as required.
+    pub fn setup_instructions(self) -> String {
+        let provider = match self {
+            Self::Kimi => "Kimi",
+            Self::Muse => "Muse",
+            Self::Qwen => "Qwen",
+        };
+        let key = self.api_key_environment();
+        let mut instructions = format!(
+            "{provider} models need credentials before they can run:\n\n  export \
+             {key}=\"YOUR_API_KEY\"\n"
+        );
+        if self.default_base_url().is_none() {
+            let url = self.base_url_environment();
+            let _ = writeln!(instructions, "  export {url}=\"YOUR_BASE_URL\" (required)");
+        }
+        instructions.push_str("\nRestart the app so it picks up the new variables.");
+        instructions
     }
 
     fn client(

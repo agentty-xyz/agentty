@@ -1,10 +1,10 @@
 use std::env;
 
-use ag_harness::provider::ModelProvider;
+use ag_harness::provider::{ModelConfigurationError, ModelProvider};
 use serde_json::json;
 
 use super::support::FixedModel;
-use crate::{ChatCommand, CliError, ModelSelection, model_connector};
+use crate::{ChatCommand, CliError, ModelSelection, model_connector, with_setup_instructions};
 
 fn muse_selection(model: &str) -> ModelSelection {
     ModelSelection {
@@ -123,8 +123,56 @@ fn model_connector_applies_an_explicit_base_url_only_to_its_provider() {
     assert!(kimi.is_ok());
     assert!(matches!(
         qwen,
-        Err(CliError::BaseUrlRequired { name }) if name == ModelProvider::Qwen.base_url_environment()
+        Err(CliError::ProviderSetupRequired { instructions })
+        if instructions.contains(ModelProvider::Qwen.base_url_environment())
     ));
+}
+
+#[test]
+fn model_connector_reports_setup_instructions_for_a_missing_api_key() {
+    // Arrange
+    let mut environment = |_: &str| Err(env::VarError::NotPresent);
+    let mut connect = model_connector(ModelProvider::Muse, None, &mut environment);
+
+    // Act
+    let missing_key = connect(&ModelSelection {
+        model: "muse-test".to_string(),
+        provider: ModelProvider::Muse,
+    });
+
+    // Assert
+    assert!(matches!(
+        missing_key,
+        Err(CliError::ProviderSetupRequired { instructions })
+        if instructions.contains("export MODEL_API_KEY")
+    ));
+}
+
+#[test]
+fn setup_instructions_replace_only_missing_credential_errors() {
+    // Arrange
+    let selection = ModelSelection {
+        model: "kimi-k3".to_string(),
+        provider: ModelProvider::Kimi,
+    };
+    let missing_key = CliError::ModelConfiguration(ModelConfigurationError::ApiKey {
+        name: "KIMI_API_KEY",
+    });
+    let unrelated = CliError::UnknownModel {
+        model: "unknown".to_string(),
+    };
+
+    // Act
+    let rewritten = with_setup_instructions(&selection, missing_key);
+    let passthrough = with_setup_instructions(&selection, unrelated);
+
+    // Assert
+    assert!(matches!(
+        rewritten,
+        CliError::ProviderSetupRequired { instructions }
+        if instructions.contains("export KIMI_API_KEY")
+    ));
+    assert!(matches!(passthrough, CliError::UnknownModel { .. }));
 }
 
 #[test]
@@ -142,4 +190,27 @@ fn model_identity_is_absent_beyond_the_identity_limit() {
     assert_eq!(identity.key(), longest.key());
     assert!(ModelSelection::registry(identity, FixedModel(json!({}))).is_ok());
     assert_eq!(missing, None);
+}
+
+#[test]
+fn terminal_message_keeps_setup_instruction_line_breaks_but_flattens_other_errors() {
+    // Arrange
+    let setup = CliError::ProviderSetupRequired {
+        instructions: "line one\n\n  export FOO=\"bar\"".to_string(),
+    };
+    let other = CliError::UnknownCommand {
+        name: "wat".to_string(),
+    };
+
+    // Act
+    let setup_message = setup.terminal_message();
+    let other_message = other.terminal_message();
+
+    // Assert
+    assert_eq!(setup_message, "line one\n\n  export FOO=\"bar\"");
+    assert_eq!(
+        other_message,
+        "unknown command `wat`; type /help for commands"
+    );
+    assert!(!other_message.contains('\n'));
 }
