@@ -9,7 +9,7 @@ use ag_forge as forge;
 use ag_git::GitClient;
 use ag_orchestration as orchestration;
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
-use ag_telemetry::{Outcome, Span};
+use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use serde_json;
 use tokio::sync::mpsc;
@@ -675,6 +675,7 @@ async fn run_auto_commit(
     has_review_comment_targets: bool,
     review_comment_resolutions: &[NewSessionReviewCommentResolution],
 ) -> Result<(bool, Option<String>), SessionError> {
+    let phase = Span::child("commit.auto");
     let outcome = SessionTaskService::handle_auto_commit(AssistContext {
         app_event_tx: context.app_event_tx.clone(),
         available_agent_kinds: Arc::clone(&context.available_agent_kinds),
@@ -688,7 +689,13 @@ async fn run_auto_commit(
         session_update_versions: context.session_update_versions.clone(),
         transcript: Arc::clone(&context.transcript),
     })
+    .with_context(phase.context())
     .await;
+    phase.finish(if matches!(outcome, AutoCommitOutcome::Failed) {
+        Outcome::Failed
+    } else {
+        Outcome::Completed
+    });
 
     match outcome {
         AutoCommitOutcome::Committed(outcome) => {

@@ -31,6 +31,7 @@ pub struct RunScope {
 /// Captured ownership and every independently cancelable enclosing scope.
 #[derive(Clone, Default)]
 pub(crate) struct RunContext {
+    pub(crate) phase_trace: Option<Context>,
     pub(crate) scope: RunScope,
     pub(crate) trace: Context,
     cancellations: Vec<CancellationToken>,
@@ -39,6 +40,7 @@ pub(crate) struct RunContext {
 impl RunContext {
     fn new(scope: RunScope) -> Self {
         Self {
+            phase_trace: None,
             cancellations: scope.cancellation.iter().cloned().collect(),
             scope,
             trace: Context::current(),
@@ -53,6 +55,7 @@ impl RunContext {
 
     fn inherited(mut self) -> Self {
         let parent = Self::current();
+        self.phase_trace = self.phase_trace.or(parent.phase_trace);
         let capture_policy = self
             .trace
             .get::<CaptureToolContent>()
@@ -61,6 +64,9 @@ impl RunContext {
         if !self.trace.span().span_context().is_valid() {
             self.trace = parent.trace;
         }
+        self.phase_trace = self.phase_trace.filter(|phase| {
+            phase.span().span_context().trace_id() == self.trace.span().span_context().trace_id()
+        });
         if let Some(policy) = capture_policy {
             self.trace = self.trace.with_value(policy);
         }
@@ -97,6 +103,10 @@ impl RunContext {
     }
 }
 
+#[cfg(test)]
+#[path = "scope_test.rs"]
+mod tests;
+
 /// Executes host work with inherited run ownership. Spawned tasks must carry a
 /// scoped client explicitly; Tokio task-local values do not cross task spawns.
 pub async fn in_scope<T>(scope: RunScope, work: impl Future<Output = T>) -> T {
@@ -127,7 +137,13 @@ struct ScopedClient {
 #[async_trait]
 impl RunClient for ScopedClient {
     async fn submit(&self, request: OneShotRequest) -> Result<OneShotSubmission, OneShotError> {
-        let context = self.context.clone().inherited();
+        let submitting = Context::current();
+        let mut context = self.context.clone().inherited();
+        let phase = submitting.span().span_context().clone();
+        let owner = context.trace.span().span_context().clone();
+        if phase.is_valid() && phase.trace_id() == owner.trace_id() && phase != owner {
+            context.phase_trace = Some(submitting);
+        }
         CURRENT
             .scope(
                 context.clone(),

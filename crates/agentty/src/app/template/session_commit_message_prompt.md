@@ -11,7 +11,10 @@ work was completed.
 
 {% else %}
 
-Use the cumulative session diff below.
+Use the cumulative session diff below. It may contain bounded per-file excerpts with
+explicit omission markers. Describe only supported changes; omitted details are unknown.
+Do not retrieve a replacement full diff or file contents, except the repository
+commit-message guidance requested below.
 
 {% endif %}
 

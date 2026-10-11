@@ -120,6 +120,11 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
             .scope(async {})
             .await;
         let child = Span::child("utility.run");
+        let phase = Span::child("host.phase");
+        child.link(&phase.context());
+        child.link(&child.context());
+        child.link(&Context::new());
+        phase.finish(Outcome::Completed);
         child.attribute("agentty.purpose", "title");
         child
             .scope(async {
@@ -179,24 +184,14 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
         find("agent.attempt").parent_span_id,
         find("utility.run").span_context.span_id()
     );
+    assert_eq!(find("utility.run").links.links.len(), 1);
+    assert_eq!(
+        find("utility.run").links.links[0].span_context.span_id(),
+        find("host.phase").span_context.span_id()
+    );
     assert!(matches!(find("failed").status, Status::Error { .. }));
     assert!(matches!(find("canceled").status, Status::Unset));
-    for name in ["dropped", "abandoned", "canceled"] {
-        assert!(
-            find(name)
-                .attributes
-                .contains(&KeyValue::new("agentty.outcome", "canceled"))
-        );
-    }
-    assert!(
-        find("panic")
-            .attributes
-            .contains(&KeyValue::new("error.type", "panic"))
-    );
-    assert_eq!(find("utility.run").events.events[0].name, "first_activity");
-    assert_eq!(find("session.turn").events.events[0].name, "accepted");
-    assert!(!format!("{spans:?}").contains("private error"));
-    assert!(!format!("{spans:?}").contains("private panic"));
+    assert_terminal_metadata(&spans);
     assert_context_ownership(&spans);
 }
 
@@ -352,4 +347,36 @@ fn assert_context_ownership(spans: &[SpanData]) {
         );
         assert_eq!(pair[0].parent_span_id, pair[1].span_context.span_id());
     }
+}
+
+fn assert_terminal_metadata(spans: &[SpanData]) {
+    for name in ["dropped", "abandoned", "canceled"] {
+        assert!(spans.iter().any(|span| {
+            span.name == name
+                && span
+                    .attributes
+                    .contains(&KeyValue::new("agentty.outcome", "canceled"))
+        }));
+    }
+    assert!(spans.iter().any(|span| {
+        span.name == "panic"
+            && span
+                .attributes
+                .contains(&KeyValue::new("error.type", "panic"))
+    }));
+    for (name, event) in [
+        ("utility.run", "first_activity"),
+        ("session.turn", "accepted"),
+    ] {
+        assert!(spans.iter().any(|span| {
+            span.name == name
+                && span
+                    .events
+                    .events
+                    .first()
+                    .is_some_and(|first| first.name == event)
+        }));
+    }
+    assert!(!format!("{spans:?}").contains("private error"));
+    assert!(!format!("{spans:?}").contains("private panic"));
 }

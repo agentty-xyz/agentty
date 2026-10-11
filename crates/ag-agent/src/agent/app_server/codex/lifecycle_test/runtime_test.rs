@@ -312,6 +312,59 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
     );
 }
 
+#[tokio::test]
+async fn runtime_bootstrap_bills_fresh_threads_but_establishes_a_baseline_for_resumed_history() {
+    // Arrange
+    let folder = tempdir().expect("runtime folder");
+    for resumed in [false, true] {
+        let request = AppServerTurnRequest {
+            execution_policy: ag_contracts::ExecutionPolicy::default(),
+            provider_call_budget: None,
+            folder: folder.path().to_path_buf(),
+            live_transcript: None,
+            main_checkout_root: None,
+            model: model_fixture::CODEX_MODEL.as_str().to_string(),
+            permission_mode: PermissionMode::AutoEdit,
+            personality: ag_contracts::PersonalityPrompt::default(),
+            prompt: TurnPrompt::from("Run the turn"),
+            request_kind: ag_contracts::AgentRequestKind::SessionStart,
+            replay_transcript: None,
+            provider_conversation_id: resumed.then(|| "thread-bootstrap".to_string()),
+            persisted_instruction_conversation_id: None,
+            reasoning_level: ReasoningLevel::High,
+            session_id: "session-1".to_string(),
+            speed_mode: SpeedMode::Fast,
+        };
+        let script = r#"while IFS= read -r request; do
+            case "$request" in *'"method":"initialized"'*) continue ;; esac
+            request_id=$(printf '%s' "$request" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+            printf '{"id":"%s","result":{"thread":{"id":"thread-bootstrap"}}}\n' "$request_id"
+        done"#;
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(script);
+
+        // Act
+        let (mut child, mut transport, mut state) =
+            start_runtime_with_built_command(command, &request)
+                .await
+                .expect("bootstrap runtime");
+        transport.close_stdin();
+        crate::app_server_transport::shutdown_child(&mut child).await;
+        state.usage.begin_turn();
+        state.usage.observe(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":100,"outputTokens":10}}}}), None);
+        let first = state.usage.totals();
+        state.usage.finish_turn();
+        state.usage.begin_turn();
+        state.usage.observe(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":150,"outputTokens":15}}}}), None);
+
+        // Assert
+        assert_eq!(state.thread_id, "thread-bootstrap");
+        assert_eq!(state.restored_context, resumed);
+        assert_eq!(first, (!resumed).then_some((100, 10)));
+        assert_eq!(state.usage.totals(), Some((50, 5)));
+    }
+}
+
 #[test]
 fn codex_runtime_state_new_initializes_zero_tokens_and_empty_thread_id() {
     // Arrange
@@ -469,4 +522,169 @@ async fn initialize_runtime_propagates_transport_termination_error() {
     // Assert
     let error = result.expect_err("initialize_runtime should propagate transport error");
     assert!(matches!(error, AppServerError::Transport(_)));
+}
+
+#[tokio::test]
+async fn completed_turn_uses_cumulative_deltas_without_overwriting_request_context() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let (stream_tx, _) = mpsc::unbounded_channel();
+    let mut state =
+        CodexTurnEventLoopState::new(stream_tx, ProtocolRequestProfile::SessionTurn, "thread-1");
+    state.usage.begin_turn();
+    state
+        .process_turn_start_response(&serde_json::json!({"result":{"turn":{"id":"turn-1"}}}))
+        .expect("start");
+    // Act
+    let result = Span::root("agent.attempt", Vec::new()).scope(async {
+        for (thread, total, last, cached) in [("thread-1", 100, 100, 30), ("thread-1", 250, 150, 70), ("thread-2", 5_000, 4_000, 3_000), ("thread-1", 250, 150, 70)] {
+            state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":thread,"turnId":"turn-1","tokenUsage":{"total":{"inputTokens":total,"outputTokens":30,"cachedInputTokens":cached},"last":{"inputTokens":last,"outputTokens":20}}}})).expect("usage event");
+        }
+        state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed","usage":{"inputTokens":150,"outputTokens":20}}}})).expect("completion")
+    }).await;
+    // Assert
+    let (_, input, output) = result.expect("completed turn");
+    assert_eq!((input, output), (250, 30));
+    assert_eq!(state.usage.latest_input, Some(150));
+    let spans = exporter.get_finished_spans().expect("spans");
+    let attempt = spans
+        .iter()
+        .find(|span| span.name == "agent.attempt")
+        .expect("attempt");
+    for attribute in [
+        KeyValue::new("agentty.usage.aggregate_known", true),
+        KeyValue::new("agentty.context.last_request.input_tokens", 150_i64),
+        KeyValue::new("gen_ai.usage.cache_read.input_tokens", 70_i64),
+    ] {
+        assert!(attempt.attributes.contains(&attribute));
+    }
+}
+
+#[tokio::test]
+async fn completed_turns_never_rebill_fallback_usage_after_a_counter_gap() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut results = Vec::new();
+    // Act
+    for include_last in [false, true] {
+        let mut tracker = crate::agent::app_server::codex::usage::UsageTracker::default();
+        for (total, last) in [
+            (Some((100, 10)), true),
+            (None, true),
+            (Some((200, 20)), include_last),
+            (Some((250, 25)), true),
+        ] {
+            let (stream_tx, _) = mpsc::unbounded_channel();
+            let mut state = CodexTurnEventLoopState::new(
+                stream_tx,
+                ProtocolRequestProfile::SessionTurn,
+                "thread-1",
+            );
+            state.usage = tracker;
+            state.usage.begin_turn();
+            let mut usage = serde_json::json!({});
+            if last {
+                usage["last"] = serde_json::json!({"inputTokens":50,"outputTokens":5});
+            }
+            if let Some((input, output)) = total {
+                usage["total"] = serde_json::json!({"inputTokens":input,"outputTokens":output});
+            }
+            let result = Span::root("agent.attempt", Vec::new()).scope(async {
+            state.process_turn_start_response(&serde_json::json!({"result":{"turn":{"id":"turn-1"}}})).expect("start");
+            state.process_stream_response(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":usage}})).expect("usage");
+            state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}})).expect("completion").expect("completed turn")
+        }).await;
+            results.push((result.1, result.2));
+            tracker = state.usage;
+        }
+    }
+    // Assert
+    assert_eq!(
+        results,
+        [
+            (100, 10),
+            (50, 5),
+            (0, 0),
+            (50, 5),
+            (100, 10),
+            (50, 5),
+            (50, 5),
+            (50, 5)
+        ]
+    );
+    let spans = exporter.get_finished_spans().expect("spans");
+    let known = spans
+        .iter()
+        .filter(|span| span.name == "agent.attempt")
+        .map(|span| {
+            span.attributes
+                .contains(&KeyValue::new("agentty.usage.aggregate_known", true))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(known, [true, false, false, true, true, false, false, true]);
+}
+
+#[tokio::test]
+async fn resumed_turns_with_only_cumulative_usage_never_bill_retained_history() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut results = Vec::new();
+    // Act
+    for snake_case in [false, true] {
+        let mut tracker = crate::agent::app_server::codex::usage::UsageTracker::default();
+        tracker.resumed();
+        for (input, output) in [(50_000, 1_000), (50_050, 1_005)] {
+            let (stream_tx, _) = mpsc::unbounded_channel();
+            let mut state = CodexTurnEventLoopState::new(
+                stream_tx,
+                ProtocolRequestProfile::SessionTurn,
+                "thread-1",
+            );
+            state.usage = tracker;
+            state.usage.begin_turn();
+            let notification = if snake_case {
+                serde_json::json!({"method":"thread/token_usage/updated","params":{"thread_id":"thread-1","turn_id":"turn-1","token_usage":{"total_token_usage":{"input_tokens":input,"output_tokens":output}}}})
+            } else {
+                serde_json::json!({"method":"thread/tokenUsage/updated","params":{"threadId":"thread-1","turnId":"turn-1","tokenUsage":{"total":{"inputTokens":input,"outputTokens":output}}}})
+            };
+            let result = Span::root("agent.attempt", Vec::new()).scope(async {
+                state.process_turn_start_response(&serde_json::json!({"result":{"turn":{"id":"turn-1"}}})).expect("start");
+                state.process_stream_response(&notification).expect("usage");
+                state.process_stream_response(&serde_json::json!({"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}})).expect("completion").expect("completed turn")
+            }).await;
+            results.push((result.1, result.2));
+            tracker = state.usage;
+        }
+    }
+    // Assert
+    assert_eq!(results, [(0, 0), (50, 5), (0, 0), (50, 5)]);
+    let known = exporter
+        .get_finished_spans()
+        .expect("spans")
+        .iter()
+        .filter(|span| span.name == "agent.attempt")
+        .map(|span| {
+            span.attributes
+                .contains(&KeyValue::new("agentty.usage.aggregate_known", true))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(known, [false, true, false, true]);
 }

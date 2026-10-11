@@ -33,6 +33,34 @@ dependency-graph filter above. An execution filter does not select compilation p
 separate `test-agentty-e2e` gate. A filter narrows execution, not necessarily
 compilation. Use `test-workspace` when impact is uncertain.
 
+## Coordinated Validation
+
+To expand changed packages through workspace dependents and their dependencies, use the
+cataloged coordinator:
+
+```sh
+AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
+  prek run validate --all-files --hook-stage manual
+```
+
+The coordinator executes `clippy` and unrestricted `test-focused` selections through
+`prek`, holding an OS lock in Cargo's effective target directory, resolved from metadata
+and pinned for each check. Cargo configuration and target-directory environment
+overrides are honored. The check subprocesses clear `SKIP` and `PREK_SKIP` so requested
+checks execute before their successes are recorded. Other invocations of the coordinator
+using that directory wait; direct Cargo commands still use Cargo's own build lock. Keep
+target directories inside the checkout, with downloaded registry and compiler caches
+managed separately. The target must not contain tracked source files. Target artifacts,
+including paths linked into that directory, are excluded from input fingerprints even
+when the target is not Git-ignored.
+
+Direct `ag-xtask validate` invocation accepts `--packages`, ordered `--hook` IDs, and
+optional `--reuse`. Fresh execution is the default. Reuse applies only to allowlisted
+deterministic hooks with matching package selection, tracked and untracked source, Git
+state/configuration, tool versions, and environment. Changes or failures invalidate
+success; inputs changing during execution cannot produce a successful stamp. Coverage
+always runs fresh. Repository-required hooks still apply.
+
 ## Test Timings
 
 Nextest hooks write test execution durations to `target/nextest/ci/junit.xml` and Cargo

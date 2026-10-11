@@ -287,35 +287,19 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
 }
 
 #[tokio::test]
-async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
+async fn commit_generation_bounds_oversized_diff_and_existing_message_without_summary_calls() {
     // Arrange
     let mut client = MockRunClient::new();
-    client.expect_submit().returning(|request| {
+    client.expect_submit().once().returning(|request| {
         assert!(request.prompt.len() <= 60_000);
         assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        if request.prompt.starts_with("Summarize") {
-            if request.prompt.contains("previous message") {
-                assert!(request.prompt.contains("commit-message continuity"));
-                assert!(request.prompt.contains("Preserve the\nsubject"));
-                assert!(!request.prompt.contains("Produce a compact checkpoint"));
-                return Ok(one_shot_submission(
-                    "Earlier commit subject and changes",
-                    0,
-                    0,
-                ));
-            }
-            return Ok(one_shot_submission(
-                "Preserve changes to all affected files",
-                0,
-                0,
-            ));
-        }
-        assert!(request.prompt.contains("Summarized input"));
-        assert!(
-            request
-                .prompt
-                .contains("Earlier commit subject and changes")
-        );
+        assert!(request.prompt.contains("original_bytes"));
+        assert!(request.prompt.contains("previous message"));
+        request
+            .provider_call_budget
+            .as_ref()
+            .expect("shared budget")
+            .consume()?;
         Ok(one_shot_submission("Handle large changes", 0, 0))
     });
 
@@ -328,7 +312,11 @@ async fn commit_generation_summarizes_oversized_diff_and_existing_message() {
             crate::domain::agent::SpeedMode::Normal,
         ),
         &"+change\n".repeat(160_000),
-        (Some(&"previous message\n".repeat(10_000)), "{}"),
+        (
+            Some(&"previous message\n".repeat(10_000)),
+            "{}",
+            &ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS),
+        ),
         &client,
         true,
         false,
@@ -427,7 +415,11 @@ async fn test_generate_session_commit_message_with_client_rejects_submission_err
             crate::domain::agent::SpeedMode::Normal,
         ),
         "diff --git a/a.rs b/a.rs",
-        (None, "{}"),
+        (
+            None,
+            "{}",
+            &ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS),
+        ),
         &run_client,
         false,
         false,
@@ -474,6 +466,7 @@ async fn test_generate_session_commit_message_with_client_falls_back_for_blank_a
         (
             Some("Keep session commit accurate\n\n- Preserve existing behavior"),
             "{}",
+            &ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS),
         ),
         &run_client,
         false,
@@ -576,16 +569,16 @@ async fn test_commit_session_changes_falls_back_to_files_and_chat() {
         let mut client = MockRunClient::new();
         client
             .expect_submit()
-            .times(1..=COMMIT_MESSAGE_MAX_PROVIDER_CALLS)
+            .once()
             .withf(|request| request.prompt.contains("DIFF_ONLY_SECRET"))
             .returning(move |request| {
+                request
+                    .provider_call_budget
+                    .as_ref()
+                    .expect("shared budget")
+                    .consume()?;
                 if oversized_diff {
-                    assert!(request.prompt.contains("Summarize the supplied fragment"));
-                    request
-                        .provider_call_budget
-                        .expect("shared budget")
-                        .consume()?;
-                    return Ok(one_shot_submission("", 0, 0));
+                    assert!(request.prompt.contains("original_bytes"));
                 }
                 Err(OneShotError::new("Input exceeds the maximum length"))
             });
@@ -797,4 +790,86 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
 
     // Assert
     assert_eq!(outcome.commit_message, expected_message);
+}
+
+#[tokio::test]
+async fn commit_fallback_cannot_reset_an_exhausted_provider_budget() {
+    // Arrange
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_diff()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok("+change".into()) }));
+    git_client
+        .expect_has_commits_since()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    git_client.expect_diff_changed_files().never();
+    let mut client = MockRunClient::new();
+    client.expect_submit().once().returning(|request| {
+        let budget = request.provider_call_budget.expect("shared budget");
+        for _ in 0..COMMIT_MESSAGE_MAX_PROVIDER_CALLS {
+            budget.consume()?;
+        }
+        Err(OneShotError::new("Input exceeds the maximum length"))
+    });
+    // Act
+    let result = SessionTaskService::commit_session_changes(
+        &git_client,
+        Path::new("project"),
+        "main",
+        (
+            model_fixture::codex_selection(),
+            ReasoningLevel::Low,
+            SpeedMode::Normal,
+        ),
+        &client,
+        false,
+        &Mutex::new(SessionTranscript::default()),
+    )
+    .await;
+    // Assert
+    assert!(
+        result
+            .err()
+            .expect("budget exhausted")
+            .to_string()
+            .contains("provider call limit")
+    );
+}
+
+#[tokio::test]
+async fn oversized_rendered_commit_prompt_is_rejected_before_provider_submission() {
+    // Arrange
+    let client = MockRunClient::new();
+    // Act
+    let result = SessionTaskService::generate_session_commit_message_with_client(
+        Path::new("."),
+        (
+            model_fixture::codex_selection(),
+            ReasoningLevel::Low,
+            SpeedMode::Normal,
+        ),
+        "+change",
+        (
+            None,
+            &"user request".repeat(10_000),
+            &ag_contracts::ProviderCallBudget::new(8),
+        ),
+        &client,
+        false,
+        false,
+    )
+    .await;
+    // Assert
+    assert!(
+        result
+            .expect_err("prompt budget")
+            .to_string()
+            .contains("commit prompt budget")
+    );
 }

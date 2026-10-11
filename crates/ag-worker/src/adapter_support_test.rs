@@ -47,3 +47,7 @@ impl RuntimeConfig {
         }
     }
 }
+
+/// Serializes unit tests that replace the process-wide telemetry provider.
+#[cfg(test)]
+pub(crate) static TRACER_PROVIDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());

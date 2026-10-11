@@ -111,6 +111,12 @@ impl OperationTrace {
         };
         let outcome = completed.then(|| Self::outcome(item));
         let mut attributes = Vec::new();
+        if category == "compaction" {
+            attributes.push(KeyValue::new(
+                "agentty.compaction.trigger",
+                "provider_native",
+            ));
+        }
         if let Some(exit_code) = item.get("exitCode").and_then(Value::as_i64) {
             attributes.push(KeyValue::new("agentty.provider.exit_code", exit_code));
         }
@@ -368,6 +374,7 @@ impl OperationTrace {
             span.context().span().set_attribute(attribute);
         }
         if let Some(outcome) = outcome {
+            span.attribute("agentty.provider.completion.observed", true);
             span.finish(outcome);
             self.completed.insert(id.to_string());
         } else {
@@ -423,6 +430,15 @@ impl OperationTrace {
                 .map(|tokens| KeyValue::new(key, tokens))
         })
         .collect()
+    }
+}
+
+impl Drop for OperationTrace {
+    fn drop(&mut self) {
+        for span in self.operations.values() {
+            span.attribute("agentty.provider.completion.observed", false);
+            span.attribute("agentty.timing.incomplete", true);
+        }
     }
 }
 

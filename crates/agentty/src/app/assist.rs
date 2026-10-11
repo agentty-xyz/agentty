@@ -70,7 +70,7 @@ impl FailureTracker {
     /// Records one failure fingerprint and returns `true` when the
     /// identical-failure streak exceeded the configured limit.
     pub(super) fn observe(&mut self, fingerprint: &str) -> bool {
-        let normalized_fingerprint = fingerprint.trim().to_ascii_lowercase();
+        let normalized_fingerprint = failure_fingerprint(fingerprint);
         if normalized_fingerprint.is_empty() {
             self.previous_fingerprint.clear();
             self.streak = 0;
@@ -86,6 +86,76 @@ impl FailureTracker {
         }
 
         self.streak > self.max_identical_failure_streak
+    }
+}
+
+/// Removes build progress and measured durations while retaining diagnostics,
+/// test identities, source locations and assertion values.
+fn failure_fingerprint(diagnostic: &str) -> String {
+    let fingerprint = diagnostic
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            ![
+                "Compiling ",
+                "Checking ",
+                "Finished ",
+                "Blocking waiting for file lock",
+                "Nextest run ID ",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        })
+        .map(|line| {
+            let runner_line = line.trim_start();
+            let (status, rest) = runner_line
+                .split_once(char::is_whitespace)
+                .unwrap_or((runner_line, ""));
+            if !matches!(
+                status,
+                "FAIL" | "PASS" | "TIMEOUT" | "ABORT" | "EXECFAIL" | "LEAK"
+            ) {
+                return line.to_string();
+            }
+            let Some((_, details)) = rest
+                .trim_start()
+                .strip_prefix('[')
+                .and_then(|rest| rest.split_once(']'))
+                .filter(|(duration, _)| {
+                    duration
+                        .trim()
+                        .strip_suffix('s')
+                        .is_some_and(|number| number.trim().parse::<f64>().is_ok())
+                })
+            else {
+                return line.to_string();
+            };
+            let details = details
+                .split_ascii_whitespace()
+                .map(|word| {
+                    if word
+                        .strip_prefix("pid=")
+                        .is_some_and(|pid| pid.parse::<u64>().is_ok())
+                    {
+                        "pid=<dynamic>"
+                    } else {
+                        word
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            format!("{status} [duration] {details}")
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if fingerprint.trim().is_empty() {
+        String::new()
+    } else {
+        fingerprint.to_ascii_lowercase()
     }
 }
 

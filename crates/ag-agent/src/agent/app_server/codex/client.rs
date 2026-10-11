@@ -52,6 +52,7 @@ impl RuntimeClientProvider for CodexRuntimeProvider {
             .await?;
             runtime.state.latest_input_tokens = 0;
             runtime.state.restored_context = false;
+            runtime.state.usage = super::usage::UsageTracker::default();
 
             Ok(true)
         })

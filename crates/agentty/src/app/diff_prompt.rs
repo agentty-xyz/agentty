@@ -4,10 +4,11 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 
 use ag_contracts::{
-    AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
-    ReasoningLevel, is_input_size_error,
+    AgentRequestKind, OneShotError, OneShotRequest, PermissionMode, ReasoningLevel,
+    is_input_size_error,
 };
 use ag_protocol::diff_fence;
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 
 /// Conservative byte budget, also bounding characters and byte-tokenizer input.
@@ -27,7 +28,6 @@ const SUMMARY_LIMIT: usize = 2_000;
 #[derive(Clone, Copy)]
 enum SummaryPurpose {
     Diff,
-    CommitContinuity,
     SessionCheckpoint,
 }
 
@@ -35,7 +35,6 @@ impl SummaryPurpose {
     fn instructions(self) -> &'static str {
         match self {
             Self::Diff => include_str!("template/diff_summary_prompt.md"),
-            Self::CommitContinuity => include_str!("template/commit_continuity_summary_prompt.md"),
             Self::SessionCheckpoint => include_str!("template/session_checkpoint_prompt.md"),
         }
     }
@@ -44,74 +43,6 @@ impl SummaryPurpose {
 /// Preserves host prompt-rendering diagnostics at the utility-run boundary.
 pub(super) fn render_result(result: Result<String, impl Display>) -> Result<String, OneShotError> {
     result.map_err(|error| OneShotError::new(error.to_string()))
-}
-
-/// Submits a diff prompt, summarizing oversized input in isolated utility
-/// turns. Context is the prior commit message; it retains commit continuity
-/// rather than becoming a session checkpoint.
-///
-/// The renderer includes all caller-owned overhead in the budget. Summaries
-/// cover every chunk, including huge lines and continuation hunks; none of the
-/// original worktree content is changed. Returns whether context was summarized
-/// so reviews can disclose that they do not constitute full diff coverage.
-/// Size rejections get at most two smaller final retries; other failures
-/// propagate. All summary, reduction, and final attempts share the caller's
-/// provider-call budget.
-pub(super) async fn submit(
-    client: &dyn RunClient,
-    mut request: OneShotRequest,
-    diff: &str,
-    context: &str,
-    max_provider_calls: usize,
-    render: impl Fn(&str, &str) -> Result<String, OneShotError>,
-) -> Result<(OneShotSubmission, bool), OneShotError> {
-    let call_budget = ag_contracts::ProviderCallBudget::new(max_provider_calls);
-    request.provider_call_budget = Some(call_budget.clone());
-    let mut diff = diff.to_string();
-    let mut context = context.to_string();
-    let mut summarized = false;
-    let mut previous_size = usize::MAX;
-    let mut last_error = OneShotError::new("Input exceeds the maximum length of the prompt budget");
-    for limit in [PROMPT_BUDGET, PROMPT_BUDGET / 2, PROMPT_BUDGET / 4] {
-        let budget = limit.min(previous_size / 2);
-        if budget < 4_096 {
-            return Err(last_error);
-        }
-        let mut prompt = render(&diff, &context)?;
-        if prompt.len() > budget {
-            // Fences and template overhead can overflow the prompt even when
-            // each input is below its nominal allowance. Reduce those inputs
-            // too, while retaining a useful minimum summary size.
-            let diff_target = (budget / 3).min(diff.len() / 2).max(MIN_CHUNK_BYTES);
-            let context_target = (budget / 8).min(context.len() / 2).max(MIN_CHUNK_BYTES);
-            diff = summarize(client, &request, &diff, diff_target, &call_budget).await?;
-            context = summarize_for(
-                client,
-                &request,
-                &context,
-                context_target,
-                &call_budget,
-                SummaryPurpose::CommitContinuity,
-            )
-            .await?;
-            summarized = true;
-            prompt = render(&diff, &context)?;
-        }
-        if prompt.len() > budget {
-            return Err(last_error);
-        }
-
-        previous_size = prompt.len();
-        request.prompt = prompt;
-        call_budget.ensure_available()?;
-        match client.submit(request.clone()).await {
-            Ok(submission) => return Ok((submission, summarized)),
-            Err(error) if is_input_size_error(&error.to_string()) => last_error = error,
-            Err(error) => return Err(error),
-        }
-    }
-
-    Err(last_error)
 }
 
 /// Reduces all input chunks, then reduces their summaries again when necessary.
@@ -260,7 +191,18 @@ async fn summary_with_repair(
             ));
         }
         call_budget.ensure_available()?;
-        let submission = client.submit(request).await?;
+        let phase = Span::child("utility.summary");
+        phase.attribute(
+            "agentty.input.bytes",
+            i64::try_from(request.prompt.len()).unwrap_or(i64::MAX),
+        );
+        phase.attribute(
+            "agentty.provider.budget.remaining",
+            i64::try_from(call_budget.remaining()).unwrap_or(i64::MAX),
+        );
+        let submission = phase
+            .run(client.submit(request), |_| Outcome::Failed)
+            .await?;
         let summary = submission.response.answer.trim();
         if !summary.is_empty() && summary.len() <= limit {
             return Ok(summary.to_string());

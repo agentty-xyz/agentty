@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
+use ag_telemetry::{Context, Outcome, Span};
 #[cfg(unix)]
 use rustix::fs::{self as rustix_fs, Access};
 use tokio::task::spawn_blocking;
@@ -1463,16 +1464,31 @@ async fn commit_all_with_retry(
     message_strategy: SingleCommitMessageStrategy,
     amend_existing_commit: bool,
 ) -> Result<(), GitError> {
+    let context = Context::current();
     spawn_blocking(move || {
+        let _context = context.attach();
         stage_all_sync(&repo_path)?;
 
-        for _ in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
-            let output = run_commit_command(
+        for attempt in 0..COMMIT_ALL_HOOK_RETRY_ATTEMPTS {
+            let phase = Span::child("git.commit.attempt");
+            phase.attribute(
+                "agentty.retry.attempt",
+                i64::try_from(attempt).unwrap_or(i64::MAX).saturating_add(1),
+            );
+            let result = run_commit_command(
                 &repo_path,
                 &commit_message,
                 message_strategy,
                 amend_existing_commit,
-            )?;
+            );
+            phase.finish(
+                if result.as_ref().is_ok_and(|output| output.status.success()) {
+                    Outcome::Completed
+                } else {
+                    Outcome::Failed
+                },
+            );
+            let output = result?;
 
             if output.status.success() {
                 return Ok(());

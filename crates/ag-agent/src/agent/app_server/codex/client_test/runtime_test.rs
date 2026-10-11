@@ -279,6 +279,7 @@ async fn execute_turn_event_loop_answers_user_input_request_without_blocking() {
             stream_tx,
             thread_id: "thread-1",
             turn_timeout: app_server_transport::TURN_TIMEOUT,
+            usage_state: &mut usage::UsageTracker::default(),
         },
     )
     .await;
@@ -318,6 +319,7 @@ async fn execute_turn_event_loop_prefers_completed_final_message_over_commentary
             stream_tx,
             thread_id: "thread-1",
             turn_timeout: app_server_transport::TURN_TIMEOUT,
+            usage_state: &mut usage::UsageTracker::default(),
         },
     )
     .await;
@@ -403,6 +405,8 @@ async fn isolated_context_reset_keeps_process_and_discards_previous_conversation
     runtime.transport = AppServerStdioTransport::new(stdin, stdout, "stdin", "stdout");
     runtime.state.restored_context = true;
     runtime.state.latest_input_tokens = 90_000;
+    runtime.state.usage.begin_turn();
+    runtime.state.usage.observe(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":50,"outputTokens":10},"last":{"inputTokens":50,"outputTokens":10}}}}), None);
 
     let pid = runtime.pid();
     // Act
@@ -415,5 +419,9 @@ async fn isolated_context_reset_keeps_process_and_discards_previous_conversation
     assert_eq!(runtime.state.thread_id, "fresh-context");
     assert!(!runtime.state.restored_context);
     assert_eq!(runtime.state.latest_input_tokens, 0);
+    assert_eq!(runtime.state.usage.latest_input, None);
+    runtime.state.usage.begin_turn();
+    runtime.state.usage.observe(&serde_json::json!({"method":"thread/tokenUsage/updated","params":{"tokenUsage":{"total":{"inputTokens":100,"outputTokens":15},"last":{"inputTokens":100,"outputTokens":15}}}}), None);
+    assert_eq!(runtime.state.usage.totals(), Some((100, 15)));
     runtime.shutdown_runtime().await;
 }

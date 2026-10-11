@@ -9,6 +9,7 @@ use ag_protocol::{
     protocol_output_schema,
 };
 use ag_session::AgentKind;
+use ag_telemetry::{Context, FutureExt as _};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -18,6 +19,10 @@ use crate::agent;
 use crate::app_server::{AppServerError, AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport::{self, extract_json_error_message, response_id_matches};
 use crate::model::{reasoning, session};
+
+/// Host cause attached to an explicit compaction request.
+#[derive(Clone)]
+struct CompactionTrigger(&'static str);
 
 /// Mutable runtime state required while a Codex app-server process is active.
 pub(super) struct CodexRuntimeState {
@@ -35,6 +40,7 @@ pub(super) struct CodexRuntimeState {
     pub(super) restored_context: bool,
     /// Active provider-native thread identifier.
     pub(super) thread_id: String,
+    pub(super) usage: usage::UsageTracker,
 }
 
 impl CodexRuntimeState {
@@ -48,6 +54,7 @@ impl CodexRuntimeState {
             permission_mode,
             restored_context: false,
             thread_id: String::new(),
+            usage: usage::UsageTracker::default(),
         }
     }
 }
@@ -137,6 +144,9 @@ pub(super) async fn start_runtime_with_built_command(
         Ok((thread_id, restored_context)) => {
             state.thread_id = thread_id;
             state.restored_context = restored_context;
+            if restored_context {
+                state.usage.resumed();
+            }
 
             Ok((child, transport, state))
         }
@@ -379,7 +389,10 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
         let _ = stream_tx.send(AppServerStreamEvent::ProgressUpdate(
             "Compacting context".to_string(),
         ));
-        send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens).await?;
+        send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens)
+            .with_context(Context::current().with_value(CompactionTrigger("proactive")))
+            .await?;
+        state.usage.clear_context();
     }
 
     let result = execute_turn_event_loop(
@@ -395,13 +408,14 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
             stream_tx: stream_tx.clone(),
             thread_id: &state.thread_id,
             turn_timeout: app_server_transport::TURN_TIMEOUT,
+            usage_state: &mut state.usage,
         },
     )
     .await;
 
     match result {
         Ok((message, input_tokens, output_tokens)) => {
-            state.latest_input_tokens = input_tokens;
+            state.latest_input_tokens = state.usage.latest_input.unwrap_or(0);
 
             Ok((message, input_tokens, output_tokens))
         }
@@ -410,7 +424,9 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                 "Compacting context".to_string(),
             ));
             send_compact_request(transport, &state.thread_id, &mut state.latest_input_tokens)
+                .with_context(Context::current().with_value(CompactionTrigger("context_overflow")))
                 .await?;
+            state.usage.clear_context();
 
             let (message, input_tokens, output_tokens) = execute_turn_event_loop(
                 transport,
@@ -425,10 +441,11 @@ pub(super) async fn run_turn_with_runtime<Transport: AppServerRuntimeTransport>(
                     stream_tx,
                     thread_id: &state.thread_id,
                     turn_timeout: app_server_transport::TURN_TIMEOUT,
+                    usage_state: &mut state.usage,
                 },
             )
             .await?;
-            state.latest_input_tokens = input_tokens;
+            state.latest_input_tokens = state.usage.latest_input.unwrap_or(0);
 
             Ok((message, input_tokens, output_tokens))
         }
@@ -460,6 +477,12 @@ pub(super) async fn send_compact_request_with_timeout<Transport: AppServerRuntim
     turn_timeout: Duration,
 ) -> Result<(), AppServerError> {
     let span = ag_telemetry::Span::child("agent.compaction");
+    span.attribute(
+        "agentty.compaction.trigger",
+        Context::current()
+            .get::<CompactionTrigger>()
+            .map_or("explicit", |trigger| trigger.0),
+    );
     span.attribute("agentty.provider.operation.type", "compaction");
     span.attribute("agentty.timing.source", "lifecycle");
     span.run(
@@ -544,6 +567,8 @@ pub(super) struct CodexTurnEventLoopInput<'a> {
     pub(super) thread_id: &'a str,
     /// Maximum time to wait for the turn completion event.
     pub(super) turn_timeout: Duration,
+    /// Retained cumulative usage baseline for this provider thread.
+    pub(super) usage_state: &'a mut usage::UsageTracker,
 }
 
 /// Sends one `turn/start` request and processes events until completion or
@@ -558,8 +583,10 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
     let turn_timeout = input.turn_timeout;
     let mut state =
         CodexTurnEventLoopState::new(input.stream_tx, input.protocol_profile, input.thread_id);
+    state.usage = input.usage_state.clone();
+    state.usage.begin_turn();
 
-    tokio::time::timeout(turn_timeout, async {
+    let result = tokio::time::timeout(turn_timeout, async {
         loop {
             let Some(response_value) = read_turn_response_value(transport).await? else {
                 continue;
@@ -579,8 +606,11 @@ pub(super) async fn execute_turn_event_loop<Transport: AppServerRuntimeTransport
             }
         }
     })
-    .await
-    .map_err(|_| turn_completed_timeout_error(turn_timeout))?
+    .await;
+    state.usage.finish_turn();
+    *input.usage_state = state.usage.clone();
+
+    result.map_err(|_| turn_completed_timeout_error(turn_timeout))?
 }
 
 /// Mutable state carried across Codex app-server turn events.
@@ -595,6 +625,7 @@ struct CodexTurnEventLoopState {
     protocol_profile: ProtocolRequestProfile,
     stream_tx: mpsc::UnboundedSender<AppServerStreamEvent>,
     thread_id: String,
+    usage: usage::UsageTracker,
     waiting_for_handoff_turn_completion: bool,
 }
 
@@ -621,6 +652,7 @@ impl CodexTurnEventLoopState {
             protocol_profile,
             stream_tx,
             thread_id: thread_id.to_string(),
+            usage: usage::UsageTracker::default(),
             waiting_for_handoff_turn_completion: false,
         }
     }
@@ -689,11 +721,11 @@ impl CodexTurnEventLoopState {
         );
         let event_turn_id = response_value
             .get("params")
-            .and_then(|params| params.get("turnId"))
+            .and_then(|params| params.get("turnId").or_else(|| params.get("turn_id")))
             .and_then(Value::as_str);
         let event_thread_id = response_value
             .get("params")
-            .and_then(|params| params.get("threadId"))
+            .and_then(|params| params.get("threadId").or_else(|| params.get("thread_id")))
             .and_then(Value::as_str);
         if (event_thread_id.is_none() || event_thread_id == Some(self.thread_id.as_str()))
             && (event_turn_id.is_none() || event_turn_id == self.active_turn_id.as_deref())
@@ -701,18 +733,20 @@ impl CodexTurnEventLoopState {
             self.operation_trace
                 .observe(AgentKind::Codex, response_value);
             self.activity.observe(AgentKind::Codex, response_value);
+            self.usage
+                .observe(response_value, self.active_turn_id.as_deref());
+            usage::update_turn_usage_from_response(
+                response_value,
+                self.active_turn_id.as_deref(),
+                &mut self.completed_turn_usage,
+                &mut self.latest_stream_usage,
+            );
         }
         stream_turn_content_from_response(
             response_value,
             &self.stream_tx,
             &mut self.assistant_messages,
             &mut self.active_phase,
-        );
-        usage::update_turn_usage_from_response(
-            response_value,
-            self.active_turn_id.as_deref(),
-            &mut self.completed_turn_usage,
-            &mut self.latest_stream_usage,
         );
 
         if self.record_interrupted_completion(response_value) {
@@ -763,8 +797,13 @@ impl CodexTurnEventLoopState {
             response_value,
             self.active_turn_id.as_deref(),
         );
-        let (input_tokens, output_tokens) =
-            usage::resolve_turn_usage(self.completed_turn_usage, self.latest_stream_usage);
+        self.usage.record();
+        let (input_tokens, output_tokens) = self
+            .usage
+            .totals()
+            .or(self.completed_turn_usage)
+            .unwrap_or_else(|| usage::resolve_turn_usage(None, self.latest_stream_usage));
+        self.usage.finish_turn();
 
         finalize_turn_completion(
             turn_result,
