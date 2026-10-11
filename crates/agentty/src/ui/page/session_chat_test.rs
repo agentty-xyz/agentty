@@ -951,12 +951,12 @@ fn rendered_rows_with_started_session(mode: &AppMode, width: u16, height: u16) -
 #[test]
 fn test_render_session_shows_started_label_only_in_every_footer() {
     // Arrange
-    let label = "Started 2026-07-01 00:00 (2h 0m ago)";
+    let label = "Started 2h 0m ago";
     let view_mode = AppMode::View {
         session_id: "session-id".into(),
         scroll_offset: None,
     };
-    let question_mode = AppMode::Question {
+    let mut question_mode = AppMode::Question {
         at_mention_state: None,
         session_id: "session-id".into(),
         questions: vec![QuestionItem::new("Continue?")],
@@ -968,17 +968,35 @@ fn test_render_session_shows_started_label_only_in_every_footer() {
         selected_option_index: None,
     };
 
+    let mut prompt = prompt_mode("");
+
     // Act
-    let view_rows = rendered_rows_with_started_session(&view_mode, 240, 16);
-    let prompt_rows = rendered_rows_with_started_session(&prompt_mode(""), 240, 16);
-    let question_rows = rendered_rows_with_started_session(&question_mode, 240, 16);
+    let mut rendered_rows = Vec::new();
+    for width in [80, 240] {
+        rendered_rows.push(rendered_rows_with_started_session(&view_mode, width, 16));
+        for focus in [ChatFocus::Input, ChatFocus::Chat] {
+            if let AppMode::Prompt { focus: current, .. } = &mut prompt {
+                *current = focus;
+            }
+            if let AppMode::Question { focus: current, .. } = &mut question_mode {
+                *current = focus;
+            }
+            rendered_rows.push(rendered_rows_with_started_session(&prompt, width, 16));
+            rendered_rows.push(rendered_rows_with_started_session(
+                &question_mode,
+                width,
+                16,
+            ));
+        }
+    }
 
     // Assert
-    for rows in [&view_rows, &prompt_rows, &question_rows] {
+    for rows in &rendered_rows {
         let label_rows: Vec<&String> = rows.iter().filter(|row| row.contains(label)).collect();
         let resource_row = rows.iter().find(|row| row.contains("Processes: --"));
         assert_eq!(label_rows.len(), 1, "rows: {rows:#?}");
-        assert!(label_rows[0].trim_end().ends_with(label));
+        assert!(label_rows[0].contains("╰"));
+        assert!(label_rows[0].trim_end().ends_with("╯"));
         assert!(resource_row.is_some_and(|row| !row.contains("Started")));
     }
 }
@@ -992,7 +1010,7 @@ fn test_render_session_omits_started_label_when_rows_are_too_narrow() {
     };
 
     // Act
-    let rows = rendered_rows_with_started_session(&mode, 60, 12);
+    let rows = rendered_rows_with_started_session(&mode, 12, 12);
 
     // Assert
     assert!(rows.iter().all(|row| !row.contains("Started")));

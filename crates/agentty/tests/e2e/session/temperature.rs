@@ -71,6 +71,7 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
                         .press_key("a")
                         .press_key("Enter")
                         .wait_for_text("Host CPU temp: --", 5000)
+                        .wait_for_stable_frame(300, 5000)
                         .capture_labeled("temperature", "Host CPU temperature awaiting a sample")
                         .write_text("Measure session resources")
                         .press_key("Enter")
@@ -85,6 +86,7 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
                                 )
                             },
                         ))
+                        .wait_for_stable_frame(300, 5000)
                         .capture_labeled("resources", "Tracked agent and child process usage")
                 },
                 |frame, report| Box::pin(async move {

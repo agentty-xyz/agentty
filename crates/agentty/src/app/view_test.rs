@@ -33,26 +33,19 @@ impl Clock for DaylightSavingClock {
 }
 
 #[test]
-fn read_frame_time_resolves_visible_session_offset_at_its_start() {
+fn read_frame_time_uses_current_wall_clock_and_offset() {
     // Arrange
     let clock = DaylightSavingClock {
         unix_seconds: 1_793_000_000,
     };
-    let created_at = DST_END_UNIX_SECONDS - 86_400;
 
     // Act
-    let with_session = read_frame_time(&clock, Some(created_at));
-    let without_session = read_frame_time(&clock, None);
+    let frame_time = read_frame_time(&clock);
 
     // Assert
-    assert_eq!(with_session.unix_seconds(), 1_793_000_000);
-    assert_eq!(with_session.unix_millis(), 1_793_000_000_000);
-    assert_eq!(with_session.local_utc_offset_seconds(), 3_600);
-    assert_eq!(with_session.local_utc_offset_seconds_at(created_at), 7_200);
-    assert_eq!(
-        without_session.local_utc_offset_seconds_at(created_at),
-        3_600
-    );
+    assert_eq!(frame_time.unix_seconds(), 1_793_000_000);
+    assert_eq!(frame_time.unix_millis(), 1_793_000_000_000);
+    assert_eq!(frame_time.local_utc_offset_seconds(), 3_600);
 }
 
 #[test]

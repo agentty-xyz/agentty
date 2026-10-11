@@ -43,6 +43,7 @@ pub struct ChatInput<'a> {
     active: bool,
     clear_style: Option<Style>,
     cursor: usize,
+    footer: Option<&'a str>,
     input: &'a str,
     status: Option<&'a str>,
     suggestion_list: Option<&'a SuggestionList>,
@@ -57,6 +58,7 @@ impl<'a> ChatInput<'a> {
             active: true,
             clear_style: None,
             cursor,
+            footer: None,
             input,
             status: None,
             suggestion_list: None,
@@ -97,6 +99,13 @@ impl<'a> ChatInput<'a> {
         self
     }
 
+    /// Sets right-aligned text in the bottom border when it fits in full.
+    #[must_use]
+    pub fn footer(mut self, footer: &'a str) -> Self {
+        self.footer = Some(footer);
+        self
+    }
+
     /// Sets the style reapplied after clearing the input area.
     ///
     /// Overlay-hosted inputs use this to keep popup-local cells on the
@@ -118,11 +127,25 @@ impl<'a> ChatInput<'a> {
             (Self::inactive_border_style(), Self::inactive_title_style())
         };
 
-        Block::default()
+        let mut block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(border_style)
-            .title(Span::styled(title, title_style))
+            .title(Span::styled(title, title_style));
+
+        if let Some(footer) = self.footer
+            && footer.width().saturating_add(4) <= usize::from(width)
+        {
+            block = block.title_bottom(
+                Line::styled(
+                    format!(" {footer} "),
+                    Style::default().fg(style::palette::text_muted()),
+                )
+                .right_aligned(),
+            );
+        }
+
+        block
     }
 
     /// Fits the title and status between the border corners and padding,

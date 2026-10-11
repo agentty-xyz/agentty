@@ -34,6 +34,7 @@ fn test_builder_methods() {
     // Act
     let chat_input = ChatInput::new(title, input, cursor)
         .placeholder(placeholder)
+        .footer("Started 4m ago")
         .suggestion_list(&suggestion_list);
 
     // Assert
@@ -41,6 +42,7 @@ fn test_builder_methods() {
     assert_eq!(chat_input.input, input);
     assert_eq!(chat_input.cursor, cursor);
     assert_eq!(chat_input.placeholder, placeholder);
+    assert_eq!(chat_input.footer, Some("Started 4m ago"));
     assert!(chat_input.suggestion_list.is_some());
     assert_eq!(
         chat_input
@@ -49,6 +51,38 @@ fn test_builder_methods() {
             .title,
         "Menu"
     );
+}
+
+#[test]
+fn test_footer_stays_in_bottom_border_across_focus_changes_when_it_fits() {
+    // Arrange
+    let footer = "Started 4m ago";
+
+    for width in [16, 40] {
+        for active in [false, true] {
+            let backend = ratatui::backend::TestBackend::new(width, 3);
+            let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+            let chat_input = ChatInput::new("Prompt", "", 0)
+                .footer(footer)
+                .active(active);
+
+            // Act
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    chat_input.render(frame, area);
+                })
+                .expect("render input");
+            let bottom_row = buffer_row_text(terminal.backend().buffer(), 2, width);
+
+            // Assert
+            if width == 40 {
+                assert!(bottom_row.ends_with(" Started 4m ago ╯"), "{bottom_row}");
+            } else {
+                assert!(!bottom_row.contains("Started"), "{bottom_row}");
+            }
+        }
+    }
 }
 
 #[test]

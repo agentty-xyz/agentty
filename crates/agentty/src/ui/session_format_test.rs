@@ -1,12 +1,11 @@
 use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
-use ratatui::text::Line;
 
 use super::{
-    line_with_right_aligned_suffix, prompt_session_status, session_header_lines,
-    session_metadata_text, session_output_queued_lines, session_output_status_icon,
-    session_output_status_message, session_output_uses_tachyon_loader, session_resources_line,
-    session_speed_display, session_started_label,
+    prompt_session_status, session_header_lines, session_metadata_text,
+    session_output_queued_lines, session_output_status_icon, session_output_status_message,
+    session_output_uses_tachyon_loader, session_resources_line, session_speed_display,
+    session_started_label,
 };
 use crate::domain::agent::{AgentModel, ReasoningLevel, ResponseStyle};
 use crate::domain::resource::SessionResources;
@@ -381,7 +380,7 @@ fn merged_session_output_explains_manual_sync_wait() {
 }
 
 #[test]
-fn test_session_started_label_formats_local_start_and_age() {
+fn test_session_started_label_formats_age() {
     // Arrange
     let created_at = 1_782_864_000;
     let utc_offset_seconds = 2 * 3_600;
@@ -400,38 +399,30 @@ fn test_session_started_label_formats_local_start_and_age() {
     let future = session_started_label(created_at, FrameTime::new(created_at - 600, 0, 0));
 
     // Assert
-    assert_eq!(just_started, "Started 2026-07-01 00:00 (just now)");
-    assert_eq!(minutes, "Started 2026-07-01 00:00 (12m ago)");
-    assert_eq!(hours, "Started 2026-07-01 02:00 (3h 5m ago)");
-    assert_eq!(days, "Started 2026-07-01 00:00 (2d 4h ago)");
-    assert_eq!(future, "Started 2026-07-01 00:00 (just now)");
+    assert_eq!(just_started, "Started just now");
+    assert_eq!(minutes, "Started 12m ago");
+    assert_eq!(hours, "Started 3h 5m ago");
+    assert_eq!(days, "Started 2d 4h ago");
+    assert_eq!(future, "Started just now");
 }
 
 #[test]
-fn test_session_started_label_keeps_start_hour_across_daylight_saving_change() {
+fn test_session_started_label_is_independent_of_daylight_saving_offsets() {
     // Arrange
     let created_at = 1_792_843_200;
-    let winter_offset_seconds = 3_600;
-    let summer_offset_seconds = 2 * 3_600;
-    let frame_time = FrameTime::new(created_at + 2 * 86_400, 0, winter_offset_seconds);
+    let now = created_at + 2 * 86_400;
 
     // Act
-    let resolved = session_started_label(
-        created_at,
-        frame_time.with_local_utc_offset_at(created_at, summer_offset_seconds),
-    );
-    let other_session = session_started_label(
-        created_at,
-        frame_time.with_local_utc_offset_at(created_at - 1, summer_offset_seconds),
-    );
+    let winter = session_started_label(created_at, FrameTime::new(now, 0, 3_600));
+    let summer = session_started_label(created_at, FrameTime::new(now, 0, 2 * 3_600));
 
     // Assert
-    assert_eq!(resolved, "Started 2026-10-24 14:00 (2d 0h ago)");
-    assert_eq!(other_session, "Started 2026-10-24 13:00 (2d 0h ago)");
+    assert_eq!(winter, "Started 2d 0h ago");
+    assert_eq!(summer, winter);
 }
 
 #[test]
-fn test_session_started_label_falls_back_to_age_without_local_date() {
+fn test_session_started_label_handles_extreme_timestamps_and_offsets() {
     // Arrange
     let frame_time = FrameTime::new(1_782_864_000, 0, i64::MAX);
 
@@ -443,25 +434,4 @@ fn test_session_started_label_falls_back_to_age_without_local_date() {
     assert_eq!(invalid_offset, "Started 10m ago");
     assert!(invalid_timestamp.starts_with("Started "));
     assert!(invalid_timestamp.ends_with("h ago"));
-}
-
-#[test]
-fn test_line_with_right_aligned_suffix_pads_to_width_or_keeps_line() {
-    // Arrange
-    let line = || Line::from("Help");
-
-    // Act
-    let aligned = line_with_right_aligned_suffix(line(), "Started", 20);
-    let exact = line_with_right_aligned_suffix(line(), "Started", 13);
-    let narrow = line_with_right_aligned_suffix(line(), "Started", 12);
-
-    // Assert
-    assert_eq!(aligned.to_string(), "Help         Started");
-    assert_eq!(aligned.width(), 20);
-    assert_eq!(
-        aligned.spans.last().and_then(|span| span.style.fg),
-        Some(style::palette::text_muted())
-    );
-    assert_eq!(exact.to_string(), "Help  Started");
-    assert_eq!(narrow.to_string(), "Help");
 }
