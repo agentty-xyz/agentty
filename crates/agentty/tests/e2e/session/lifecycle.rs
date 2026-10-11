@@ -14,6 +14,7 @@ use agentty::domain::session_message::SessionMessageKind;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
+use testty::frame::CellColor;
 use testty::region::Region;
 
 use super::fixture::{
@@ -988,6 +989,47 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, CLAUDE_STRUCTURED_RESPONSE_TEXT, &full);
                     assertion::assert_not_visible(frame, "Saved prompt:");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Verify that disabled creation options use readable gray in the default
+/// theme.
+#[tokio::test]
+async fn session_creation_default_theme_disabled_options() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_creation_default_theme_disabled_options")
+        .env("NO_COLOR", "")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_sessions_tab(env).await }))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .wait_for_text("Select parent first", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    // Assert
+                    let disabled_color = CellColor::new(192, 192, 192);
+                    for text in [
+                        "Stacked",
+                        "Select parent first",
+                        "Append to stack",
+                        "[Preview] Review only",
+                    ] {
+                        assertion::assert_text_has_fg_color(frame, text, &disabled_color);
+                        assertion::assert_text_has_bg_color(frame, text, &CellColor::black());
+                    }
+                    assertion::assert_span_is_highlighted(frame, "Draft");
                 })
             },
         )

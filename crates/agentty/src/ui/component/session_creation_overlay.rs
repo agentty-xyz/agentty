@@ -129,8 +129,8 @@ impl SessionCreationOverlay {
 
         let (label_style, detail_style) = if is_disabled {
             (
-                Style::default().fg(palette::text_subtle()),
-                Style::default().fg(palette::text_subtle()),
+                Style::default().fg(palette::text_muted()),
+                Style::default().fg(palette::text_muted()),
             )
         } else {
             (

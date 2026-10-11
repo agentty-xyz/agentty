@@ -1,12 +1,45 @@
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Modifier};
 
 use super::{
     APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL, APPEND_TO_STACK_PREVIEW_DETAIL,
     ORCHESTRATOR_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS, STACKED_SESSION_DETAIL,
     SessionCreationOverlay,
 };
+use crate::domain::theme::ColorTheme;
 use crate::ui::Component;
-use crate::ui::style::palette;
+use crate::ui::style::{palette, scoped_active_theme};
+
+#[test]
+fn test_default_theme_disabled_options_remain_readable_and_unselected() {
+    // Arrange
+    let _theme_scope = scoped_active_theme(ColorTheme::Current);
+    let backend = ratatui::backend::TestBackend::new(80, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    let overlay = SessionCreationOverlay::new(3, false, false);
+
+    // Act
+    terminal
+        .draw(|frame| Component::render(&overlay, frame, frame.area()))
+        .expect("failed to draw");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    for text in [
+        "Stacked",
+        "Select parent first",
+        "Append to stack",
+        APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL,
+    ] {
+        let (column, row) = text_position(buffer, text).expect("disabled option should render");
+        for offset in 0..u16::try_from(text.len()).expect("option text fits terminal width") {
+            let cell = &buffer[(column + offset, row)];
+            assert_eq!(cell.fg, Color::Gray);
+            assert_eq!(cell.bg, palette::surface_overlay());
+            assert!(!cell.modifier.contains(Modifier::BOLD));
+        }
+    }
+}
 
 #[test]
 fn test_session_creation_overlay_new_stores_selected_option() {

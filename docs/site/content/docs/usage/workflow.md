@@ -269,6 +269,8 @@ unchanged.
   eligible parent and sync it onto that branch. Sessions with children or linked review
   requests cannot be moved.
 
+Unavailable session types stay visible in readable muted text.
+
 Start stacked drafts from parent to child. Each needs a review-ready parent and an idle
 stack. Parents can receive replies and sync while materialized children are idle.
 Completing a parent turn or syncing it automatically rebases review-ready descendants. A
