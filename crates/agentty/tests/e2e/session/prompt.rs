@@ -490,6 +490,73 @@ async fn prompt_multiline_via_alt_enter() -> E2eResult {
     Ok(())
 }
 
+/// Verify macOS editing shortcuts through both enhanced and legacy terminal
+/// encodings, without submitting or canceling the prompt.
+#[tokio::test]
+async fn prompt_macos_editing_shortcuts() -> E2eResult {
+    // Arrange
+    let cases = [
+        ("enhanced", "\x1b[127;3u", "\x1b[13;3u", "\x1b[127;9u"),
+        ("legacy", "\x1b\x7f", "\x1b\r", "\x15"),
+    ];
+
+    for (name, word_delete, newline, line_delete) in cases {
+        FeatureTest::new(format!("prompt_macos_editing_{name}"))
+            .with_git()
+            .run(
+                |scenario| {
+                    // Act
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .press_key("a")
+                        .press_key("Enter")
+                        .wait_for_stable_frame(300, 5000)
+                        .write_text("retained removable")
+                        .wait_for_text("retained removable", 3000)
+                        .write_text(word_delete)
+                        .wait_for_stable_frame(300, 3000)
+                        .capture_labeled("word_deleted", "Previous word removed")
+                        .write_text(newline)
+                        .write_text("discard this line")
+                        .wait_for_text("discard this line", 3000)
+                        .capture_labeled("multiline", "Alt+Enter starts a second line")
+                        .press_key("Left")
+                        .write_text(line_delete)
+                        .write_text("replacement")
+                        .wait_for_text("replacement", 3000)
+                        .wait_for_stable_frame(300, 3000)
+                },
+                |frame, report| {
+                    Box::pin(async move {
+                        // Assert
+                        let word_frame = common::frame_from_capture(&report.captures[0]);
+                        let word_region = Region::full(word_frame.cols(), word_frame.rows());
+                        let full = Region::full(frame.cols(), frame.rows());
+                        assertion::assert_text_in_region(&word_frame, "retained", &word_region);
+                        assertion::assert_not_visible(&word_frame, "removabl");
+                        let multiline_frame = common::frame_from_capture(&report.captures[1]);
+                        let retained_row = (0..multiline_frame.rows())
+                            .find(|&row| multiline_frame.row_text(row).contains("retained"))
+                            .expect("first line should remain visible");
+                        assert!(
+                            multiline_frame
+                                .row_text(retained_row + 1)
+                                .contains("discard this line"),
+                            "{}",
+                            multiline_frame.all_text()
+                        );
+                        assertion::assert_text_in_region(frame, "retainedreplacement", &full);
+                        assertion::assert_not_visible(frame, "discard");
+                    })
+                },
+            )
+            .await?;
+    }
+
+    Ok(())
+}
+
 /// Verify bracketed paste keeps leading indentation after prompt submission.
 #[tokio::test]
 async fn prompt_paste_indentation() -> E2eResult {

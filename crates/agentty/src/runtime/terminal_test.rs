@@ -6,10 +6,47 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crossterm::Command;
 
 use super::{
-    DisableXtermCsiUModifiedKeys, EnableXtermCsiUModifiedKeys, MockTerminalOperation,
-    TerminalEnhancement, TerminalGuard, has_ssh_environment,
-    prepare_terminal_stdout_with_operation, restore_terminal_state,
+    CrosstermTerminalOperation, DisableXtermCsiUModifiedKeys, EnableXtermCsiUModifiedKeys,
+    MockTerminalOperation, TerminalEnhancement, TerminalGuard, TerminalOperation,
+    has_ssh_environment, prepare_terminal_stdout_with_operation, restore_terminal_state,
 };
+
+/// Verifies keyboard modes are pushed and popped on the alternate screen,
+/// while the legacy and tmux paths retain their transport-specific sequences.
+#[test]
+fn terminal_keyboard_modes_use_the_alternate_screen() {
+    // Arrange
+    let operation = CrosstermTerminalOperation;
+    let cases = [
+        (enhancement_fixture(false, false), "", ""),
+        (enhancement_fixture(true, false), "\x1b[>5u", "\x1b[<1u"),
+        (
+            enhancement_fixture(true, true),
+            "\x1b[>4;1f\x1b[>4;2m\x1b[>5u",
+            "\x1b[<1u\x1b[>4f\x1b[>4m",
+        ),
+    ];
+
+    for (enhancement, push, pop) in cases {
+        let mut startup = Vec::new();
+        let mut cleanup = Vec::new();
+
+        // Act
+        operation
+            .enter_alternate_screen(&mut startup, enhancement)
+            .expect("startup sequences should render");
+        operation
+            .leave_alternate_screen(&mut cleanup, enhancement)
+            .expect("cleanup sequences should render");
+
+        // Assert
+        assert_eq!(startup, format!("\x1b[?1049h{push}\x1b[?2004h").as_bytes());
+        assert_eq!(
+            cleanup,
+            format!("{pop}\x1b[?2004l\x1b[?1049l\x1b[?25h").as_bytes()
+        );
+    }
+}
 
 /// Builds one expected terminal enhancement configuration.
 fn enhancement_fixture(keyboard: bool, xterm: bool) -> TerminalEnhancement {
