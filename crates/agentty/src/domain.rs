@@ -2,6 +2,8 @@
 
 pub mod composer;
 pub mod file_entry;
+/// Launch-time availability of in-process harness sessions.
+pub mod harness;
 /// Editable text-input state and cursor operations.
 pub mod input;
 /// Orchestration and orchestration-task lifecycle states.

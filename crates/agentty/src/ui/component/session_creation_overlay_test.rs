@@ -1,10 +1,13 @@
 use ratatui::layout::{Alignment, Rect};
 
 use super::{
-    APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL, APPEND_TO_STACK_PREVIEW_DETAIL,
-    ORCHESTRATOR_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS, STACKED_SESSION_DETAIL,
-    SessionCreationOverlay,
+    AGENT_CLI_REQUIRED_DETAIL, APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL,
+    APPEND_TO_STACK_PREVIEW_DETAIL, HARNESS_OPTION_INDEX, HARNESS_SESSION_MISSING_KEY_DETAIL,
+    HARNESS_SESSION_PREVIEW_DETAIL, ORCHESTRATOR_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS,
+    STACKED_SESSION_DETAIL, SessionCreationOverlay,
 };
+use crate::domain::agent::AgentModel;
+use crate::domain::harness::HarnessAvailability;
 use crate::ui::Component;
 use crate::ui::style::palette;
 
@@ -14,7 +17,13 @@ fn test_session_creation_overlay_new_stores_selected_option() {
     let selected_option_index = 1;
 
     // Act
-    let overlay = SessionCreationOverlay::new(selected_option_index, true, true);
+    let overlay = SessionCreationOverlay::new(
+        selected_option_index,
+        true,
+        true,
+        HarnessAvailability::Hidden,
+        true,
+    );
 
     // Assert
     assert_eq!(overlay.selected_option_index, selected_option_index);
@@ -57,7 +66,7 @@ fn test_session_creation_overlay_render_shows_session_options() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(0, true, true);
+    let overlay = SessionCreationOverlay::new(0, true, true, HarnessAvailability::Hidden, true);
 
     // Act
     terminal
@@ -90,7 +99,7 @@ fn test_session_creation_overlay_aligns_option_text_left() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(1, false, false);
+    let overlay = SessionCreationOverlay::new(1, false, false, HarnessAvailability::Hidden, true);
 
     // Act
     terminal
@@ -109,7 +118,7 @@ fn test_session_creation_overlay_aligns_option_text_left() {
 #[test]
 fn test_session_creation_overlay_lines_center_header_and_help_text() {
     // Arrange
-    let overlay = SessionCreationOverlay::new(0, false, false);
+    let overlay = SessionCreationOverlay::new(0, false, false, HarnessAvailability::Hidden, true);
 
     // Act
     let lines = overlay.lines();
@@ -124,7 +133,7 @@ fn test_session_creation_overlay_lines_center_header_and_help_text() {
 #[test]
 fn test_session_creation_overlay_lines_disable_stacked_option() {
     // Arrange
-    let overlay = SessionCreationOverlay::new(2, false, false);
+    let overlay = SessionCreationOverlay::new(2, false, false, HarnessAvailability::Hidden, true);
 
     // Act
     let lines = overlay.lines();
@@ -148,7 +157,7 @@ fn test_session_creation_overlay_lines_disable_stacked_option() {
 #[test]
 fn test_session_creation_overlay_lines_enable_stacked_option() {
     // Arrange
-    let overlay = SessionCreationOverlay::new(3, true, false);
+    let overlay = SessionCreationOverlay::new(3, true, false, HarnessAvailability::Hidden, true);
 
     // Act
     let lines = overlay.lines();
@@ -172,8 +181,10 @@ fn test_session_creation_overlay_lines_enable_stacked_option() {
 #[test]
 fn test_session_creation_overlay_lines_gate_append_to_stack_option() {
     // Arrange
-    let disabled_overlay = SessionCreationOverlay::new(2, true, false);
-    let enabled_overlay = SessionCreationOverlay::new(4, true, true);
+    let disabled_overlay =
+        SessionCreationOverlay::new(2, true, false, HarnessAvailability::Hidden, true);
+    let enabled_overlay =
+        SessionCreationOverlay::new(4, true, true, HarnessAvailability::Hidden, true);
 
     // Act
     let disabled_lines = disabled_overlay.lines();
@@ -218,4 +229,95 @@ fn text_position(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16,
     }
 
     None
+}
+
+/// Renders one overlay into an 80x20 buffer and returns its text.
+fn rendered_text(overlay: &SessionCreationOverlay) -> String {
+    let backend = ratatui::backend::TestBackend::new(80, 20);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+    terminal
+        .draw(|frame| {
+            Component::render(overlay, frame, frame.area());
+        })
+        .expect("failed to draw");
+
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>()
+}
+
+#[test]
+fn test_session_creation_overlay_harness_row_follows_availability() {
+    // Arrange
+    let hidden = SessionCreationOverlay::new(0, false, false, HarnessAvailability::Hidden, true);
+    let missing_key = SessionCreationOverlay::new(
+        0,
+        false,
+        false,
+        HarnessAvailability::MissingCredentials,
+        true,
+    );
+    let available = SessionCreationOverlay::new(
+        HARNESS_OPTION_INDEX,
+        false,
+        false,
+        HarnessAvailability::Available(AgentModel::MuseSpark13),
+        true,
+    );
+
+    // Act
+    let hidden_text = rendered_text(&hidden);
+    let missing_key_text = rendered_text(&missing_key);
+    let available_lines = available.lines();
+
+    // Assert
+    assert!(!hidden_text.contains("Harness"));
+    assert!(missing_key_text.contains("Harness"));
+    assert!(missing_key_text.contains(HARNESS_SESSION_MISSING_KEY_DETAIL));
+    let harness_line = &available_lines[2 + HARNESS_OPTION_INDEX];
+    assert_eq!(harness_line.spans.len(), 1);
+    assert!(
+        harness_line.spans[0]
+            .content
+            .contains(HARNESS_SESSION_PREVIEW_DETAIL)
+    );
+    assert_eq!(harness_line.spans[0].style.bg, Some(palette::accent()));
+    assert!(rendered_text(&available).contains(HARNESS_SESSION_PREVIEW_DETAIL));
+}
+
+#[test]
+fn test_session_creation_overlay_disables_cli_rows_without_agent_cli() {
+    // Arrange
+    let overlay = SessionCreationOverlay::new(
+        0,
+        true,
+        true,
+        HarnessAvailability::Available(AgentModel::MuseSpark13),
+        false,
+    );
+
+    // Act
+    let lines = overlay.lines();
+
+    // Assert
+    for cli_line in &lines[2..2 + HARNESS_OPTION_INDEX] {
+        assert!(cli_line.spans.iter().any(|span| {
+            span.content.contains(AGENT_CLI_REQUIRED_DETAIL)
+                && span.style.fg == Some(palette::text_subtle())
+        }));
+        assert!(
+            cli_line
+                .spans
+                .iter()
+                .all(|span| span.style.bg != Some(palette::accent()))
+        );
+    }
+    assert!(lines[2 + HARNESS_OPTION_INDEX].spans.iter().any(|span| {
+        span.content.contains(HARNESS_SESSION_PREVIEW_DETAIL)
+            && span.style.fg == Some(palette::text_muted())
+    }));
 }

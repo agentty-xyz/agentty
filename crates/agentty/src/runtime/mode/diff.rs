@@ -553,7 +553,7 @@ fn open_line_comment_prompt(app: &mut App) {
     let history_entries = super::session_view::session_prompt_history_entries(session);
     app.save_diff_comment_progress(session_id.clone(), line_comments.clone());
 
-    let slash_state = app.prompt_slash_state();
+    let slash_state = app.prompt_slash_state(&session_id);
     let mut snapshot = restored_prompt.unwrap_or_else(|| PromptModeSnapshot {
         at_mention_state: None,
         attachment_state: PromptAttachmentState::default(),

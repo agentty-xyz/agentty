@@ -44,6 +44,7 @@ impl OperationTrace {
             AgentKind::Gemini => self.gemini(payload),
             AgentKind::Antigravity => self.antigravity(payload),
             AgentKind::Claude => self.claude(payload),
+            AgentKind::Harness => {}
         }
     }
 

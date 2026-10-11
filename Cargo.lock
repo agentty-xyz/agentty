@@ -13,6 +13,7 @@ name = "ag-agent"
 version = "0.17.0"
 dependencies = [
  "ag-contracts",
+ "ag-harness",
  "ag-protocol",
  "ag-session",
  "ag-telemetry",
@@ -27,11 +28,13 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

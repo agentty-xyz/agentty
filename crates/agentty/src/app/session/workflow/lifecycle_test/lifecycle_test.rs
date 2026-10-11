@@ -5,6 +5,7 @@ use std::time::{Duration, Instant, SystemTime};
 use ag_forge as forge;
 use ag_git as git;
 use serde_json::Value;
+use tracing::instrument::WithSubscriber;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
@@ -21,8 +22,8 @@ use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment, TurnPromptTex
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::test_support::FixedClock;
 use crate::test_support::telemetry::capture_events;
+use crate::test_support::{FixedClock, TestSubscriber};
 
 #[tokio::test]
 async fn draft_creation_uses_the_active_project_and_requires_a_git_branch() {
@@ -703,4 +704,45 @@ fn assert_session_start_metadata(event: &Value, agent: AgentSelection, private_s
     assert_eq!(event["properties"]["model"], agent.model().as_str());
     assert!(!event.to_string().contains("private prompt"));
     assert!(!event.to_string().contains(private_session_id));
+}
+
+#[tokio::test]
+/// Removes each session's harness history and tolerates sessions without one.
+async fn harness_directory_cleanup_tolerates_missing_history() {
+    // Arrange
+    let removed_paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut filesystem = fs::MockFsClient::new();
+    let recorded_paths = Arc::clone(&removed_paths);
+    let mut results = vec![
+        Err(fs::FsError::Io(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        ))),
+        Err(fs::FsError::Io(std::io::Error::from(
+            std::io::ErrorKind::NotFound,
+        ))),
+        Ok(()),
+    ];
+    filesystem
+        .expect_remove_dir_all()
+        .times(3)
+        .returning(move |path| {
+            recorded_paths.lock().expect("paths lock").push(path);
+            let result = results.pop().expect("one result per call");
+
+            Box::pin(async move { result })
+        });
+    let filesystem: Arc<dyn fs::FsClient> = Arc::new(filesystem);
+
+    // Act
+    for session_id in ["removed", "missing", "denied"] {
+        SessionManager::cleanup_session_harness_directory(Arc::clone(&filesystem), session_id)
+            .with_subscriber(TestSubscriber)
+            .await;
+    }
+
+    // Assert
+    let removed_paths = removed_paths.lock().expect("paths lock");
+    assert_eq!(removed_paths.len(), 3);
+    assert!(removed_paths[0].ends_with("harness/removed"));
+    assert!(removed_paths[2].ends_with("harness/denied"));
 }

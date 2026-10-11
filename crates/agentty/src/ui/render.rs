@@ -8,7 +8,8 @@ use ratatui::widgets::TableState;
 use crate::app::session::session_branch;
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{ProjectSyncStatus, Tab, UpdateStatus};
-use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::ProjectListItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -47,12 +48,16 @@ pub struct RenderContext<'a> {
     pub archived_session_count: usize,
     /// Locally available agent CLI executables and detected versions.
     pub available_agent_clis: &'a [AgentCliInfo],
+    /// Startup-validated agent CLIs that can run new sessions.
+    pub available_agent_kinds: &'a [AgentKind],
     /// Active top-level tab selection.
     pub current_tab: Tab,
     /// Version label rendered in the status bar.
     pub current_version_display_text: &'a str,
     /// Active project-scoped reasoning level used by session pages.
     pub default_reasoning_level: ReasoningLevel,
+    /// Whether this launch offers Harness sessions.
+    pub harness_availability: HarnessAvailability,
     /// Current local branch name for the active project.
     pub git_branch: Option<&'a str>,
     /// Latest ahead/behind counts for the active project branch.

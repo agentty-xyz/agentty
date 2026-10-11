@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use crate::app::AppEvent;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{RunAgentAssistTaskInput, SessionError, SessionTaskService};
-use crate::domain::agent::AgentSelection;
+use crate::domain::agent::{AgentKind, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::AppRepositories;
@@ -28,6 +28,8 @@ pub(super) struct AssistPolicy {
 pub(super) struct AssistContext {
     /// App event sender used to update UI progress/output state.
     pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Locally installed agent CLIs that utility prompts may target.
+    pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Session PID slot for CLI cancellation or retained app-server accounting.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Repository bundle used for session persistence updates.

@@ -23,7 +23,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::session::SessionError;
-use crate::domain::agent::{AgentModel, AgentSelection};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::personality::RealPersonalityCatalogClient;
@@ -185,6 +185,7 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel("sess1".to_string(), Arc::new(mock_channel)),

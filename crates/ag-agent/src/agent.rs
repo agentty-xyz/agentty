@@ -11,9 +11,11 @@ mod backend;
 mod claude;
 pub(crate) mod cli;
 mod codex;
-mod execution_policy;
+pub(crate) mod execution_policy;
 mod gemini;
+mod harness;
 mod instruction;
+pub(crate) mod native;
 mod prompt;
 mod provider;
 pub(crate) mod replay;
@@ -31,7 +33,8 @@ pub use availability::{
 pub use backend::MockAgentBackend;
 pub use backend::{AgentBackend, AgentBackendError, AgentTransport, BuildCommandRequest};
 pub use instruction::instruction_bootstrap_key;
-pub(crate) use instruction::{InstructionDeliveryMode, plan_app_server_instruction_delivery};
+pub(crate) use instruction::{InstructionDeliveryMode, plan_instruction_delivery};
+pub use native::NativeHarnessConfig;
 pub(crate) use prompt::{
     PromptPreparationRequest, apply_response_style_prompt, prepare_prompt_text,
 };

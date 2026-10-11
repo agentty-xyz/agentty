@@ -1,7 +1,7 @@
 //! App state definitions and workflow glue for the app core module.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -66,6 +66,10 @@ use crate::presentation::setting::SettingsPresentationState;
 /// `agentty` home directory.
 pub const AGENTTY_WT_DIR: &str = "wt";
 
+/// Relative directory name holding each Harness session's durable history
+/// within the `agentty` home directory.
+pub const AGENTTY_HARNESS_DIR: &str = "harness";
+
 /// Background auto-update progress state for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UpdateStatus {
@@ -112,6 +116,8 @@ pub(crate) struct AppClients {
     pub(super) agent_availability_probe: Arc<dyn AgentAvailabilityProbe>,
     /// Whether startup should spawn background CLI version detection.
     pub(super) agent_cli_version_task_enabled: bool,
+    /// Whether Agentty started with `--experimental-harness`.
+    pub(super) experimental_harness: bool,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
@@ -132,6 +138,7 @@ impl AppClients {
         Self {
             agent_availability_probe: Arc::new(RealAgentAvailabilityProbe),
             agent_cli_version_task_enabled: true,
+            experimental_harness: false,
             runtime_config: RuntimeConfig::default(),
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
@@ -144,6 +151,18 @@ impl AppClients {
             tmux_client: Arc::new(RealTmuxClient),
             version_task_runner: Arc::new(task::RealVersionTaskRunner),
         }
+    }
+
+    /// Enables `--experimental-harness`: Harness sessions run in process and
+    /// keep their durable history under `harness_data_root`.
+    #[must_use]
+    pub(crate) fn with_experimental_harness(mut self, harness_data_root: PathBuf) -> Self {
+        self.experimental_harness = true;
+        self.runtime_config = self.runtime_config.with_native_harness(harness_data_root);
+        self.session_run_factory =
+            Arc::new(RealSessionRunFactory::new(self.runtime_config.clone()));
+
+        self
     }
 }
 
@@ -609,7 +628,7 @@ impl App {
             attachment_state: crate::presentation::prompt::PromptAttachmentState::default(),
             focus: ChatFocus::Input,
             history_state: crate::presentation::prompt::PromptHistoryState::new(Vec::new()),
-            slash_state: self.prompt_slash_state(),
+            slash_state: self.prompt_slash_state(&session_id),
             session_id: SessionId::from(session_id.as_str()),
             input: InputState::default(),
             scroll_offset: None,

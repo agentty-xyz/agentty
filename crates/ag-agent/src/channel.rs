@@ -7,6 +7,7 @@
 pub(crate) mod app_server;
 pub(crate) mod cli;
 mod factory;
+pub(crate) mod native;
 
 pub use factory::create_agent_channel;
 #[cfg(any(test, feature = "test-utils"))]

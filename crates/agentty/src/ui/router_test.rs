@@ -10,7 +10,8 @@ use super::{
 };
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
-use crate::domain::agent::ReasoningLevel;
+use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{Session, Status};
@@ -60,6 +61,8 @@ fn route_shared_context_finds_appendable_parent_for_selected_review_session() {
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::High,
+        harness_availability: HarnessAvailability::Hidden,
+        available_agent_kinds: AgentKind::ALL,
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
@@ -132,6 +135,8 @@ fn render_list_tab(
         available_agent_clis: &available_agent_clis,
         current_tab,
         default_reasoning_level: ReasoningLevel::Max,
+        harness_availability: HarnessAvailability::Hidden,
+        available_agent_kinds: AgentKind::ALL,
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
@@ -170,6 +175,8 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::High,
+        harness_availability: HarnessAvailability::Hidden,
+        available_agent_kinds: AgentKind::ALL,
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],
@@ -525,6 +532,8 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
         available_agent_clis: &[],
         current_tab: Tab::Sessions,
         default_reasoning_level: ReasoningLevel::default(),
+        harness_availability: HarnessAvailability::Hidden,
+        available_agent_kinds: AgentKind::ALL,
         has_more_archived_sessions: false,
         is_archive_expanded: false,
         mru_project_order: &[],

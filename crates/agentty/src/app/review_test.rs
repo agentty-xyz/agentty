@@ -239,6 +239,7 @@ fn review_agent_kind_labels_are_title_cased() {
         (AgentKind::Gemini, "Gemini"),
         (AgentKind::Claude, "Claude"),
         (AgentKind::Codex, "Codex"),
+        (AgentKind::Harness, "Harness"),
     ];
 
     // Act

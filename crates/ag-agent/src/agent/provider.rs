@@ -198,6 +198,16 @@ fn provider_descriptor(kind: AgentKind) -> AgentProviderDescriptor {
             protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
             transport: AgentTransport::AppServer,
         },
+        AgentKind::Harness => AgentProviderDescriptor {
+            app_server_client_factory: |_default_client| None,
+            app_server_thought_policy: AppServerThoughtPolicy::None,
+            backend_factory: || Box::new(super::harness::HarnessBackend),
+            parse_response: super::harness::parse_response,
+            parse_stream_output_line: super::harness::parse_stream_output_line,
+            prompt_transport: AgentPromptTransport::Argv,
+            protocol_schema_instruction_mode: ProtocolSchemaInstructionMode::TransportSchema,
+            transport: AgentTransport::Native,
+        },
     }
 }
 

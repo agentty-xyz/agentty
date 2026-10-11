@@ -124,6 +124,7 @@ async fn test_handle_auto_commit_updates_session_title() {
     });
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),

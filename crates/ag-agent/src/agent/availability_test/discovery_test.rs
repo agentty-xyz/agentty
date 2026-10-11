@@ -8,13 +8,15 @@ use tempfile::tempdir;
 use crate::agent::availability::{available_agent_kinds_from_path, executable_name};
 
 #[test]
-/// Ensures executable names stay aligned with provider command names.
+/// Ensures executable names stay aligned with provider command names and the
+/// in-process harness has none.
 fn test_executable_name_matches_agent_cli_names() {
     // Arrange / Act / Assert
-    assert_eq!(executable_name(AgentKind::Antigravity), "agy");
-    assert_eq!(executable_name(AgentKind::Claude), "claude");
-    assert_eq!(executable_name(AgentKind::Codex), "codex");
-    assert_eq!(executable_name(AgentKind::Gemini), "gemini");
+    assert_eq!(executable_name(AgentKind::Antigravity), Some("agy"));
+    assert_eq!(executable_name(AgentKind::Claude), Some("claude"));
+    assert_eq!(executable_name(AgentKind::Codex), Some("codex"));
+    assert_eq!(executable_name(AgentKind::Gemini), Some("gemini"));
+    assert_eq!(executable_name(AgentKind::Harness), None);
 }
 
 #[test]

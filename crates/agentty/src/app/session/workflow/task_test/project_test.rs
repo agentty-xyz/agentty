@@ -52,6 +52,7 @@ async fn test_load_auto_commit_agent_setting_prefers_project_fast_selection() {
         &database,
         "session-id",
         model_fixture::codex_selection(),
+        AgentKind::ALL,
     )
     .await;
 

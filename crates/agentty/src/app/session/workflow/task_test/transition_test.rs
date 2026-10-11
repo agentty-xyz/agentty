@@ -41,6 +41,7 @@ async fn test_handle_auto_commit_appends_commit_error_from_mock_git_client() {
         .returning(|_| Err(OneShotError::new("commit failed")));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -112,6 +113,7 @@ async fn test_handle_auto_commit_stops_on_index_lock() {
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("project"),
@@ -197,6 +199,7 @@ async fn test_handle_auto_commit_warns_when_pre_commit_hook_is_missing() {
         .returning(|_| Ok(one_shot_submission("Update project", 0, 0)));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -241,6 +244,7 @@ async fn test_handle_auto_commit_reports_when_no_changes_exist() {
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),
@@ -368,6 +372,7 @@ async fn test_commit_assist_preserves_retained_runtime_accounting() {
         let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
         let context = AssistContext {
             app_event_tx,
+            available_agent_kinds: Arc::from(AgentKind::ALL),
             child_pid: Arc::clone(&child_pid),
             db: database,
             folder: PathBuf::from("project"),
@@ -656,6 +661,7 @@ async fn test_append_pre_commit_hook_warning_ignores_duplicate_advisory() {
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: database.clone(),
         folder: PathBuf::from("/tmp/project"),

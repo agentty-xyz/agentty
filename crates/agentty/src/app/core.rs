@@ -14,6 +14,6 @@ pub(crate) use event::{AppEvent, AppRuntimeEvent};
 #[path = "core_test_support_test.rs"]
 pub(crate) mod test_support;
 pub(crate) use state::SyncReviewRequestTaskResult;
-pub use state::{AGENTTY_WT_DIR, App, UpdateStatus};
+pub use state::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus};
 
 pub use crate::infra::home::agentty_home;

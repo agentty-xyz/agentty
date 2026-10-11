@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use ag_git as git;
-use ag_session::StaticAgentAvailabilityProbe;
+use ag_session::{AgentAvailabilityProbe, StaticAgentAvailabilityProbe};
 use ag_worker::test_support::{AppServerClient, MockAppServerClient};
 use ratatui::buffer::{Buffer, Cell};
 use tracing::field::{Field, Visit};
@@ -347,6 +347,30 @@ pub(crate) fn test_app_clients() -> app::test_support::AppClients {
 /// app-server override.
 pub(crate) fn test_app_clients_with_mock_app_server() -> app::test_support::AppClients {
     test_app_clients().with_app_server_client_override(mock_app_server())
+}
+
+/// Reports no backend CLI and one configured Harness provider.
+struct HarnessOnlyAvailabilityProbe;
+
+impl AgentAvailabilityProbe for HarnessOnlyAvailabilityProbe {
+    fn available_agent_kinds(&self) -> Vec<AgentKind> {
+        Vec::new()
+    }
+
+    fn native_harness_default_model(&self) -> Option<AgentModel> {
+        Some(AgentModel::KimiK3)
+    }
+}
+
+/// Builds one client bundle for an `--experimental-harness` launch whose only
+/// backend is Harness on `AgentModel::KimiK3`, keeping scripted session runs.
+pub(crate) fn harness_only_test_app_clients(
+    harness_data_root: PathBuf,
+) -> app::test_support::AppClients {
+    test_app_clients_with_available_agent_kinds(Vec::new())
+        .with_agent_availability_probe(Arc::new(HarnessOnlyAvailabilityProbe))
+        .with_experimental_harness(harness_data_root)
+        .with_session_run_factory(Arc::new(app::test_support::TestSessionRunFactory::default()))
 }
 
 /// Builds one app rooted at a retained temporary directory using the given

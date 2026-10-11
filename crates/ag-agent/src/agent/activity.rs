@@ -39,7 +39,7 @@ impl ActivityObserver {
         match kind {
             AgentKind::Codex => self.codex(payload),
             AgentKind::Claude => self.claude(payload),
-            AgentKind::Gemini | AgentKind::Antigravity => {}
+            AgentKind::Gemini | AgentKind::Antigravity | AgentKind::Harness => {}
         }
     }
 

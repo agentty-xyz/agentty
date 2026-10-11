@@ -27,7 +27,7 @@ requires its respective CLI to be installed and available on your `PATH`.
   [Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate with an API
   key or Vertex AI.
 
-All backends accept pasted local prompt images from the Agentty composer (`Ctrl+V`,
+All CLI backends accept pasted local prompt images from the Agentty composer (`Ctrl+V`,
 `Ctrl+Shift+V`, or `Alt+V` in prompt mode) and run their turns non-interactively inside
 the session worktree.
 
@@ -53,6 +53,38 @@ Agentty uses each provider's official non-interactive CLI or app-server surface
 after you authenticate with that provider's CLI. It does not implement OAuth flows, read
 provider OAuth tokens directly, or call private provider APIs. You are responsible for
 choosing an authentication method permitted for your account, plan, and usage pattern.
+
+## Harness Sessions (Preview)
+
+<a id="backends-harness"></a> Start Agentty with `agentty --experimental-harness` to add
+a **Harness** session type that runs Agentty's built-in agent loop instead of an
+external CLI. It talks directly to a model provider using an API key from the
+environment:
+
+| Provider | Key                 | Endpoint                      |
+| -------- | ------------------- | ----------------------------- |
+| Muse     | `MODEL_API_KEY`     | Optional `MODEL_API_BASE_URL` |
+| Kimi     | `KIMI_API_KEY`      | Required `KIMI_BASE_URL`      |
+| Qwen     | `DASHSCOPE_API_KEY` | Required `DASHSCOPE_BASE_URL` |
+
+Without the flag the session type is hidden; with the flag but no configured provider it
+is shown disabled. With a configured provider, Agentty starts even when no backend CLI
+is installed; the other session types are then disabled and the selector opens on
+**Harness**. A Harness session's `/model` lists only harness models, and other sessions
+never list them. Choosing a harness model never changes the project's default model.
+
+- `Read Only` turns can read the worktree. `Auto Edit` turns can also write files and
+  run unsandboxed `bash`, which can reach the network and paths outside the worktree,
+  like Codex full access. Provider keys and endpoints are removed from the `bash`
+  environment.
+- Answers arrive in one piece; the activity footer shows tool calls while a turn runs.
+- Commit messages and titles use the project's default fast or smart model when one is
+  set and its agent CLI is installed, otherwise the session's harness model.
+- History is stored per session under `~/.agentty/harness/` and removed with the
+  session. Image attachments are not supported yet; a prompt with pasted images fails
+  before reaching the model.
+- Switching away from a Kimi model is rejected once the session has Kimi reasoning
+  history. Switching to another provider needs only that provider's key.
 
 ## Subagent Limits
 
@@ -187,6 +219,17 @@ Both providers share the same Gemini model ids:
 - `gpt-6-luna`: Efficient Codex model for focused, high-volume tasks.
 - `gpt-5.6-terra`: Current Codex model for balanced coding performance.
 - `gpt-5.3-codex-spark`: Codex spark model for quick coding iterations.
+
+### Harness Models
+
+Available only in Harness sessions. New Harness sessions start on the first listed model
+whose provider is configured:
+
+- `muse-spark-1.3`: Muse Spark model.
+- `kimi-k3`: Latest Kimi model.
+- `kimi-k2.6`: Previous Kimi model.
+- `qwen3.8-max`: Most capable Qwen model.
+- `qwen-plus`: Balanced Qwen model.
 
 ### Stored Model Upgrades
 

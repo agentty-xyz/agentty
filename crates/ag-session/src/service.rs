@@ -15,6 +15,9 @@ pub enum CreateSessionMode {
     Regular,
     /// Creates a root draft whose worktree is materialized on first send.
     Draft,
+    /// Creates a regular root session that runs on the in-process
+    /// [`crate::AgentKind::Harness`] with its default model.
+    Harness,
     /// Creates a controller session that plans and supervises worker sessions.
     Orchestrator,
     /// Creates one worker owned by a persisted orchestration task.
