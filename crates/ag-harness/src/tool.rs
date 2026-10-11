@@ -25,7 +25,7 @@ const READ_DESCRIPTION: &str = concat!(
     "File/show offsets are one-based line numbers and limits count lines. If truncated, ",
     "continue file/show at next_offset; narrow list/search/diff when no continuation is supplied."
 );
-const READ_NAME: &str = "read";
+pub(crate) const READ_NAME: &str = "read";
 const MAX_PATCH_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4 * 1024;
 const MAX_QUERY_BYTES: usize = 4 * 1024;

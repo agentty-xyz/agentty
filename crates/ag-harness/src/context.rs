@@ -7,8 +7,16 @@ use thiserror::Error;
 
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelRequest};
-use crate::tool::{Tool, ToolCall, ToolDefinition};
+use crate::tool::{READ_NAME, Tool, ToolCall, ToolDefinition};
 use crate::turn::{TurnError, TurnOptions};
+
+/// Fraction of the request budget, as its divisor, that a grown request is
+/// elided below once it no longer fits, so the requests that follow can append
+/// tool rounds without eliding again.
+pub(crate) const ELISION_HEADROOM_DIVISOR: u64 = 4;
+
+/// Outcome fields of a `bash` or `write` result kept in its elision notice.
+const ELIDED_OUTCOME_KEYS: [&str; 4] = ["exit_code", "signal", "status", "termination"];
 
 /// Approximate request-weight budget for one registered model configuration.
 ///
@@ -18,8 +26,9 @@ use crate::turn::{TurnError, TurnOptions};
 /// [`crate::model::ModelCapabilities`], and revise the effective
 /// [`crate::recovery::ExecutionIdentity`] when it changes. The budget governs
 /// every provider request of a turn: the initial request keeps the most recent
-/// whole turns that fit, and requests grown by in-turn tool traffic are
-/// re-admitted before each follow-up model call. The stored byte-based replay
+/// whole turns that fit, and a request grown by in-turn tool traffic sends its
+/// oldest in-turn tool results as elision notices when it no longer fits. The
+/// stored byte-based replay
 /// budget still bounds how much history is loaded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextBudget {
@@ -173,19 +182,53 @@ impl HistoryTurn {
         replay
     }
 
-    /// Returns a stopped turn's input and stop note, replayed when its full
-    /// replay does not fit; `None` for a completed turn.
-    pub(crate) fn brief_replay(&self) -> Option<Vec<ModelMessage>> {
-        let stop = self.stop.as_ref()?;
+    /// Returns the most complete replay weighing at most `available_weight`:
+    /// the full replay, then the replay with its oldest tool results elided,
+    /// then the brief replay. Returns `None` when even the brief replay does
+    /// not fit.
+    pub(crate) fn fitted_replay(
+        &self,
+        estimator: &dyn ContextEstimator,
+        available_weight: u64,
+    ) -> Option<Vec<ModelMessage>> {
+        let mut replay = self.replay();
+        let required = weigh_messages(estimator, &replay);
+        if required <= available_weight {
+            return Some(replay);
+        }
+        let (required, _) = elide_tool_results(estimator, &mut replay, required, available_weight);
+        if required <= available_weight {
+            return Some(replay);
+        }
+        let brief = self.brief_replay();
 
-        Some(
-            self.messages
+        (weigh_messages(estimator, &brief) <= available_weight).then_some(brief)
+    }
+
+    /// Returns the turn's input followed by its final output, or by its stop
+    /// note for a stopped turn, dropping every tool round in between.
+    pub(crate) fn brief_replay(&self) -> Vec<ModelMessage> {
+        self.brief().replay()
+    }
+
+    /// Returns this turn reduced to the messages its brief replay needs: the
+    /// input and, for a completed turn, the final output.
+    pub(crate) fn brief(&self) -> Self {
+        let output = match self.stop {
+            Some(_) => None,
+            None => self.messages.get(1..).and_then(<[_]>::last).cloned(),
+        };
+
+        Self {
+            messages: self
+                .messages
                 .first()
                 .cloned()
                 .into_iter()
-                .chain([stop.note()])
+                .chain(output)
                 .collect(),
-        )
+            stop: self.stop.clone(),
+        }
     }
 
     /// Answers each tool call still awaiting a result, so a stopped turn
@@ -280,7 +323,7 @@ impl TurnStop {
 /// weight left for history.
 ///
 /// The current input is weighed as the canonical user message the request
-/// sends, so this admission matches [`admit_grown_request`]'s per-message
+/// sends, so this admission matches [`fit_grown_request`]'s per-message
 /// accounting for the same content.
 ///
 /// # Errors
@@ -314,24 +357,65 @@ pub(crate) fn admit_mandatory_content(
     Ok(budget_weight - required)
 }
 
-/// Re-admits a request that in-turn tool traffic has grown since projection.
+/// Fits a request that in-turn tool traffic has grown since projection.
+///
+/// When the whole request no longer fits, tool results are replaced oldest
+/// first with a short elision notice, starting with replayed history, so a
+/// turn that follows a large one can still grow. Results answering the latest
+/// tool-call message always stay intact. Elision applies to the returned copy
+/// only, so the turn still persists and replays every result. Returns `None`
+/// when the request fits unchanged.
+///
+/// `elided_through` carries the message index before which an earlier request
+/// of the same turn elided every result. That prefix is elided again, and
+/// only a request that still does not fit and may `extend_elision` elides
+/// further, down to [`ELISION_HEADROOM_DIVISOR`] headroom, advancing
+/// `elided_through`, so consecutive requests share an unchanged prefix
+/// instead of each eliding one more result.
 ///
 /// # Errors
-/// Returns [`TurnError::ContextBudgetExceeded`] when the accumulated
-/// messages, advertised tool definitions, and reserved output no longer fit.
-pub(crate) fn admit_grown_request(
+/// Returns [`TurnError::ContextBudgetExceeded`] when the messages, advertised
+/// tool definitions, and reserved output cannot fit even after eliding every
+/// eligible tool result.
+pub(crate) fn fit_grown_request(
     estimator: &dyn ContextEstimator,
     budget: ContextBudget,
     request: &ModelRequest,
-) -> Result<(), TurnError> {
-    let mut required = budget.reserved_output_weight();
-    for message in request.messages() {
-        required = required.saturating_add(estimator.message_weight(message));
-    }
+    elided_through: &mut usize,
+    extend_elision: bool,
+) -> Result<Option<ModelRequest>, TurnError> {
+    let mut required = budget
+        .reserved_output_weight()
+        .saturating_add(weigh_messages(estimator, request.messages()));
     for tool in request.tools() {
         required = required.saturating_add(estimator.tool_definition_weight(tool));
     }
     let budget_weight = budget.max_request_weight().get();
+    if required <= budget_weight {
+        return Ok(None);
+    }
+    // Without a tool round, nothing precedes the latest round to elide.
+    let latest_round = request
+        .messages()
+        .iter()
+        .rposition(|message| {
+            matches!(
+                message,
+                ModelMessage::AssistantToolCall(_) | ModelMessage::AssistantToolCalls(_)
+            )
+        })
+        .unwrap_or(0);
+    let mut fitted = request.clone();
+    let (elided, unelided) =
+        fitted.messages_mut()[..latest_round].split_at_mut((*elided_through).min(latest_round));
+    (required, _) = elide_tool_results(estimator, elided, required, 0);
+    if extend_elision && required > budget_weight {
+        let target_weight = budget_weight - budget_weight / ELISION_HEADROOM_DIVISOR;
+        let (remaining, examined) =
+            elide_tool_results(estimator, unelided, required, target_weight);
+        required = remaining;
+        *elided_through = elided.len() + examined;
+    }
     if required > budget_weight {
         return Err(TurnError::ContextBudgetExceeded {
             budget: budget_weight,
@@ -339,39 +423,27 @@ pub(crate) fn admit_grown_request(
         });
     }
 
-    Ok(())
+    Ok(Some(fitted))
 }
 
 /// Flattens the most recent finished turns whose combined weight fits
 /// `available_weight`, dropping every turn older than the first that does
-/// not, so a turn's tool groups are never split. A stopped turn whose full
-/// replay does not fit keeps only its input and stop note. Returns the
-/// projected messages with the number of loaded turns that projection
-/// evicted.
+/// not, so a turn's tool groups are never split. A turn whose full replay
+/// does not fit is replayed with its oldest tool results elided, or only with
+/// its input and final output or stop note. Returns the projected messages
+/// with the number of loaded turns that projection evicted.
 pub(crate) fn select_recent_turns(
     estimator: &dyn ContextEstimator,
     turns: &VecDeque<HistoryTurn>,
     available_weight: u64,
 ) -> (Vec<ModelMessage>, usize) {
-    let weigh = |messages: &[ModelMessage]| {
-        messages.iter().fold(0_u64, |weight, message| {
-            weight.saturating_add(estimator.message_weight(message))
-        })
-    };
     let mut kept = Vec::new();
     let mut remaining = available_weight;
     for turn in turns.iter().rev() {
-        let full = turn.replay();
-        let replay = if weigh(&full) <= remaining {
-            Some(full)
-        } else {
-            turn.brief_replay()
-                .filter(|brief| weigh(brief) <= remaining)
-        };
-        let Some(replay) = replay else {
+        let Some(replay) = turn.fitted_replay(estimator, remaining) else {
             break;
         };
-        remaining -= weigh(&replay);
+        remaining -= weigh_messages(estimator, &replay);
         kept.push(replay);
     }
     let dropped_turns = turns.len().saturating_sub(kept.len());
@@ -396,6 +468,89 @@ pub(crate) fn advertised_tools(options: &TurnOptions) -> Vec<ToolDefinition> {
     }
 
     tools
+}
+
+fn weigh_messages(estimator: &dyn ContextEstimator, messages: &[ModelMessage]) -> u64 {
+    messages.iter().fold(0_u64, |weight, message| {
+        weight.saturating_add(estimator.message_weight(message))
+    })
+}
+
+/// Replaces tool results in `messages` oldest first with an elision notice
+/// until `required` fits `available_weight`, skipping results the notice would
+/// not shrink. Returns the remaining required weight and the number of leading
+/// messages examined.
+fn elide_tool_results(
+    estimator: &dyn ContextEstimator,
+    messages: &mut [ModelMessage],
+    mut required: u64,
+    available_weight: u64,
+) -> (u64, usize) {
+    let mut examined = 0;
+    for message in messages {
+        if required <= available_weight {
+            break;
+        }
+        examined += 1;
+        let ModelMessage::ToolResult {
+            call_id,
+            content,
+            name,
+        } = &*message
+        else {
+            continue;
+        };
+        let elided = ModelMessage::ToolResult {
+            call_id: call_id.clone(),
+            content: elided_tool_result(name, content),
+            name: name.clone(),
+        };
+        let saved_weight = estimator
+            .message_weight(message)
+            .saturating_sub(estimator.message_weight(&elided));
+        if saved_weight == 0 {
+            continue;
+        }
+        required = required.saturating_sub(saved_weight);
+        *message = elided;
+    }
+
+    (required, examined)
+}
+
+/// Renders the notice that stands in for one elided tool result. A `read`
+/// may be repeated to recover its content; any other call already ran, so
+/// its notice keeps the recorded outcome, which alone says whether the call
+/// took effect, and warns against repeating it.
+fn elided_tool_result(name: &str, content: &str) -> String {
+    if name == READ_NAME {
+        return serde_json::json!({
+            "elided": "This earlier tool result was removed to keep the request within the \
+                       context budget. Repeat the call only if you still need its content.",
+            "original_bytes": content.len(),
+        })
+        .to_string();
+    }
+    let mut notice = serde_json::Map::new();
+    notice.insert(
+        "elided".to_string(),
+        "This earlier tool result was removed to keep the request within the context budget. The \
+         call already ran with the outcome recorded here; do not repeat it only to recover its \
+         output."
+            .into(),
+    );
+    notice.insert("original_bytes".to_string(), content.len().into());
+    let result: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(content).unwrap_or_default();
+    for key in ELIDED_OUTCOME_KEYS {
+        if let Some(value) = result.get(key)
+            && !value.is_null()
+        {
+            notice.insert(key.to_string(), value.clone());
+        }
+    }
+
+    serde_json::Value::Object(notice).to_string()
 }
 
 #[cfg(test)]

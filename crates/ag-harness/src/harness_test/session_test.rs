@@ -211,6 +211,37 @@ fn chat_history_evicts_complete_tool_turns() {
     assert!(history.bytes <= max_bytes);
 }
 
+#[test]
+fn chat_history_keeps_a_turn_over_the_byte_limit_as_its_input_and_output() {
+    // Arrange
+    let brief_turn = vec![
+        ModelMessage::User("inspect".to_string()),
+        ModelMessage::Assistant(r#"{"summary":"done"}"#.to_string()),
+    ];
+    let mut tool_turn = brief_turn.clone();
+    tool_turn.insert(1, ModelMessage::AssistantToolCall(read_call("call_read")));
+    tool_turn.insert(
+        2,
+        ModelMessage::ToolResult {
+            call_id: "call_read".to_string(),
+            content: "file contents".to_string(),
+            name: "read".to_string(),
+        },
+    );
+    let max_bytes = retained_bytes(&brief_turn);
+    let mut history = SessionHistory::new(max_bytes);
+
+    // Act
+    history.push(HistoryTurn::from(tool_turn));
+
+    // Assert
+    assert_eq!(
+        history.turns().iter().cloned().collect::<Vec<_>>(),
+        vec![HistoryTurn::from(brief_turn)]
+    );
+    assert_eq!(history.bytes, max_bytes);
+}
+
 #[tokio::test]
 async fn session_applies_the_configured_history_budget() {
     // Arrange

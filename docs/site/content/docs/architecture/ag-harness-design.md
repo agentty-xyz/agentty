@@ -66,8 +66,15 @@ crates/
 
 A turn continues until the model responds without requesting a tool, and the terminal
 response must satisfy the caller's schema. There is no tool-call limit: cancellation and
-the required `ContextBudget` bound a turn, which fails typed once the next request no
-longer fits.
+the required `ContextBudget` bound a turn. When tool traffic grows the next request past
+the budget, the request sends its oldest tool results, replayed history first, as short
+elision notices, keeping the latest round intact and the stored results unchanged.
+Elision leaves a quarter of the budget free and later requests keep the same elided
+prefix, so the request prefix changes only when that headroom is spent. At most 128
+model requests per turn may extend that prefix; after that, requests only re-elide it,
+and the turn fails typed once a request cannot fit. Notices for `bash` and `write`
+results keep the recorded outcome and tell the model not to repeat the call; only `read`
+notices invite a repeat.
 
 ```mermaid
 flowchart TD
@@ -92,7 +99,12 @@ a stopped turn keeps everything it already did.
 - Failed and interrupted turns re-enter model context with what they recorded, never as
   completed history: tool calls without a result get a placeholder result in the request
   only, and a closing stop note names the cause and the writes and commands whose
-  outcome is unknown. A stopped turn that does not fit replays only its input and note.
+  outcome is unknown.
+- A turn that does not fit is projected with its oldest tool results elided, or else
+  only with its input and final output or stop note. A turn larger than the history byte
+  limit is loaded in that input-and-ending form rather than evicted. Compaction reduces
+  turns to that input and ending, oldest turn first, before dropping whole turns from
+  its source.
 - Reservation and model switching run in one store-owned atomic section that reads the
   admission state and records the harness's decision: recorded host requests first, then
   the model generation, an idle session, and no unresolved command.

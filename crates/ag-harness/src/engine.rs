@@ -21,6 +21,10 @@ use crate::turn::{
 };
 use crate::write::{WriteError, WriteTool};
 
+/// Model calls one turn may elide tool results beyond the prefix earlier
+/// requests elided; later requests only re-elide that prefix.
+pub(crate) const MAX_ELISION_EXTENSIONS: usize = 128;
+
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
     pub(crate) context_budget: context::ContextBudget,
@@ -44,13 +48,17 @@ impl Engine<'_> {
         let started_at = Instant::now();
         let recorder = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
+        let mut fitted_request = None;
+        let mut elision_extensions = 0_usize;
+        let mut elided_through = 0_usize;
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut tool_calls = Vec::new();
 
         loop {
+            let sent_request = fitted_request.as_ref().unwrap_or(&request);
             let (response, activity, reasoning_content) = self
-                .complete_model_request(&request, model_request_index, turn_id)
+                .complete_model_request(sent_request, model_request_index, turn_id)
                 .await?;
             model_request_index = model_request_index.saturating_add(1);
             model_requests.push(activity);
@@ -87,9 +95,22 @@ impl Engine<'_> {
                 }
             }
             // Tool traffic grows the request between model calls; a grown
-            // request that no longer fits fails typed here instead of
-            // overflowing the provider context.
-            context::admit_grown_request(self.context_estimator, self.context_budget, &request)?;
+            // request sends its oldest tool results elided, keeping the prefix
+            // earlier requests elided. Only `MAX_ELISION_EXTENSIONS` model
+            // calls may elide beyond that prefix, so a model re-reading elided
+            // content cannot loop unbounded, and the turn fails typed once it
+            // cannot fit the provider context.
+            let elided_before = elided_through;
+            fitted_request = context::fit_grown_request(
+                self.context_estimator,
+                self.context_budget,
+                &request,
+                &mut elided_through,
+                elision_extensions < MAX_ELISION_EXTENSIONS,
+            )?;
+            if elided_through > elided_before {
+                elision_extensions += 1;
+            }
         }
     }
 

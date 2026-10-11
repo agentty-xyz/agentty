@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{
     ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator, HistoryTurn,
-    TurnStop, admit_grown_request, admit_mandatory_content, advertised_tools, select_recent_turns,
+    TurnStop, admit_mandatory_content, advertised_tools, fit_grown_request, select_recent_turns,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::{ModelMessage, ModelRequest};
@@ -273,15 +273,16 @@ fn grown_requests_are_re_admitted_against_the_whole_budget() {
     );
 
     // Act
-    let initial = admit_grown_request(&FixedEstimator, budget, &request);
+    let initial = fit_grown_request(&FixedEstimator, budget, &request, &mut 0, true);
     request.record_tool_call(call.clone());
     request.record_tool_result(&call, "content".to_string());
-    let grown = admit_grown_request(&FixedEstimator, budget, &request);
+    let grown = fit_grown_request(&FixedEstimator, budget, &request, &mut 0, true);
 
     // Assert
     // Reserved 2 + one user message 7 + one tool definition 2 = 11 of 20.
-    initial.expect("initial request fits");
-    // The recorded call and result add two 7-weight messages: 25 of 20.
+    assert_eq!(initial.expect("initial request fits"), None);
+    // The recorded call and result add two 7-weight messages: 25 of 20, and
+    // the only result answers the latest call, so nothing can be elided.
     assert!(matches!(
         grown,
         Err(TurnError::ContextBudgetExceeded {
@@ -289,6 +290,413 @@ fn grown_requests_are_re_admitted_against_the_whole_budget() {
             required: 25,
         })
     ));
+}
+
+/// Weighs tool results by content bytes and every other item at one unit.
+struct ToolResultBytesEstimator;
+
+impl ContextEstimator for ToolResultBytesEstimator {
+    fn message_weight(&self, message: &ModelMessage) -> u64 {
+        match message {
+            ModelMessage::ToolResult { content, .. } => {
+                u64::try_from(content.len()).expect("content length fits u64")
+            }
+            _ => 1,
+        }
+    }
+
+    fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
+        0
+    }
+}
+
+/// Records one read round per content in `results` after a prior turn whose
+/// tool result is `history_result`.
+fn request_with_rounds(history_result: &str, results: &[&str]) -> ModelRequest {
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let history_call = read_call("history-call");
+    let history = vec![
+        ModelMessage::User("earlier".into()),
+        ModelMessage::AssistantToolCall(history_call),
+        ModelMessage::ToolResult {
+            call_id: "history-call".into(),
+            content: history_result.into(),
+            name: "read".into(),
+        },
+        ModelMessage::Assistant("{}".into()),
+    ];
+    let mut request = ModelRequest::with_history(history, "prompt", schema);
+    for (index, content) in results.iter().enumerate() {
+        let call = read_call(&format!("call-{index}"));
+        request.record_tool_call(call.clone());
+        request.record_tool_result(&call, (*content).to_string());
+    }
+
+    request
+}
+
+fn tool_result_content(messages: &[ModelMessage], call_id: &str) -> String {
+    messages
+        .iter()
+        .find_map(|message| match message {
+            ModelMessage::ToolResult {
+                call_id: id,
+                content,
+                ..
+            } if id == call_id => Some(content.clone()),
+            _ => None,
+        })
+        .expect("tool result")
+}
+
+#[test]
+fn grown_requests_elide_oldest_tool_results_from_history_first_below_the_headroom() {
+    // Arrange
+    let large = "x".repeat(400);
+    let request = request_with_rounds(&large, &[large.as_str(); 5]);
+    let original = request.clone();
+    let mut elided_through = 0;
+
+    // Act
+    let fitted = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(2_400),
+        &request,
+        &mut elided_through,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    // Six 400-byte results plus nine unit messages weigh 2,409 of 2,400.
+    // Each 169-byte notice saves 231, so eliding the history result, then
+    // `call-0` and `call-1`, brings the request to 1,716, below the 1,800
+    // headroom target; later results keep their content.
+    let history_result = tool_result_content(fitted.messages(), "history-call");
+    assert!(history_result.contains("\"elided\""));
+    assert!(history_result.contains("\"original_bytes\":400"));
+    for call_id in ["call-0", "call-1"] {
+        assert!(tool_result_content(fitted.messages(), call_id).contains("\"elided\""));
+    }
+    for call_id in ["call-2", "call-3", "call-4"] {
+        assert_eq!(tool_result_content(fitted.messages(), call_id), large);
+    }
+    // Four history messages, the prompt, and the first two rounds.
+    assert_eq!(elided_through, 9);
+    assert_eq!(fitted.messages().len(), original.messages().len());
+    assert_eq!(request, original);
+}
+
+#[test]
+fn consecutive_grown_requests_keep_the_elided_prefix_unchanged() {
+    // Arrange
+    let large = "x".repeat(400);
+    let mut request = request_with_rounds(&large, &[large.as_str(); 5]);
+    let mut elided_through = 0;
+    let first = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(2_400),
+        &request,
+        &mut elided_through,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+    let call = read_call("call-5");
+    request.record_tool_call(call.clone());
+    request.record_tool_result(&call, large.clone());
+
+    // Act
+    let second = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(2_400),
+        &request,
+        &mut elided_through,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    // The new round grows the request to 2,810; eliding the same three
+    // results again brings it to 2,117, which fits without eliding `call-2`.
+    assert_eq!(
+        second.messages()[..first.messages().len()],
+        first.messages()[..]
+    );
+    assert_eq!(tool_result_content(second.messages(), "call-2"), large);
+    assert_eq!(elided_through, 9);
+}
+
+#[test]
+fn grown_requests_keep_the_outcome_of_elided_effects_and_warn_against_repeating_them() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let bash_call = ToolCall::from_json(
+        "bash-call".to_string(),
+        "bash",
+        r#"{"command":"make test"}"#,
+        None,
+    )
+    .expect("bash call");
+    let bash_result = json!({
+        "exit_code": 0,
+        "signal": null,
+        "stdout": "x".repeat(600),
+        "termination": "exited",
+    })
+    .to_string();
+    let history = vec![
+        ModelMessage::User("earlier".into()),
+        ModelMessage::AssistantToolCall(bash_call),
+        ModelMessage::ToolResult {
+            call_id: "bash-call".into(),
+            content: bash_result.clone(),
+            name: "bash".into(),
+        },
+        ModelMessage::Assistant("{}".into()),
+    ];
+    let mut request = ModelRequest::with_history(history, "prompt", schema);
+    let call = read_call("call-0");
+    request.record_tool_call(call.clone());
+    request.record_tool_result(&call, "x".repeat(400));
+
+    // Act
+    let fitted = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(1_000),
+        &request,
+        &mut 0,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    let notice: serde_json::Value =
+        serde_json::from_str(&tool_result_content(fitted.messages(), "bash-call"))
+            .expect("notice is JSON");
+    assert!(
+        notice["elided"]
+            .as_str()
+            .expect("elision text")
+            .contains("do not repeat it")
+    );
+    assert_eq!(notice["original_bytes"], bash_result.len());
+    assert_eq!(notice["exit_code"], 0);
+    assert_eq!(notice["termination"], "exited");
+    assert!(notice.get("signal").is_none());
+    assert!(notice.get("stdout").is_none());
+}
+
+#[test]
+fn grown_requests_keep_a_rejected_write_status_without_claiming_its_effects() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let write_call = ToolCall::from_json(
+        "write-call".to_string(),
+        "write",
+        r#"{"path":"name.txt","patch":"text"}"#,
+        None,
+    )
+    .expect("write call");
+    let rejected_write = json!({
+        "error": "x".repeat(600),
+        "path": "name.txt",
+        "status": "rejected",
+    })
+    .to_string();
+    let history = vec![
+        ModelMessage::User("earlier".into()),
+        ModelMessage::AssistantToolCall(write_call),
+        ModelMessage::ToolResult {
+            call_id: "write-call".into(),
+            content: rejected_write,
+            name: "write".into(),
+        },
+        ModelMessage::Assistant("{}".into()),
+    ];
+    let mut request = ModelRequest::with_history(history, "prompt", schema);
+    let call = read_call("call-0");
+    request.record_tool_call(call.clone());
+    request.record_tool_result(&call, "x".repeat(400));
+
+    // Act
+    let fitted = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(1_000),
+        &request,
+        &mut 0,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    let notice: serde_json::Value =
+        serde_json::from_str(&tool_result_content(fitted.messages(), "write-call"))
+            .expect("notice is JSON");
+    let elided = notice["elided"].as_str().expect("elision text");
+    assert!(elided.contains("outcome recorded here"));
+    assert!(!elided.contains("effects remain"));
+    assert_eq!(notice["status"], "rejected");
+    assert!(notice.get("error").is_none());
+}
+
+#[test]
+fn grown_requests_keep_results_smaller_than_the_elision_notice() {
+    // Arrange
+    let request = request_with_rounds("", &["tiny", &"x".repeat(400), &"x".repeat(400)]);
+
+    // Act
+    let fitted = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(700),
+        &request,
+        &mut 0,
+        true,
+    )
+    .expect("elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    assert_eq!(tool_result_content(fitted.messages(), "call-0"), "tiny");
+    assert!(tool_result_content(fitted.messages(), "call-1").contains("\"elided\""));
+    assert_eq!(
+        tool_result_content(fitted.messages(), "call-2"),
+        "x".repeat(400)
+    );
+}
+
+#[test]
+fn grown_requests_fail_typed_when_the_latest_round_alone_cannot_fit() {
+    // Arrange
+    let large = "x".repeat(400);
+    let request = request_with_rounds(&large, &[&large, &large]);
+
+    // Act
+    let rejected = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(500),
+        &request,
+        &mut 0,
+        true,
+    );
+
+    // Assert
+    // Eliding the history result and the first in-turn result still leaves
+    // the latest result, two notices, and six unit messages: 744 of 500.
+    assert!(matches!(
+        rejected,
+        Err(TurnError::ContextBudgetExceeded {
+            budget: 500,
+            required: 744,
+        })
+    ));
+}
+
+#[test]
+fn grown_requests_that_may_not_extend_elision_still_re_elide_the_prefix() {
+    // Arrange
+    let large = "x".repeat(400);
+    let request = request_with_rounds(&large, &[&large, &large, &large]);
+    let mut elided_through = 4;
+
+    // Act
+    let fitted = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(1_400),
+        &request,
+        &mut elided_through,
+        false,
+    )
+    .expect("prefix-elided request fits")
+    .expect("request needs elision");
+
+    // Assert
+    // Re-eliding the history result brings 1,607 to 1,376 of 1,400.
+    assert!(tool_result_content(fitted.messages(), "history-call").contains("\"elided\""));
+    assert_eq!(tool_result_content(fitted.messages(), "call-0"), large);
+    assert_eq!(elided_through, 4);
+}
+
+#[test]
+fn grown_requests_that_may_not_extend_elision_fail_typed_at_their_prefix_elided_weight() {
+    // Arrange
+    let large = "x".repeat(400);
+    let request = request_with_rounds(&large, &[&large, &large, &large]);
+    let mut elided_through = 4;
+
+    // Act
+    let rejected = fit_grown_request(
+        &ToolResultBytesEstimator,
+        budget(1_200),
+        &request,
+        &mut elided_through,
+        false,
+    );
+
+    // Assert
+    // Eliding `call-0` and `call-1` too would fit this request; without
+    // extension it is rejected once the history result is re-elided.
+    assert!(matches!(
+        rejected,
+        Err(TurnError::ContextBudgetExceeded {
+            budget: 1_200,
+            required: 1_376,
+        })
+    ));
+    assert_eq!(elided_through, 4);
+}
+
+#[test]
+fn selection_elides_or_briefs_a_completed_turn_whose_tool_rounds_do_not_fit() {
+    // Arrange
+    let large = "x".repeat(400);
+    let older = vec![
+        ModelMessage::User("older".to_string()),
+        ModelMessage::Assistant("{}".to_string()),
+    ];
+    let mut oversized = vec![ModelMessage::User("prompt".to_string())];
+    for call_id in ["call-0", "call-1"] {
+        oversized.push(ModelMessage::AssistantToolCall(read_call(call_id)));
+        oversized.push(ModelMessage::ToolResult {
+            call_id: call_id.to_string(),
+            content: large.clone(),
+            name: "read".to_string(),
+        });
+    }
+    oversized.push(ModelMessage::Assistant("{}".to_string()));
+    let turns = VecDeque::from(vec![
+        HistoryTurn::from(older.clone()),
+        HistoryTurn::from(oversized.clone()),
+    ]);
+
+    // Act
+    // The oversized turn weighs 804; eliding its first result brings it to
+    // 573, and eliding both still leaves 342.
+    let (elided, elided_evicted) = select_recent_turns(&ToolResultBytesEstimator, &turns, 600);
+    let (brief, brief_evicted) = select_recent_turns(&ToolResultBytesEstimator, &turns, 300);
+
+    // Assert
+    assert_eq!(elided.len(), older.len() + oversized.len());
+    assert_eq!(elided[..2], older[..]);
+    assert!(tool_result_content(&elided, "call-0").contains("\"elided\""));
+    assert_eq!(tool_result_content(&elided, "call-1"), large);
+    assert_eq!(elided_evicted, 0);
+    assert_eq!(
+        brief,
+        [
+            older,
+            vec![
+                ModelMessage::User("prompt".to_string()),
+                ModelMessage::Assistant("{}".to_string()),
+            ],
+        ]
+        .concat()
+    );
+    assert_eq!(brief_evicted, 0);
 }
 
 fn read_call(id: &str) -> ToolCall {
@@ -393,21 +801,35 @@ fn stop_note_bounds_the_effects_it_names() {
 }
 
 #[test]
-fn completed_turns_replay_verbatim_without_a_brief_form() {
+fn completed_turns_replay_verbatim_and_briefly_as_input_and_output() {
     // Arrange
     let messages = vec![
         ModelMessage::User("question".to_string()),
+        ModelMessage::AssistantToolCall(read_call("call")),
+        result("call"),
         ModelMessage::Assistant("answer".to_string()),
     ];
     let turn = HistoryTurn::from(messages.clone());
+    let input_only = HistoryTurn::from(vec![ModelMessage::User("only".to_string())]);
 
     // Act
     let replay = turn.replay();
     let brief = turn.brief_replay();
+    let input_only_brief = input_only.brief_replay();
 
     // Assert
     assert_eq!(replay, messages);
-    assert_eq!(brief, None);
+    assert_eq!(
+        brief,
+        vec![
+            ModelMessage::User("question".to_string()),
+            ModelMessage::Assistant("answer".to_string()),
+        ]
+    );
+    assert_eq!(
+        input_only_brief,
+        vec![ModelMessage::User("only".to_string())]
+    );
 }
 
 #[test]
@@ -434,12 +856,7 @@ fn selection_keeps_only_input_and_note_of_a_stopped_turn_that_does_not_fit() {
     let (empty, empty_evicted) = select_recent_turns(&FixedEstimator, &turns, 13);
 
     // Assert
-    assert_eq!(
-        projected,
-        stopped
-            .brief_replay()
-            .expect("stopped turn has a brief form")
-    );
+    assert_eq!(projected, stopped.brief_replay());
     assert_eq!(evicted, 1);
     assert_eq!(
         full,

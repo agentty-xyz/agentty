@@ -205,6 +205,8 @@ impl Session {
 
     /// Renders the bounded generation source: the previous summary plus the
     /// most recent uncovered turns that fit the effective context budget.
+    /// Before dropping whole turns, an oversized source sheds tool rounds
+    /// oldest turn first, keeping each turn's input and final output.
     fn compaction_input(
         &self,
         loaded: &LoadedSession,
@@ -212,6 +214,7 @@ impl Session {
     ) -> Result<TurnInput, SessionError> {
         let mut turns: Vec<Vec<ModelMessage>> =
             loaded.turns.iter().map(HistoryTurn::replay).collect();
+        let mut briefed_turns = 0;
 
         loop {
             let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
@@ -224,6 +227,10 @@ impl Session {
                 options,
             ) {
                 Ok(_) => return Ok(input),
+                Err(_) if briefed_turns < turns.len() => {
+                    turns[briefed_turns] = loaded.turns[briefed_turns].brief_replay();
+                    briefed_turns += 1;
+                }
                 Err(_) if !turns.is_empty() => {
                     turns.remove(0);
                 }
@@ -699,7 +706,12 @@ impl SessionHistory {
         &self.turns
     }
 
-    pub(crate) fn push(&mut self, turn: HistoryTurn) {
+    /// Appends a finished turn, keeping only its brief form when it alone
+    /// exceeds the byte limit, and evicts the oldest turns while over it.
+    pub(crate) fn push(&mut self, mut turn: HistoryTurn) {
+        if retained_bytes(&turn.messages) > self.max_bytes {
+            turn = turn.brief();
+        }
         self.bytes = self.bytes.saturating_add(retained_bytes(&turn.messages));
         self.turns.push_back(turn);
 

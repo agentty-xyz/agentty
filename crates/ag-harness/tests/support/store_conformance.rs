@@ -615,6 +615,82 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
 }
 
 #[tokio::test]
+async fn journaled_backends_keep_the_input_and_output_of_a_completed_turn_over_the_byte_budget() {
+    for store in journaled_stores().await {
+        // Arrange
+        let older = [
+            ModelMessage::User("old".to_string()),
+            ModelMessage::Assistant("{}".to_string()),
+        ];
+        let brief = [
+            ModelMessage::User("work".to_string()),
+            ModelMessage::Assistant(r#"{"done":true}"#.to_string()),
+        ];
+        let rounds = [
+            ModelMessage::AssistantToolCall(write_call("call")),
+            ModelMessage::ToolResult {
+                call_id: "call".to_string(),
+                content: "x".repeat(100),
+                name: "write".to_string(),
+            },
+        ];
+        let budget = older
+            .iter()
+            .chain(&brief)
+            .map(ModelMessage::retained_bytes)
+            .sum();
+        store
+            .create_session(&NewSession::new("brief", schema()), None, budget)
+            .await
+            .expect("create");
+        let first = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "brief",
+            &TurnInput::from("old"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("older turn");
+        store
+            .complete_turn(first.owner(), &older[1..])
+            .await
+            .expect("complete older");
+        drop(first);
+        let oversized = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "brief",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("oversized turn");
+        store
+            .append_messages(oversized.owner(), &rounds)
+            .await
+            .expect("append");
+        store
+            .complete_turn(oversized.owner(), &brief[1..])
+            .await
+            .expect("complete oversized");
+        drop(oversized);
+
+        // Act
+        let loaded = store.load_session("brief").await.expect("history");
+
+        // Assert
+        assert_eq!(
+            loaded.turns,
+            vec![
+                HistoryTurn::from(older.to_vec()),
+                HistoryTurn::from(brief.to_vec()),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
 async fn all_backends_preserve_ordered_image_input_in_history() {
     // Arrange
     for store in stores().await {

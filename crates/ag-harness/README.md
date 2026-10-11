@@ -61,9 +61,11 @@ let outcome = session.send("Now focus on error handling").await?;
 Every request replays the most recent finished turns that fit the context budget; the
 provider never holds conversation state. Each model response and tool result is stored
 as soon as it finishes. A failed or interrupted turn replays what it recorded plus a
-note naming why it stopped and any writes or commands whose outcome is unknown; when it
-does not fit, only its input and note are replayed. Sessions run concurrently, with one
-active turn per session. The library never picks a database location for you.
+note naming why it stopped and any writes or commands whose outcome is unknown. A turn
+that does not fit is replayed with its oldest tool results elided, or else only with its
+input and final output or stop note; the same input-and-ending form keeps a turn larger
+than `max_history_bytes` in history. Sessions run concurrently, with one active turn per
+session. The library never picks a database location for you.
 
 ## Turns
 
@@ -95,8 +97,13 @@ let outcome = session
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn:
-  once tool traffic grows the next request past the budget, the turn fails with
-  `TurnError::ContextBudgetExceeded`.
+  once tool traffic grows the next request past the budget, its oldest tool results,
+  replayed history first, are sent as short elision notices (stored results stay intact)
+  until a quarter of the budget is free. Later requests keep that elided prefix, and at
+  most 128 model requests per turn may elide beyond it. `bash` and `write` notices keep
+  the recorded outcome. The turn fails with `TurnError::ContextBudgetExceeded` when the
+  latest round still cannot fit, or when the elision limit is spent and re-eliding the
+  prefix no longer fits.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.

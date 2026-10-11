@@ -605,21 +605,20 @@ impl Record {
                 turn.status != Status::Running && turn.owner.turn_position() > boundary
             })
         {
-            let stop = self.stop(turn);
-            let mut messages = turn.messages.as_slice();
-            let mut bytes = retained_bytes(messages);
-            if bytes > remaining && stop.is_some() {
-                messages = &messages[..messages.len().min(1)];
-                bytes = retained_bytes(messages);
+            let mut history_turn = HistoryTurn {
+                messages: turn.messages.clone(),
+                stop: self.stop(turn),
+            };
+            let mut bytes = retained_bytes(&history_turn.messages);
+            if bytes > remaining {
+                history_turn = history_turn.brief();
+                bytes = retained_bytes(&history_turn.messages);
             }
             if bytes > remaining {
                 break;
             }
             remaining -= bytes;
-            turns.push(HistoryTurn {
-                messages: messages.to_vec(),
-                stop,
-            });
+            turns.push(history_turn);
         }
         turns.reverse();
 

@@ -647,6 +647,10 @@ impl ModelRequest {
         self.messages
     }
 
+    pub(crate) fn messages_mut(&mut self) -> &mut [ModelMessage] {
+        &mut self.messages
+    }
+
     fn record(&mut self, message: ModelMessage) -> &ModelMessage {
         self.messages.push(message);
 
