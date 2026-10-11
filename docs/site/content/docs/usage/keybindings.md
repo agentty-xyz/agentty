@@ -35,6 +35,10 @@ Completion menus and question options take precedence when open.
 On macOS, undo still uses `Ctrl+Z`, not `Cmd+Z`. Terminal applications such as Ghostty
 may consume `Cmd+Z` before Agentty or a surrounding `tmux` session receives it.
 
+`Cmd+Backspace`, `Option+Backspace`, and `Alt+Enter` require the terminal to forward the
+shortcut. If a terminal consumes a shortcut, use `Ctrl+U` to delete the line, `Ctrl+W`
+to delete the previous word, or `Ctrl+J` to insert a newline in multiline inputs.
+
 Multiline prompt and question inputs also share vertical cursor movement and newline
 insertion. Single-line publish and launch-configuration inputs keep only the first line
 of pasted text.

@@ -43,11 +43,11 @@ trait TerminalOperation {
     /// while still honoring explicit modified-key reporting requests.
     fn is_tmux_session(&self) -> bool;
 
-    /// Enters the alternate screen and enables bracketed paste, optionally
-    /// enabling keyboard enhancement flags first.
+    /// Enters the alternate screen, enables its keyboard enhancement flags
+    /// when supported, and enables bracketed paste.
     fn enter_alternate_screen(
         &self,
-        stdout: &mut io::Stdout,
+        stdout: &mut dyn io::Write,
         enhancement: TerminalEnhancement,
     ) -> io::Result<()>;
 
@@ -55,7 +55,7 @@ trait TerminalOperation {
     /// terminal cursor, optionally popping keyboard enhancement flags first.
     fn leave_alternate_screen(
         &self,
-        stdout: &mut io::Stdout,
+        stdout: &mut dyn io::Write,
         enhancement: TerminalEnhancement,
     ) -> io::Result<()>;
 }
@@ -93,30 +93,32 @@ impl TerminalOperation for CrosstermTerminalOperation {
 
     fn enter_alternate_screen(
         &self,
-        stdout: &mut io::Stdout,
+        mut stdout: &mut dyn io::Write,
         enhancement: TerminalEnhancement,
     ) -> io::Result<()> {
         if enhancement.keyboard_enhancement_enabled {
             execute!(
-                stdout,
+                &mut stdout,
+                // Kitty keyboard modes belong to the active screen. Enable
+                // them after switching so modified keys reach the TUI.
+                EnterAlternateScreen,
                 EnableXtermCsiUModifiedKeys(enhancement),
                 PushKeyboardEnhancementFlags(keyboard_enhancement_flags()),
-                EnterAlternateScreen,
                 EnableBracketedPaste
             )
         } else {
-            execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)
+            execute!(&mut stdout, EnterAlternateScreen, EnableBracketedPaste)
         }
     }
 
     fn leave_alternate_screen(
         &self,
-        stdout: &mut io::Stdout,
+        mut stdout: &mut dyn io::Write,
         enhancement: TerminalEnhancement,
     ) -> io::Result<()> {
         if enhancement.keyboard_enhancement_enabled {
             execute!(
-                stdout,
+                &mut stdout,
                 PopKeyboardEnhancementFlags,
                 DisableXtermCsiUModifiedKeys(enhancement),
                 DisableBracketedPaste,
@@ -124,7 +126,12 @@ impl TerminalOperation for CrosstermTerminalOperation {
                 Show
             )
         } else {
-            execute!(stdout, DisableBracketedPaste, LeaveAlternateScreen, Show)
+            execute!(
+                &mut stdout,
+                DisableBracketedPaste,
+                LeaveAlternateScreen,
+                Show
+            )
         }
     }
 }
