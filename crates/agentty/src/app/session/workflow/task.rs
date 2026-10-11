@@ -538,10 +538,14 @@ impl SessionTaskService {
     /// This prefers the active project's `DefaultFastAgent` and
     /// `DefaultFastModel`, falls back through the smart defaults, and finally
     /// returns `fallback_selection` when no persisted setting can be parsed.
+    /// Persisted defaults apply only when they resolve to one of
+    /// `available_agent_kinds`, so Harness-only setups never fall back to a
+    /// missing CLI.
     pub(crate) async fn load_auto_commit_agent_setting(
         db: &AppRepositories,
         session_id: &str,
         fallback_selection: AgentSelection,
+        available_agent_kinds: &[AgentKind],
     ) -> AgentSelection {
         let project_id = match db.sessions().load_session_project_id(session_id).await {
             Ok(project_id) => project_id,
@@ -556,11 +560,11 @@ impl SessionTaskService {
             }
         };
 
-        setting::load_default_fast_agent_selection_from_repositories(
+        setting::load_session_utility_agent_selection_from_repositories(
             db,
             project_id,
             fallback_selection,
-            AgentKind::ALL,
+            available_agent_kinds,
         )
         .await
     }
@@ -734,9 +738,13 @@ impl SessionTaskService {
             .ok_or_else(|| {
                 SessionError::Workflow("Missing session base branch for auto-commit".to_string())
             })?;
-        let auto_commit_agent =
-            Self::load_auto_commit_agent_setting(&context.db, &context.id, context.session_agent)
-                .await;
+        let auto_commit_agent = Self::load_auto_commit_agent_setting(
+            &context.db,
+            &context.id,
+            context.session_agent,
+            &context.available_agent_kinds,
+        )
+        .await;
         let auto_commit_reasoning_level =
             Self::load_auto_commit_reasoning_level(&context.db, &context.id).await;
         let auto_commit_speed_mode =

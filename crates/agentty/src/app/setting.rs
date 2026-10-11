@@ -155,6 +155,35 @@ pub(crate) async fn load_default_fast_agent_selection_from_repositories(
     .await
 }
 
+/// Loads the Fast-role selection used by one session's utility work, such as
+/// title generation and auto-commit messages.
+///
+/// Persisted Fast and Smart defaults apply only when they resolve to an
+/// installed agent CLI. Otherwise the session keeps its own selection, so a
+/// Harness session in a launch without CLIs never routes utility work to a
+/// missing CLI or to an unconfigured Harness provider.
+pub(crate) async fn load_session_utility_agent_selection_from_repositories(
+    repositories: &AppRepositories,
+    project_id: Option<i64>,
+    session_agent: AgentSelection,
+    available_agent_kinds: &[AgentKind],
+) -> AgentSelection {
+    let allowed_agent_kinds = [available_agent_kinds, &[session_agent.kind()]].concat();
+    let selection = load_default_fast_agent_selection_from_repositories(
+        repositories,
+        project_id,
+        session_agent,
+        &allowed_agent_kinds,
+    )
+    .await;
+
+    if available_agent_kinds.contains(&selection.kind()) {
+        return selection;
+    }
+
+    session_agent
+}
+
 /// Loads the persisted smart-model default from repositories as an agent/model
 /// selection.
 ///

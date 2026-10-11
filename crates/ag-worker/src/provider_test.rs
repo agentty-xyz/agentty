@@ -2,8 +2,12 @@ use std::env;
 use std::num::NonZeroUsize;
 use std::process::Command;
 
-use ag_contracts::{ExecutionPolicy, McpPolicy, ToolPolicy};
-use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind};
+use ag_contracts::{
+    AgentRequestKind, ExecutionPolicy, McpPolicy, OneShotRequest, PermissionMode,
+    PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
+    TurnRequest,
+};
+use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
 
 use crate::{
     RealAgentAvailabilityProbe, RuntimeConfig, cleanup_session_worktree_artifacts, setup_backend,
@@ -78,12 +82,16 @@ fn provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path() {
             setup_backend(AgentKind::Antigravity, std::path::Path::new(".")),
             Err(ag_contracts::AgentError::Backend(_))
         ));
+        assert_eq!(
+            RealAgentAvailabilityProbe.native_harness_default_model(),
+            Some(AgentModel::MuseSpark13)
+        );
         return;
     }
     // Act
     let output = Command::new(env::current_exe().expect("test executable"))
         .args(["--exact", "provider::tests::provider_discovery_uses_the_runtime_with_an_isolated_empty_search_path"])
-        .env(MARKER, "1").env("PATH", "").output().expect("isolated discovery");
+        .env(MARKER, "1").env("PATH", "").env("MODEL_API_KEY", "test-key").output().expect("isolated discovery");
     // Assert
     assert!(
         output.status.success(),
@@ -108,4 +116,66 @@ fn workspace_services_preserve_provider_capabilities_and_cleanup() {
     }
     // Act / Assert
     assert!(cleanup_session_worktree_artifacts(directory.path()).is_ok());
+}
+
+#[tokio::test]
+async fn native_harness_configuration_runs_harness_work_in_process() {
+    // Arrange
+    let data_root = tempfile::tempdir().expect("data root");
+    let config = RuntimeConfig::default().with_native_harness(data_root.path().to_path_buf());
+    let (events, _events_rx) = tokio::sync::mpsc::unbounded_channel();
+    let turn = TurnRequest {
+        continuation: TurnContinuation::fresh(),
+        execution_policy: ExecutionPolicy::default(),
+        folder: data_root.path().to_path_buf(),
+        main_checkout_root: None,
+        model: "unlisted-model".to_string(),
+        permission_mode: PermissionMode::ReadOnly,
+        personality: PersonalityPrompt::default(),
+        prompt: ag_protocol::TurnPrompt::from_text("Hi".to_string()),
+        reasoning_level: ReasoningLevel::Low,
+        request_kind: AgentRequestKind::SessionStart,
+        response_style: ResponseStyle::Concise,
+        speed_mode: SpeedMode::Normal,
+    };
+    let utility = OneShotRequest {
+        activity_tx: None,
+        child_pid: None,
+        execution_policy: ExecutionPolicy::default(),
+        folder: data_root.path().to_path_buf(),
+        harness: AgentKind::Harness.to_string(),
+        model: "unlisted-model".to_string(),
+        permission_mode: PermissionMode::ReadOnly,
+        prompt: "Hi".to_string(),
+        provider_call_budget: None,
+        reasoning_level: ReasoningLevel::Low,
+        request_kind: AgentRequestKind::UtilityPrompt,
+        speed_mode: SpeedMode::Normal,
+    };
+
+    // Act
+    let turn = config
+        .factory
+        .session(AgentKind::Harness)
+        .run_turn("session".to_string(), turn, events)
+        .await;
+    let utility = config
+        .factory
+        .utility()
+        .submit_cancellable(utility, tokio_util::sync::CancellationToken::new())
+        .await;
+
+    // Assert
+    assert!(
+        turn.expect_err("unlisted model should fail")
+            .to_string()
+            .contains("does not serve model")
+    );
+    assert!(
+        utility
+            .expect_err("unlisted model should fail")
+            .to_string()
+            .contains("does not serve model")
+    );
+    assert!(!uses_persistent_session(AgentKind::Harness));
 }

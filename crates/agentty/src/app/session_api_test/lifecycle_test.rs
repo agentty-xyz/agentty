@@ -13,6 +13,7 @@ use super::support::{
     request_session, request_session_creation, seed_active_orchestration_session,
 };
 use crate::app::{App, AppEvent};
+use crate::domain::agent::AgentCliInfo;
 use crate::domain::orchestration::OrchestrationTaskKind;
 
 #[tokio::test]
@@ -124,6 +125,77 @@ async fn runtime_backend_rejects_creation_for_inactive_projects() {
         creation_error,
         ApiSessionError::Operation(format!("Project `{inactive_project_id}` is not active"))
     );
+}
+
+#[tokio::test]
+async fn runtime_backend_creates_harness_sessions_only_when_available() {
+    // Arrange
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
+    let project_id = app.active_project_id();
+    let request = CreateSessionRequest {
+        inherit_from_session_id: None,
+        mode: CreateSessionMode::Harness,
+        project_id,
+    };
+
+    // Act
+    let unavailable_error = request_session_creation(&mut app, request.clone())
+        .await
+        .expect_err("hidden harness should reject creation");
+    app.services
+        .set_harness_availability(crate::domain::harness::HarnessAvailability::Available(
+            AgentModel::KimiK3,
+        ));
+    let session_id = request_session_creation(&mut app, request)
+        .await
+        .expect("available harness should create a session");
+    let session = request_session(&mut app, session_id)
+        .await
+        .expect("harness session should load")
+        .expect("harness session should exist");
+
+    // Assert
+    assert!(matches!(
+        unavailable_error,
+        ApiSessionError::Operation(message) if message.contains("--experimental-harness")
+    ));
+    assert_eq!(session.settings.agent.kind(), AgentKind::Harness);
+    assert_eq!(session.settings.agent.model(), AgentModel::KimiK3);
+    assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
+    assert_eq!(session.settings.role, SessionRole::Worker);
+}
+
+#[tokio::test]
+async fn runtime_backend_creates_only_harness_sessions_without_agent_cli() {
+    // Arrange
+    let harness_root = tempfile::tempdir().expect("harness data root");
+    let (mut app, _temp_dir) = crate::test_support::new_git_test_app_with_clients(
+        crate::test_support::harness_only_test_app_clients(harness_root.path().to_path_buf()),
+    )
+    .await;
+    let project_id = app.active_project_id();
+    // The CLI refresh lists an `agy` too old for startup to accept.
+    app.services
+        .replace_available_agent_clis(vec![AgentCliInfo::loading(AgentKind::Antigravity)]);
+    let request = |mode| CreateSessionRequest {
+        inherit_from_session_id: None,
+        mode,
+        project_id,
+    };
+
+    // Act
+    let regular_error = request_session_creation(&mut app, request(CreateSessionMode::Regular))
+        .await
+        .expect_err("regular sessions need an agent CLI");
+    let harness_result =
+        request_session_creation(&mut app, request(CreateSessionMode::Harness)).await;
+
+    // Assert
+    assert!(matches!(
+        regular_error,
+        ApiSessionError::Operation(message) if message.contains("only Harness sessions")
+    ));
+    assert!(harness_result.is_ok());
 }
 
 #[tokio::test]

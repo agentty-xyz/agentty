@@ -2,6 +2,7 @@
 
 use super::state::{App, UpdateStatus};
 use crate::app::tab::Tab;
+use crate::domain::agent::AgentKind;
 use crate::domain::session::{Session, Status};
 use crate::presentation::app_mode::{AppMode, ConfirmationViewMode, HelpContext};
 
@@ -32,11 +33,26 @@ impl App {
         self.projects.git_status()
     }
 
-    /// Builds prompt slash-menu state from the cached machine-scoped agent
-    /// availability snapshot.
-    pub(crate) fn prompt_slash_state(&self) -> crate::presentation::prompt::PromptSlashState {
+    /// Builds prompt slash-menu state for one session.
+    ///
+    /// Harness sessions offer only Harness models; other sessions use the
+    /// cached machine-scoped agent availability snapshot.
+    pub(crate) fn prompt_slash_state(
+        &self,
+        session_id: &str,
+    ) -> crate::presentation::prompt::PromptSlashState {
+        let is_harness_session = self
+            .sessions
+            .session_for_id(session_id)
+            .is_some_and(|session| session.agent.kind() == AgentKind::Harness);
+        let available_agent_kinds = if is_harness_session {
+            vec![AgentKind::Harness]
+        } else {
+            self.services.available_agent_kinds()
+        };
+
         crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
-            self.services.available_agent_kinds(),
+            available_agent_kinds,
         )
     }
 

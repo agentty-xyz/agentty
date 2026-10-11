@@ -9,6 +9,7 @@ use tracing::warn;
 use crate::app::review::{self, FocusedReviewPersistence, ReviewAgent, ReviewCacheEntry};
 use crate::app::task::{SessionDiffTaskInput, SessionDiffTaskSource, TaskService};
 use crate::app::{App, session};
+use crate::domain::agent::parse_persisted_session_agent_model;
 use crate::domain::review::FocusedReviewStatus;
 use crate::domain::session::{Session, SessionId, SessionRole, Status};
 use crate::domain::transient_message::{
@@ -441,9 +442,12 @@ impl App {
         let Some(project_id) = row.project_id else {
             return false;
         };
-        let review_agent =
+        let review_agent = review::session_review_agent(
             crate::app::setting::load_default_review_agent_setting(&self.services, project_id)
-                .await;
+                .await,
+            parse_persisted_session_agent_model(Some(&row.agent), &row.model),
+            &self.services.available_agent_kinds(),
+        );
         let folder = session::session_folder(self.services.base_path(), session_id.as_str());
         let source = SessionDiffTaskSource::Worktree {
             archived_fallback: None,
@@ -708,10 +712,14 @@ impl App {
     /// Starts one deduplicated review-preparation request and shows loading
     /// state only when there is no prior review output to retain.
     fn start_review_diff_load(&mut self, session_id: &SessionId, is_manual: bool) -> bool {
-        let review_agent = review::normalize_review_agent(self.review_agent());
         let Some(session) = self.sessions.session_for_id(session_id) else {
             return false;
         };
+        let review_agent = review::session_review_agent(
+            review::normalize_review_agent(self.review_agent()),
+            session.agent,
+            &self.services.available_agent_kinds(),
+        );
         let (folder, source) = self.session_diff_task_target(session);
 
         self.start_review_diff_load_for_target(

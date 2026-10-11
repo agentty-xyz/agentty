@@ -25,6 +25,11 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Offers preview Harness sessions run by the built-in agent loop when
+    /// `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or
+    /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
+    #[arg(long)]
+    experimental_harness: bool,
     /// Disables automatic application updates.
     #[arg(long)]
     no_update: bool,
@@ -171,7 +176,15 @@ async fn run_application(
 
     run_with_analytics(
         Box::pin(async {
-            let mut app = App::new(!cli.no_update, base_path, working_dir, git_branch, db).await?;
+            let mut app = App::new(
+                !cli.no_update,
+                cli.experimental_harness,
+                base_path,
+                working_dir,
+                git_branch,
+                db,
+            )
+            .await?;
             app.set_analytics(analytics.clone());
 
             map_runtime_result(runtime(&mut app).await)

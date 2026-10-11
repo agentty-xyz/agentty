@@ -7,7 +7,7 @@ use crate::channel::factory::create_agent_channel;
 #[test]
 fn create_agent_channel_returns_cli_channel_for_claude() {
     // Arrange / Act
-    let channel = create_agent_channel(AgentKind::Claude, None);
+    let channel = create_agent_channel(AgentKind::Claude, None, None);
 
     // Assert
     assert_eq!(Arc::strong_count(&channel), 1);
@@ -16,7 +16,7 @@ fn create_agent_channel_returns_cli_channel_for_claude() {
 #[test]
 fn create_agent_channel_returns_managed_channel_for_antigravity() {
     // Arrange / Act
-    let channel = create_agent_channel(AgentKind::Antigravity, None);
+    let channel = create_agent_channel(AgentKind::Antigravity, None, None);
 
     // Assert
     assert_eq!(Arc::strong_count(&channel), 1);
@@ -25,7 +25,7 @@ fn create_agent_channel_returns_managed_channel_for_antigravity() {
 #[test]
 fn create_agent_channel_returns_app_server_channel_for_codex() {
     // Arrange / Act
-    let channel = create_agent_channel(AgentKind::Codex, None);
+    let channel = create_agent_channel(AgentKind::Codex, None, None);
 
     // Assert
     assert_eq!(Arc::strong_count(&channel), 1);
@@ -34,7 +34,7 @@ fn create_agent_channel_returns_app_server_channel_for_codex() {
 #[test]
 fn create_agent_channel_returns_app_server_channel_for_gemini() {
     // Arrange / Act
-    let channel = create_agent_channel(AgentKind::Gemini, None);
+    let channel = create_agent_channel(AgentKind::Gemini, None, None);
 
     // Assert
     assert_eq!(Arc::strong_count(&channel), 1);

@@ -1,4 +1,4 @@
-use crate::AgentKind;
+use crate::{AgentKind, AgentModel};
 
 /// Automatic update and version probe state for one locally runnable agent
 /// CLI.
@@ -27,20 +27,21 @@ pub struct AgentCliInfo {
 }
 
 impl AgentCliInfo {
-    /// Creates one CLI availability row for a provider and optional version.
+    /// Creates one CLI availability row for a CLI-backed provider and
+    /// optional version.
     pub fn new(kind: AgentKind, version: Option<String>) -> Self {
         Self {
-            executable_name: kind.executable_name(),
+            executable_name: kind.executable_name().unwrap_or_default(),
             kind,
             version: version.map_or(AgentCliVersion::Unknown, AgentCliVersion::Value),
         }
     }
 
-    /// Creates one CLI availability row whose update/version refresh is still
-    /// loading.
+    /// Creates one CLI availability row for a CLI-backed provider whose
+    /// update/version refresh is still loading.
     pub fn loading(kind: AgentKind) -> Self {
         Self {
-            executable_name: kind.executable_name(),
+            executable_name: kind.executable_name().unwrap_or_default(),
             kind,
             version: AgentCliVersion::Loading,
         }
@@ -71,6 +72,13 @@ pub trait AgentAvailabilityProbe: Send + Sync {
     /// Returns available agent CLI executables and their refreshed versions.
     fn available_agent_clis(&self) -> Vec<AgentCliInfo> {
         AgentCliInfo::from_kinds(&self.available_agent_kinds())
+    }
+
+    /// Returns the first [`AgentKind::Harness`] model whose provider
+    /// credentials are configured, or `None` when no provider is. Probes
+    /// without credential discovery report none.
+    fn native_harness_default_model(&self) -> Option<AgentModel> {
+        None
     }
 }
 

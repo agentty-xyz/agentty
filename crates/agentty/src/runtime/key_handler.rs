@@ -16,6 +16,7 @@ use crate::presentation::app_mode::{
 };
 use crate::runtime::mode::confirmation::ConfirmationDecision;
 use crate::runtime::{EventResult, PresentationState, backend_err, mode};
+use crate::ui::component::session_creation_overlay::HARNESS_OPTION_INDEX;
 
 /// Routes key events to the active mode handler and returns the next runtime
 /// action.
@@ -135,6 +136,17 @@ where
     result
 }
 
+/// Opens the session creation selector on its first enabled row.
+pub(crate) fn session_creation_mode(app: &App) -> AppMode {
+    let selected_option_index = (0..=HARNESS_OPTION_INDEX)
+        .find(|option_index| session_creation_option_is_enabled(app, *option_index))
+        .unwrap_or_default();
+
+    AppMode::SessionCreation {
+        selected_option_index,
+    }
+}
+
 /// Resolves the full terminal area and routes one clarification-question key
 /// event through the shared render cache.
 async fn handle_question_key<B: Backend>(
@@ -221,7 +233,7 @@ async fn handle_session_creation_key(app: &mut App, key: KeyEvent) -> io::Result
 
 /// Updates the highlighted option in the session creation selector.
 fn update_session_creation_selection(app: &mut App, selected_option_index: usize) {
-    let mut selected_option_index = selected_option_index.min(4);
+    let mut selected_option_index = selected_option_index.min(HARNESS_OPTION_INDEX);
     while selected_option_index > 0
         && !session_creation_option_is_enabled(app, selected_option_index)
     {
@@ -249,18 +261,23 @@ fn select_previous_session_creation_option(app: &mut App) {
 /// Moves to the next enabled session-creation option.
 fn select_next_session_creation_option(app: &mut App) {
     let current_index = current_session_creation_selection(app);
-    let next_index = ((current_index + 1)..=4)
+    let next_index = ((current_index + 1)..=HARNESS_OPTION_INDEX)
         .find(|option_index| session_creation_option_is_enabled(app, *option_index))
         .unwrap_or(current_index);
     update_session_creation_selection(app, next_index);
 }
 
 /// Returns whether one creation-selector row can currently be chosen.
+///
+/// Every row except Harness runs on an agent CLI, so a Harness-only launch
+/// offers only the Harness row.
 fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
     match option_index {
+        0..=4 if !app.services.has_agent_cli() => false,
         0..=2 => true,
         3 => selected_stacked_parent_session_id(app).is_some(),
         4 => selected_stack_append_session_id(app).is_some(),
+        HARNESS_OPTION_INDEX => app.services.harness_availability().is_available(),
         _ => false,
     }
 }
@@ -268,10 +285,14 @@ fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
 /// Creates the selected session type and opens its prompt composer.
 async fn create_selected_session(app: &mut App) -> io::Result<()> {
     let selected_option_index = current_session_creation_selection(app);
+    if !session_creation_option_is_enabled(app, selected_option_index) {
+        return Ok(());
+    }
     let mode = match selected_option_index {
         0 => CreateSessionMode::Regular,
         1 => CreateSessionMode::Draft,
         2 => CreateSessionMode::Orchestrator,
+        HARNESS_OPTION_INDEX => CreateSessionMode::Harness,
         3 => {
             let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
                 return Ok(());
@@ -310,9 +331,7 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
 fn handle_pre_commit_hook_warning_key(app: &mut App, key: KeyEvent) -> EventResult {
     match key.code {
         KeyCode::Enter => {
-            app.mode = AppMode::SessionCreation {
-                selected_option_index: 0,
-            };
+            app.mode = session_creation_mode(app);
         }
         KeyCode::Esc => app.mode = AppMode::List,
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {

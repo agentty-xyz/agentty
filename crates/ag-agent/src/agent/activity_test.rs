@@ -177,6 +177,7 @@ fn malformed_non_tool_and_unknown_events_are_ignored() {
         AgentKind::Codex,
         AgentKind::Gemini,
         AgentKind::Antigravity,
+        AgentKind::Harness,
     ] {
         observer.observe_line(kind, "invalid");
         for event in [

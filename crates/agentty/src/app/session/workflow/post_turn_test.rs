@@ -82,6 +82,7 @@ fn review_operation_test_context(
 ) -> PostTurnContext {
     PostTurnContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -388,6 +389,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
     pool.close().await;
     let context = PostTurnContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
@@ -631,6 +633,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
         .never();
     let context = Arc::new(PostTurnContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock,
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),

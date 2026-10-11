@@ -1,6 +1,8 @@
 use crate::session::SqliteSessionRepository;
 
 #[test]
+/// Ensures model-only inserts keep their provider routing, including harness
+/// model ids that share no family prefix.
 fn model_inference_preserves_current_retired_and_unknown_family_routing() {
     // Arrange
     let cases = [
@@ -13,6 +15,10 @@ fn model_inference_preserves_current_retired_and_unknown_family_routing() {
         ("gemini-3.1-pro-preview", "antigravity"),
         ("gemini-3-pro-preview", "antigravity"),
         ("gemini-unlisted", "antigravity"),
+        ("muse-spark-1.3", "harness"),
+        ("kimi-k3", "harness"),
+        ("qwen-plus", "harness"),
+        ("kimi-unlisted", "antigravity"),
         ("unrecognized-model", "antigravity"),
     ];
 

@@ -594,6 +594,13 @@ async fn malformed_unknown_and_unrelated_provider_events_are_ignored() {
                 json!({"message": {"content": [{"type": "text"}, {"type": "tool_use"}, {"type": "tool_result"}]}}),
             ],
         ),
+        (
+            AgentKind::Harness,
+            vec![
+                json!({"method": "item/started", "params": {"item": {"id": "call-1", "type": "commandExecution", "command": "cargo test"}}}),
+                json!({"type": "message", "content": [{"type": "tool_use", "id": "call-1", "name": "Bash"}]}),
+            ],
+        ),
     ];
 
     // Act / Assert

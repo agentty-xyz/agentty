@@ -76,7 +76,7 @@ pub(crate) fn instruction_delivery_mode_for_runtime(
     runtime_provider_conversation_id: Option<&str>,
     should_replay_transcript: bool,
 ) -> InstructionDeliveryMode {
-    agent::plan_app_server_instruction_delivery(
+    agent::plan_instruction_delivery(
         &request.request_kind,
         runtime_provider_conversation_id,
         request.persisted_instruction_conversation_id.as_deref(),

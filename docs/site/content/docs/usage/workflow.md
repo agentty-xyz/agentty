@@ -268,6 +268,9 @@ unchanged.
 - **Append to stack** `[Preview]`: Move an independent review-ready session below an
   eligible parent and sync it onto that branch. Sessions with children or linked review
   requests cannot be moved.
+- **Harness** `[Preview]`: A regular session run by Agentty's built-in agent loop. It
+  appears only when Agentty starts with `--experimental-harness`; see
+  [Harness Sessions](@/docs/agents/backends.md#backends-harness).
 
 Unavailable session types stay visible in readable muted text.
 

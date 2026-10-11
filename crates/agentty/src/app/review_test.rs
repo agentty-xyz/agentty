@@ -8,7 +8,7 @@ use super::{
     ReviewProgress, ReviewUpdate, apply_review_updates, hydrate_review_transient,
     hydrate_review_transients, normalize_review_agent, prune_review_cache, review_agent_kind_label,
     review_cache_from_rows, review_loading_message, review_progress_message,
-    review_reasoning_label, review_view_text,
+    review_reasoning_label, review_view_text, session_review_agent,
 };
 use crate::app::session_state::SessionState;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
@@ -239,6 +239,7 @@ fn review_agent_kind_labels_are_title_cased() {
         (AgentKind::Gemini, "Gemini"),
         (AgentKind::Claude, "Claude"),
         (AgentKind::Codex, "Codex"),
+        (AgentKind::Harness, "Harness"),
     ];
 
     // Act
@@ -835,4 +836,28 @@ fn partial_review_persists_structured_status_and_retains_display_text() {
     assert_eq!(persistence[0].status, FocusedReviewStatus::Partial);
     assert!(cache[&id].matches_persistence(&persistence[0]));
     assert_eq!(review_view_text(&cache, &id), Some(text));
+}
+
+#[test]
+/// Verifies focused review keeps an installed review CLI and otherwise uses
+/// the session's own Harness model with normal speed.
+fn test_session_review_agent_falls_back_to_session_without_review_cli() {
+    // Arrange
+    let review_agent = (
+        AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        ReasoningLevel::High,
+        SpeedMode::Fast,
+    );
+    let harness = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
+
+    // Act
+    let installed = session_review_agent(review_agent, harness, &[AgentKind::Codex]);
+    let harness_only = session_review_agent(review_agent, harness, &[]);
+
+    // Assert
+    assert_eq!(installed, review_agent);
+    assert_eq!(
+        harness_only,
+        (harness, ReasoningLevel::High, SpeedMode::Normal)
+    );
 }

@@ -31,6 +31,7 @@ pub(crate) fn render_app(
         RenderContext {
             active_project_id: snapshot.active_project_id,
             available_agent_clis: &snapshot.available_agent_clis,
+            available_agent_kinds: &snapshot.available_agent_kinds,
             current_tab: snapshot.current_tab,
             current_version_display_text: snapshot.current_version_display_text,
             default_reasoning_level: snapshot.default_reasoning_level,
@@ -38,6 +39,7 @@ pub(crate) fn render_app(
             git_branch: snapshot.git_branch,
             git_upstream_ref: snapshot.git_upstream_ref,
             git_status: snapshot.git_status,
+            harness_availability: snapshot.harness_availability,
             archived_session_count: snapshot.archived_session_count,
             has_more_archived_sessions: snapshot.has_more_archived_sessions,
             is_archive_expanded: snapshot.is_archive_expanded,

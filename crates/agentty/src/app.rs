@@ -33,7 +33,7 @@ pub(crate) mod tab;
 mod task;
 mod view;
 
-pub use core::{AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
+pub use core::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};
 pub(crate) use core::{AppEvent, AppRuntimeEvent};
 
 pub use error::AppError;

@@ -34,6 +34,7 @@ async fn test_run_agent_assist_uses_injected_run_client() {
     let (app_event_tx, _app_event_rx) = mpsc::unbounded_channel();
     let context = AssistContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         child_pid: Arc::new(Mutex::new(None)),
         db: AppRepositories::in_memory().await.expect("db should open"),
         folder: temp_directory.path().to_path_buf(),

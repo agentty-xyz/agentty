@@ -22,7 +22,7 @@ use super::support::{
 };
 use crate::app::AppEvent;
 use crate::app::session::SessionError;
-use crate::domain::agent::{AgentModel, AgentSelection};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
@@ -57,6 +57,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let context = SessionWorkerContext {
         app_event_tx,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -164,6 +165,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
     )));
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(
@@ -255,6 +257,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         .returning(|_| Box::pin(async { Ok(true) }));
     let context = SessionWorkerContext {
         app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
         session_run: SessionRunClient::from_channel(

@@ -5,7 +5,8 @@ use std::path::Path;
 
 use crate::app::session_state::SessionGitStatus;
 use crate::app::{App, ProjectSyncStatus, Tab, UpdateStatus, session};
-use crate::domain::agent::{AgentCliInfo, ReasoningLevel};
+use crate::domain::agent::{AgentCliInfo, AgentKind, ReasoningLevel};
+use crate::domain::harness::HarnessAvailability;
 use crate::domain::project::ProjectListItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{DailyActivity, Session, SessionId};
@@ -28,6 +29,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     /// Full archive total for the active project.
     pub(crate) archived_session_count: usize,
     pub(crate) available_agent_clis: Vec<AgentCliInfo>,
+    /// Startup-validated agent CLIs that can run new sessions.
+    pub(crate) available_agent_kinds: Vec<AgentKind>,
     pub(crate) current_tab: Tab,
     pub(crate) current_version_display_text: &'a str,
     pub(crate) default_reasoning_level: ReasoningLevel,
@@ -35,6 +38,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) git_branch: Option<&'a str>,
     pub(crate) git_status: Option<(u32, u32)>,
     pub(crate) git_upstream_ref: Option<&'a str>,
+    /// Whether this launch offers Harness sessions.
+    pub(crate) harness_availability: HarnessAvailability,
     /// Whether the session list has an archive pagination action.
     pub(crate) has_more_archived_sessions: bool,
     /// Whether loaded archived rows extend beyond the first page.
@@ -93,6 +98,8 @@ impl App {
             active_project_id: project.active_project_id,
             active_prompt_outputs: sessions.active_prompt_outputs,
             available_agent_clis: self.services.available_agent_clis(),
+            available_agent_kinds: self.services.available_agent_kinds(),
+            harness_availability: self.services.harness_availability(),
             current_tab,
             current_version_display_text: &self.current_version_display_text,
             default_reasoning_level: self.settings.default_smart_reasoning_level,

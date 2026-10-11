@@ -47,6 +47,17 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
             ],
             "gpt-6.1-sol",
         ),
+        (
+            AgentKind::Harness,
+            vec![
+                "muse-spark-1.3",
+                "kimi-k3",
+                "kimi-k2.6",
+                "qwen3.8-max",
+                "qwen-plus",
+            ],
+            "muse-spark-1.3",
+        ),
     ];
 
     // Act / Assert
@@ -82,6 +93,7 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
         assert!(
             AgentKind::ALL
                 .iter()
+                .chain([&AgentKind::Harness])
                 .any(|provider| provider.supports_model(*model))
         );
     }
@@ -124,6 +136,14 @@ fn declared_context_limits_preserve_proactive_compaction_budgets() {
         assert_eq!(limits.context_window_tokens, expected.0);
         assert_eq!(limits.input_headroom_tokens, expected.1);
         assert_eq!(limits.input_token_budget(), expected.2);
+    }
+    for model in AgentKind::Harness.models() {
+        assert_eq!(
+            model
+                .context_limits()
+                .map(ModelContextLimits::input_token_budget),
+            Some(111_616)
+        );
     }
     for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {
         assert!(
