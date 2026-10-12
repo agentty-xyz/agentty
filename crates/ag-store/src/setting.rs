@@ -1,5 +1,7 @@
 //! Setting-scoped persistence adapters and query helpers.
 
+use std::collections::HashMap;
+
 use ag_session::{ReasoningLevel, ResponseStyle, SettingName, SpeedMode};
 use async_trait::async_trait;
 use sqlx::SqlitePool;
@@ -19,6 +21,13 @@ pub trait SettingRepository: Send + Sync {
 
     /// Looks up a setting value by name.
     async fn get_setting(&self, name: SettingName) -> Result<Option<String>, DbError>;
+
+    /// Loads every persisted project value for one setting in a single query.
+    /// Projects without a value are omitted from the returned map.
+    async fn load_project_setting_values(
+        &self,
+        name: SettingName,
+    ) -> Result<HashMap<i64, String>, DbError>;
 
     /// Loads the active project identifier from application settings.
     async fn load_active_project_id(&self) -> Result<Option<i64>, DbError>;
@@ -117,6 +126,29 @@ WHERE name = ?
         .await?;
 
         Ok(row.map(|row| row.value))
+    }
+
+    async fn load_project_setting_values(
+        &self,
+        name: SettingName,
+    ) -> Result<HashMap<i64, String>, DbError> {
+        let setting_name = name.as_str();
+        let rows = sqlx::query!(
+            r#"
+SELECT project_id AS "project_id!: i64",
+       value AS "value!: String"
+FROM project_setting
+WHERE name = ?
+"#,
+            setting_name
+        )
+        .fetch_all(&self.0)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.project_id, row.value))
+            .collect())
     }
 
     async fn load_active_project_id(&self) -> Result<Option<i64>, DbError> {

@@ -64,6 +64,15 @@ Commit and rebase assistance collect utility activity concurrently and save the 
 usage footer immediately after their displayed answer or attempt failure notice, before
 propagating failures to the overall workflow.
 
+## Project Access
+
+Startup uses the launch repository and loads saved project rows without validating other
+checkout paths. The one-time discovery suggestion grants access only when the user
+accepts. Project discovery runs through an injected filesystem boundary on a background
+task; `AppEvent` completions update the foreground dialog. Cancellation stops traversal
+cooperatively and invalidates late results. Only selected results are registered. Saved
+checkouts are validated when explicitly opened.
+
 ## Session Channel Composition
 
 Composition injects `SessionRunFactory`, which returns a worker-owned

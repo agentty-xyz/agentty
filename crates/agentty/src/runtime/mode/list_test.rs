@@ -278,7 +278,7 @@ async fn test_handle_project_switcher_key_ignored_on_projects_tab() {
 }
 
 #[tokio::test]
-async fn test_handle_add_key_ignored_on_projects_tab() {
+async fn test_handle_add_key_opens_project_path_on_projects_tab() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
     app.tabs.set(Tab::Projects);
@@ -294,7 +294,15 @@ async fn test_handle_add_key_ignored_on_projects_tab() {
     // Assert
     assert!(matches!(event_result, EventResult::Continue));
     assert!(app.sessions.sessions().is_empty());
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(
+        app.mode,
+        AppMode::ProjectCatalog {
+            dialog: crate::presentation::project_catalog::ProjectCatalogDialog::PathInput {
+                discover: false,
+                ..
+            }
+        }
+    ));
 }
 
 #[tokio::test]
@@ -1627,6 +1635,7 @@ async fn archive_load_more_enter_survives_programmatic_creation() {
 async fn archive_load_more_enter_and_project_switch_reset_the_window() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_test_app().await;
+    std::fs::create_dir_all(base_dir.path().join(".git")).expect("project repository marker");
     let project = app.projects.active_project_id();
     for index in 0..21 {
         let id = format!("archive-{index:02}");
@@ -1700,7 +1709,7 @@ async fn archive_load_more_enter_and_project_switch_reset_the_window() {
 
     // Arrange: switching away and back resets the expanded archive.
     let other_dir = base_dir.path().join("other-project");
-    tokio::fs::create_dir_all(&other_dir)
+    tokio::fs::create_dir_all(other_dir.join(".git"))
         .await
         .expect("other directory");
     let other_project = app
@@ -1784,4 +1793,69 @@ async fn archive_show_less_enter_collapses_to_first_page() {
         app.sessions.selected_archive_action(),
         Some(ArchiveAction::LoadMore)
     );
+}
+
+#[tokio::test]
+async fn test_handle_discover_key_opens_folder_path_on_projects_tab() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_git_test_app().await;
+    app.tabs.set(Tab::Projects);
+    // Act
+    handle(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("key");
+    // Assert
+    assert!(matches!(
+        app.mode,
+        AppMode::ProjectCatalog {
+            dialog: crate::presentation::project_catalog::ProjectCatalogDialog::PathInput {
+                discover: true,
+                ..
+            }
+        }
+    ));
+}
+
+#[tokio::test]
+async fn test_opening_unavailable_project_displays_error_without_switching() {
+    // Arrange
+    let (mut app, root) = crate::test_support::new_git_test_app().await;
+    let original = app.active_project_id();
+    let missing = app
+        .services
+        .db()
+        .projects()
+        .upsert_project(
+            &root.path().join("missing").to_string_lossy(),
+            Some("main".to_string()),
+        )
+        .await
+        .expect("saved");
+    app.apply_app_events(AppEvent::RefreshProjects).await;
+    let index = app
+        .projects
+        .render_parts()
+        .project_items
+        .iter()
+        .position(|item| item.project.id == missing)
+        .expect("history row");
+    while app.projects.render_parts().selected_index != Some(index) {
+        app.next_project();
+    }
+    app.tabs.set(Tab::Projects);
+    // Act
+    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .expect("key");
+    // Assert
+    assert_eq!(app.active_project_id(), original);
+    assert!(matches!(
+        app.mode,
+        AppMode::ProjectCatalog {
+            dialog: crate::presentation::project_catalog::ProjectCatalogDialog::Message { .. }
+        }
+    ));
 }

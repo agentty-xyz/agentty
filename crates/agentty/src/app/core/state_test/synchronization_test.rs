@@ -430,6 +430,8 @@ async fn project_sync_completion_reconciles_after_switching_back_to_its_project(
     // Arrange
     let first_project_dir = tempdir().expect("failed to create first project dir");
     let second_project_dir = tempdir().expect("failed to create second project dir");
+    fs::create_dir_all(first_project_dir.path().join(".git")).expect("first repository marker");
+    fs::create_dir_all(second_project_dir.path().join(".git")).expect("second repository marker");
     let first_project_path = first_project_dir.path().to_path_buf();
     let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database

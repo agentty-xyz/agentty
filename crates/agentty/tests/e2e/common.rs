@@ -556,7 +556,20 @@ async fn open_database_with_seeded_project(
 pub(crate) async fn open_database(env: &BuilderEnv) -> Result<Database, DbError> {
     let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
 
-    Database::open(&db_path).await
+    let database = Database::open(&db_path).await?;
+    if database
+        .settings()
+        .get_setting(ag_session::SettingName::ProjectDiscoveryPromptSeen)
+        .await?
+        .is_none()
+    {
+        database
+            .settings()
+            .upsert_setting(ag_session::SettingName::ProjectDiscoveryPromptSeen, "true")
+            .await?;
+    }
+
+    Ok(database)
 }
 
 /// Insert one seeded session row and apply any row-level seed updates.
@@ -1073,6 +1086,8 @@ impl FeatureTest {
         if self.with_git {
             env.init_git()?;
         }
+
+        open_database(&env).await?;
 
         if let Some(setup) = self.setup.take() {
             setup(&env).await?;

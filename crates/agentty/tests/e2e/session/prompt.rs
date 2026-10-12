@@ -602,6 +602,7 @@ async fn prompt_multiline_via_csi_u_shift_enter() -> E2eResult {
     let temp = tempfile::TempDir::new()?;
     let env = BuilderEnv::new(temp.path())?;
     env.init_git()?;
+    common::open_database(&env).await?;
     let scenario = Scenario::new("prompt_multiline_shift_enter")
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::switch_to_tab("Sessions"))

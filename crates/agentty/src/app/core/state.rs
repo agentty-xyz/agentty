@@ -122,6 +122,7 @@ pub(crate) struct AppClients {
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
     pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
+    pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
     pub(super) runtime_config: RuntimeConfig,
@@ -144,6 +145,7 @@ impl AppClients {
             git_client: Arc::new(RealGitClient),
             is_tmux_session: tmux::is_tmux_session(),
             personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
             session_run_factory: Arc::new(RealSessionRunFactory::new(RuntimeConfig::default())),
@@ -230,6 +232,7 @@ pub struct App {
     pub(crate) project_sync_status_expires_at: Option<Instant>,
     /// Owns project selection state, project metadata, and git status
     /// snapshots.
+    pub(crate) project_catalog: Box<crate::app::project_catalog::ProjectCatalog>,
     pub(crate) projects: ProjectManager,
     /// Saves prompt composers per session so leaving chat focus with `q` and
     /// reopening the session restores the complete typed draft. Entries are
@@ -412,6 +415,9 @@ impl App {
 
     /// Switches app context to one persisted project id.
     ///
+    /// Legacy subdirectory projects retain their ids, sessions, and settings
+    /// after validating the containing repository on explicit access.
+    ///
     /// # Errors
     /// Returns an error if the project does not exist or session refresh fails.
     pub async fn switch_project(&mut self, project_id: i64) -> Result<(), AppError> {
@@ -425,6 +431,19 @@ impl App {
             .ok_or_else(|| {
                 AppError::Workflow(format!("Project with id `{project_id}` was not found"))
             })?;
+        if !self.services.fs_client().is_dir(project.path.clone())
+            || (!self.services.fs_client().exists(project.path.join(".git"))
+                && self
+                    .services
+                    .git_client()
+                    .find_git_repo_root(project.path.clone())
+                    .await
+                    .is_none())
+        {
+            return Err(AppError::Workflow(
+                "Project is unavailable or is not a Git repository".to_string(),
+            ));
+        }
         let recoverable_focused_review_session_ids =
             Self::load_recoverable_focused_review_session_ids(self.services.db(), project.id)
                 .await?;
@@ -1852,9 +1871,8 @@ impl App {
     }
 
     /// Reloads project list snapshots from persistence.
-    pub(super) async fn reload_projects(&mut self) {
-        let project_items =
-            Self::load_project_items(self.services.db(), self.services.fs_client().as_ref()).await;
+    pub(in crate::app) async fn reload_projects(&mut self) {
+        let project_items = Self::load_project_items(self.services.db()).await;
         self.projects.replace_project_items(project_items);
     }
 

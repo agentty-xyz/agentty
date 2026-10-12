@@ -5,12 +5,184 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+use ag_session::SettingName;
 use testty::assertion;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
+
+#[tokio::test]
+async fn test_relative_agentty_root_excludes_managed_worktrees()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange, Act, Assert
+    FeatureTest::new("relative_agentty_root_excludes_managed_worktrees")
+        .with_git()
+        .env("AGENTTY_ROOT", "managed-root")
+        .setup(|env| {
+            Box::pin(async move {
+                let root = env.workdir.join("managed-root");
+                std::fs::create_dir_all(root.join("wt/session/.git"))?;
+                let database = agentty::db::Database::open(&root.join("db/agentty.db")).await?;
+                database
+                    .settings()
+                    .upsert_setting(SettingName::ProjectDiscoveryPromptSeen, "true")
+                    .await?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .wait_for_text("Add project", 5000)
+                    .write_text("~/test-project/managed-root/wt/session")
+                    .press_key("Enter")
+                    .wait_for_text("session worktrees", 5000)
+                    .capture_labeled("rejected", "Managed worktree cannot be registered")
+                    .press_key("Esc")
+                    .wait_for_stable_frame(300, 5000)
+                    .press_key("d")
+                    .wait_for_text("Discover projects in folder", 5000)
+                    .write_text("~/test-project")
+                    .press_key("Enter")
+                    .wait_for_text("Select repositories to add", 10000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "test-project", &full);
+                    assertion::assert_not_visible(frame, "wt/session");
+                    let capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "rejected")
+                        .expect("rejection capture");
+                    let rejection = common::frame_from_capture(capture);
+                    assertion::assert_text_in_region(&rejection, "session worktrees", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Emulates a database created by launching an older version in a subdirectory.
+async fn seed_legacy_subdirectory(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    let legacy = env.workdir.join("legacy-subdir");
+    std::fs::create_dir_all(&legacy)?;
+    let database = common::open_database(env).await?;
+    let legacy_id = database
+        .projects()
+        .upsert_project(&legacy.to_string_lossy(), None)
+        .await?;
+    database
+        .sessions()
+        .insert_session(
+            "legacy-session",
+            "claude-haiku-4-5-20251001",
+            "main",
+            "Review",
+            legacy_id,
+        )
+        .await?;
+    database
+        .sessions()
+        .update_session_title("legacy-session", "Legacy history")
+        .await?;
+    database
+        .settings()
+        .upsert_project_setting(legacy_id, SettingName::LaunchConfiguration, "legacy-launch")
+        .await?;
+    std::fs::create_dir_all(
+        crate::test_support::session_folder(&env.agentty_root.join("wt"), "legacy-session")
+            .join(".agentty"),
+    )?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_upgrade_opens_legacy_subdirectory_history() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Arrange, Act, Assert
+    FeatureTest::new("upgrade_opens_legacy_subdirectory_history")
+        .with_git()
+        .setup(|env| Box::pin(seed_legacy_subdirectory(env)))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("legacy-subdir", 5000)
+                    .press_key("j")
+                    .press_key("Enter")
+                    .wait_for_text("Legacy history", 5000)
+                    .capture_labeled("history", "Legacy project sessions remain accessible")
+                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "legacy-launch", &full);
+                    assertion::assert_text_in_region(frame, "legacy-subdir", &full);
+                    let capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "history")
+                        .expect("history capture");
+                    let history = common::frame_from_capture(capture);
+                    assertion::assert_text_in_region(&history, "Legacy history", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_non_repository_launch_stays_out_of_project_switcher()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange, Act, Assert
+    FeatureTest::new("non_repository_launch_stays_out_of_project_switcher")
+        .setup(|env| {
+            Box::pin(async move {
+                std::fs::create_dir_all(env.home_dir.join("added-repo/.git"))?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .wait_for_text("Add project", 5000)
+                    .write_text("~/added-repo")
+                    .press_key("Enter")
+                    .wait_for_text("added-repo", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Project: added-repo", 5000)
+                    .press_key("p")
+                    .wait_for_text("Switch project", 5000)
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "added-repo", &full);
+                    assertion::assert_not_visible(frame, "test-project");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
 
 /// Configures two local upstreams and delays `git pull` long enough to prove
 /// navigation and cross-project sync queueing remain non-modal.
@@ -398,6 +570,140 @@ fn assert_project_sync_non_modal(
     let queued_frame = common::frame_from_capture(queued_capture);
     let queued_full = Region::full(queued_frame.cols(), queued_frame.rows());
     assertion::assert_text_in_region(&queued_frame, "Syncing zeta-project/main...", &queued_full);
+
+    Ok(())
+}
+
+/// Enables the real first-run invitation without changing other PTY fixtures.
+async fn seed_discovery_invitation(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::open_database(env)
+        .await?
+        .settings()
+        .upsert_setting(ag_session::SettingName::ProjectDiscoveryPromptSeen, "false")
+        .await?;
+    std::fs::create_dir_all(env.home_dir.join("discover-me/.git"))?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange, Act, Assert
+    FeatureTest::new("project_discovery_startup_skip")
+        .with_git()
+        .setup(|env| Box::pin(seed_discovery_invitation(env)))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Discover repositories?", 5000)
+                    .capture_labeled("invitation", "Home discovery requires consent")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_not_visible(frame, "Discover repositories?");
+                    assertion::assert_not_visible(frame, "discover-me");
+                    let capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "invitation")
+                        .expect("invitation capture");
+                    let invitation = common::frame_from_capture(capture);
+                    assertion::assert_text_in_region(&invitation, "macOS folder-access", &full);
+                    assertion::assert_text_in_region(&invitation, "prompts.", &full);
+                    assertion::assert_text_in_region(&invitation, "Skip", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_project_discovery_startup_accept_and_select() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Arrange, Act, Assert
+    FeatureTest::new("project_discovery_startup_accept_and_select")
+        .with_git()
+        .setup(|env| Box::pin(seed_discovery_invitation(env)))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("Discover repositories?", 5000)
+                    .press_key("y")
+                    .wait_for_text("Select repositories to add", 10000)
+                    .capture_labeled("results", "No repositories are selected automatically")
+                    .press_key("Space")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "discover-me", &full);
+                    assertion::assert_not_visible(frame, "Select repositories to add");
+                    let capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "results")
+                        .expect("results capture");
+                    let results = common::frame_from_capture(capture);
+                    assertion::assert_text_in_region(&results, "[ ]", &full);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_project_discovery_add_and_chosen_folder() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange, Act, Assert
+    FeatureTest::new("project_discovery_add_and_chosen_folder")
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                std::fs::create_dir_all(env.home_dir.join("added-repo/.git"))?;
+                std::fs::create_dir_all(env.home_dir.join("chosen/found-repo/.git"))?;
+                std::fs::create_dir_all(env.home_dir.join("outside-scope/.git"))?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .press_key("a")
+                    .wait_for_text("Add project", 5000)
+                    .write_text("~/added-repo")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .wait_for_text("added-repo", 5000)
+                    .press_key("d")
+                    .wait_for_text("Discover projects in folder", 5000)
+                    .write_text("~/chosen")
+                    .press_key("Enter")
+                    .wait_for_text("Select repositories to add", 10000)
+                    .press_key("Space")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "added-repo", &full);
+                    assertion::assert_text_in_region(frame, "found-repo", &full);
+                    assertion::assert_not_visible(frame, "outside-scope");
+                })
+            },
+        )
+        .await?;
 
     Ok(())
 }

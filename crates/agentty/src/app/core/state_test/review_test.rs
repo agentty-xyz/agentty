@@ -105,6 +105,8 @@ async fn test_switch_project_restores_project_scoped_focused_reviews() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
+    fs::create_dir_all(base_dir.path().join(".git")).expect("first repository marker");
+    fs::create_dir_all(second_project_dir.path().join(".git")).expect("second repository marker");
     let base_path = base_dir.path().to_path_buf();
     let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
@@ -205,6 +207,8 @@ async fn test_switch_project_recovers_persisted_deferred_review_after_restart() 
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
+    fs::create_dir_all(base_dir.path().join(".git")).expect("first repository marker");
+    fs::create_dir_all(second_project_dir.path().join(".git")).expect("second repository marker");
     let base_path = base_dir.path().to_path_buf();
     let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
@@ -994,6 +998,8 @@ async fn test_switch_immediately_after_response_recovers_in_progress_review() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
+    fs::create_dir_all(base_dir.path().join(".git")).expect("first repository marker");
+    fs::create_dir_all(second_project_dir.path().join(".git")).expect("second repository marker");
     let base_path = base_dir.path().to_path_buf();
     let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database

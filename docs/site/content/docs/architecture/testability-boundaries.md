@@ -59,7 +59,8 @@ identifies the owning crates and layers.
 Campaign tests inject repositories, `SessionBackend`, `OrchestrationEventSink`, and
 `OrchestrationSchedule`. They do not construct the TUI. Storage tests exercise real
 SQLite adapters with injected timestamps; test fixtures do not alter production
-contracts. Session-list archive windows are bounded by the repository query; test
+contracts. Project catalog visibility loads in one settings batch, independent of
+catalog size. Session-list archive windows are bounded by the repository query; test
 pagination with real SQLite and selection behavior through the host and PTY.
 
 Resource tests inject process identities and readings to cover PID reuse, stale data,
@@ -105,6 +106,12 @@ and hosts remain independent of provider implementations.
 <a id="architecture-app-layer-typed-errors"></a> Application workflows propagate
 `SessionError` and `AppError`. Convert them to display strings only at event and UI
 boundaries; preserve causes until then.
+
+Project discovery is an injected capability invoked only after explicit user consent.
+Startup catalog loads are database-only. Tests assert zero discovery calls before
+consent, selected-root scope, cancellation, stale completions, and explicit result
+registration; PTY scenarios cover the invitation and project controls. Operating-system
+permission prompts require separate macOS verification.
 
 ## Testing Guidance
 

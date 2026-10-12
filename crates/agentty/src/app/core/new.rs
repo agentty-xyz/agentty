@@ -18,7 +18,6 @@ use crate::domain::harness::HarnessAvailability;
 use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
-use crate::infra::fs::FsClient;
 use crate::presentation::setting::SettingsPresentationState;
 
 /// Environment flag that pins the version rendered by feature-test runs.
@@ -60,7 +59,7 @@ impl App {
             env!("CARGO_PKG_VERSION"),
         );
 
-        let app = Self::new_with_options(
+        let app = Box::pin(Self::new_with_options(
             auto_update,
             base_path,
             working_dir,
@@ -68,7 +67,7 @@ impl App {
             current_version_display_text,
             repositories.into(),
             clients,
-        )
+        ))
         .await?;
 
         Ok(app)
@@ -89,15 +88,7 @@ impl App {
         repositories: AppRepositories,
         clients: AppClients,
     ) -> Result<Self, AppError> {
-        let StartupProjectContext {
-            active_project_id,
-            active_project_name,
-            initial_tab,
-            project_items,
-            startup_git_branch,
-            startup_git_upstream_ref,
-            startup_working_dir,
-        } = Self::load_startup_project_state(
+        let startup = Self::load_startup_project_state(
             &base_path,
             working_dir.as_path(),
             git_branch,
@@ -125,23 +116,23 @@ impl App {
         )
         .await?;
         let projects = crate::app::project::ProjectManager::new(
-            active_project_id,
-            active_project_name,
-            startup_git_branch,
-            startup_git_upstream_ref,
-            project_items,
-            startup_working_dir.clone(),
+            startup.active_project_id,
+            startup.active_project_name,
+            startup.startup_git_branch,
+            startup.startup_git_upstream_ref,
+            startup.project_items,
+            startup.startup_working_dir.clone(),
         );
-        let settings = Self::load_settings(&repositories, &services, active_project_id).await;
-        let mut sessions = Self::load_and_restack_startup_sessions(
-            &services,
-            active_project_id,
-            startup_working_dir.as_path(),
-        )
-        .await;
-        let (review_cache, recoverable_focused_review_session_ids) =
-            Self::load_startup_focused_reviews(&repositories, active_project_id, &mut sessions)
-                .await?;
+        let settings =
+            Self::load_settings(&repositories, &services, startup.active_project_id).await;
+        let (sessions, review_cache, recoverable_focused_review_session_ids) =
+            Self::load_startup_sessions_and_reviews(
+                &repositories,
+                &services,
+                startup.active_project_id,
+                startup.startup_working_dir.as_path(),
+            )
+            .await?;
 
         let sync_context = Self::sync_context_for(&projects, &services, &sessions);
         let sync_handle = sync::SyncHandle::spawn(event_tx.clone(), sync_context);
@@ -151,10 +142,14 @@ impl App {
             .unwrap_or_else(|| sync_handle.sync_main_runner());
         let mut app = Self {
             mode: crate::presentation::app_mode::AppMode::List,
+            project_catalog: Box::new(crate::app::project_catalog::ProjectCatalog::new(
+                clients.project_discovery_client,
+                clients.project_discovery_home,
+            )),
             needs_redraw: true,
             settings,
             settings_presentation: SettingsPresentationState::default(),
-            tabs: crate::app::tab::TabManager::new(initial_tab),
+            tabs: crate::app::tab::TabManager::new(startup.initial_tab),
             current_version_display_text,
             prompt_progress: std::collections::HashMap::new(),
             diff_comment_progress: std::collections::HashMap::new(),
@@ -188,30 +183,34 @@ impl App {
             tmux_client: clients.tmux_client,
         };
         app.recover_startup_focused_reviews(recoverable_focused_review_session_ids);
+        app.suggest_project_discovery().await;
 
         Ok(app)
     }
 
-    /// Loads focused-review cache state and reviews that must be regenerated
-    /// during startup recovery.
-    async fn load_startup_focused_reviews(
+    /// Loads sessions and focused-review recovery state for the launch project.
+    async fn load_startup_sessions_and_reviews(
         repositories: &AppRepositories,
+        services: &AppServices,
         active_project_id: i64,
-        sessions: &mut SessionManager,
+        working_dir: &Path,
     ) -> Result<
         (
+            SessionManager,
             std::collections::HashMap<crate::domain::session::SessionId, review::ReviewCacheEntry>,
             Vec<String>,
         ),
         AppError,
     > {
+        let mut sessions =
+            Self::load_and_restack_startup_sessions(services, active_project_id, working_dir).await;
         let review_cache = Self::load_focused_review_cache(repositories, active_project_id).await;
         let recoverable_session_ids =
             Self::load_recoverable_focused_review_session_ids(repositories, active_project_id)
                 .await?;
         review::hydrate_review_transients(&review_cache, sessions.state_mut());
 
-        Ok((review_cache, recoverable_session_ids))
+        Ok((sessions, review_cache, recoverable_session_ids))
     }
 
     /// Restarts focused review for durable triggers whose persistence was
@@ -359,9 +358,8 @@ impl App {
                 .await?;
         let startup_project_context = AppStartup::load_startup_project_context(
             repositories,
-            clients.fs_client.as_ref(),
             &clients.git_client,
-            clients.project_discovery_client.as_ref(),
+            clients.fs_client.as_ref(),
             working_dir,
             git_branch,
             current_project_id,
@@ -470,16 +468,11 @@ impl App {
         AppStartup::load_git_upstream_ref(git_client, working_dir, git_branch).await
     }
 
-    /// Loads project list entries for the projects tab.
-    ///
-    /// Agentty-managed session worktrees, missing project directories, and
-    /// non-git folders are excluded so the list keeps only user-facing
-    /// repository roots that still exist on disk.
+    /// Loads saved project snapshots without probing their filesystem paths.
     pub(super) async fn load_project_items(
         db: &AppRepositories,
-        fs_client: &dyn FsClient,
     ) -> Vec<crate::domain::project::ProjectListItem> {
-        AppStartup::load_project_items(db, fs_client).await
+        AppStartup::load_project_items(db).await
     }
 
     /// Converts a project row into domain project model.

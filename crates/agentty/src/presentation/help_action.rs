@@ -315,6 +315,12 @@ pub(crate) fn session_list_actions(
 pub(crate) fn project_list_actions() -> Vec<HelpAction> {
     let mut actions = list_base_actions();
     actions.push(HelpAction::new("select", "Enter", "Select active project"));
+    actions.push(HelpAction::new("add", "a", "Add project by path"));
+    actions.push(HelpAction::new(
+        "discover",
+        "d",
+        "Discover projects in a folder",
+    ));
     actions.push(HelpAction::new("nav", "j/k", "Navigate projects"));
     actions.push(HelpAction::new("next tab", "Tab", "Switch tab"));
     actions.push(HelpAction::new("help", "?", "Help"));
@@ -327,6 +333,8 @@ pub(crate) fn project_list_footer_actions() -> Vec<HelpAction> {
     vec![
         HelpAction::new("quit", "q", "Quit"),
         HelpAction::new("select", "Enter", "Select active project"),
+        HelpAction::new("add", "a", "Add project by path"),
+        HelpAction::new("discover", "d", "Discover projects in a folder"),
         HelpAction::new("nav", "j/k", "Navigate projects"),
         HelpAction::new("help", "?", "Help"),
     ]

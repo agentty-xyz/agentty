@@ -30,6 +30,29 @@ activate a reply when available. The footer shows the active directory, branch, 
 ahead/behind counts. Up to eight session agent turns can execute at once; additional
 turns wait for capacity while their sessions remain responsive.
 
+### Projects and Discovery
+
+Agentty opens the repository you launch it from. Outside a repository, use the
+**Projects** tab to choose or add one. Saved projects load from the database; Agentty
+checks their folders only when you open them. Unavailable projects remain in your
+history and show an error when opened.
+
+Launch directories outside repositories stay out of the project catalog. Older projects
+saved as repository subdirectories remain selectable in **Projects** and retain their
+existing sessions and settings.
+
+A one-time startup popup offers to discover repositories in your home directory.
+**Skip** is selected by default. Accepting permits one scan; Agentty remembers either
+choice and never scans automatically on later launches. Scanning may trigger
+operating-system folder-access prompts.
+
+In **Projects**, press `a` to add a repository root by path, or `d` to discover within a
+folder you choose. Paths can be absolute, relative to the current project, or start with
+`~`. Scans search up to five levels and 200 repositories, skip hidden folders and
+Agentty session worktrees, and do not follow directory symlinks. Inaccessible folders
+may be skipped. Press `Esc` to cancel. Select results with `Space`, then press `Enter`
+to save only the selected repositories.
+
 ### Resource Usage
 
 `Processes`, `CPU`, and `Memory` cover the tracked agent and its descendants, refreshed

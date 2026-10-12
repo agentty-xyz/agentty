@@ -958,3 +958,18 @@ fn app_event_label_names_review_comment_resolution_updates() {
     // Assert
     assert_eq!(label, "SessionReviewCommentResolutionUpdated");
 }
+
+#[test]
+fn app_event_label_names_project_discovery_completion() {
+    // Arrange
+    let event = AppEvent::ProjectDiscoveryCompleted {
+        completion: crate::app::project_catalog::ProjectDiscoveryCompletion {
+            request_id: 1,
+            result: Ok(Vec::new()),
+        },
+    };
+    // Act
+    let label = AppServices::app_event_label(&event);
+    // Assert
+    assert_eq!(label, "ProjectDiscoveryCompleted");
+}

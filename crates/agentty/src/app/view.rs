@@ -157,6 +157,7 @@ fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
         | AppMode::SessionCreation { .. }
         | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }
+        | AppMode::ProjectCatalog { .. }
         | AppMode::ProjectSwitcher { .. }
         | AppMode::Confirmation { .. }
         | AppMode::SyncBlockedPopup { .. }

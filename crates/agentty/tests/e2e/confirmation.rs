@@ -201,6 +201,7 @@ async fn quit_confirm_yes_exits() {
     let _test_guard = common::acquire_e2e_test_lock().await;
     let temp = tempfile::TempDir::new().expect("failed to create temp dir");
     let env = BuilderEnv::new(temp.path()).expect("failed to create builder env");
+    common::open_database(&env).await.expect("fixture database");
     let mut session = env.builder().spawn().expect("failed to spawn session");
 
     let scenario = Scenario::new("quit_yes")

@@ -28,6 +28,8 @@ async fn test_switch_project_updates_active_git_upstream_reference() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
+    fs::create_dir_all(base_dir.path().join(".git")).expect("first repository marker");
+    fs::create_dir_all(second_project_dir.path().join(".git")).expect("second repository marker");
     let base_path = base_dir.path().to_path_buf();
     let second_project_path = second_project_dir.path().to_path_buf();
     let database = AppRepositories::in_memory().await.expect("db should open");

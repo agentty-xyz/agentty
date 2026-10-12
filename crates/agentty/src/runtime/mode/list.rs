@@ -66,6 +66,12 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         {
             open_session_creation_flow(app).await;
         }
+        KeyCode::Char('a') if app.tabs.current() == Tab::Projects => {
+            app.open_project_path_input(false);
+        }
+        KeyCode::Char('d') if app.tabs.current() == Tab::Projects => {
+            app.open_project_path_input(true);
+        }
         KeyCode::Char('p')
             if app.tabs.current() == Tab::Sessions && key.modifiers == KeyModifiers::NONE =>
         {
@@ -160,12 +166,13 @@ async fn open_session_creation_flow(app: &mut App) {
 /// On the sessions tab, any selected session can be opened in view mode.
 async fn handle_enter_key(app: &mut App) -> io::Result<EventResult> {
     match app.tabs.current() {
-        Tab::Projects => {
-            if app.switch_selected_project().await.is_ok() {
+        Tab::Projects => match app.switch_selected_project().await {
+            Ok(()) => {
                 app.tabs.set(Tab::Sessions);
                 app.persist_current_tab().await;
             }
-        }
+            Err(error) => app.project_catalog_message(error.to_string()),
+        },
         Tab::Sessions => {
             match app.sessions.selected_archive_action() {
                 Some(ArchiveAction::LoadMore) => {

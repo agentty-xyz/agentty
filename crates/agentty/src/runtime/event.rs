@@ -397,6 +397,19 @@ async fn process_paste_event(app: &mut App, pasted_text: &str) {
         mode::diff::handle_paste(app, pasted_text);
     }
 
+    if let AppMode::ProjectCatalog {
+        dialog:
+            crate::presentation::project_catalog::ProjectCatalogDialog::PathInput {
+                input, error, ..
+            },
+    } = &mut app.mode
+    {
+        input.apply(InputCommand::InsertText(
+            mode::input_key::normalize_single_line_pasted_text(pasted_text),
+        ));
+        *error = None;
+    }
+
     if let AppMode::PublishBranchInput {
         input,
         locked_upstream_ref: None,

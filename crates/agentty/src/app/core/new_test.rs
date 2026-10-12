@@ -3,7 +3,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ag_git::GitClient;
 use tempfile::tempdir;
 use tokio::process::Command;
 
@@ -17,8 +16,6 @@ use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
 use crate::infra::db;
 use crate::infra::db::{AppRepositories, Database};
-use crate::infra::fs::FsClient;
-use crate::infra::project_discovery::ProjectDiscoveryClient;
 
 const PUBLIC_CONSTRUCTOR_COVERAGE_ENV: &str = "AGENTTY_PUBLIC_CONSTRUCTOR_COVERAGE";
 
@@ -371,7 +368,7 @@ impl App {
         repositories: impl Into<AppRepositories>,
         clients: AppClients,
     ) -> Result<Self, AppError> {
-        Self::new_with_options(
+        Box::pin(Self::new_with_options(
             false,
             base_path,
             working_dir,
@@ -379,63 +376,17 @@ impl App {
             format!("v{}", env!("CARGO_PKG_VERSION")),
             repositories.into(),
             clients,
-        )
+        ))
         .await
-    }
-
-    /// Resolves startup active project id from settings, falling back to the
-    /// current working directory when the stored project row is stale.
-    pub(in crate::app::core) async fn resolve_startup_active_project_id(
-        db: &AppRepositories,
-        fs_client: &dyn FsClient,
-        current_project_id: i64,
-    ) -> i64 {
-        AppStartup::resolve_startup_active_project_id(db, fs_client, current_project_id).await
     }
 
     /// Loads project list entries with one caller-provided session worktree
     /// root for filtering.
     pub(in crate::app::core) async fn load_project_items_with_session_worktree_root(
         db: &AppRepositories,
-        fs_client: &dyn FsClient,
         session_worktree_root: &Path,
     ) -> Vec<crate::domain::project::ProjectListItem> {
-        AppStartup::load_project_items_with_session_worktree_root(
-            db,
-            fs_client,
-            session_worktree_root,
-        )
-        .await
-    }
-
-    /// Refreshes the persisted project catalog from the user's home directory
-    /// during startup before the first project list render.
-    pub(in crate::app::core) async fn load_projects_from_home_directory(
-        db: &AppRepositories,
-        git_client: &dyn GitClient,
-        project_discovery_client: &dyn ProjectDiscoveryClient,
-        session_worktree_root: &Path,
-        home_directory: Option<&Path>,
-    ) {
-        AppStartup::load_projects_from_home_directory(
-            db,
-            git_client,
-            project_discovery_client,
-            session_worktree_root,
-            home_directory,
-        )
-        .await;
-    }
-
-    /// Returns git repository roots discovered under the user home directory.
-    ///
-    /// A repository root is identified by a direct `.git` marker inside the
-    /// directory and discovery stops after `HOME_PROJECT_SCAN_MAX_RESULTS`.
-    pub(in crate::app::core) fn discover_home_project_paths(
-        home_directory: &Path,
-        session_worktree_root: &Path,
-    ) -> Vec<PathBuf> {
-        AppStartup::discover_home_project_paths(home_directory, session_worktree_root)
+        AppStartup::load_project_items_with_session_worktree_root(db, session_worktree_root).await
     }
 
     /// Returns whether a persisted project path points to an agentty session
@@ -451,18 +402,8 @@ impl App {
     /// should remain visible in the Projects tab.
     pub(in crate::app::core) fn visible_project_rows(
         project_rows: Vec<db::ProjectListRow>,
-        fs_client: &dyn FsClient,
         session_worktree_root: &Path,
     ) -> Vec<db::ProjectListRow> {
-        AppStartup::visible_project_rows(project_rows, fs_client, session_worktree_root)
-    }
-
-    /// Returns whether one persisted project path still resolves to a
-    /// directory on disk.
-    pub(in crate::app::core) fn is_existing_project_path(
-        fs_client: &dyn FsClient,
-        project_path: &str,
-    ) -> bool {
-        AppStartup::is_existing_project_path(fs_client, project_path)
+        AppStartup::visible_project_rows(project_rows, session_worktree_root)
     }
 }

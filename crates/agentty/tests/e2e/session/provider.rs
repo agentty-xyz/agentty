@@ -8,7 +8,6 @@ use std::time::Duration;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::region::Region;
-use testty::scenario::Scenario;
 use tokio::process::Command;
 
 use super::fixture::{
@@ -808,31 +807,32 @@ async fn test_session_pre_commit_hook_warning() -> E2eResult {
 /// tools so current-information prompts do not require an interactive grant.
 #[tokio::test]
 async fn claude_session_launch_allows_web_tools() -> E2eResult {
-    // Arrange
-    let _test_guard = common::acquire_e2e_test_lock().await;
-    let temp = tempfile::TempDir::new()?;
-    let env = BuilderEnv::new(temp.path())?;
-    env.init_git()?;
-    install_web_tool_reporting_claude_stub(&env).await?;
-
-    let scenario = Scenario::new("claude_session_web_tools")
-        .compose(&common::wait_for_agentty_startup())
-        .compose(&common::switch_to_tab("Sessions"))
-        .press_key("a")
-        .press_key("Enter")
-        .wait_for_stable_frame(300, 5000)
-        .write_text("Use the web for current package docs")
-        .wait_for_text("Use the web for current package docs", 3000)
-        .press_key("Enter")
-        .wait_for_text("Claude web tools enabled", 30000);
-
-    // Act
-    let frame = scenario.run(env.builder())?;
-
-    // Assert
-    let full = Region::full(frame.cols(), frame.rows());
-    assertion::assert_text_in_region(&frame, "Claude web tools enabled", &full);
-    assertion::assert_not_visible(&frame, "Claude web tools missing");
+    // Arrange, Act, Assert
+    FeatureTest::new("claude_session_web_tools")
+        .with_git()
+        .setup(|env| Box::pin(install_web_tool_reporting_claude_stub(env)))
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 5000)
+                    .write_text("Use the web for current package docs")
+                    .wait_for_text("Use the web for current package docs", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("Claude web tools enabled", 30000)
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Claude web tools enabled", &full);
+                    assertion::assert_not_visible(frame, "Claude web tools missing");
+                })
+            },
+        )
+        .await?;
 
     Ok(())
 }

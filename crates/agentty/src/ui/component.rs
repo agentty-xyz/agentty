@@ -16,6 +16,8 @@ pub mod info_overlay;
 pub mod launch_configuration_list_editor;
 /// Launch-configuration selection popup.
 pub mod launch_configuration_overlay;
+/// Explicit project discovery invitation, input, and result selection.
+pub mod project_catalog_overlay;
 /// Most-recently-opened project switcher popup.
 pub mod project_switcher_overlay;
 /// Remote branch name input popup.

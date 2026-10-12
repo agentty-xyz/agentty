@@ -736,6 +736,11 @@ pub enum ChatFocus {
 
 /// Represents the active UI mode for the application.
 pub enum AppMode {
+    /// Explicit project registration, discovery, and startup suggestion.
+    ProjectCatalog {
+        /// Current project dialog state.
+        dialog: crate::presentation::project_catalog::ProjectCatalogDialog,
+    },
     /// Displays the active top-level list tab.
     List,
     /// Displays the session creation selector above the sessions list.

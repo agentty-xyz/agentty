@@ -1,271 +1,177 @@
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::Arc;
 
-use tempfile::tempdir;
+use ag_git::{GitClient, MockGitClient};
 
-use super::super::core::AGENTTY_WT_DIR;
 use super::AppStartup;
+use crate::app::Tab;
+use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::MockFsClient;
 
-/// Builds one project-list row fixture for startup filtering tests.
-fn project_list_row_fixture(
-    project_id: i64,
-    project_path: &Path,
-) -> crate::infra::db::ProjectListRow {
-    crate::infra::db::ProjectListRow {
-        active_session_count: 0,
-        created_at: 0,
-        display_name: None,
-        git_branch: Some("main".to_string()),
-        id: project_id,
-        input_tokens: 0,
-        is_favorite: false,
-        last_opened_at: None,
-        last_session_updated_at: None,
-        output_tokens: 0,
-        path: project_path.to_string_lossy().to_string(),
-        session_count: 0,
-        updated_at: 0,
-    }
-}
-
-/// Builds one mock filesystem client that reports directories from the
-/// provided set.
-fn mock_fs_client_with_directories(existing_directories: HashSet<PathBuf>) -> MockFsClient {
-    let mut fs_client = MockFsClient::new();
-    fs_client
-        .expect_is_dir()
-        .returning(move |path| existing_directories.contains(&path));
-
-    fs_client
-}
-
-/// Builds one mock filesystem client that reports existing directories and
-/// direct `.git` metadata markers from separate sets.
-fn mock_fs_client_with_directories_and_git_markers(
-    existing_directories: HashSet<PathBuf>,
-    git_marker_paths: HashSet<PathBuf>,
-) -> MockFsClient {
-    let mut fs_client = MockFsClient::new();
-    fs_client
-        .expect_is_dir()
-        .returning(move |path| existing_directories.contains(&path));
-    fs_client
-        .expect_exists()
-        .returning(move |path| git_marker_paths.contains(&path));
-
-    fs_client
-}
-
-/// Verifies startup project resolution prefers the persisted active
-/// project when its directory still exists.
 #[tokio::test]
-async fn resolve_startup_active_project_id_prefers_existing_stored_project() {
+async fn startup_keeps_registered_project_when_git_metadata_is_unavailable() {
     // Arrange
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let current_project_path = PathBuf::from("/workspace/current");
-    let stored_project_path = PathBuf::from("/workspace/stored");
-    let current_project_id = database
+    let database = AppRepositories::in_memory().await.expect("db");
+    let project_id = database
         .projects()
-        .upsert_project(
-            &current_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
+        .upsert_project("/saved/repo", None)
         .await
-        .expect("failed to persist current project");
-    let stored_project_id = database
-        .projects()
-        .upsert_project(
-            &stored_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to persist stored project");
+        .expect("saved project");
     database
         .settings()
-        .set_active_project_id(stored_project_id)
+        .upsert_project_setting(project_id, SettingName::ProjectCatalogVisible, "true")
         .await
-        .expect("failed to persist active project id");
-    let fs_client =
-        mock_fs_client_with_directories(HashSet::from([current_project_path, stored_project_path]));
-
+        .expect("registered repository");
+    let mut fs = MockFsClient::new();
+    fs.expect_exists()
+        .once()
+        .withf(|path| path == Path::new("/saved/repo/.git"))
+        .return_const(false);
+    let git: Arc<dyn GitClient> = Arc::new(MockGitClient::new());
     // Act
-    let resolved_project_id =
-        AppStartup::resolve_startup_active_project_id(&database, &fs_client, current_project_id)
-            .await;
-
-    // Assert
-    assert_eq!(resolved_project_id, stored_project_id);
-}
-
-/// Verifies startup project resolution falls back to the current project
-/// when the persisted active path is stale.
-#[tokio::test]
-async fn resolve_startup_active_project_id_falls_back_for_missing_stored_project() {
-    // Arrange
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let current_project_path = PathBuf::from("/workspace/current");
-    let missing_project_path = PathBuf::from("/workspace/missing");
-    let current_project_id = database
-        .projects()
-        .upsert_project(
-            &current_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to persist current project");
-    let missing_project_id = database
-        .projects()
-        .upsert_project(
-            &missing_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to persist missing project");
-    database
-        .settings()
-        .set_active_project_id(missing_project_id)
-        .await
-        .expect("failed to persist active project id");
-    let fs_client = mock_fs_client_with_directories(HashSet::from([current_project_path]));
-
-    // Act
-    let resolved_project_id =
-        AppStartup::resolve_startup_active_project_id(&database, &fs_client, current_project_id)
-            .await;
-
-    // Assert
-    assert_eq!(resolved_project_id, current_project_id);
-}
-
-/// Verifies visible project filtering removes missing directories,
-/// non-git folders, and agentty-managed worktree paths.
-#[test]
-fn visible_project_rows_excludes_missing_nongit_and_worktree_projects() {
-    // Arrange
-    let visible_project_path = PathBuf::from("/workspace/visible");
-    let nongit_project_path = PathBuf::from("/workspace/nongit");
-    let missing_project_path = PathBuf::from("/workspace/missing");
-    let session_worktree_root = Path::new("/workspace/.agentty/wt");
-    let worktree_project_path = session_worktree_root.join("session-a");
-    let project_rows = vec![
-        project_list_row_fixture(1, &visible_project_path),
-        project_list_row_fixture(2, &nongit_project_path),
-        project_list_row_fixture(3, &missing_project_path),
-        project_list_row_fixture(4, &worktree_project_path),
-    ];
-    let fs_client = mock_fs_client_with_directories_and_git_markers(
-        HashSet::from([
-            visible_project_path.clone(),
-            nongit_project_path,
-            worktree_project_path,
-        ]),
-        HashSet::from([visible_project_path.join(".git")]),
-    );
-
-    // Act
-    let visible_rows =
-        AppStartup::visible_project_rows(project_rows, &fs_client, session_worktree_root);
-
-    // Assert
-    assert_eq!(visible_rows.len(), 1);
-    assert_eq!(visible_rows[0].path, visible_project_path.to_string_lossy());
-}
-
-/// Verifies project-item loading uses database rows and filters non-git
-/// folders plus agentty-managed worktree paths before building UI items.
-#[tokio::test]
-async fn load_project_items_with_session_worktree_root_filters_database_rows() {
-    // Arrange
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let visible_project_path = PathBuf::from("/workspace/visible");
-    let nongit_project_path = PathBuf::from("/workspace/nongit");
-    let session_worktree_root = Path::new("/workspace/.agentty/wt");
-    let worktree_project_path = session_worktree_root.join("session-a");
-    database
-        .projects()
-        .upsert_project(
-            &visible_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to persist visible project");
-    database
-        .projects()
-        .upsert_project(&nongit_project_path.to_string_lossy(), None)
-        .await
-        .expect("failed to persist nongit project");
-    database
-        .projects()
-        .upsert_project(
-            &worktree_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to persist worktree project");
-    let fs_client = mock_fs_client_with_directories_and_git_markers(
-        HashSet::from([
-            visible_project_path.clone(),
-            nongit_project_path,
-            worktree_project_path,
-        ]),
-        HashSet::from([visible_project_path.join(".git")]),
-    );
-
-    // Act
-    let project_items = AppStartup::load_project_items_with_session_worktree_root(
+    let context = AppStartup::load_startup_project_context(
         &database,
-        &fs_client,
-        session_worktree_root,
+        &git,
+        &fs,
+        Path::new("/saved/repo"),
+        None,
+        project_id,
+    )
+    .await
+    .expect("startup");
+    // Assert
+    assert_eq!(context.initial_tab, Tab::Projects);
+    assert_eq!(context.project_items.len(), 1);
+    assert_eq!(context.project_items[0].project.id, project_id);
+}
+
+/// Startup honors the launch project even if a different saved project exists.
+#[tokio::test]
+async fn startup_uses_launch_project_without_probing_saved_paths() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db");
+    let current = database
+        .projects()
+        .upsert_project("/launch/repo", Some("main".to_string()))
+        .await
+        .expect("launch");
+    let stored = database
+        .projects()
+        .upsert_project("/protected/Documents/repo", Some("old".to_string()))
+        .await
+        .expect("stored");
+    database
+        .settings()
+        .set_active_project_id(stored)
+        .await
+        .expect("active");
+    let mut git = MockGitClient::new();
+    git.expect_current_upstream_reference()
+        .once()
+        .withf(|path| path == Path::new("/launch/repo"))
+        .returning(|_| Box::pin(async { Ok("origin/main".to_string()) }));
+    let git: Arc<dyn GitClient> = Arc::new(git);
+    let mut fs = MockFsClient::new();
+    fs.expect_exists()
+        .once()
+        .withf(|path| path == Path::new("/launch/repo/.git"))
+        .return_const(true);
+    // Act
+    let context = AppStartup::load_startup_project_context(
+        &database,
+        &git,
+        &fs,
+        Path::new("/launch/repo"),
+        Some("main".to_string()),
+        current,
+    )
+    .await
+    .expect("context");
+    // Assert
+    assert_eq!(context.active_project_id, current);
+    assert_eq!(context.startup_working_dir, Path::new("/launch/repo"));
+    assert_eq!(context.project_items.len(), 2);
+}
+
+/// Catalog rows are database snapshots, including currently inaccessible paths.
+#[tokio::test]
+async fn project_catalog_preserves_saved_paths_and_excludes_managed_worktrees() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db");
+    database
+        .projects()
+        .upsert_project("/protected/Documents/repo", None)
+        .await
+        .expect("saved");
+    database
+        .projects()
+        .upsert_project("/managed/wt/session", Some("main".to_string()))
+        .await
+        .expect("worktree");
+    // Act
+    let rows = AppStartup::load_project_items_with_session_worktree_root(
+        &database,
+        Path::new("/managed/wt"),
     )
     .await;
-
     // Assert
-    assert_eq!(project_items.len(), 1);
-    assert_eq!(project_items[0].project.path, visible_project_path);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].project.path, Path::new("/protected/Documents/repo"));
 }
 
-/// Verifies home catalog discovery finds repository roots while excluding
-/// agentty session worktrees.
-#[test]
-fn discover_home_project_paths_includes_git_repos_and_excludes_session_worktrees() {
+#[tokio::test]
+async fn startup_tab_uses_saved_choice_or_first_run_projects() {
     // Arrange
-    let temp_dir = tempdir().expect("failed to create temp dir");
-    let home_directory = temp_dir.path();
-    let project_a_path = home_directory.join("project-a");
-    let project_b_path = home_directory.join("project-b");
-    let session_worktree_root = home_directory.join(".agentty").join(AGENTTY_WT_DIR);
-    let session_project_path = session_worktree_root.join("session-a");
-    fs::create_dir_all(project_a_path.join(".git")).expect("failed to create first repo");
-    fs::create_dir_all(project_b_path.join(".git")).expect("failed to create second repo");
-    fs::create_dir_all(session_project_path.join(".git"))
-        .expect("failed to create session worktree repo");
-
-    // Act
-    let discovered_project_paths =
-        AppStartup::discover_home_project_paths(home_directory, &session_worktree_root);
-
-    // Assert
+    let database = AppRepositories::in_memory().await.expect("db");
+    // Act / Assert
     assert_eq!(
-        discovered_project_paths,
-        vec![project_a_path, project_b_path]
+        AppStartup::load_startup_tab(&database, false).await,
+        Tab::Projects
+    );
+    assert_eq!(
+        AppStartup::load_startup_tab(&database, true).await,
+        Tab::Sessions
     );
 }
 
-impl AppStartup {
-    /// Returns git repository roots discovered under the user home directory.
-    ///
-    /// Tests call through the real project-discovery implementation so app
-    /// orchestration no longer owns raw filesystem walking logic.
-    pub(crate) fn discover_home_project_paths(
-        home_directory: &Path,
-        session_worktree_root: &Path,
-    ) -> Vec<PathBuf> {
-        crate::infra::project_discovery::discover_home_project_paths(
-            home_directory,
-            session_worktree_root,
-        )
+#[tokio::test]
+async fn catalog_visibility_batch_preserves_order_and_legacy_rows() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("db");
+    let mut expected_ids = Vec::new();
+    for index in 0..200 {
+        let id = database
+            .projects()
+            .upsert_project(&format!("/saved/repo-{index:03}"), None)
+            .await
+            .expect("project");
+        if index % 3 == 0 {
+            database
+                .settings()
+                .upsert_project_setting(id, SettingName::ProjectCatalogVisible, "false")
+                .await
+                .expect("hidden");
+        } else {
+            expected_ids.push(id);
+            if index % 3 == 1 {
+                database
+                    .settings()
+                    .upsert_project_setting(id, SettingName::ProjectCatalogVisible, "true")
+                    .await
+                    .expect("visible");
+            }
+        }
     }
+    // Act
+    let rows = AppStartup::load_project_items_with_session_worktree_root(
+        &database,
+        Path::new("/managed/wt"),
+    )
+    .await;
+    // Assert
+    assert_eq!(
+        rows.iter().map(|row| row.project.id).collect::<Vec<_>>(),
+        expected_ids
+    );
 }
