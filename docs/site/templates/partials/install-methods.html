@@ -1,9 +1,12 @@
 {% set npm_install_command = "npm install -g agentty" %}
+{% set bun_install_command = "bun add --global agentty" %}
+{% set pnpm_install_command = "pnpm add --global agentty" %}
 {% set npx_install_command = "npx agentty" %}
 {% set cargo_install_command = "cargo install agentty" %}
 {% set shell_install_command = "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/agentty-xyz/agentty/releases/latest/download/agentty-installer.sh | sh" %}
 <p>
-    <strong>npm (recommended)</strong> supports automatic updates.
+    <strong>npm (recommended), Bun, and pnpm</strong> global installs support automatic updates
+    when Agentty can identify the original package manager. These packages require Node.js on your <code>PATH</code>.
 </p>
 <div class="install-wrapper">
     <!-- Negative bottom margin pulls tabs down so their bottom border overlaps
@@ -15,6 +18,20 @@
                 aria-controls="install-command"
                 aria-selected="true"
                 data-cmd="{{ npm_install_command }}">npm</button>
+        <button class="install-tab"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="false"
+                tabindex="-1"
+                data-cmd="{{ bun_install_command }}">Bun</button>
+        <button class="install-tab"
+                type="button"
+                role="tab"
+                aria-controls="install-command"
+                aria-selected="false"
+                tabindex="-1"
+                data-cmd="{{ pnpm_install_command }}">pnpm</button>
         <button class="install-tab"
                 type="button"
                 role="tab"
@@ -60,6 +77,14 @@
     </style>
     <details class="install-fallback">
         <summary>Other installation methods</summary>
+        <p>
+            <strong>Bun</strong>
+        </p>
+        <pre><code>{{ bun_install_command }}</code></pre>
+        <p>
+            <strong>pnpm</strong>
+        </p>
+        <pre><code>{{ pnpm_install_command }}</code></pre>
         <p>
             <strong>npx (run without installing)</strong>
         </p>

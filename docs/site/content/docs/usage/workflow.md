@@ -602,9 +602,14 @@ after restoring the terminal and limits final export flushing to three seconds.
 
 ## Auto-Update
 
-<a id="usage-auto-update"></a> Agentty checks npm at startup and hourly, then installs
-new versions in the background. The status bar reports installation progress, a request
-to restart after success, or a manual update command after failure.
+<a id="usage-auto-update"></a> Agentty checks the npm registry at startup and hourly.
+For global `npm`, Bun, and `pnpm` installs, it updates through the original package
+manager when exactly one manager's global installation matches the running binary. The
+status bar reports progress and asks you to restart after success.
+
+If the installer cannot be identified, or an update fails, rerun your original
+installation command. Cargo, shell, local, and `npx` installs require manual updates.
+See [Installation](@/docs/getting-started/installation.md) for update commands.
 
 ```bash
 agentty --no-update

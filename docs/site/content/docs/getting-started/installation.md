@@ -15,6 +15,24 @@ and launch your first session.
 
 {{ install_methods() }}
 
+If `pnpm` reports a global bin-directory error, run `pnpm setup`, reopen your terminal,
+and retry.
+
+If package install scripts are blocked, the first launch downloads the binary from
+GitHub Releases. Keep network access available for that launch.
+
+To update manually, use the same method you originally installed with:
+
+| Method | Update command                        |
+| ------ | ------------------------------------- |
+| npm    | `npm install --global agentty@latest` |
+| Bun    | `bun add --global agentty@latest`     |
+| pnpm   | `pnpm add --global agentty@latest`    |
+| Cargo  | `cargo install agentty --locked`      |
+| Shell  | Rerun the shell installer above.      |
+
+With `npx`, run `npx agentty@latest` to use the latest release without a global install.
+
 For Cargo installation on macOS, install Xcode Command Line Tools for native process
 bindings.
 

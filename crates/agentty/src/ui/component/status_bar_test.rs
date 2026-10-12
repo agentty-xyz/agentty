@@ -175,7 +175,7 @@ fn test_project_sync_text_formats_each_terminal_and_progress_phase() {
 #[test]
 fn test_status_bar_render_shows_update_notice_when_available() {
     // Arrange
-    let backend = ratatui::backend::TestBackend::new(100, 1);
+    let backend = ratatui::backend::TestBackend::new(80, 1);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let status_bar =
         StatusBar::new("v0.1.12".to_string()).latest_available_version(Some("v0.1.13".to_string()));
@@ -191,7 +191,7 @@ fn test_status_bar_render_shows_update_notice_when_available() {
     // Assert
     let text = buffer_text(&terminal);
     assert!(text.contains("Agentty v0.1.12"));
-    assert!(text.contains("v0.1.13 version available update with npm i -g agentty@latest"));
+    assert!(text.contains("v0.1.13 available — rerun your original install command"));
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn test_status_bar_render_shows_updating_in_progress() {
     // Assert
     let text = buffer_text(&terminal);
     assert!(text.contains("Updating to v0.1.13..."));
-    assert!(!text.contains("npm i -g agentty@latest"));
+    assert!(!text.contains("rerun your original install command"));
 }
 
 #[test]
@@ -272,7 +272,7 @@ fn test_status_bar_render_keeps_update_state_visible_with_page_fyi() {
 #[test]
 fn test_status_bar_render_shows_manual_hint_on_update_failure() {
     // Arrange
-    let backend = ratatui::backend::TestBackend::new(100, 1);
+    let backend = ratatui::backend::TestBackend::new(80, 1);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     let status_bar = StatusBar::new("v0.1.12".to_string())
         .latest_available_version(Some("v0.1.13".to_string()))
@@ -290,6 +290,6 @@ fn test_status_bar_render_shows_manual_hint_on_update_failure() {
 
     // Assert
     let text = buffer_text(&terminal);
-    assert!(text.contains("npm i -g agentty@latest"));
+    assert!(text.contains("rerun your original install command"));
     assert!(!text.contains("Updating to"));
 }

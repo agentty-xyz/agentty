@@ -1,16 +1,17 @@
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use semver::Version;
 use tempfile::tempdir;
 
 use super::{
-    AGENTTY_NPM_PACKAGE, MockVersionCommandRunner, NPM_REGISTRY_LATEST_URL,
+    AGENTTY_NPM_PACKAGE, MockVersionCommandRunner, NPM_REGISTRY_LATEST_URL, PackageManager,
     RealVersionCommandRunner, VERSION_LOOKUP_COMMAND_TIMEOUT, VERSION_UPDATE_COMMAND_TIMEOUT,
     VersionCommandOutput, VersionError, fetch_latest_npm_version_tag,
     is_newer_than_current_version, latest_npm_version_tag, latest_npm_version_tag_with_runner,
     latest_version_from_result, parse_npm_cli_version_response, parse_registry_latest_response,
-    parse_version, run_npm_update_with_runner, version_tag,
+    parse_version, run_package_update_with_runner, run_update_with_runner, version_tag,
 };
 use crate::infra::version::VersionCommandRunner;
 
@@ -535,7 +536,7 @@ async fn test_run_npm_update_calls_npm_install_global() {
         });
 
     // Act
-    let output = run_npm_update_with_runner(&command_runner)
+    let output = run_package_update_with_runner(PackageManager::Npm, &command_runner)
         .await
         .expect("update should succeed");
 
@@ -562,7 +563,7 @@ async fn test_run_npm_update_preserves_runner_error_without_displaying_stderr() 
         });
 
     // Act
-    let error = run_npm_update_with_runner(&command_runner)
+    let error = run_package_update_with_runner(PackageManager::Npm, &command_runner)
         .await
         .expect_err("should propagate runner error");
 
@@ -589,7 +590,7 @@ async fn test_run_npm_update_preserves_timeout() {
         });
 
     // Act
-    let error = run_npm_update_with_runner(&command_runner)
+    let error = run_package_update_with_runner(PackageManager::Npm, &command_runner)
         .await
         .expect_err("timed-out update should fail");
 
@@ -601,4 +602,191 @@ async fn test_run_npm_update_preserves_timeout() {
             timeout,
         } if command == "npm" && timeout == VERSION_UPDATE_COMMAND_TIMEOUT
     ));
+}
+
+/// Resolves realistic installation links and records only the selected update.
+#[tokio::test]
+async fn updates_only_the_matching_global_manager() {
+    // Arrange
+    for selected in [
+        PackageManager::Npm,
+        PackageManager::Bun,
+        PackageManager::Pnpm,
+    ] {
+        let mut runner = MockVersionCommandRunner::new();
+        runner.expect_canonicalize_path().returning(move |path| {
+            if path == Path::new("/running/agentty") {
+                return Some(path.to_path_buf());
+            }
+            if path == Path::new("/bun/agentty") {
+                return Some(PathBuf::from("/bun/package/run-agentty.js"));
+            }
+            let candidate = match selected {
+                PackageManager::Npm => "/npm/agentty/node_modules/.bin_real/agentty",
+                PackageManager::Bun => "/bun/package/node_modules/.bin_real/agentty",
+                PackageManager::Pnpm => "/pnpm/agentty/node_modules/.bin_real/agentty",
+            };
+
+            (path == Path::new(candidate)).then(|| PathBuf::from("/running/agentty"))
+        });
+        runner
+            .expect_run_command()
+            .times(4)
+            .returning(move |program, args, timeout| {
+                let manager = [
+                    PackageManager::Npm,
+                    PackageManager::Bun,
+                    PackageManager::Pnpm,
+                ]
+                .into_iter()
+                .find(|manager| manager.program() == program)
+                .expect("unexpected program");
+                let stdout = if timeout == VERSION_LOOKUP_COMMAND_TIMEOUT {
+                    let expected = match manager {
+                        PackageManager::Npm => vec!["root", "--global"],
+                        PackageManager::Bun => vec!["pm", "bin", "--global"],
+                        PackageManager::Pnpm => vec!["list", "--global", "--depth", "0", "--json"],
+                    };
+                    assert_eq!(args, expected);
+                    if manager == PackageManager::Pnpm {
+                        r#"[{"dependencies":{"agentty":{"path":"/pnpm/agentty"}}}]"#.to_string()
+                    } else {
+                        format!("/{program}\n")
+                    }
+                } else {
+                    assert_eq!(manager, selected);
+                    assert_eq!(timeout, VERSION_UPDATE_COMMAND_TIMEOUT);
+                    let expected = match selected {
+                        PackageManager::Npm => vec!["i", "-g", "agentty@latest"],
+                        PackageManager::Bun | PackageManager::Pnpm => {
+                            vec!["add", "-g", "agentty@latest"]
+                        }
+                    };
+                    assert_eq!(args, expected);
+                    "updated".to_string()
+                };
+
+                Ok(VersionCommandOutput {
+                    status: "0".to_string(),
+                    stderr: String::new(),
+                    stdout,
+                    success: true,
+                })
+            });
+
+        // Act
+        let result = run_update_with_runner(Some(Path::new("/running/agentty")), &runner).await;
+
+        // Assert
+        assert_eq!(result.expect("selected installer should update"), "updated");
+    }
+}
+
+#[tokio::test]
+async fn missing_executable_requires_manual_update_without_commands() {
+    // Arrange
+    let mut runner = MockVersionCommandRunner::new();
+    runner.expect_canonicalize_path().return_const(None);
+    runner.expect_run_command().times(0);
+
+    // Act
+    let missing = run_update_with_runner(None, &runner).await;
+    let unresolved = run_update_with_runner(Some(Path::new("/missing")), &runner).await;
+
+    // Assert
+    assert!(matches!(&missing, Err(VersionError::UnknownInstallation)));
+    assert!(
+        missing
+            .expect_err("manual update required")
+            .to_string()
+            .contains("pnpm add -g agentty@latest")
+    );
+    assert!(matches!(unresolved, Err(VersionError::UnknownInstallation)));
+}
+
+#[tokio::test]
+async fn uncertain_installations_never_run_an_install_command() {
+    // Arrange
+    for case in [
+        "unmatched",
+        "ambiguous",
+        "spawn",
+        "exit",
+        "relative",
+        "missing_launcher",
+        "root_launcher",
+        "empty_pnpm",
+        "relative_pnpm",
+    ] {
+        let mut runner = MockVersionCommandRunner::new();
+        runner.expect_canonicalize_path().returning(move |path| {
+            if path == Path::new("/running/agentty") {
+                return Some(path.to_path_buf());
+            }
+            match case {
+                "ambiguous" => Some(PathBuf::from("/running/agentty")),
+                "root_launcher" if path == Path::new("/global/agentty") => Some(PathBuf::from("/")),
+                _ => None,
+            }
+        });
+        runner
+            .expect_run_command()
+            .times(3)
+            .returning(move |program, args, timeout| {
+                assert_eq!(timeout, VERSION_LOOKUP_COMMAND_TIMEOUT);
+                assert!(args.contains(&"--global".to_string()));
+                assert!(!args.contains(&"agentty@latest".to_string()));
+                if case == "spawn" {
+                    return Err(VersionError::CommandSpawn {
+                        command: program.to_string(),
+                        message: "missing".to_string(),
+                    });
+                }
+
+                Ok(VersionCommandOutput {
+                    status: "1".to_string(),
+                    stderr: String::new(),
+                    stdout: if case == "relative" {
+                        "relative"
+                    } else if program == "pnpm" && case == "ambiguous" {
+                        r#"[{"dependencies":{"agentty":{"path":"/global"}}}]"#
+                    } else if program == "pnpm" && case == "empty_pnpm" {
+                        "[{}]"
+                    } else if program == "pnpm" && case == "relative_pnpm" {
+                        r#"[{"dependencies":{"agentty":{"path":"relative"}}}]"#
+                    } else {
+                        "/global"
+                    }
+                    .to_string(),
+                    success: case != "exit",
+                })
+            });
+
+        // Act
+        let result = run_update_with_runner(Some(Path::new("/running/agentty")), &runner).await;
+
+        // Assert
+        assert!(
+            matches!(result, Err(VersionError::UnknownInstallation)),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn real_runner_resolves_existing_paths_and_rejects_missing_paths() {
+    // Arrange
+    let directory = tempdir().expect("fixture directory");
+    let runner = RealVersionCommandRunner;
+
+    // Act
+    let existing = runner.canonicalize_path(directory.path());
+    let missing = runner.canonicalize_path(&directory.path().join("missing"));
+
+    // Assert
+    assert_eq!(
+        existing,
+        Some(directory.path().canonicalize().expect("canonical path"))
+    );
+    assert_eq!(missing, None);
 }

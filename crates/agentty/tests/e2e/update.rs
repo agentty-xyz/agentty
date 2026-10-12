@@ -1,7 +1,8 @@
 //! Automatic Agentty update E2E tests.
 
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 
+use assert_cmd::cargo::cargo_bin;
 use testty::assertion;
 use testty::region::Region;
 
@@ -29,6 +30,10 @@ if [ "$1" = "view" ] && [ "$2" = "agentty" ]; then
   fi
   exit 0
 fi
+if [ "$1" = "root" ] && [ "$2" = "--global" ]; then
+  printf '%s' "$AGENTTY_ROOT/global-node-modules"
+  exit 0
+fi
 if [ "$1" = "i" ] && [ "$2" = "-g" ] && [ "$3" = "agentty@latest" ]; then
   sleep 4
   exit 0
@@ -42,6 +47,12 @@ exit 1
     // sufficient.
     std::fs::set_permissions(&npm_path, std::fs::Permissions::from_mode(0o700))?;
 
+    for manager in ["bun", "pnpm"] {
+        let path = env.stub_bin.join(manager);
+        std::fs::write(&path, "#!/bin/sh\nexit 1\n")?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+
     Ok(())
 }
 
@@ -49,7 +60,14 @@ exit 1
 /// fixture before the application launches.
 async fn setup_periodic_agentty_update(env: &BuilderEnv) -> E2eResult {
     common::seed_active_project_setting(env).await?;
-    install_periodic_agentty_update_stub(env)
+    install_periodic_agentty_update_stub(env)?;
+    let binary_directory = env
+        .agentty_root
+        .join("global-node-modules/agentty/node_modules/.bin_real");
+    std::fs::create_dir_all(&binary_directory)?;
+    symlink(cargo_bin("agentty"), binary_directory.join("agentty"))?;
+
+    Ok(())
 }
 
 /// Verify that a newer version discovered on a periodic tick visibly updates
@@ -99,6 +117,43 @@ async fn test_periodic_auto_update() -> E2eResult {
                         &updating_frame,
                         "Updating to v999.0.0...",
                         &updating_region,
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// Unknown installation provenance displays manual guidance in the terminal.
+#[tokio::test]
+async fn test_unknown_installation_manual_update() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("unknown_installation_manual_update")
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                common::seed_active_project_setting(env).await?;
+                install_periodic_agentty_update_stub(env)
+            })
+        })
+        .env(VERSION_CHECK_INTERVAL_MS_ENV_VAR, "1000")
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .wait_for_text("rerun your original install command", 15000)
+                    .capture_labeled("manual-update", "Original installer required")
+            },
+            |frame, _| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "v999.0.0 available", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "rerun your original install command",
+                        &full,
                     );
                 })
             },

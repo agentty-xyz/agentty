@@ -11,7 +11,7 @@
     '$pageview', 'get_started_clicked', 'github_clicked',
     'install_method_selected', 'install_command_copied'
   ]);
-  var allowedMethods = new Set(['npm', 'npx', 'cargo', 'sh']);
+  var allowedMethods = new Set(['npm', 'Bun', 'pnpm', 'npx', 'cargo', 'sh']);
   var choice;
 
   var allowedHostname = location.hostname === 'agentty.xyz'
