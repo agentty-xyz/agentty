@@ -547,14 +547,14 @@ async fn seed_aged_review_ready_session(
     Ok(())
 }
 
-/// Verify that session chat shows when the session started and its age only
-/// in the footer, in view and reply modes.
+/// Verify that session age stays in the footer while viewing, composing,
+/// and focusing the chat transcript.
 #[tokio::test]
-async fn session_chat_shows_session_start_and_age() -> E2eResult {
+async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("session_chat_shows_session_start_and_age")
+    FeatureTest::new("session_chat_keeps_session_age_across_focus_changes")
         .with_git()
-        .with_terminal_size(180, 30)
+        .with_terminal_size(80, 30)
         .setup(|env| Box::pin(async move { seed_aged_review_ready_session(env).await }))
         .run(
             |scenario| {
@@ -562,25 +562,49 @@ async fn session_chat_shows_session_start_and_age() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Started 2026-06-27 20:00 (3d 4h ago)", 5000)
-                    .capture_labeled("view", "Session start and age while viewing")
+                    .wait_for_text("Started 3d 4h ago", 5000)
+                    .capture_labeled("view", "Session age while viewing")
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
-                    .capture_labeled("reply", "Session start and age while replying")
+                    .capture_labeled("reply", "Session age while replying")
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
+                    .capture_labeled("chat", "Session age with chat focus")
+                    .press_key("Tab")
+                    .wait_for_text("Enter: send", 5000)
+                    .capture_labeled("input", "Session age after returning to input")
             },
             |frame, report| {
                 Box::pin(async move {
                     let view_frame = common::frame_from_capture(&report.captures[0]);
-                    for (captured_frame, footer_text) in
-                        [(&view_frame, "q: back"), (frame, "Enter: send")]
-                    {
+                    let reply_frame = common::frame_from_capture(&report.captures[1]);
+                    let chat_frame = common::frame_from_capture(&report.captures[2]);
+                    for (captured_frame, footer_text) in [
+                        (&view_frame, "q: back"),
+                        (&reply_frame, "Enter: send"),
+                        (&chat_frame, "j/k: scroll"),
+                        (frame, "Enter: send"),
+                    ] {
                         let label_rows: Vec<String> = (0..captured_frame.rows())
                             .map(|row| captured_frame.row_text(row))
-                            .filter(|row| row.contains("Started 2026-06-27 20:00 (3d 4h ago)"))
+                            .filter(|row| row.contains("Started 3d 4h ago"))
                             .collect();
                         assert_eq!(label_rows.len(), 1, "label rows: {label_rows:#?}");
-                        assert!(label_rows[0].contains(footer_text));
+                        assert!(label_rows[0].contains("╰"));
+                        assert!(label_rows[0].trim_end().ends_with("╯"));
+                        assert!(
+                            (0..captured_frame.rows())
+                                .any(|row| captured_frame.row_text(row).contains(footer_text))
+                        );
+                        if footer_text == "Enter: send" {
+                            assert!(
+                                (0..captured_frame.rows()).any(|row| captured_frame
+                                    .row_text(row)
+                                    .contains("Ctrl+V/Alt+V"))
+                            );
+                        }
                         assert!(!label_rows[0].contains("Processes:"));
+                        assert!(!label_rows[0].contains("2026-"));
                     }
                 })
             },
