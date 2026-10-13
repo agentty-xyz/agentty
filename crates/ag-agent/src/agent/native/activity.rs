@@ -44,9 +44,11 @@ impl ActivityBridge {
             attempt_id: self.attempt_id.clone(),
             exit_code: None,
             id: tool_call_id.to_string(),
+            input: None,
             kind: activity_kind(&name),
             name,
             observed_at: SystemTime::now(),
+            output: None,
             parent_id: None,
             status,
         }));

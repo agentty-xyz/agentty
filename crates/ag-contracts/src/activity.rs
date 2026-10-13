@@ -1,13 +1,13 @@
-//! Provider-observed activity, independent of telemetry content capture.
+//! Provider-observed activity for display, independent of telemetry capture.
 
 use std::time::SystemTime;
 
-/// A bounded, content-free snapshot of one observed provider operation.
+/// A bounded display snapshot of one observed provider operation.
 ///
 /// Match updates by `(attempt_id, id)`. Retries use new attempt identities.
 /// Names describe tools or explicitly invoked skills, never inferred file
-/// reads. Raw arguments and outputs are intentionally excluded from this
-/// stream.
+/// reads. Optional input and output previews are display-only: they must not
+/// be replayed to providers or implicitly exported as telemetry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ActivityEvent {
     /// Unique provider attempt identity, including retries and repairs.
@@ -16,12 +16,16 @@ pub struct ActivityEvent {
     pub exit_code: Option<i64>,
     /// Provider operation identity within the attempt.
     pub id: String,
+    /// Bounded command or argument preview, when reported by the provider.
+    pub input: Option<String>,
     /// Provider-independent operation category.
     pub kind: ActivityKind,
     /// Bounded tool or skill identity suitable for display.
     pub name: String,
     /// Time this snapshot was observed by the adapter.
     pub observed_at: SystemTime,
+    /// Bounded result preview, updated as output arrives when supported.
+    pub output: Option<String>,
     /// Provider parent operation identity, scoped to the same attempt.
     pub parent_id: Option<String>,
     /// Latest observed lifecycle state.

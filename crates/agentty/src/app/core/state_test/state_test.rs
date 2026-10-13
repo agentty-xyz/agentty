@@ -855,3 +855,57 @@ async fn apply_app_events_refresh_projects_reloads_project_active_session_count(
         .map_or(0, |item| item.active_session_count);
     assert_eq!(updated_active_count, 0);
 }
+
+#[test]
+fn app_event_batch_keeps_latest_live_activity_snapshot_and_clear() {
+    // Arrange
+    let mut batch = AppEventBatch::default();
+
+    // Act
+    for activity in [Some("running".into()), Some("completed".into()), None] {
+        batch.collect_event(AppEvent::SessionActivityUpdated {
+            activity,
+            session_id: "session".into(),
+        });
+    }
+    batch.collect_event(AppEvent::SessionActivityUpdated {
+        activity: Some("other".into()),
+        session_id: "other".into(),
+    });
+
+    // Assert
+    assert_eq!(batch.session_activity_updates.len(), 2);
+    assert_eq!(batch.session_activity_updates.get("session"), Some(&None));
+    assert_eq!(
+        batch.session_activity_updates.get("other"),
+        Some(&Some("other".into()))
+    );
+}
+
+#[test]
+fn app_event_batch_consumes_deferred_activity_before_clear() {
+    // Arrange
+    let mut batch = AppEventBatch::default();
+    let activity = crate::app::session::LiveActivity::default();
+
+    // Act
+    batch.collect_event(AppEvent::SessionActivityReady {
+        activity,
+        session_id: "session".into(),
+    });
+
+    // Assert
+    assert_eq!(
+        batch.session_activity_updates.get("session"),
+        Some(&Some(String::new()))
+    );
+
+    // Act
+    batch.collect_event(AppEvent::SessionActivityUpdated {
+        activity: None,
+        session_id: "session".into(),
+    });
+
+    // Assert
+    assert_eq!(batch.session_activity_updates.get("session"), Some(&None));
+}

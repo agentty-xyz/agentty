@@ -22,7 +22,7 @@ use crate::agent::app_server::gemini::lifecycle::{
     start_session,
 };
 use crate::agent::app_server::stdio_transport::MockAppServerRuntimeTransport;
-use crate::app_server::AppServerTurnRequest;
+use crate::app_server::{AppServerStreamEvent, AppServerTurnRequest};
 use crate::app_server_transport;
 use crate::telemetry::TRACER_PROVIDER_LOCK;
 
@@ -56,7 +56,7 @@ async fn gemini_transport_traces_tool_lifecycle_for_the_current_session() {
     transport.expect_next_stdout().times(4).returning(move || {
         let line = if let Some((session, status)) = updates.lock().expect("updates").pop() {
             serde_json::json!({"method": "session/update", "params": {"sessionId": session, "update": {
-                "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": status, "kind": "execute", "title": "private title",
+                "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": status, "kind": "execute", "title": "private title", "rawInput":{"command":"pwd"}, "rawOutput":"project",
             }}})
         } else {
             serde_json::json!({"id": prompt_id.lock().expect("id").clone(), "result": {"response": "done"}})
@@ -64,7 +64,7 @@ async fn gemini_transport_traces_tool_lifecycle_for_the_current_session() {
 
         Box::pin(async move { Ok(Some(line)) })
     });
-    let (stream_tx, _stream_rx) = mpsc::unbounded_channel();
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel();
 
     // Act
     let result = Span::root("agent.attempt", Vec::new())
@@ -97,6 +97,17 @@ async fn gemini_transport_traces_tool_lifecycle_for_the_current_session() {
             .contains(&KeyValue::new("agentty.outcome", "completed"))
     );
     assert!(!format!("{spans:?}").contains("private"));
+    let activity = std::iter::from_fn(|| stream_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppServerStreamEvent::Activity(event) => Some(event),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(activity.len(), 2);
+    assert_eq!(activity[0].input.as_deref(), Some("pwd"));
+    assert_eq!(activity[1].output.as_deref(), Some("project"));
+    assert_eq!(activity[1].status, ag_contracts::ActivityStatus::Completed);
+    assert_eq!(activity[0].attempt_id, activity[1].attempt_id);
 }
 
 fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTurnRequest {

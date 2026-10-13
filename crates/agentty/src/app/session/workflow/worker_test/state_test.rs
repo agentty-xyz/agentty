@@ -304,9 +304,11 @@ fn activity_event() -> ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
         id: "call".into(),
+        input: None,
         kind: ActivityKind::Tool,
         name: "Read".into(),
         observed_at: std::time::SystemTime::UNIX_EPOCH,
+        output: None,
         parent_id: None,
         status: ActivityStatus::Completed,
     }
@@ -340,4 +342,56 @@ async fn test_consume_activity_survives_progress_coalescing() {
 
     // Assert
     assert_eq!(activity.summary(), "Tools: Read ×2\n");
+}
+
+#[tokio::test]
+async fn test_activity_is_published_before_the_turn_stream_closes() {
+    // Arrange
+    let (sender, receiver) = mpsc::unbounded_channel();
+    let (app_sender, mut app_receiver) = mpsc::unbounded_channel();
+    let consumer = tokio::spawn(consume_turn_events(
+        receiver,
+        app_sender,
+        "session".into(),
+        Arc::new(Mutex::new(None)),
+    ));
+
+    // Act
+    sender
+        .send(TurnEvent::Activity(ActivityEvent {
+            status: ActivityStatus::Running,
+            ..activity_event()
+        }))
+        .expect("send");
+    let update = app_receiver.recv().await.expect("live update");
+
+    // Assert
+    let AppEvent::SessionActivityReady {
+        activity: snapshot,
+        session_id,
+    } = update
+    else {
+        unreachable!("expected live activity");
+    };
+    assert_eq!(session_id.as_str(), "session");
+    assert_eq!(snapshot.snapshot(), "… Read\n");
+    assert!(!consumer.is_finished());
+
+    // Act
+    sender
+        .send(TurnEvent::ThoughtDelta("thinking".into()))
+        .expect("send");
+    sender
+        .send(TurnEvent::Activity(activity_event()))
+        .expect("send");
+    drop(sender);
+    let activity = consumer.await.expect("consumer");
+    let remaining = std::iter::from_fn(|| app_receiver.try_recv().ok()).collect::<Vec<_>>();
+
+    // Assert
+    assert!(remaining.iter().any(|event| matches!(event,
+        AppEvent::SessionActivityReady { activity, session_id }
+            if session_id.as_str() == "session" && activity.snapshot() == "✓ Read\n"
+    )));
+    assert_eq!(activity.summary(), "Tools: Read ×1\n");
 }

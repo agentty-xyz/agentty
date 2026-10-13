@@ -379,9 +379,11 @@ fn activity_event(status: ActivityStatus) -> ActivityEvent {
         attempt_id: "attempt".into(),
         exit_code: None,
         id: "call".into(),
+        input: None,
         kind: ActivityKind::Tool,
         name: "read_file".into(),
         observed_at: SystemTime::UNIX_EPOCH,
+        output: None,
         parent_id: Some("parent".into()),
         status,
     }

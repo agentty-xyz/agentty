@@ -477,6 +477,7 @@ async fn append_turn_activity(context: &PostTurnContext, activity: &super::activ
         },
     )
     .await;
+    activity.clear_live(&context.app_event_tx, &context.session_id);
 }
 
 /// Persists the successful turn payload, emits the reducer projection, and

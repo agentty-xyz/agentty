@@ -7,11 +7,12 @@ use ag_contracts::{ActivityEvent, ActivityKind, ActivityStatus};
 use ag_session::AgentKind;
 use serde_json::Value;
 
+use super::activity_content::{ActivityDetails, append_output};
+
 const MAX_ACTIVITIES: usize = 512;
 
-/// Emits at most a start and terminal snapshot for each operation in an
-/// attempt. Dropping the attempt settles unfinished calls without claiming
-/// success.
+/// Emits changed lifecycle and content snapshots for each operation.
+/// Dropping the attempt settles unfinished calls without claiming success.
 pub(crate) struct ActivityObserver {
     attempt_id: String,
     calls: BTreeMap<String, ActivityEvent>,
@@ -39,7 +40,9 @@ impl ActivityObserver {
         match kind {
             AgentKind::Codex => self.codex(payload),
             AgentKind::Claude => self.claude(payload),
-            AgentKind::Gemini | AgentKind::Antigravity | AgentKind::Harness => {}
+            AgentKind::Gemini => self.gemini(payload),
+            AgentKind::Antigravity => self.antigravity(payload),
+            AgentKind::Harness => {}
         }
     }
 
@@ -59,6 +62,11 @@ impl ActivityObserver {
         let completed = match payload.get("method").and_then(Value::as_str) {
             Some("item/started") => false,
             Some("item/completed") => true,
+            Some("item/commandExecution/outputDelta") => {
+                self.codex_output(payload);
+
+                return;
+            }
             _ => return,
         };
         if let Some(item) = payload.pointer("/params/item") {
@@ -115,7 +123,176 @@ impl ActivityObserver {
             &name,
             None,
             status,
-            item.get("exitCode").and_then(Value::as_i64),
+            ActivityDetails::new(
+                item.get("command")
+                    .or_else(|| item.get("arguments"))
+                    .or_else(|| item.get("query")),
+                item.get("aggregatedOutput")
+                    .filter(|value| !value.is_null())
+                    .or_else(|| item.get("result").filter(|value| !value.is_null()))
+                    .or_else(|| item.get("contentItems").filter(|value| !value.is_null()))
+                    .or_else(|| item.get("error")),
+                item.get("exitCode").and_then(Value::as_i64),
+            ),
+        );
+    }
+
+    fn codex_output(&mut self, payload: &Value) {
+        let Some(id) = payload.pointer("/params/itemId").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(delta) = payload.pointer("/params/delta").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(previous) = self.calls.get(id) else {
+            return;
+        };
+        if previous.status != ActivityStatus::Running {
+            return;
+        }
+        let output = append_output(previous.output.as_deref(), delta);
+        self.record(
+            id,
+            ActivityKind::Command,
+            "shell",
+            None,
+            ActivityStatus::Running,
+            ActivityDetails {
+                output: Some(output),
+                ..ActivityDetails::default()
+            },
+        );
+    }
+
+    fn gemini(&mut self, payload: &Value) {
+        if payload.get("method").and_then(Value::as_str) != Some("session/update") {
+            return;
+        }
+        let Some(update) = payload.pointer("/params/update") else {
+            return;
+        };
+        if !matches!(
+            update.get("sessionUpdate").and_then(Value::as_str),
+            Some("tool_call" | "tool_call_update")
+        ) {
+            return;
+        }
+        let Some(id) = update.get("toolCallId").and_then(Value::as_str) else {
+            return;
+        };
+        let kind = match update.get("kind").and_then(Value::as_str) {
+            Some("execute") => ActivityKind::Command,
+            Some(_) => ActivityKind::Tool,
+            None => self
+                .calls
+                .get(id)
+                .map_or(ActivityKind::Tool, |event| event.kind),
+        };
+        let name = update
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                if self.calls.contains_key(id) {
+                    "tool"
+                } else {
+                    update.get("kind").and_then(Value::as_str).unwrap_or("tool")
+                }
+            });
+        let name = if name == "execute" { "shell" } else { name };
+        let status = match update.get("status").and_then(Value::as_str) {
+            Some("completed") => ActivityStatus::Completed,
+            Some("failed") => ActivityStatus::Failed,
+            Some("cancelled" | "canceled") => ActivityStatus::Interrupted,
+            Some(_) => ActivityStatus::Running,
+            None => self
+                .calls
+                .get(id)
+                .map_or(ActivityStatus::Running, |event| event.status),
+        };
+        self.record(
+            id,
+            kind,
+            name,
+            None,
+            status,
+            ActivityDetails::new(
+                update
+                    .get("rawInput")
+                    .filter(|value| !value.is_null())
+                    .or_else(|| {
+                        self.calls
+                            .get(id)
+                            .and_then(|event| event.input.as_ref())
+                            .is_none()
+                            .then(|| update.get("title"))
+                            .flatten()
+                    }),
+                update
+                    .get("rawOutput")
+                    .filter(|value| !value.is_null())
+                    .or_else(|| update.get("content")),
+                update
+                    .pointer("/rawOutput/exitCode")
+                    .and_then(Value::as_i64),
+            ),
+        );
+    }
+
+    fn antigravity(&mut self, payload: &Value) {
+        if payload.get("event").and_then(Value::as_str) != Some("step_update") {
+            return;
+        }
+        let Some(step) = payload.get("step_update") else {
+            return;
+        };
+        if !step
+            .get("step_type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("tool"))
+        {
+            return;
+        }
+        let Some(index) = step.get("step_index").and_then(Value::as_u64) else {
+            return;
+        };
+        let info = step.get("tool_info").unwrap_or(step);
+        let name = info
+            .get("name")
+            .or_else(|| step.get("tool_name"))
+            .and_then(Value::as_str)
+            .unwrap_or("tool");
+        let completed = step
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(|state| state.eq_ignore_ascii_case("DONE"));
+        let exit_code = info.get("exit_code").and_then(Value::as_i64);
+        let status = if info.get("error").is_some_and(|error| !error.is_null())
+            || (completed && exit_code.is_some_and(|code| code != 0))
+        {
+            ActivityStatus::Failed
+        } else if completed {
+            ActivityStatus::Completed
+        } else {
+            ActivityStatus::Running
+        };
+        let kind = if name == "run_command" {
+            ActivityKind::Command
+        } else {
+            ActivityKind::Tool
+        };
+        self.record(
+            &index.to_string(),
+            kind,
+            name,
+            None,
+            status,
+            ActivityDetails::new(
+                info.get("parameters"),
+                info.get("output")
+                    .filter(|value| !value.is_null())
+                    .or_else(|| info.get("error")),
+                exit_code,
+            ),
         );
     }
 
@@ -159,7 +336,14 @@ impl ActivityObserver {
                     } else {
                         (ActivityKind::Tool, name)
                     };
-                    self.record(id, kind, name, parent, ActivityStatus::Running, None);
+                    self.record(
+                        id,
+                        kind,
+                        name,
+                        parent,
+                        ActivityStatus::Running,
+                        ActivityDetails::new(block.get("input"), None, None),
+                    );
                 }
                 Some("tool_result") => {
                     let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
@@ -170,7 +354,14 @@ impl ActivityObserver {
                     } else {
                         ActivityStatus::Completed
                     };
-                    self.record(id, ActivityKind::Tool, "tool", parent, status, None);
+                    self.record(
+                        id,
+                        ActivityKind::Tool,
+                        "tool",
+                        parent,
+                        status,
+                        ActivityDetails::new(None, block.get("content"), None),
+                    );
                 }
                 _ => {}
             }
@@ -184,42 +375,56 @@ impl ActivityObserver {
         name: &str,
         parent: Option<&str>,
         status: ActivityStatus,
-        exit_code: Option<i64>,
+        details: ActivityDetails,
     ) {
         if !Self::valid_id(id) || self.excluded_ids.contains(id) {
             return;
         }
         let event = if let Some(previous) = self.calls.get(id) {
-            if previous.status != ActivityStatus::Running || status == ActivityStatus::Running {
+            if previous.status != ActivityStatus::Running && previous.status != status {
                 return;
             }
-            ActivityEvent {
-                status,
-                exit_code,
-                observed_at: SystemTime::now(),
-                ..previous.clone()
+            let mut event = previous.clone();
+            event.status = status;
+            if name != "tool" {
+                event.name = Self::display_name(name);
+                event.kind = kind;
             }
+            event.input = details.input.or(event.input);
+            event.output = details.output.or(event.output);
+            event.exit_code = details.exit_code.or(event.exit_code);
+            if event == *previous {
+                return;
+            }
+            event.observed_at = SystemTime::now();
+
+            event
         } else {
             if self.calls.len() + self.excluded_ids.len() >= MAX_ACTIVITIES {
                 return;
             }
             ActivityEvent {
                 attempt_id: self.attempt_id.clone(),
-                exit_code,
+                exit_code: details.exit_code,
                 id: id.to_string(),
+                input: details.input,
                 kind,
-                name: name
-                    .chars()
-                    .filter(|character| character.is_alphanumeric() || "_-./:".contains(*character))
-                    .take(128)
-                    .collect(),
+                name: Self::display_name(name),
                 observed_at: SystemTime::now(),
+                output: details.output,
                 parent_id: parent.filter(|id| Self::valid_id(id)).map(str::to_string),
                 status,
             }
         };
         self.calls.insert(id.to_string(), event.clone());
         (self.emit)(event);
+    }
+
+    fn display_name(name: &str) -> String {
+        name.chars()
+            .filter(|character| character.is_alphanumeric() || "_-./:".contains(*character))
+            .take(128)
+            .collect()
     }
 
     fn valid_id(id: &str) -> bool {

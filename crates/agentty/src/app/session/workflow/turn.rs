@@ -259,6 +259,7 @@ pub(super) async fn run_channel_turn(
             },
         )
         .await;
+    activity.clear_live(&context.app_event_tx, &context.session_id);
     Span::child("session.finalize")
         .scope(post_turn::finalize_channel_turn(&finalizer, &result))
         .await;
@@ -652,7 +653,7 @@ pub(super) async fn load_session_speed_mode(
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
 ///
-/// - [`TurnEvent::Activity`]: reduces snapshots into the returned usage
+/// - [`TurnEvent::Activity`]: publishes live rows and reduces the usage
 ///   summary.
 /// - [`TurnEvent::ThoughtDelta`]: coalesces immediately ready thought bursts
 ///   and updates the transient thinking loader text with the latest message.
@@ -670,7 +671,7 @@ pub(super) async fn consume_turn_events(
 
     while let Some(event) = event_rx.recv().await {
         match event {
-            TurnEvent::Activity(event) => activity.observe(event),
+            TurnEvent::Activity(event) => activity.observe_live(event, &app_event_tx, &session_id),
             TurnEvent::ThoughtDelta(thought) => {
                 let Some(thought) = normalize_thinking_stream_text(&thought) else {
                     continue;
@@ -680,6 +681,7 @@ pub(super) async fn consume_turn_events(
                     child_pid.as_ref(),
                     thought,
                     &session_id,
+                    &app_event_tx,
                     &mut activity,
                 );
                 if active_progress.as_deref() == Some(thought.as_str()) {
@@ -699,6 +701,7 @@ pub(super) async fn consume_turn_events(
         }
     }
 
+    activity.finish_live(&app_event_tx, &session_id);
     if active_progress.take().is_some() {
         SessionTaskService::clear_session_progress(&app_event_tx, &session_id);
     }
@@ -717,6 +720,7 @@ fn coalesce_ready_turn_progress_events(
     child_pid: &Mutex<Option<u32>>,
     initial_thought: String,
     session_id: &SessionId,
+    app_event_tx: &mpsc::UnboundedSender<AppEvent>,
     activity: &mut super::activity::TurnActivity,
 ) -> String {
     let mut latest_thought = initial_thought;
@@ -729,7 +733,7 @@ fn coalesce_ready_turn_progress_events(
 
         coalesced_events += 1;
         match event {
-            TurnEvent::Activity(event) => activity.observe(event),
+            TurnEvent::Activity(event) => activity.observe_live(event, app_event_tx, session_id),
             TurnEvent::ThoughtDelta(thought) => {
                 if let Some(thought) = normalize_thinking_stream_text(&thought) {
                     latest_thought = thought;

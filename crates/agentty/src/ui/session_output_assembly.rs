@@ -16,6 +16,7 @@ use crate::domain::session_message::{SessionMessage, SessionMessageKind, Session
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
+use crate::ui::component::session_output;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
 use crate::ui::session_format;
@@ -415,7 +416,14 @@ fn append_transient_message(
             }
 
             append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-            append_plain_status_lines(lines, status_message, inner_width);
+            if message.slot == TransientMessageSlot::Activity {
+                lines.extend(session_output::live_activity_lines(
+                    status_message,
+                    inner_width,
+                ));
+            } else {
+                append_plain_status_lines(lines, status_message, inner_width);
+            }
 
             None
         }
@@ -611,7 +619,7 @@ fn append_transcript_messages(
             SessionMessageKind::AgentPrompt => {}
             SessionMessageKind::ActivitySummary => {
                 append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-                lines.extend(super::component::session_output::activity_summary_lines(
+                lines.extend(session_output::activity_summary_lines(
                     &message.content,
                     inner_width,
                 ));

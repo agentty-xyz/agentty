@@ -762,6 +762,14 @@ fn background_event_labels_preserve_variant_identity() {
             },
         },
         AppEvent::RefreshGitStatus,
+        AppEvent::SessionActivityReady {
+            activity: crate::app::session::LiveActivity::default(),
+            session_id: session_id.clone(),
+        },
+        AppEvent::SessionActivityUpdated {
+            activity: None,
+            session_id: session_id.clone(),
+        },
         AppEvent::SessionProgressUpdated {
             progress_message: None,
             session_id,

@@ -201,6 +201,10 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
     tokio::time::timeout(turn_timeout, async {
         let mut usage_tracker = TurnUsageTracker::default();
         let mut operation_trace = agent::trace::OperationTrace::new();
+        let activity_tx = stream_tx.clone();
+        let mut activity = agent::activity::ActivityObserver::new(move |event| {
+            let _ = activity_tx.send(AppServerStreamEvent::Activity(event));
+        });
         loop {
             let stdout_line = transport.next_stdout().await?.ok_or_else(|| {
                 AppServerError::Provider(
@@ -214,6 +218,7 @@ async fn run_turn_with_timeout<Transport: AppServerRuntimeTransport>(
 
             if let Some(step_update) = stream_parser::step_update(&payload) {
                 operation_trace.observe(AgentKind::Antigravity, &payload);
+                activity.observe(AgentKind::Antigravity, &payload);
                 usage_tracker.record_step(step_update);
                 if let Some(event) = stream_parser::stream_event(step_update) {
                     let _ = stream_tx.send(event);

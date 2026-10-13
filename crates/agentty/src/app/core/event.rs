@@ -167,6 +167,16 @@ pub(crate) enum AppEvent {
         /// Session whose comments were requested.
         session_id: SessionId,
     },
+    /// Signals a replaceable activity snapshot awaiting foreground formatting.
+    SessionActivityReady {
+        activity: crate::app::session::LiveActivity,
+        session_id: SessionId,
+    },
+    /// Replaces the ordered live tool and skill rows for a session turn.
+    SessionActivityUpdated {
+        activity: Option<String>,
+        session_id: SessionId,
+    },
     /// Indicates compact live thinking text for an in-progress session.
     SessionProgressUpdated {
         progress_message: Option<String>,
@@ -393,6 +403,7 @@ pub(super) struct AppEventBatch {
         Vec<(SessionId, u64, uuid::Uuid, app::review::ReviewProgress)>,
     pub(super) review_request_status_updates: Vec<ReviewRequestStatusUpdate>,
     pub(super) review_updates: Vec<(SessionId, ReviewUpdate)>,
+    pub(super) session_activity_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_creations: Vec<(String, Result<String, String>)>,
     pub(super) session_diff_stats_updates: HashMap<SessionId, SessionDiffStats>,
     pub(super) session_diff_updates: Vec<crate::app::SessionDiffUpdate>,
@@ -485,6 +496,7 @@ impl AppEventBatch {
             || !self.session_personality_updates.is_empty()
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
+            || !self.session_activity_updates.is_empty()
             || !self.session_review_comment_resolution_updates.is_empty()
             || !self.session_queued_sync_resolved_ids.is_empty()
             || !self.session_rebase_review_invalidated_ids.is_empty()
@@ -648,17 +660,17 @@ impl AppEventBatch {
                 request_id,
                 result,
                 session_id,
-            } => self.diff_preview_updates.push(DiffPreviewUpdate {
-                path,
-                request_id,
-                result,
-                session_id,
-            }),
+            } => self.collect_diff_preview_loaded(path, request_id, result, session_id),
             AppEvent::SessionDiffLoaded {
                 request_id,
                 result,
                 session_id,
             } => self.collect_session_diff_loaded(request_id, result, session_id),
+            event @ (AppEvent::SessionActivityReady { .. }
+            | AppEvent::SessionActivityUpdated { .. }) => self.collect_activity_event(event),
+            AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
+                self.collect_session_workflow_notice_updated(session_id, notice);
+            }
             AppEvent::SessionProgressUpdated {
                 progress_message,
                 session_id,
@@ -705,7 +717,6 @@ impl AppEventBatch {
             | AppEvent::StackedParentTurnCompleted { .. }
             | AppEvent::StackedParentSyncCompleted { .. }
             | AppEvent::StackedParentMergeCompleted { .. }
-            | AppEvent::SessionWorkflowNoticeUpdated { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
             AppEvent::ProjectDiscoveryCompleted { .. }
@@ -730,6 +741,42 @@ impl AppEventBatch {
             | AppEvent::SessionTurnStarted { .. }
             | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
         }
+    }
+
+    /// Formats deferred activity only after dequeuing, preserving clear order.
+    fn collect_activity_event(&mut self, event: AppEvent) {
+        match event {
+            AppEvent::SessionActivityReady {
+                activity,
+                session_id,
+            } => {
+                self.session_activity_updates
+                    .insert(session_id, Some(activity.snapshot()));
+            }
+            AppEvent::SessionActivityUpdated {
+                activity,
+                session_id,
+            } => {
+                self.session_activity_updates.insert(session_id, activity);
+            }
+            _ => unreachable!("only activity events are routed here"),
+        }
+    }
+
+    /// Retains a completed file preview for stale-safe foreground application.
+    fn collect_diff_preview_loaded(
+        &mut self,
+        path: String,
+        request_id: u64,
+        result: Result<ag_git::WorktreeFileContent, String>,
+        session_id: SessionId,
+    ) {
+        self.diff_preview_updates.push(DiffPreviewUpdate {
+            path,
+            request_id,
+            result,
+            session_id,
+        });
     }
 
     /// Collects the latest background `@`-mention index for one session.
@@ -806,9 +853,6 @@ impl AppEventBatch {
             AppEvent::StackedParentMergeCompleted { child_session_ids } => self
                 .stacked_parent_merge_child_rebases
                 .extend(child_session_ids),
-            AppEvent::SessionWorkflowNoticeUpdated { notice, session_id } => {
-                self.collect_session_workflow_notice_updated(session_id, notice);
-            }
             AppEvent::PublishedBranchSyncUpdated {
                 persistent_notice,
                 session_id,
@@ -847,6 +891,9 @@ impl AppEventBatch {
             | AppEvent::RefreshProjects
             | AppEvent::RefreshGitStatus
             | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
+            | AppEvent::SessionWorkflowNoticeUpdated { .. }
+            | AppEvent::SessionActivityReady { .. }
+            | AppEvent::SessionActivityUpdated { .. }
             | AppEvent::SessionProgressUpdated { .. }
             | AppEvent::SyncMainCompleted { .. }
             | AppEvent::SyncMainConflictResolutionStarted { .. }
@@ -1164,10 +1211,12 @@ impl App {
                 .await;
         }
 
-        for (session_id, turn_applied_state) in event_batch.applied_turns {
+        for (session_id, turn_applied_state) in std::mem::take(&mut event_batch.applied_turns) {
             self.apply_agent_response_received(&session_id, &turn_applied_state);
         }
-        for (session_id, sync_update) in event_batch.published_branch_sync_updates {
+        for (session_id, sync_update) in
+            std::mem::take(&mut event_batch.published_branch_sync_updates)
+        {
             self.apply_published_branch_sync_update(&session_id, sync_update)
                 .await;
         }
@@ -1177,11 +1226,7 @@ impl App {
         }
 
         self.sync_touched_sessions(&event_batch.session_ids);
-        self.apply_session_transient_updates(
-            std::mem::take(&mut event_batch.session_review_comment_resolution_updates),
-            std::mem::take(&mut event_batch.session_orchestration_progress_updates),
-            std::mem::take(&mut event_batch.session_workflow_notice_updates),
-        );
+        self.apply_session_transient_updates(&mut event_batch);
         self.start_stacked_child_rebases_after_parent_merge(std::mem::take(
             &mut event_batch.stacked_parent_merge_child_rebases,
         ))
@@ -1218,24 +1263,28 @@ impl App {
 
     /// Applies transient updates after completed-turn snapshots are
     /// synchronized.
-    fn apply_session_transient_updates(
-        &mut self,
-        review_comment_updates: Vec<(SessionId, Option<usize>)>,
-        orchestration_updates: HashMap<SessionId, Option<String>>,
-        workflow_notices: HashMap<SessionId, Vec<String>>,
-    ) {
-        for (session_id, comment_count) in review_comment_updates {
+    fn apply_session_transient_updates(&mut self, event_batch: &mut AppEventBatch) {
+        for (session_id, activity) in std::mem::take(&mut event_batch.session_activity_updates) {
+            self.sessions.update_live_activity(&session_id, activity);
+        }
+        for (session_id, comment_count) in
+            std::mem::take(&mut event_batch.session_review_comment_resolution_updates)
+        {
             if comment_count.is_some_and(|count| count > 0) {
                 self.clear_review_output(&session_id);
             }
             self.sessions
                 .update_review_comment_resolution(&session_id, comment_count);
         }
-        for (session_id, progress) in orchestration_updates {
+        for (session_id, progress) in
+            std::mem::take(&mut event_batch.session_orchestration_progress_updates)
+        {
             self.sessions
                 .update_orchestration_progress(&session_id, progress);
         }
-        for (session_id, notices) in workflow_notices {
+        for (session_id, notices) in
+            std::mem::take(&mut event_batch.session_workflow_notice_updates)
+        {
             for notice in notices {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }

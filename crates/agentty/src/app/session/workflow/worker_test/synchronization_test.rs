@@ -1,9 +1,12 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use ag_contracts::{MockAgentChannel, PermissionMode, TurnResult};
+use ag_contracts::{
+    ActivityEvent, ActivityKind, ActivityStatus, AgentError, MockAgentChannel, PermissionMode,
+    TurnEvent, TurnResult,
+};
 use ag_forge as forge;
 use ag_git::MockGitClient;
 use ag_protocol::AgentResponse;
@@ -757,4 +760,70 @@ async fn canceled_rebase_does_not_start_another_assisted_turn() {
             .expect("cancel token")
             .is_cancelled()
     );
+}
+
+#[tokio::test]
+async fn rebase_assist_clears_live_activity_without_a_following_user_turn() {
+    for failure in [None, Some("failed"), Some("cancelled")] {
+        // Arrange
+        let mut channel = MockAgentChannel::new();
+        channel
+            .expect_run_turn()
+            .once()
+            .returning(move |_, _, events| {
+                Box::pin(async move {
+                    events
+                        .send(TurnEvent::Activity(ActivityEvent {
+                            attempt_id: "assist".into(),
+                            exit_code: None,
+                            id: "call".into(),
+                            input: None,
+                            kind: ActivityKind::Tool,
+                            name: "Read".into(),
+                            observed_at: SystemTime::UNIX_EPOCH,
+                            output: None,
+                            parent_id: None,
+                            status: ActivityStatus::Running,
+                        }))
+                        .expect("activity");
+                    match failure {
+                        Some("cancelled") => Err(AgentError::InterruptedByUser("stopped".into())),
+                        Some(message) => Err(AgentError::Backend(message.into())),
+                        None => Ok(successful_turn_result("resolved")),
+                    }
+                })
+            });
+        let (mut context, _, messages, _directory) =
+            queue_test_context(channel, VecDeque::new(), Status::Rebasing).await;
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        context.app_event_tx = sender;
+        let assist = SessionWorkerRebaseAssistClient::from_context(&context, None);
+
+        // Act
+        let result = assist.run_assist_turn("resolve conflict".into()).await;
+        let events = std::iter::from_fn(|| receiver.try_recv().ok()).collect::<Vec<_>>();
+
+        // Assert
+        assert_eq!(result.is_err(), failure.is_some());
+        assert!(messages.lock().expect("messages").is_empty());
+        let ready = events
+            .iter()
+            .position(|event| matches!(event, AppEvent::SessionActivityReady { .. }))
+            .expect("live rows");
+        let clear = events
+            .iter()
+            .position(|event| {
+                matches!(
+                    event,
+                    AppEvent::SessionActivityUpdated { activity: None, .. }
+                )
+            })
+            .expect("clear rows");
+        assert!(clear > ready);
+        assert!(
+            !events[clear + 1..]
+                .iter()
+                .any(|event| matches!(event, AppEvent::SessionActivityReady { .. }))
+        );
+    }
 }

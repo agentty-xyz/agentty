@@ -963,6 +963,32 @@ impl SessionManager {
         }
     }
 
+    /// Replaces live invocation rows without persisting them or replaying
+    /// them to the provider. The transient store invalidates render caches.
+    pub(crate) fn update_live_activity(&mut self, session_id: &str, activity: Option<String>) {
+        let Some(session) = self
+            .state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        if let Some(activity) = activity {
+            session.transient_messages.upsert(TransientMessage {
+                anchor: TransientMessageAnchor::AfterActiveTurn,
+                body: TransientMessageBody::Plain(activity),
+                lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+                slot: TransientMessageSlot::Activity,
+                turn_position: session.latest_user_prompt_position(),
+            });
+        } else {
+            session
+                .transient_messages
+                .retract(TransientMessageSlot::Activity);
+        }
+    }
+
     /// Replaces or clears the board snapshot for an orchestrator.
     pub(crate) fn update_orchestration_progress(
         &mut self,

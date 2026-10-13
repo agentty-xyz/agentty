@@ -1,12 +1,15 @@
 //! Session transcript rendering and scrolling.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use ag_session::test_support as model_fixture;
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::region::Region;
 
-use super::fixture::E2eResult;
+use super::fixture::{E2eResult, seed_project_settings};
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 use crate::{common, test_support};
 
@@ -1129,6 +1132,91 @@ async fn test_session_activity_footers() -> E2eResult {
                 })
             },
         )
+        .await?;
+
+    Ok(())
+}
+
+/// Tool and skill status is visible before the final provider result arrives.
+#[tokio::test]
+async fn test_session_live_activity() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("session_live_activity")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .setup(|env| Box::pin(async move {
+            let script = r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+input=$(cat)
+case "$input" in
+  *"Generate a concise, commit-style title"*) answer='Activity demo' ;;
+  *"Stream activity demo"*)
+    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Bash","input":{"command":"printf activity-details-with-a-long-literal-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-hidden-command-tail"}},{"type":"tool_use","id":"skill","name":"Skill","input":{"skill":"review"}}]}}'
+    sleep 3
+    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"read","content":"activity-details\nsecond output line"},{"type":"tool_result","tool_use_id":"skill","is_error":true,"content":"first error line\nsecond error line\nhidden third error line"}]}}'
+    sleep 3
+    answer='Activity demo finished' ;;
+  *) answer='Ready' ;;
+esac
+result='{\"answer\":\"'"$answer"'\"}'
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$result"
+"#;
+            let path = env.stub_bin.join("claude");
+            std::fs::write(&path, script)?;
+            #[cfg(unix)]
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750))?;
+            seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
+        }))
+        .run(|scenario| {
+            scenario
+                .compose(&common::wait_for_agentty_startup())
+                .compose(&common::switch_to_tab("Sessions"))
+                .press_key("a")
+                .press_key("Enter")
+                .wait_for_text("Tab: focus | Enter: send", 5000)
+                .write_text("Stream activity demo")
+                .press_key("Enter")
+                .wait_for_text("printf activity-details", 15000)
+                .wait_for_text("… skill review", 15000)
+                .capture_labeled("running", "Invocations before the answer")
+                .wait_for_text("second error line", 10000)
+                .wait_for_text("✗ skill review", 10000)
+                .capture_labeled("settled", "Statuses update in place")
+                .wait_for_text("Tools: Bash ×1", 15000)
+        }, |frame, report| Box::pin(async move {
+            for (index, labels) in [
+                ["… Bash · printf activity-details", "… skill review"],
+                ["✓ Bash · printf activity-details", "✗ skill review"],
+            ].iter().enumerate() {
+                let capture = common::frame_from_capture(&report.captures[index]);
+                let full = Region::full(capture.cols(), capture.rows());
+                for label in labels {
+                    assertion::assert_text_in_region(&capture, label, &full);
+                    assertion::assert_match_count(&capture, label, 1);
+                }
+                assertion::assert_text_in_region(&capture, "printf activity-details", &full);
+                let text = capture.all_text();
+                let call_row = text.lines().find(|line| line.contains("Bash ·")).expect("call row");
+                assert!(call_row.contains("..."));
+                assert!(!text.contains("hidden-command-tail"));
+                if index == 1 {
+                    assertion::assert_text_in_region(&capture, "first error line", &full);
+                    assertion::assert_text_in_region(&capture, "second error line", &full);
+                    assert!(!capture.all_text().contains("hidden third error line"));
+                }
+                assert!(!capture.all_text().contains("second output line"));
+                assert!(!capture.all_text().contains("Input:"));
+                assert!(!capture.all_text().contains("Output:"));
+                assert!(!capture.all_text().contains("Activity demo finished"));
+            }
+            let full = Region::full(frame.cols(), frame.rows());
+            assertion::assert_text_in_region(frame, "Activity demo finished", &full);
+            assertion::assert_text_in_region(frame, "Skills: review ×1 (1 failed)", &full);
+            assert!(!frame.all_text().contains("… Bash"));
+            assert!(!frame.all_text().contains("✓ Bash"));
+            assert!(!frame.all_text().contains("first error line"));
+        }))
         .await?;
 
     Ok(())
