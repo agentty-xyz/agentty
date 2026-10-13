@@ -898,6 +898,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         ag_harness::turn::HistoryActivity::default()
     );
     assert_eq!(once.report().output_corrections(), 0);
+    assert_eq!(once.report().tool_argument_corrections(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(
@@ -909,12 +910,19 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
             context.truncated_results(),
             context.dropped_tool_calls(),
             context.shrunk_latest_write_calls(),
+            context.superseded_results(),
         ),
-        (0, 0, 0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0, 0, 0)
     );
     let first_request = &once.report().model_requests()[0];
     assert!(first_request.estimated_weight() > 0);
     assert_eq!(first_request.calibrated_weight(), None);
+    let repeated = ag_harness::turn::ToolActivity::ReadRepeated {
+        action: ag_harness::tool::ReadAction::File,
+        duration: std::time::Duration::ZERO,
+        summary: "name.txt".to_string(),
+    };
+    assert_eq!((repeated.name(), repeated.path()), ("read", "name.txt"));
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
     let requests = requests

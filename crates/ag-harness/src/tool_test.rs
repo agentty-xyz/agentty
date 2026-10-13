@@ -739,3 +739,20 @@ fn read_capabilities_and_description_follow_the_selected_base() {
             .is_err()
     );
 }
+
+#[test]
+fn invalid_tool_arguments_name_the_tool_and_the_problem() {
+    // Arrange
+    let arguments = r#"{"path src/":"lib.rs"}"#;
+
+    // Act
+    let error = ToolCall::from_json("call-id".to_string(), "read", arguments, None)
+        .expect_err("unknown field");
+
+    // Assert
+    assert!(matches!(
+        error,
+        model::ModelError::InvalidToolArguments { reason }
+            if reason.starts_with("`read`: unknown field `path src/`")
+    ));
+}

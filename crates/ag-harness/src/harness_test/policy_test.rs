@@ -8,8 +8,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::support::{
-    model, object_schema, read_call, read_harness, response_without_metadata, write_call,
-    write_harness,
+    model, object_schema, read_call, read_call_with_path, read_harness, response_without_metadata,
+    write_call, write_harness,
 };
 use crate::bash::{BashConfig, BashError};
 use crate::context_budget_fixture::unbounded_context_budget;
@@ -283,10 +283,15 @@ async fn runs_sequential_and_batched_tool_calls_without_a_per_turn_limit() {
     model.expect_complete().times(14).returning(move |_| {
         let index = observed_requests.fetch_add(1, Ordering::SeqCst);
         let response = match index {
-            0..12 => ModelResponse::ToolCall(read_call(&format!("call_{index}"))),
+            0..12 => ModelResponse::ToolCall(read_call_with_path(
+                &format!("call_{index}"),
+                &format!("file_{index}.txt"),
+            )),
             12 => ModelResponse::ToolCalls(
                 (0..10)
-                    .map(|call| read_call(&format!("batch_{call}")))
+                    .map(|call| {
+                        read_call_with_path(&format!("batch_{call}"), &format!("batch_{call}.txt"))
+                    })
                     .collect(),
             ),
             _ => ModelResponse::Output(json!({"summary": "done"})),

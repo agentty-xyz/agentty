@@ -3,7 +3,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome, TurnReport,
+    ContextActivity, HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome,
+    TurnReport,
 };
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
@@ -96,6 +97,41 @@ fn history_activity_defaults_and_decodes_legacy_reports() {
 }
 
 #[test]
+fn corrections_and_superseded_results_default_in_legacy_reports() {
+    // Arrange
+    let report =
+        TurnReport::new(Duration::from_millis(1), Vec::new(), Vec::new()).with_corrections(2, 3);
+    let legacy_report = json!({
+        "duration": {"secs": 0, "nanos": 1_000_000},
+        "model_requests": [],
+        "tool_calls": []
+    });
+    let legacy_context = json!({
+        "cleared_reasoning": 0,
+        "dropped_history_turns": 0,
+        "dropped_tool_calls": 0,
+        "elided_results": 4,
+        "shrunk_latest_write_calls": 0,
+        "shrunk_write_calls": 0,
+        "truncated_results": 0
+    });
+
+    // Act
+    let decoded_report: TurnReport = serde_json::from_value(legacy_report).expect("report");
+    let decoded_context: ContextActivity =
+        serde_json::from_value(legacy_context).expect("context activity");
+    let context = ContextActivity::new(0, 0, 0, 3, 0, 0, 0).with_superseded_results(2);
+
+    // Assert
+    assert_eq!(report.output_corrections(), 2);
+    assert_eq!(report.tool_argument_corrections(), 3);
+    assert_eq!(decoded_report.tool_argument_corrections(), 0);
+    assert_eq!(decoded_context.elided_results(), 4);
+    assert_eq!(decoded_context.superseded_results(), 0);
+    assert_eq!(context.superseded_results(), 2);
+}
+
+#[test]
 fn tool_activity_display_formats_every_outcome_safely() {
     // Arrange
     let read = ToolActivity::Read {
@@ -128,6 +164,11 @@ fn tool_activity_display_formats_every_outcome_safely() {
         duration: Duration::from_millis(4),
         path: "src/main.rs".to_string(),
     };
+    let repeated_read = ToolActivity::ReadRepeated {
+        action: ReadAction::File,
+        duration: Duration::from_millis(5),
+        summary: "src/lib.rs".to_string(),
+    };
 
     // Act
     let displays = [
@@ -137,6 +178,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
         rejected_read.to_string(),
         write.to_string(),
         rejected_write.to_string(),
+        repeated_read.to_string(),
     ];
 
     // Assert
@@ -149,8 +191,12 @@ fn tool_activity_display_formats_every_outcome_safely() {
             "read missing.rs (rejected; 2 ms)",
             "write src/lib.rs (4 bytes; 3 ms)",
             "write src/main.rs (rejected; 4 ms)",
+            "read file src/lib.rs (repeated; 5 ms)",
         ]
     );
+    assert_eq!(repeated_read.duration(), Duration::from_millis(5));
+    assert_eq!(repeated_read.name(), "read");
+    assert_eq!(repeated_read.path(), "src/lib.rs");
     assert_eq!(inspection.duration(), Duration::from_millis(1));
     assert_eq!(inspection.path(), ".");
     assert_eq!(rejected_inspection.duration(), Duration::from_millis(1));

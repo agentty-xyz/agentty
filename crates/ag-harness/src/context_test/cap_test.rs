@@ -3,7 +3,7 @@ use std::num::NonZeroU64;
 use serde_json::json;
 
 use super::support::{
-    ByteEstimator, bash_call, budget, read_call, record_read_round, request, result_json,
+    ByteEstimator, bash_command_call, budget, read_call, record_read_round, request, result_json,
     tool_result, write_call,
 };
 use crate::context::{
@@ -122,7 +122,7 @@ fn capped_results_stay_capped_identically_and_are_later_elided_from_the_original
     let third = third.expect("third copy");
     let notice = result_json(&third.messages()[2]);
     assert_eq!(notice["original_bytes"], json!(5000));
-    assert_eq!(notice["read"], json!("file name.txt"));
+    assert_eq!(notice["read"], json!("file large.txt"));
     assert_eq!(third_activity.truncated_results(), 0);
     assert!(third_activity.elided_results() >= 1);
     assert_eq!(third_activity.dropped_tool_calls(), 0);
@@ -251,7 +251,7 @@ fn dropping_a_round_releases_its_capped_result() {
     let mut request = request(Vec::new(), Vec::new(), "loop");
     let outcome = "o".repeat(250);
     for index in 0..4 {
-        let bash = bash_call(&format!("b{index}"));
+        let bash = bash_command_call(&format!("b{index}"), &format!("cargo test {index}"));
         request.record_tool_call(bash.clone());
         request.record_tool_result(
             &bash,
@@ -282,7 +282,7 @@ fn dropping_a_round_releases_its_capped_result() {
         activity.truncated_results(),
         4 - activity.dropped_tool_calls()
     );
-    assert!(dropped_note(&fitted).contains("Commands run: `cargo test`"));
+    assert!(dropped_note(&fitted).contains("Commands run: `cargo test 0`"));
     assert!(!dropped_note(&fitted).contains("Reads whose results"));
 }
 
@@ -354,7 +354,7 @@ fn read_notice_without_a_known_target_omits_the_target() {
     let content = r#"{"content":"fn main() {}","path":"src/main.rs"}"#;
 
     // Act
-    let notice = cleared_result_notice("read", content, None);
+    let notice = cleared_result_notice("read", content, None, None);
 
     // Assert
     let notice: serde_json::Value = serde_json::from_str(&notice).expect("notice json");

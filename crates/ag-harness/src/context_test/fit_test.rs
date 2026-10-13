@@ -79,7 +79,7 @@ fn fit_elides_oldest_results_down_to_the_target_and_keeps_the_latest_round() {
     assert_eq!(activity.elided_results(), 2);
     let notice = result_json(&fitted.messages()[2]);
     assert_eq!(notice["original_bytes"], json!(1000));
-    assert_eq!(notice["read"], json!("file name.txt"));
+    assert_eq!(notice["read"], json!("file r0.txt"));
     assert!(
         notice["context_cleared"]
             .as_str()
@@ -578,9 +578,9 @@ fn fit_reduces_history_or_fails_typed_when_feedback_overflows_a_tool_free_reques
         ModelMessage::Assistant("{}".to_string()),
     ]];
     let mut with_history = request(Vec::new(), history, "reply");
-    with_history.record_output_feedback("f".repeat(500));
+    with_history.record_feedback("f".repeat(500));
     let mut without_history = request(Vec::new(), Vec::new(), "reply");
-    without_history.record_output_feedback("f".repeat(500));
+    without_history.record_feedback("f".repeat(500));
 
     // Act
     let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(1000), &with_history)
@@ -606,7 +606,7 @@ fn fit_reduces_history_or_fails_typed_when_feedback_overflows_a_tool_free_reques
 fn fit_drops_feedback_that_precedes_a_dropped_round_with_that_round() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "loop");
-    request.record_output_feedback("f".repeat(100));
+    request.record_feedback("f".repeat(100));
     for index in 0..4 {
         record_read_round(&mut request, &format!("r{index}"), 300);
     }

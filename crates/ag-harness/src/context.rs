@@ -6,12 +6,13 @@ use std::fmt::Write as _;
 use std::num::NonZeroU64;
 use std::ops::Range;
 
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
 use crate::input::TurnInput;
 use crate::model::{ModelMessage, ModelRequest};
-use crate::tool::{ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
+use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 
 /// Share, in percent, of the request capacity left after reserved output
@@ -23,10 +24,10 @@ pub(crate) const FIT_TARGET_PERCENT: u64 = 70;
 /// Share, in percent, of the request capacity left after reserved output
 /// that one tool result may keep once a request exceeds the budget; a
 /// larger result is cut to a head and tail excerpt of this size before any
-/// other reduction. A quarter still holds a large file excerpt, while two
-/// capped results stay within [`FIT_TARGET_PERCENT`] beside instructions and
-/// elided older rounds, so one oversized output never forces earlier rounds
-/// out of the request.
+/// other reduction except clearing superseded results. A quarter still holds a
+/// large file excerpt, while two capped results stay within
+/// [`FIT_TARGET_PERCENT`] beside instructions and elided older rounds, so one
+/// oversized output never forces earlier rounds out of the request.
 pub(crate) const RESULT_CAP_PERCENT: u64 = 25;
 
 /// Share, in percent, of the request capacity left after reserved output
@@ -44,6 +45,10 @@ pub(crate) const CLEARED_REASONING: &str = "[reasoning cleared to fit the contex
 /// Leading bytes of every cleared-result notice, so a notice loaded from
 /// reduced history is never cleared again.
 const CLEARED_RESULT_PREFIX: &str = r#"{"context_cleared":"#;
+
+/// Leading bytes of the result that answers a repeated `read` without
+/// running it, so that result never supersedes the read it points to.
+const REPEATED_READ_PREFIX: &str = r#"{"unchanged":true,"#;
 
 /// Outcome fields of a `bash` or `write` result kept in its cleared notice.
 const OUTCOME_KEYS: [&str; 6] = [
@@ -74,8 +79,9 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// every provider request of a turn: the initial request keeps the most recent
 /// turns that fit, each whole, with its tool traffic cleared, or as its input
 /// and final output, and a request grown by in-turn tool traffic is reduced
-/// before each follow-up model call by capping oversized tool results to head
-/// and tail excerpts, clearing older tool results, reasoning, and write
+/// before each follow-up model call by clearing older tool results that a
+/// later call superseded, capping oversized tool results to head and tail
+/// excerpts, clearing the other older tool results, reasoning, and write
 /// patches, dropping the oldest history turns, then the current turn's oldest
 /// tool rounds behind one note, and finally cutting the latest results further
 /// and the latest write patches to their outcome.
@@ -471,6 +477,8 @@ pub(crate) struct ContextFit {
     restore: Vec<(usize, ModelMessage)>,
     sent_weight: u64,
     shrunk_writes_before: usize,
+    superseded_results: usize,
+    truncated_latest: Vec<usize>,
 }
 
 impl ContextFit {
@@ -484,12 +492,16 @@ impl ContextFit {
     /// canonical request fits and no earlier request was reduced, with the
     /// reductions the copy carries.
     ///
-    /// A request that exceeds the budget first caps every tool result above
-    /// [`RESULT_CAP_PERCENT`] of its capacity, and the latest round's largest
-    /// results while together they exceed [`LATEST_ROUND_CAP_PERCENT`], to a
-    /// head and tail excerpt. It is then reduced to [`FIT_TARGET_PERCENT`]
-    /// of its capacity, in order: older tool results (oldest first, replayed
-    /// history before the current turn), then assistant reasoning, then
+    /// A request that exceeds the budget first clears older tool results
+    /// that a later call of the request superseded, oldest first, until it
+    /// weighs at most [`FIT_TARGET_PERCENT`] of its capacity (see
+    /// [`Self::elide_superseded`]). It then caps every remaining tool result
+    /// above [`RESULT_CAP_PERCENT`] of its capacity, and the latest round's
+    /// largest results while together they exceed
+    /// [`LATEST_ROUND_CAP_PERCENT`], to a head and tail excerpt, and is
+    /// reduced to [`FIT_TARGET_PERCENT`] of its capacity, in order: the other
+    /// older tool results (oldest first, replayed history before the current
+    /// turn), then assistant reasoning, then
     /// `write` patches, then whole projected history turns, oldest first,
     /// then whole earlier tool rounds of the current turn, oldest first,
     /// replaced by one note naming what they did and read. The latest
@@ -516,9 +528,11 @@ impl ContextFit {
             self.messages.push(FitMessage {
                 changes: 0,
                 reduced: None,
+                span: ReadSpan::parse(message),
                 weight,
             });
         }
+        self.truncated_latest.clear();
         let base = request
             .tools()
             .iter()
@@ -592,16 +606,30 @@ impl ContextFit {
             shrunk_latest_write_calls,
             self.reduced_counts[Reduction::ShrinkWrite.slot()],
             self.capped_results + truncated_results,
-        );
+        )
+        .with_superseded_results(self.superseded_results);
         self.sent_weight = required - budget.reserved_output_weight();
 
         Ok((Some(&*self.fitted.insert(fitted)), activity))
     }
 
-    /// Caps oversized tool results, then reduces messages past the
-    /// watermarks, tier by tier, until the request weighs at most
-    /// [`FIT_TARGET_PERCENT`] of its capacity, advances the watermarks past
-    /// what it reduced, and returns whether any sent message changed.
+    /// Returns whether the last request sent the current turn's canonical
+    /// message at `index` whole: neither reduced, cut, nor left out. A
+    /// message appended after that request is still whole.
+    pub(crate) fn sends_whole(&self, index: usize) -> bool {
+        index >= self.dropped_rounds.end
+            && self
+                .messages
+                .get(index)
+                .is_none_or(|entry| entry.changes == 0)
+            && !self.truncated_latest.contains(&index)
+    }
+
+    /// Elides superseded older results, caps oversized tool results, then
+    /// reduces messages past the watermarks, tier by tier, until the request
+    /// weighs at most [`FIT_TARGET_PERCENT`] of its capacity, advances the
+    /// watermarks past what it reduced, and returns whether any sent
+    /// message changed.
     fn extend(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -614,7 +642,7 @@ impl ContextFit {
         let capacity = budget.max_request_weight().get() - reserved;
         let target = reserved.saturating_add(capacity.saturating_mul(FIT_TARGET_PERCENT) / 100);
         let latest_round = layout.latest_round;
-        let mut changed = self.cap_results(estimator, request, latest_round, capacity);
+        let mut changed = false;
         let mut tier = Tier {
             base,
             changed: &mut changed,
@@ -622,6 +650,11 @@ impl ContextFit {
             messages: request.messages(),
             target,
         };
+        // Superseded results go first, so none is kept as a capped excerpt.
+        self.elide_superseded(&mut tier, latest_round);
+        if self.cap_results(estimator, request, latest_round, capacity) {
+            *tier.changed = true;
+        }
         self.elided_results_before = self.reduce(
             &mut tier,
             Reduction::ElideResult,
@@ -765,6 +798,39 @@ impl ContextFit {
         excerpt(low)
     }
 
+    /// Elides the tool results past the elision watermark, before the
+    /// latest round, that a later call of the request superseded, oldest
+    /// first, until the request weighs at most the tier's target. A result is
+    /// superseded when a later call re-read the same target over at least
+    /// its lines, applied a write to the file it read, or reran the same
+    /// command; its notice names that call. Staleness is weighed only while
+    /// a request exceeds the budget, and a result elided this way stays
+    /// elided, so later requests keep sharing the reduced prefix.
+    fn elide_superseded(&mut self, tier: &mut Tier<'_>, latest_round: usize) {
+        let superseded = find_superseded(
+            tier.messages,
+            &self.messages,
+            self.elided_results_before..latest_round,
+        );
+        for (index, supersession) in superseded {
+            if tier.base.saturating_add(self.required) <= tier.target {
+                return;
+            }
+            if self.messages[index].changes & Reduction::ElideResult.flag() != 0 {
+                continue;
+            }
+            let Some(reduced) =
+                elided_result(&tier.messages[index], &self.records, Some(&supersession))
+            else {
+                continue;
+            };
+            if self.replace(tier, index, reduced, Reduction::ElideResult) {
+                self.messages[index].changes |= SUPERSEDED_FLAG;
+                self.superseded_results += 1;
+            }
+        }
+    }
+
     /// Applies `reduction` to cached messages in `range`, in order, until
     /// the request weighs at most the tier's target, and returns the index it
     /// stopped at.
@@ -774,6 +840,10 @@ impl ContextFit {
                 return index;
             }
             let entry = &self.messages[index];
+            // A superseded result was already elided ahead of this tier.
+            if entry.changes & reduction.flag() != 0 {
+                continue;
+            }
             // A notice describes the original result, not its capped excerpt.
             let current = match reduction {
                 Reduction::ElideResult => &tier.messages[index],
@@ -781,28 +851,42 @@ impl ContextFit {
                     entry.reduced.as_ref().unwrap_or(&tier.messages[index])
                 }
             };
-            let Some(reduced) = reduction.apply(current, &self.records) else {
-                continue;
-            };
-            let weight = tier.estimator.message_weight(&reduced);
-            let entry = &mut self.messages[index];
-            if weight < entry.weight {
-                // Each reduction's watermark only advances, so it changes a
-                // message at most once.
-                self.required -= entry.weight - weight;
-                self.reduced_counts[reduction.slot()] += 1;
-                if entry.changes & CAPPED_FLAG != 0 {
-                    entry.changes &= !CAPPED_FLAG;
-                    self.capped_results -= 1;
-                }
-                entry.changes |= reduction.flag();
-                entry.reduced = Some(reduced);
-                entry.weight = weight;
-                *tier.changed = true;
+            if let Some(reduced) = reduction.apply(current, &self.records) {
+                self.replace(tier, index, reduced, reduction);
             }
         }
 
         range.end
+    }
+
+    /// Caches `reduced` in place of the message at `index` when it weighs
+    /// less, and returns whether it did.
+    fn replace(
+        &mut self,
+        tier: &mut Tier<'_>,
+        index: usize,
+        reduced: ModelMessage,
+        reduction: Reduction,
+    ) -> bool {
+        let weight = tier.estimator.message_weight(&reduced);
+        let entry = &mut self.messages[index];
+        if weight >= entry.weight {
+            return false;
+        }
+        // Each reduction's watermark only advances, so it changes a message
+        // at most once.
+        self.required -= entry.weight - weight;
+        self.reduced_counts[reduction.slot()] += 1;
+        if entry.changes & CAPPED_FLAG != 0 {
+            entry.changes &= !CAPPED_FLAG;
+            self.capped_results -= 1;
+        }
+        entry.changes |= reduction.flag();
+        entry.reduced = Some(reduced);
+        entry.weight = weight;
+        *tier.changed = true;
+
+        true
     }
 
     /// Leaves the oldest remaining projected history turn out of the
@@ -872,6 +956,9 @@ impl ContextFit {
             self.required = self.required.saturating_sub(entry.weight);
             if entry.changes & CAPPED_FLAG != 0 {
                 self.capped_results -= 1;
+            }
+            if entry.changes & SUPERSEDED_FLAG != 0 {
+                self.superseded_results -= 1;
             }
             for reduction in [
                 Reduction::ClearReasoning,
@@ -964,6 +1051,7 @@ impl ContextFit {
             if weight < current {
                 *required -= current - weight;
                 self.replace_temporarily(fitted, index - shift, excerpt);
+                self.truncated_latest.push(index);
                 // A capped result is already counted.
                 if self.messages[index].changes & CAPPED_FLAG == 0 {
                     truncated += 1;
@@ -1119,26 +1207,7 @@ impl Reduction {
     /// apply or would not shrink it.
     fn apply(self, message: &ModelMessage, records: &CallRecords) -> Option<ModelMessage> {
         match (self, message) {
-            (
-                Self::ElideResult,
-                ModelMessage::ToolResult {
-                    call_id,
-                    content,
-                    name,
-                },
-            ) if !content.starts_with(CLEARED_RESULT_PREFIX) => {
-                let notice = cleared_result_notice(
-                    name,
-                    content,
-                    records.read_targets.get(call_id).map(String::as_str),
-                );
-
-                (notice.len() < content.len()).then(|| ModelMessage::ToolResult {
-                    call_id: call_id.clone(),
-                    content: notice,
-                    name: name.clone(),
-                })
-            }
+            (Self::ElideResult, _) => elided_result(message, records, None),
             (
                 Self::ClearReasoning,
                 ModelMessage::AssistantReasoning {
@@ -1155,7 +1224,6 @@ impl Reduction {
             (Self::ShrinkWrite, _) => reduce_calls(message, |call| {
                 shrunk_write_call(call, &records.write_outcomes)
             }),
-            (Self::ElideResult, _) => None,
         }
     }
 
@@ -1177,6 +1245,10 @@ impl Reduction {
 /// Change flag recorded for a tool result capped to an excerpt, beside the
 /// [`Reduction`] flags.
 const CAPPED_FLAG: u8 = 1 << 3;
+
+/// Change flag recorded, beside [`Reduction::ElideResult`]'s, for a tool
+/// result elided because a later call superseded it.
+const SUPERSEDED_FLAG: u8 = 1 << 4;
 
 /// What the calls of one request recorded, by call identifier: each `read`
 /// call's target and each `write` result's `status`.
@@ -1216,7 +1288,81 @@ impl CallRecords {
 struct FitMessage {
     changes: u8,
     reduced: Option<ModelMessage>,
+    /// Lines returned by a successful `file` or `show` read result.
+    span: Option<ReadSpan>,
     weight: u64,
+}
+
+/// One-based line window that a successful `file` or `show` read returned.
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ReadSpan {
+    end_line: Option<u64>,
+    start_line: u64,
+}
+
+impl ReadSpan {
+    /// Returns the window a `read` result reports, or `None` for any other
+    /// message, a rejected read, or an inspection without line numbers.
+    fn parse(message: &ModelMessage) -> Option<Self> {
+        let ModelMessage::ToolResult { content, name, .. } = message else {
+            return None;
+        };
+        if name != "read" {
+            return None;
+        }
+
+        serde_json::from_str(content).ok()
+    }
+
+    /// Whether this window includes every line of `earlier`; an empty
+    /// earlier window only needs the same or an earlier start.
+    fn covers(self, earlier: Self) -> bool {
+        self.start_line <= earlier.start_line
+            && earlier
+                .end_line
+                .is_none_or(|end| self.end_line.is_some_and(|own_end| own_end >= end))
+    }
+}
+
+/// The later call that made an earlier tool result stale.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Supersession<'a> {
+    by: &'a str,
+    cause: SupersessionCause,
+}
+
+/// How a later call superseded an earlier tool result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SupersessionCause {
+    /// A later read returned the same target over at least the same lines.
+    Reread,
+    /// The same shell command ran again.
+    Rerun,
+    /// A later applied write changed the file the read showed.
+    Write,
+}
+
+impl SupersessionCause {
+    /// Returns the notice text for a result this cause superseded.
+    fn notice(self) -> &'static str {
+        match self {
+            Self::Reread => {
+                "This earlier read result was cleared to fit the context window because a later \
+                 read of the same target, named in superseded_by, returned it again. Use that \
+                 newer result instead of reading it again."
+            }
+            Self::Rerun => {
+                "This earlier command result was cleared to fit the context window because the \
+                 same command ran again later, in the call named in superseded_by. That newer \
+                 result supersedes it; do NOT repeat the command to recover this output."
+            }
+            Self::Write => {
+                "This earlier read result was cleared to fit the context window because a later \
+                 write, named in superseded_by, changed the file it showed. If you still need the \
+                 file, read it again, narrowed with offset/limit."
+            }
+        }
+    }
 }
 
 /// Earlier tool rounds of the current turn left out of the request, and the
@@ -1342,6 +1488,137 @@ fn is_tool_call_message(message: &ModelMessage) -> bool {
     !tool_calls(message).is_empty()
 }
 
+/// Returns, oldest first, each tool result whose index lies in `range` that
+/// a later call of `messages` superseded, with the nearest such call.
+/// Results pair with the latest earlier call of their identifier, so
+/// identifiers reused across turns stay distinct.
+fn find_superseded<'a>(
+    messages: &'a [ModelMessage],
+    cached: &[FitMessage],
+    range: Range<usize>,
+) -> Vec<(usize, Supersession<'a>)> {
+    let mut calls: Vec<(&ToolCall, Option<usize>)> = Vec::new();
+    let mut awaiting: HashMap<&str, usize> = HashMap::new();
+    for (index, message) in messages.iter().enumerate() {
+        if let ModelMessage::ToolResult { call_id, .. } = message {
+            if let Some(position) = awaiting.remove(call_id.as_str()) {
+                calls[position].1 = Some(index);
+            }
+            continue;
+        }
+        for call in tool_calls(message) {
+            awaiting.insert(call.id(), calls.len());
+            calls.push((call, None));
+        }
+    }
+
+    calls
+        .iter()
+        .enumerate()
+        .filter_map(|(position, (call, result))| {
+            let result = result.filter(|result| range.contains(result))?;
+            let supersession = calls[position + 1..]
+                .iter()
+                .find_map(|(later, later_result)| {
+                    let later_result = (*later_result)?;
+                    let cause = supersession_cause(
+                        (call, &cached[result]),
+                        (later, &messages[later_result], &cached[later_result]),
+                    )?;
+
+                    Some(Supersession {
+                        by: later.id(),
+                        cause,
+                    })
+                })?;
+
+            Some((result, supersession))
+        })
+        .collect()
+}
+
+/// Returns how the `later` call, with its result, superseded the `earlier`
+/// call's result, or `None` when it did not.
+fn supersession_cause(
+    (earlier, earlier_cached): (&ToolCall, &FitMessage),
+    (later, later_result, later_cached): (&ToolCall, &ModelMessage, &FitMessage),
+) -> Option<SupersessionCause> {
+    match (earlier.arguments(), later.arguments()) {
+        (ToolCallArguments::Read(earlier), ToolCallArguments::Read(later))
+            if !is_repeated_read(later_result)
+                && rereads(earlier, earlier_cached.span, later, later_cached.span) =>
+        {
+            Some(SupersessionCause::Reread)
+        }
+        (ToolCallArguments::Read(earlier), ToolCallArguments::Write(later))
+            if write_outcome(later_result).is_some_and(|(_, status)| status == "applied")
+                && read_shows_path(earlier, later.path()) =>
+        {
+            Some(SupersessionCause::Write)
+        }
+        (ToolCallArguments::Bash(earlier), ToolCallArguments::Bash(later))
+            if earlier.command() == later.command() =>
+        {
+            Some(SupersessionCause::Rerun)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the `later` read returned the `earlier` read's target again over
+/// at least its result: the same action, path, query, and side, with a line
+/// window covering the earlier one for `file` and `show`, or the same or a
+/// larger limit otherwise. An earlier `file` or `show` read that returned no
+/// window, such as a rejection, is covered by any later read of its target.
+fn rereads(
+    earlier: &ReadArguments,
+    earlier_span: Option<ReadSpan>,
+    later: &ReadArguments,
+    later_span: Option<ReadSpan>,
+) -> bool {
+    if earlier.action() != later.action()
+        || earlier.path_filter() != later.path_filter()
+        || earlier.query() != later.query()
+        || earlier.side() != later.side()
+    {
+        return false;
+    }
+
+    match earlier.action() {
+        ReadAction::File | ReadAction::Show => match (earlier_span, later_span) {
+            (None, _) => true,
+            (Some(earlier), later) => later.is_some_and(|later| later.covers(earlier)),
+        },
+        ReadAction::Diff | ReadAction::List | ReadAction::Search => {
+            match (earlier.limit(), later.limit()) {
+                (Some(earlier), Some(later)) => later >= earlier,
+                (earlier, later) => earlier == later,
+            }
+        }
+    }
+}
+
+/// Whether a worktree write to `path` changes what `read` showed: a `file`
+/// read of that path, or a `diff` whose path filter includes it.
+fn read_shows_path(read: &ReadArguments, path: &str) -> bool {
+    match read.action() {
+        ReadAction::File => read.path() == path,
+        ReadAction::Diff => read.path_filter().is_none_or(|filter| {
+            path.strip_prefix(filter)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        }),
+        ReadAction::List | ReadAction::Search | ReadAction::Show => false,
+    }
+}
+
+/// Whether `message` answers a repeated `read` without having run it.
+fn is_repeated_read(message: &ModelMessage) -> bool {
+    matches!(
+        message,
+        ModelMessage::ToolResult { content, .. } if content.starts_with(REPEATED_READ_PREFIX)
+    )
+}
+
 /// Describes what a `read` call inspected: its action, then any query,
 /// path, revision side, and line window, such as
 /// `file src/lib.rs offset=40 limit=20`.
@@ -1459,31 +1736,75 @@ fn shrunk_write_call(
     .ok()
 }
 
+/// Returns `message` as the notice that stands in for its cleared result,
+/// naming the later call that superseded it, if any; `None` for any other
+/// message, a result already cleared, or one the notice would not shrink.
+fn elided_result(
+    message: &ModelMessage,
+    records: &CallRecords,
+    superseded: Option<&Supersession<'_>>,
+) -> Option<ModelMessage> {
+    let ModelMessage::ToolResult {
+        call_id,
+        content,
+        name,
+    } = message
+    else {
+        return None;
+    };
+    if content.starts_with(CLEARED_RESULT_PREFIX) {
+        return None;
+    }
+    let notice = cleared_result_notice(
+        name,
+        content,
+        records.read_targets.get(call_id).map(String::as_str),
+        superseded,
+    );
+
+    (notice.len() < content.len()).then(|| ModelMessage::ToolResult {
+        call_id: call_id.clone(),
+        content: notice,
+        name: name.clone(),
+    })
+}
+
 /// Renders the notice that stands in for one cleared tool result. A `read`
 /// may be repeated to recover its content, so its notice names the target
 /// when `read_target` is known; any other call already ran, so its notice
-/// keeps the recorded outcome fields and warns against repeating it.
-fn cleared_result_notice(name: &str, content: &str, read_target: Option<&str>) -> String {
-    if name == "read" {
-        let mut notice = json!({
-            "context_cleared": "This earlier read result was cleared to fit the context window. \
-                                If you still need it, read it again, narrowed with offset/limit.",
-            "original_bytes": content.len(),
-        });
+/// keeps the recorded outcome fields and warns against repeating it. A
+/// superseded result's notice says why and names the superseding call.
+fn cleared_result_notice(
+    name: &str,
+    content: &str,
+    read_target: Option<&str>,
+    superseded: Option<&Supersession<'_>>,
+) -> String {
+    let is_read = name == "read";
+    let text = match superseded {
+        Some(supersession) => supersession.cause.notice(),
+        None if is_read => {
+            "This earlier read result was cleared to fit the context window. If you still need it, \
+             read it again, narrowed with offset/limit."
+        }
+        None => {
+            "This earlier tool result was cleared to fit the context window. The call already ran \
+             with the outcome recorded here; do NOT repeat it to recover its output."
+        }
+    };
+    let mut notice = Map::new();
+    notice.insert("context_cleared".to_string(), text.into());
+    notice.insert("original_bytes".to_string(), content.len().into());
+    if let Some(supersession) = superseded {
+        notice.insert("superseded_by".to_string(), supersession.by.into());
+    }
+    if is_read {
         if let Some(target) = read_target {
-            notice["read"] = target.into();
+            notice.insert("read".to_string(), target.into());
         }
 
-        return notice.to_string();
+        return Value::Object(notice).to_string();
     }
-    let mut notice = Map::new();
-    notice.insert(
-        "context_cleared".to_string(),
-        "This earlier tool result was cleared to fit the context window. The call already ran \
-         with the outcome recorded here; do NOT repeat it to recover its output."
-            .into(),
-    );
-    notice.insert("original_bytes".to_string(), content.len().into());
     if let Ok(Value::Object(result)) = serde_json::from_str::<Value>(content) {
         for key in OUTCOME_KEYS {
             let Some(value) = result.get(key) else {
@@ -1501,6 +1822,23 @@ fn cleared_result_notice(name: &str, content: &str, read_target: Option<&str>) -
     }
 
     Value::Object(notice).to_string()
+}
+
+/// Renders the short result that answers a `read` repeating the earlier
+/// call `same_as_call` of the current turn, whose result the request still
+/// carries whole, with no write or command run since.
+pub(crate) fn repeated_read_result(same_as_call: &str) -> String {
+    let note = "This read repeats an earlier read of this turn whose result is shown above, and \
+                nothing was written or run since, so that result is unchanged. Use it instead of \
+                reading again.";
+
+    // Fields are written in this order so the result starts with
+    // `REPEATED_READ_PREFIX`.
+    format!(
+        "{REPEATED_READ_PREFIX}\"same_as_call\":{},\"note\":{}}}",
+        Value::from(same_as_call),
+        Value::from(note)
+    )
 }
 
 /// Renders a tool result cut to its first and last `kept_bytes`, split

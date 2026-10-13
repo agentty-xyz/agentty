@@ -134,6 +134,8 @@ pub struct TurnReport {
     model_requests: Vec<ModelRequestActivity>,
     #[serde(default)]
     output_corrections: usize,
+    #[serde(default)]
+    tool_argument_corrections: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -167,6 +169,14 @@ impl TurnReport {
         self.output_corrections
     }
 
+    /// Returns how many tool-call responses were rejected for invalid tool
+    /// arguments, such as an unknown or misspelled field, and re-requested
+    /// with corrective feedback; none of a rejected response's calls ran.
+    /// Reports recorded before this field existed report none.
+    pub fn tool_argument_corrections(&self) -> usize {
+        self.tool_argument_corrections
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -182,12 +192,18 @@ impl TurnReport {
             history: HistoryActivity::default(),
             model_requests,
             output_corrections: 0,
+            tool_argument_corrections: 0,
             tool_calls,
         }
     }
 
-    pub(crate) fn with_output_corrections(mut self, output_corrections: usize) -> Self {
+    pub(crate) fn with_corrections(
+        mut self,
+        output_corrections: usize,
+        tool_argument_corrections: usize,
+    ) -> Self {
         self.output_corrections = output_corrections;
+        self.tool_argument_corrections = tool_argument_corrections;
 
         self
     }
@@ -337,6 +353,8 @@ pub struct ContextActivity {
     elided_results: usize,
     shrunk_latest_write_calls: usize,
     shrunk_write_calls: usize,
+    #[serde(default)]
+    superseded_results: usize,
     truncated_results: usize,
 }
 
@@ -359,7 +377,8 @@ impl ContextActivity {
         self.dropped_tool_calls
     }
 
-    /// Earlier tool results replaced by a notice that they were cleared.
+    /// Earlier tool results replaced by a notice that they were cleared,
+    /// including [`Self::superseded_results`].
     pub fn elided_results(self) -> usize {
         self.elided_results
     }
@@ -373,6 +392,14 @@ impl ContextActivity {
     /// Earlier `write` calls whose patch was replaced by a short notice.
     pub fn shrunk_write_calls(self) -> usize {
         self.shrunk_write_calls
+    }
+
+    /// Elided results cleared ahead of older ones because a later call of
+    /// the request superseded them: a re-read of the same target, an applied
+    /// write to the file read, or a rerun of the same command. Reports
+    /// recorded before this field existed report none.
+    pub fn superseded_results(self) -> usize {
+        self.superseded_results
     }
 
     /// Tool results cut to a head and tail excerpt: oversized results capped
@@ -397,8 +424,15 @@ impl ContextActivity {
             elided_results,
             shrunk_latest_write_calls,
             shrunk_write_calls,
+            superseded_results: 0,
             truncated_results,
         }
+    }
+
+    pub(crate) fn with_superseded_results(mut self, superseded_results: usize) -> Self {
+        self.superseded_results = superseded_results;
+
+        self
     }
 }
 
@@ -450,6 +484,18 @@ pub enum ToolActivity {
         /// Repository-relative path that was rejected.
         path: String,
     },
+    /// A `read` identical to an earlier read of the same turn, answered
+    /// without running it by a short result naming that earlier call. Only
+    /// a read whose earlier result the request still carries whole, with no
+    /// `write` or `bash` call run since, is answered this way.
+    ReadRepeated {
+        /// Selected inspection action.
+        action: ReadAction,
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Bounded path, query, or action summary.
+        summary: String,
+    },
     /// A repository file write.
     Write {
         /// Number of bytes in the resulting file.
@@ -477,6 +523,7 @@ impl ToolActivity {
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
+            | Self::ReadRepeated { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
         }
@@ -488,7 +535,8 @@ impl ToolActivity {
             Self::Read { .. }
             | Self::ReadInspection { .. }
             | Self::ReadInspectionRejected { .. }
-            | Self::ReadRejected { .. } => "read",
+            | Self::ReadRejected { .. }
+            | Self::ReadRepeated { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
         }
@@ -502,9 +550,9 @@ impl ToolActivity {
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
             | Self::WriteRejected { path, .. } => path,
-            Self::ReadInspection { summary, .. } | Self::ReadInspectionRejected { summary, .. } => {
-                summary
-            }
+            Self::ReadInspection { summary, .. }
+            | Self::ReadInspectionRejected { summary, .. }
+            | Self::ReadRepeated { summary, .. } => summary,
         }
     }
 }
@@ -561,6 +609,17 @@ impl fmt::Display for ToolActivity {
                 formatter,
                 "read {} (rejected; {})",
                 sanitize_report_text(path),
+                format_report_duration(*duration)
+            ),
+            Self::ReadRepeated {
+                action,
+                duration,
+                summary,
+            } => write!(
+                formatter,
+                "read {} {} (repeated; {})",
+                action.as_str(),
+                sanitize_report_text(summary),
                 format_report_duration(*duration)
             ),
             Self::Write {

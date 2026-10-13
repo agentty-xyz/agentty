@@ -101,19 +101,21 @@ let outcome = session
   `retry_settlement()` retries persistence and command cleanup.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
   Once tool traffic grows a request past the budget, the request is sent as a reduced
-  copy without an extra model call. First, any tool result above 25% of the input budget
-  is cut to a head and tail excerpt, and the latest round's largest results are cut to
-  one common size while together they exceed 50%; an excerpt stays the same in later
-  requests. Then older tool results become notices (`read` notices name the target and
-  may be re-read; `bash`/`write` notices keep the outcome and say not to repeat), then
-  older reasoning and `write` patches are cleared, then the oldest replayed turns are
-  dropped, then the current turn's oldest tool rounds are dropped whole behind one note
-  naming the writes they applied, the commands they ran, and the reads to redo only if
-  still needed, down to 70% of the budget so later requests share a stable prefix. Only
-  as a last resort are the latest tool round's results cut further and its `write`
-  patches replaced by their recorded outcome. Stored messages are never changed;
-  `ModelRequestActivity::context` reports each reduction. A request that still cannot
-  fit fails with `TurnError::ContextBudgetExceeded`.
+  copy without an extra model call. First, older tool results that a later call
+  superseded (a re-read of the same target, an applied write to the file read, or a
+  rerun of the same command) become notices naming that call. Then any tool result above
+  25% of the input budget is cut to a head and tail excerpt, and the latest round's
+  largest results are cut to one common size while together they exceed 50%; an excerpt
+  stays the same in later requests. Then the other older tool results become notices
+  (`read` notices name the target and may be re-read; `bash`/`write` notices keep the
+  outcome and say not to repeat), then older reasoning and `write` patches are cleared,
+  then the oldest replayed turns are dropped, then the current turn's oldest tool rounds
+  are dropped whole behind one note naming the writes they applied, the commands they
+  ran, and the reads to redo only if still needed, down to 70% of the budget so later
+  requests share a stable prefix. Only as a last resort are the latest tool round's
+  results cut further and its `write` patches replaced by their recorded outcome. Stored
+  messages are never changed; `ModelRequestActivity::context` reports each reduction. A
+  request that still cannot fit fails with `TurnError::ContextBudgetExceeded`.
 - **Provider usage calibrates the estimate.** Each response's reported input tokens
   calibrate later requests: a line through the first reported request, sloped by the
   steepest token growth since and lifted over every report, so providers' fixed
@@ -123,10 +125,20 @@ let outcome = session
   harness and its sessions, and resets when a session switches model or the estimator is
   replaced. `ModelRequestActivity::estimated_weight` and `calibrated_weight` report what
   each request was fitted as.
+- **Identical reads are answered from the earlier result.** A `read` whose arguments
+  match an earlier read of the same turn returns a short note naming that call instead
+  of running again, while the last request still carried the earlier result whole, no
+  `write` or `bash` call ran since, and the result is larger than the note. The turn
+  report lists it as `ToolActivity::ReadRepeated`. `write` and `bash` always run.
 - **Invalid final output gets two corrections.** A final answer that is not valid JSON
   or violates the schema is re-requested with short, request-only feedback up to twice
   per turn; `TurnReport::output_corrections` counts these retries, and a third rejection
   fails the turn.
+- **Invalid tool arguments are corrected.** A tool-call response whose arguments do not
+  decode, such as a misspelled field, is rejected before any of its calls runs and
+  re-requested with request-only feedback naming the problem and each tool's fields;
+  `TurnReport::tool_argument_corrections` counts these retries. A third consecutive
+  rejection fails the turn; an accepted tool call resets the count.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.

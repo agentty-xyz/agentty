@@ -62,10 +62,14 @@ pub(super) fn write_call(id: &str, patch: &str) -> ToolCall {
 }
 
 pub(super) fn bash_call(id: &str) -> ToolCall {
+    bash_command_call(id, "cargo test")
+}
+
+pub(super) fn bash_command_call(id: &str, command: &str) -> ToolCall {
     ToolCall::from_json(
         id.to_string(),
         "bash",
-        r#"{"command":"cargo test"}"#,
+        &json!({"command": command}).to_string(),
         Some("run the suite".to_string()),
     )
     .expect("bash call")
@@ -111,9 +115,21 @@ pub(super) fn request(
         .with_history_turn_starts(history_turn_starts)
 }
 
-/// Records one read round whose result carries `bytes` of content.
+/// Returns a `read` call for the file `path`.
+pub(super) fn read_call_of(id: &str, path: &str) -> ToolCall {
+    ToolCall::from_json(
+        id.to_string(),
+        "read",
+        &json!({"action": "file", "path": path}).to_string(),
+        None,
+    )
+    .expect("read call")
+}
+
+/// Records one read round of the file `<id>.txt` whose result carries
+/// `bytes` of content.
 pub(super) fn record_read_round(request: &mut ModelRequest, id: &str, bytes: usize) {
-    let call = read_call(id);
+    let call = read_call_of(id, &format!("{id}.txt"));
     request.record_tool_call(call.clone());
     request.record_tool_result(&call, "x".repeat(bytes));
 }

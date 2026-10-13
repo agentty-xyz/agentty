@@ -4,16 +4,19 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use crate::calibration::ContextCalibration;
-use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
+use crate::context::{ContextBudget, ContextEstimator, ContextFit, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
-use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS};
+use crate::engine::{
+    Engine, MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS, MAX_OUTPUT_CORRECTIONS, RepeatedReads,
+};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{
     MockModel, Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse,
     ReasoningEffort,
 };
+use crate::tool::ToolCall;
 use crate::turn::TurnError;
 use crate::{OutputSchema, ToolPolicy, TurnOptions};
 
@@ -185,4 +188,182 @@ async fn feedback_that_overflows_a_tool_free_request_fails_the_turn_typed() {
         Err(TurnError::ContextBudgetExceeded { budget, .. }) if budget == input_weight + 1
     ));
     assert_eq!(requests.len(), 1);
+}
+
+fn invalid_arguments() -> ModelError {
+    ModelError::InvalidToolArguments {
+        reason: "`read`: unknown field `path src/`, expected one of `action`, `path`".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn invalid_tool_arguments_are_re_requested_with_bounded_feedback() {
+    // Arrange
+    let responses = vec![
+        Err(invalid_arguments()),
+        Ok(ModelResponse::Output(json!({"answer": "ok"}))),
+    ];
+
+    // Act
+    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
+
+    // Assert
+    let outcome = outcome.expect("the corrected response should be accepted");
+    assert_eq!(outcome.report().tool_argument_corrections(), 1);
+    assert_eq!(outcome.report().output_corrections(), 0);
+    assert_eq!(requests.len(), 2);
+    let Some(ModelMessage::User(feedback)) = requests[1].messages().last() else {
+        std::panic::resume_unwind(Box::new("feedback expected"));
+    };
+    assert!(feedback.starts_with("[harness] Your previous response was rejected"));
+    assert!(feedback.contains("unknown field `path src/`"));
+    assert!(feedback.contains("None of its tool calls ran"));
+}
+
+#[tokio::test]
+async fn consecutive_invalid_tool_arguments_fail_the_turn_at_the_limit() {
+    // Arrange
+    let responses = (0..MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS)
+        .map(|_| Err(invalid_arguments()))
+        .collect();
+
+    // Act
+    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
+
+    // Assert
+    assert!(matches!(
+        outcome,
+        Err(TurnError::Model(ModelError::InvalidToolArguments { .. }))
+    ));
+    assert_eq!(requests.len(), MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS);
+}
+
+fn tool_call(id: &str, name: &str, arguments: &serde_json::Value) -> ToolCall {
+    ToolCall::from_json(id.to_string(), name, &arguments.to_string(), None).expect("tool call")
+}
+
+fn read_of(id: &str, arguments: &serde_json::Value) -> ToolCall {
+    tool_call(id, "read", arguments)
+}
+
+#[test]
+fn repeated_reads_point_only_to_an_identical_earlier_read() {
+    // Arrange
+    let fit = ContextFit::default();
+    let mut reads = RepeatedReads::default();
+    reads.record(
+        &read_of("r1", &json!({"path": "a.txt", "limit": 20})),
+        2,
+        5000,
+        false,
+    );
+
+    // Act
+    let identical = reads.repeat_of(&read_of("r2", &json!({"path": "a.txt", "limit": 20})), &fit);
+    let equivalent = reads.repeat_of(
+        &read_of(
+            "r3",
+            &json!({"action": "file", "path": "a.txt", "limit": "20"}),
+        ),
+        &fit,
+    );
+    let narrower = reads.repeat_of(&read_of("r4", &json!({"path": "a.txt", "limit": 10})), &fit);
+    let other = reads.repeat_of(&read_of("r5", &json!({"path": "b.txt", "limit": 20})), &fit);
+    let bash = reads.repeat_of(&tool_call("b1", "bash", &json!({"command": "ls"})), &fit);
+    let write = reads.repeat_of(
+        &tool_call(
+            "w1",
+            "write",
+            &json!({"path": "a.txt", "patch": "@@ -1 +1 @@\n-a\n+b\n"}),
+        ),
+        &fit,
+    );
+
+    // Assert
+    assert_eq!(identical.as_deref(), Some("r1"));
+    assert_eq!(equivalent.as_deref(), Some("r1"));
+    assert_eq!(narrower, None);
+    assert_eq!(other, None);
+    assert_eq!(bash, None);
+    assert_eq!(write, None);
+}
+
+#[test]
+fn repeated_reads_run_again_after_a_write_or_command() {
+    // Arrange
+    let fit = ContextFit::default();
+    let read = read_of("r1", &json!({"path": "a.txt"}));
+    let effects = [
+        tool_call("b1", "bash", &json!({"command": "touch a.txt"})),
+        tool_call(
+            "w1",
+            "write",
+            &json!({"path": "a.txt", "patch": "@@ -1 +1 @@\n-a\n+b\n"}),
+        ),
+    ];
+
+    // Act
+    let after_effect: Vec<Option<String>> = effects
+        .iter()
+        .map(|effect| {
+            let mut reads = RepeatedReads::default();
+            reads.record(&read, 2, 5000, false);
+            reads.record(effect, 4, 10, false);
+
+            reads.repeat_of(&read, &fit)
+        })
+        .collect();
+    let mut reads = RepeatedReads::default();
+    reads.record(&read, 2, 5000, false);
+    reads.record(&effects[0], 4, 10, false);
+    reads.record(&read_of("r2", &json!({"path": "a.txt"})), 6, 5000, false);
+    let read_again = reads.repeat_of(&read, &fit);
+
+    // Assert
+    assert_eq!(after_effect, [None, None]);
+    assert_eq!(read_again.as_deref(), Some("r2"));
+}
+
+#[test]
+fn repeated_reads_keep_pointing_to_the_executed_read_and_skip_small_results() {
+    // Arrange
+    let fit = ContextFit::default();
+    let read = read_of("r1", &json!({"path": "a.txt"}));
+    let small = read_of("s1", &json!({"path": "small.txt"}));
+    let mut reads = RepeatedReads::default();
+    reads.record(&read, 2, 5000, false);
+    reads.record(&read_of("r2", &json!({"path": "a.txt"})), 4, 300, true);
+    reads.record(&small, 6, 40, false);
+
+    // Act
+    let repeated = reads.repeat_of(&read, &fit);
+    let small_repeat = reads.repeat_of(&small, &fit);
+
+    // Assert
+    assert_eq!(repeated.as_deref(), Some("r1"));
+    assert_eq!(small_repeat, None);
+}
+
+#[test]
+fn repeated_reads_run_again_once_the_earlier_result_was_reduced() {
+    // Arrange
+    let read = read_of("r1", &json!({"path": "a.txt"}));
+    let mut request = ModelRequest::new("inspect", object_schema());
+    request.record_tool_call(read.clone());
+    request.record_tool_result(&read, "x".repeat(5000));
+    let mut fit = ContextFit::default();
+    fit.fit(
+        &HeuristicContextEstimator,
+        ContextBudget::new(NonZeroU64::new(1000).expect("nonzero budget")),
+        &request,
+    )
+    .expect("fits after capping");
+    let mut reads = RepeatedReads::default();
+    reads.record(&read, 2, 5000, false);
+
+    // Act
+    let repeated = reads.repeat_of(&read, &fit);
+
+    // Assert
+    assert_eq!(repeated, None);
 }

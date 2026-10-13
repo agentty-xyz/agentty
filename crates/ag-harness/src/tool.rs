@@ -247,7 +247,7 @@ impl ToolCall {
             }
         }
         .map_err(|error| model::ModelError::InvalidToolArguments {
-            reason: schema_contract::bounded_diagnostic(error),
+            reason: schema_contract::bounded_diagnostic(format!("`{name}`: {error}")),
         })?;
 
         Ok(Self {

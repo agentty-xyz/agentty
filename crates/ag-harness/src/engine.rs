@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,7 +15,9 @@ use crate::model::{
 use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
-use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, WriteArguments};
+use crate::tool::{
+    ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
+};
 use crate::turn::{
     ModelRequestActivity, ToolActivity, TurnError, TurnOptions, TurnOutcome, TurnReport,
     sanitize_report_text, sanitized_completion_metadata,
@@ -25,6 +28,13 @@ use crate::{context, schema_contract};
 /// Final outputs a turn may have rejected for invalid JSON or a schema
 /// violation and re-requested with corrective feedback before failing.
 pub(crate) const MAX_OUTPUT_CORRECTIONS: usize = 2;
+
+/// Consecutive tool-call responses with invalid tool arguments that fail a
+/// turn; each earlier one is re-requested with corrective feedback. A
+/// response whose calls are accepted resets the count, so a model that
+/// keeps correcting itself is never cut off, while one that cannot form a
+/// valid call stops after a bounded number of wasted requests.
+pub(crate) const MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS: usize = 3;
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
@@ -54,6 +64,9 @@ impl Engine<'_> {
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut output_corrections = 0;
+        let mut consecutive_invalid_arguments = 0;
+        let mut tool_argument_corrections = 0;
+        let mut reads = RepeatedReads::default();
         let mut tool_calls = Vec::new();
 
         loop {
@@ -82,7 +95,21 @@ impl Engine<'_> {
                     error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
                 ) if output_corrections < MAX_OUTPUT_CORRECTIONS => {
                     output_corrections += 1;
-                    request.record_output_feedback(output_feedback(&error));
+                    request.record_feedback(output_feedback(&error));
+
+                    continue;
+                }
+                // A tool-call response with invalid arguments is rejected
+                // whole, before any of its calls runs, and handled like an
+                // invalid final output: re-requested with request-only
+                // feedback that names the problem and each tool's fields.
+                Err(error @ ModelError::InvalidToolArguments { .. })
+                    if consecutive_invalid_arguments + 1
+                        < MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS =>
+                {
+                    consecutive_invalid_arguments += 1;
+                    tool_argument_corrections += 1;
+                    request.record_feedback(tool_arguments_feedback(&error, request.tools()));
 
                     continue;
                 }
@@ -98,21 +125,19 @@ impl Engine<'_> {
                 envelope.map(|envelope| envelope.tokens(estimated_weight)),
             ));
 
-            match response {
+            let calls = match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
-                        .with_output_corrections(output_corrections);
+                        .with_corrections(output_corrections, tool_argument_corrections);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
                 ModelResponse::ToolCall(call) => {
                     Self::persist(recorder.as_ref(), request.record_tool_call(call.clone()))
                         .await?;
-                    let (result, activity) = self.execute_tool_call(&call, &tools, turn_id).await?;
-                    Self::persist(recorder.as_ref(), request.record_tool_result(&call, result))
-                        .await?;
-                    tool_calls.push(activity);
+
+                    vec![call]
                 }
                 ModelResponse::ToolCalls(calls) => {
                     if calls.is_empty() {
@@ -121,14 +146,21 @@ impl Engine<'_> {
                     ensure_unique_tool_call_ids(&calls)?;
                     Self::persist(recorder.as_ref(), request.record_tool_calls(calls.clone()))
                         .await?;
-                    for call in &calls {
-                        let (result, activity) =
-                            self.execute_tool_call(call, &tools, turn_id).await?;
-                        Self::persist(recorder.as_ref(), request.record_tool_result(call, result))
-                            .await?;
-                        tool_calls.push(activity);
-                    }
+
+                    calls
                 }
+            };
+            consecutive_invalid_arguments = 0;
+            for call in &calls {
+                let repeated = reads.repeat_of(call, &context_fit);
+                let (result, activity) = self
+                    .execute_tool_call(call, &tools, turn_id, repeated.as_deref())
+                    .await?;
+                let result_bytes = result.len();
+                Self::persist(recorder.as_ref(), request.record_tool_result(call, result)).await?;
+                let result_index = request.messages().len() - 1;
+                reads.record(call, result_index, result_bytes, repeated.is_some());
+                tool_calls.push(activity);
             }
         }
     }
@@ -275,11 +307,14 @@ impl Engine<'_> {
         Ok((response, activity, reasoning_content))
     }
 
+    /// Runs `call` under the turn's tool policy, or, when `repeats` names
+    /// the earlier call an allowed `read` repeats, answers it without running.
     async fn execute_tool_call(
         &self,
         call: &ToolCall,
         tools: &Tools,
         turn_id: Option<LifecycleId>,
+        repeats: Option<&str>,
     ) -> Result<(String, ToolActivity), TurnError> {
         let mut tool_lifecycle =
             self.lifecycle
@@ -289,10 +324,10 @@ impl Engine<'_> {
                 .bash
                 .as_ref()
                 .map(|tool| ToolExecution::Bash(tool, arguments)),
-            ToolCallArguments::Read(arguments) => tools
-                .read
-                .as_ref()
-                .map(|tool| ToolExecution::Read(tool, arguments)),
+            ToolCallArguments::Read(arguments) => tools.read.as_ref().map(|tool| match repeats {
+                Some(earlier) => ToolExecution::RepeatedRead(arguments, earlier),
+                None => ToolExecution::Read(tool, arguments),
+            }),
             ToolCallArguments::Write(arguments) => tools
                 .write
                 .as_ref()
@@ -351,6 +386,76 @@ impl Engine<'_> {
     }
 }
 
+/// Executed `read` calls of the current turn, keyed by their canonical
+/// arguments, so a repeat may be answered without running it while the
+/// model still sees the earlier result whole and nothing changed since.
+#[derive(Default)]
+struct RepeatedReads {
+    /// `write` and `bash` calls handled so far in the turn.
+    effects: usize,
+    executed: HashMap<String, ExecutedRead>,
+}
+
+impl RepeatedReads {
+    /// Returns the identifier of the earlier call of this turn that the
+    /// `read` `call` repeats when no `write` or `bash` call was handled since,
+    /// the last request sent that call's result whole, and the result is
+    /// larger than the note that would point to it; `None` otherwise,
+    /// including for any other tool.
+    fn repeat_of(&self, call: &ToolCall, context_fit: &context::ContextFit) -> Option<String> {
+        let executed = self.executed.get(&Self::key(call)?)?;
+
+        (executed.effects == self.effects
+            && context_fit.sends_whole(executed.result_index)
+            && context::repeated_read_result(&executed.call_id).len() < executed.result_bytes)
+            .then(|| executed.call_id.clone())
+    }
+
+    /// Remembers a handled call whose result of `result_bytes` is the
+    /// request message at `result_index`: an executed `read` as the latest
+    /// for its arguments, and any `write` or `bash` call as a possible
+    /// change. A `read` answered as a repeat changes nothing.
+    fn record(
+        &mut self,
+        call: &ToolCall,
+        result_index: usize,
+        result_bytes: usize,
+        repeated: bool,
+    ) {
+        match Self::key(call) {
+            Some(_) if repeated => {}
+            Some(key) => {
+                self.executed.insert(
+                    key,
+                    ExecutedRead {
+                        call_id: call.id().to_string(),
+                        effects: self.effects,
+                        result_bytes,
+                        result_index,
+                    },
+                );
+            }
+            None => self.effects += 1,
+        }
+    }
+
+    /// Returns a `read` call's canonical arguments; `None` for other tools.
+    fn key(call: &ToolCall) -> Option<String> {
+        call.read_arguments()?;
+
+        call.arguments_json().ok()
+    }
+}
+
+/// One executed `read` call of the current turn.
+struct ExecutedRead {
+    call_id: String,
+    /// `write` and `bash` calls handled before it.
+    effects: usize,
+    result_bytes: usize,
+    result_index: usize,
+}
+
 #[derive(Default)]
 struct Tools {
     bash: Option<BashTool>,
@@ -361,6 +466,8 @@ struct Tools {
 enum ToolExecution<'a> {
     Bash(&'a BashTool, &'a BashArguments),
     Read(&'a ReadTool, &'a ReadArguments),
+    /// A `read` repeating the named earlier call, answered without running.
+    RepeatedRead(&'a ReadArguments, &'a str),
     Write(&'a WriteTool, &'a WriteArguments),
 }
 
@@ -385,6 +492,14 @@ async fn execute_tool(
         ToolExecution::Read(read_tool, arguments) => {
             execute_read_tool(read_tool, arguments, started_at).await
         }
+        ToolExecution::RepeatedRead(arguments, earlier) => Ok((
+            context::repeated_read_result(earlier),
+            ToolActivity::ReadRepeated {
+                action: arguments.action(),
+                duration: started_at.elapsed(),
+                summary: sanitize_report_text(read_summary(arguments)),
+            },
+        )),
         ToolExecution::Write(write_tool, arguments) => {
             execute_write_tool(write_tool, arguments, started_at, call_id).await
         }
@@ -411,10 +526,7 @@ fn reject_invalid_read_arguments(
     error: &str,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
-    let summary = arguments
-        .path_filter()
-        .or_else(|| arguments.query())
-        .unwrap_or("read");
+    let summary = read_summary(arguments);
     let result = read::invalid_arguments_tool_result(error, summary).map_err(ReadError::from)?;
     let activity = if arguments.action() == ReadAction::File {
         ToolActivity::ReadRejected {
@@ -485,10 +597,7 @@ async fn execute_repository_inspection(
     arguments: &ReadArguments,
     started_at: Instant,
 ) -> Result<(String, ToolActivity), TurnError> {
-    let fallback_summary = arguments
-        .path_filter()
-        .or_else(|| arguments.query())
-        .unwrap_or("read");
+    let fallback_summary = read_summary(arguments);
     match read_tool.execute_inspection(arguments).await {
         Ok((result, summary)) => Ok((
             result,
@@ -553,12 +662,63 @@ async fn execute_write_tool(
     }
 }
 
+/// Returns the bounded report summary of a `read`: its path, else its
+/// query, else the tool name.
+fn read_summary(arguments: &ReadArguments) -> &str {
+    arguments
+        .path_filter()
+        .or_else(|| arguments.query())
+        .unwrap_or("read")
+}
+
 /// Renders the bounded feedback that re-requests a rejected final output.
 fn output_feedback(error: &ModelError) -> String {
     format!(
         "[harness] Your previous final response was rejected ({}). Respond with only a single \
          JSON value that matches the output schema, with no prose or Markdown around it.",
         schema_contract::bounded_diagnostic(error)
+    )
+}
+
+/// Renders the bounded feedback that re-requests a tool-call response
+/// rejected for invalid tool arguments, naming every advertised tool's
+/// argument fields.
+fn tool_arguments_feedback(error: &ModelError, tools: &[ToolDefinition]) -> String {
+    let fields: Vec<String> = tools
+        .iter()
+        .map(|tool| {
+            let parameters = tool.parameters();
+            let required = parameters["required"]
+                .as_array()
+                .map_or(&[][..], Vec::as_slice);
+            let mut names: Vec<&String> = parameters["properties"]
+                .as_object()
+                .into_iter()
+                .flat_map(|properties| properties.keys())
+                .collect();
+            // Sorted so the feedback does not depend on map ordering.
+            names.sort();
+            let fields: Vec<String> = names
+                .into_iter()
+                .map(|field| {
+                    if required.iter().any(|name| name == field.as_str()) {
+                        format!("`{field}` (required)")
+                    } else {
+                        format!("`{field}`")
+                    }
+                })
+                .collect();
+
+            format!("`{}` takes {}", tool.name(), fields.join(", "))
+        })
+        .collect();
+
+    format!(
+        "[harness] Your previous response was rejected because a tool call had invalid arguments \
+         ({}). None of its tool calls ran. Call the tools again using only their documented \
+         argument names and types: {}.",
+        schema_contract::bounded_diagnostic(error),
+        fields.join("; ")
     )
 }
 

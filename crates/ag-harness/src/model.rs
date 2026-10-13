@@ -673,8 +673,9 @@ impl ModelRequest {
         })
     }
 
-    /// Appends request-only harness feedback after a rejected final output.
-    pub(crate) fn record_output_feedback(&mut self, feedback: String) -> &ModelMessage {
+    /// Appends request-only harness feedback after a rejected response: an
+    /// invalid final output or tool calls with invalid arguments.
+    pub(crate) fn record_feedback(&mut self, feedback: String) -> &ModelMessage {
         self.record(ModelMessage::User(feedback))
     }
 
