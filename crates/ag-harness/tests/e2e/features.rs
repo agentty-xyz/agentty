@@ -64,7 +64,7 @@ impl Provider {
         match self {
             Self::Kimi => std::env::var("KIMI_MODEL").unwrap_or_else(|_| "kimi-k2.6".into()),
             Self::Muse => MUSE_SPARK_1_3.to_string(),
-            Self::Qwen => QWEN_PLUS.to_string(),
+            Self::Qwen => std::env::var("QWEN_MODEL").unwrap_or_else(|_| QWEN_PLUS.into()),
         }
     }
 

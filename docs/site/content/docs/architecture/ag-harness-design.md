@@ -70,24 +70,28 @@ the required `ContextBudget` bound a turn.
 
 Before every model request the engine fits the request to the budget without a model
 call. Fitting works on a copy, so canonical turn messages, the durable journal, and
-replayed history keep the original content. Once a request exceeds the budget it is
-reduced to 70% of its capacity, in order: older tool results become tool-aware notices
-(oldest first, replayed history before the current turn), then older assistant reasoning
-becomes a non-empty placeholder (providers that replay reasoning still receive the
-field), then older `write` patches become a note on their recorded outcome, then the
-oldest replayed turns are dropped, then the current turn's oldest tool rounds are
-dropped whole, each call message with all its results, behind one bounded note that
-counts the removed calls and names the writes they applied and the commands they ran.
-Tool calls keep their identifiers, so tool groups stay well-formed, and the latest tool
-round is never reduced by these steps. Each step is a watermark into the append-only
-canonical messages that later requests replay, so successive requests share a stable
-prefix and reduce further only when the budget is exceeded again; each reduced message
-is cached, so a request between watermark advances only weighs and appends its new
-messages. If the request still does not fit, the latest round's largest results are cut
-to a head and tail excerpt that asks for a narrower read, and as the last resort its
-`write` patches are replaced by their recorded outcome; only when even that fails does
-the turn fail typed. Each `ModelRequestActivity` reports the reductions its request
-carried.
+replayed history keep the original content. Once a request exceeds the budget, every
+tool result above 25% of the capacity left after reserved output is first cut to a head
+and tail excerpt of that size, and the latest round's largest results are cut to one
+common size while the round's results together exceed 50%, so one oversized output never
+pushes earlier rounds out. The request is then reduced to 70% of its capacity, in order:
+older tool results become tool-aware notices (oldest first, replayed history before the
+current turn; a `read` notice names its target), then older assistant reasoning becomes
+a non-empty placeholder (providers that replay reasoning still receive the field), then
+older `write` patches become a note on their recorded outcome, then the oldest replayed
+turns are dropped, then the current turn's oldest tool rounds are dropped whole, each
+call message with all its results, behind one bounded note that counts the removed
+calls, names the writes they applied and the commands they ran, and lists their distinct
+read targets to re-read only if still needed. Tool calls keep their identifiers, so tool
+groups stay well-formed, and the latest tool round is never reduced by these steps. Each
+step is a watermark into the append-only canonical messages that later requests replay,
+so successive requests share a stable prefix and reduce further only when the budget is
+exceeded again; each reduced message is cached, so a request between watermark advances
+only weighs and appends its new messages. If the request still does not fit, the latest
+round's largest results are cut further to a head and tail excerpt that asks for a
+narrower read, and as the last resort its `write` patches are replaced by their recorded
+outcome; only when even that fails does the turn fail typed. Each `ModelRequestActivity`
+reports the reductions its request carried.
 
 ```mermaid
 flowchart TD

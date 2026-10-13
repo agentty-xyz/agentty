@@ -341,7 +341,8 @@ impl ContextActivity {
         self.shrunk_write_calls
     }
 
-    /// Latest-round tool results cut to a head and tail excerpt.
+    /// Tool results cut to a head and tail excerpt: oversized results capped
+    /// before other reductions, and latest-round results cut further.
     pub fn truncated_results(self) -> usize {
         self.truncated_results
     }

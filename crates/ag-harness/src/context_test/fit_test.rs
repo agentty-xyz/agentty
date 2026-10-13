@@ -79,6 +79,7 @@ fn fit_elides_oldest_results_down_to_the_target_and_keeps_the_latest_round() {
     assert_eq!(activity.elided_results(), 2);
     let notice = result_json(&fitted.messages()[2]);
     assert_eq!(notice["original_bytes"], json!(1000));
+    assert_eq!(notice["read"], json!("file name.txt"));
     assert!(
         notice["context_cleared"]
             .as_str()
@@ -107,7 +108,7 @@ fn later_requests_reuse_the_reduced_prefix_until_the_budget_is_exceeded_again() 
     record_read_round(&mut request, "small", 600);
     let (second, second_activity) =
         fit_owned(&mut fit, budget(budget_weight), &request).expect("second fit");
-    record_read_round(&mut request, "large", 1500);
+    record_read_round(&mut request, "large", 1000);
     let (third, third_activity) =
         fit_owned(&mut fit, budget(budget_weight), &request).expect("third fit");
 
@@ -121,11 +122,11 @@ fn later_requests_reuse_the_reduced_prefix_until_the_budget_is_exceeded_again() 
         second.messages()[..first.messages().len()],
         *first.messages()
     );
-    // The third exceeds the budget again and elides every older result,
-    // keeping its newest round whole.
+    // The third exceeds the budget again and elides older results down to
+    // the target, keeping its newest round whole.
     let third = third.expect("third reduced copy");
-    assert!(weigh(&third) <= budget_weight);
-    assert_eq!(third_activity.elided_results(), 5);
+    assert!(weigh(&third) <= target(budget_weight));
+    assert_eq!(third_activity.elided_results(), 4);
     assert_eq!(third.messages()[..5], first.messages()[..5]);
     assert_eq!(third.messages().last(), request.messages().last());
 }
@@ -154,17 +155,22 @@ fn cleared_bash_and_write_results_keep_their_outcome_and_forbid_repeats() {
         &write,
         json!({"error": "z".repeat(600), "path": "src/lib.rs", "status": "rejected"}).to_string(),
     );
+    for index in 0..3 {
+        record_read_round(&mut request, &format!("f{index}"), 2000);
+    }
     let read = read_call("r1");
     request.record_tool_call(read.clone());
     request.record_tool_result(&read, "content".to_string());
+    let budget_weight = weigh(&request) - 1;
 
     // Act
-    let (fitted, activity) =
-        fit_owned(&mut ContextFit::default(), budget(1200), &request).expect("fits after elision");
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(budget_weight), &request)
+        .expect("fits after elision");
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    assert_eq!(activity.elided_results(), 2);
+    assert_eq!(activity.truncated_results(), 0);
+    assert_eq!(activity.elided_results(), 3);
     let bash_notice = result_json(&fitted.messages()[2]);
     assert!(
         bash_notice["context_cleared"]
@@ -318,7 +324,7 @@ fn fit_drops_the_oldest_history_turns_and_keeps_doing_so() {
 }
 
 #[test]
-fn fit_truncates_the_latest_round_largest_result_first_when_nothing_else_fits() {
+fn fit_caps_each_oversized_latest_result_to_a_quarter_of_the_budget() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "inspect");
     let calls = vec![read_call("large"), read_call("medium")];
@@ -332,8 +338,12 @@ fn fit_truncates_the_latest_round_largest_result_first_when_nothing_else_fits() 
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    assert!(weigh(&fitted) <= 2000);
+    assert!(weigh(&fitted) <= target(2000));
     assert_eq!(activity.truncated_results(), 2);
+    assert_eq!(activity.elided_results(), 0);
+    for message in &fitted.messages()[2..] {
+        assert!(ByteEstimator.message_weight(message) <= 500);
+    }
     let large = result_json(&fitted.messages()[2]);
     assert!(
         large["context_truncated"]
@@ -341,7 +351,8 @@ fn fit_truncates_the_latest_round_largest_result_first_when_nothing_else_fits() 
             .expect("notice")
             .contains("narrower")
     );
-    assert_eq!(large["omitted_bytes"], json!(5000));
+    assert_ne!(large["head"].as_str().expect("head"), "");
+    assert!(large["omitted_bytes"].as_u64().expect("omitted") < 5000);
     let medium = result_json(&fitted.messages()[3]);
     let head = medium["head"].as_str().expect("head");
     let tail = medium["tail"].as_str().expect("tail");
