@@ -558,3 +558,72 @@ fn fit_fails_typed_when_the_latest_round_cannot_shrink_enough() {
         Err(TurnError::ContextBudgetExceeded { budget: 20, .. })
     ));
 }
+
+#[test]
+fn fit_reduces_history_or_fails_typed_when_feedback_overflows_a_tool_free_request() {
+    // Arrange
+    let history = vec![vec![
+        ModelMessage::User("a".repeat(3000)),
+        ModelMessage::Assistant("{}".to_string()),
+    ]];
+    let mut with_history = request(Vec::new(), history, "reply");
+    with_history.record_output_feedback("f".repeat(500));
+    let mut without_history = request(Vec::new(), Vec::new(), "reply");
+    without_history.record_output_feedback("f".repeat(500));
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(1000), &with_history)
+        .expect("fits after dropping the history turn");
+    let rejected = fit_owned(&mut ContextFit::default(), budget(100), &without_history);
+
+    // Assert
+    assert_eq!(activity.dropped_history_turns(), 1);
+    assert_eq!(
+        fitted.expect("reduced copy").messages(),
+        &with_history.messages()[2..]
+    );
+    assert!(matches!(
+        rejected,
+        Err(TurnError::ContextBudgetExceeded {
+            budget: 100,
+            required: 505,
+        })
+    ));
+}
+
+#[test]
+fn fit_drops_feedback_that_precedes_a_dropped_round_with_that_round() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), "loop");
+    request.record_output_feedback("f".repeat(100));
+    for index in 0..4 {
+        record_read_round(&mut request, &format!("r{index}"), 300);
+    }
+    let budget_weight = weigh(&request) - 1;
+
+    // Act
+    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(budget_weight), &request)
+        .expect("fits after dropping rounds");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    assert!(weigh(&fitted) <= target(budget_weight));
+    let ModelMessage::User(note) = &fitted.messages()[1] else {
+        std::panic::resume_unwind(Box::new("dropped-round note expected"));
+    };
+    assert!(note.starts_with(&format!(
+        "[harness] {} earlier tool call(s)",
+        activity.dropped_tool_calls()
+    )));
+    assert!(activity.dropped_tool_calls() >= 1);
+    assert_eq!(
+        count_calls(fitted.messages()) + activity.dropped_tool_calls(),
+        4
+    );
+    assert!(
+        !fitted
+            .messages()
+            .iter()
+            .any(|message| matches!(message, ModelMessage::User(text) if text.starts_with('f')))
+    );
+}

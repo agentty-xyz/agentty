@@ -135,9 +135,10 @@ a stopped turn keeps everything it already did.
 - The byte-based history limit keeps each turn too large to load whole in its elided or
   brief form, so one oversized turn no longer hides itself and every older turn. Every
   store selects the same forms; SQLite decides whole and brief turns from stored sizes
-  and loads a turn's full payload only when its elided form might fit. Every turn
-  acquisition reloads history from the store, so live and resumed sessions replay the
-  same turns.
+  and loads a turn's full payload only when its elided form might fit. A turn larger
+  than eight times the limit is never elided, so loading one turn stays bounded. Every
+  turn acquisition reloads history from the store, so live and resumed sessions replay
+  the same turns.
 - Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
   turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
   observe context projection instead of inferring it from model answers.

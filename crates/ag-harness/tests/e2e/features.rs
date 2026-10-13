@@ -699,10 +699,11 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
     ];
     let workspace = tempfile::tempdir()?;
     let root = workspace.path().canonicalize()?;
-    let init = std::process::Command::new(GIT_EXECUTABLE)
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
         .args(["init", "--quiet"])
         .current_dir(&root)
-        .status()?;
+        .status()
+        .await?;
     if !init.success() {
         return Err("git init failed".into());
     }

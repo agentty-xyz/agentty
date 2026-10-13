@@ -2150,7 +2150,8 @@ fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut T
 /// left, exactly as [`context::fit_history_bytes`] selects them, and stops at
 /// the first turn that does not fit even in brief form. Stored sizes decide
 /// whole and brief turns without loading them; only a turn that fits briefly
-/// but not whole is loaded here, to weigh its elided form.
+/// but not whole, and stays within [`context::ELIDED_SOURCE_LIMIT_FACTOR`]
+/// times `max_history_bytes`, is loaded here, to weigh its elided form.
 async fn history_window(
     connection: &mut SqliteConnection,
     session_id: &str,
@@ -2182,7 +2183,10 @@ async fn history_window(
             let position = turn_size.turn_position;
             let (form, bytes) = if full_bytes <= remaining {
                 (WindowForm::Full, full_bytes)
-            } else if brief_bytes <= remaining {
+            } else if brief_bytes <= remaining
+                && full_bytes
+                    <= max_history_bytes.saturating_mul(context::ELIDED_SOURCE_LIMIT_FACTOR)
+            {
                 let full_turn = Value::from(vec![position]).to_string();
                 let elided = load_turn_messages(connection, session_id, &full_turn, "[]")
                     .await?
@@ -2197,6 +2201,8 @@ async fn history_window(
                     }
                     None => (WindowForm::Brief, brief_bytes),
                 }
+            } else if brief_bytes <= remaining {
+                (WindowForm::Brief, brief_bytes)
             } else {
                 break 'pages;
             };

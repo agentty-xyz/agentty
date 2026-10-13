@@ -61,7 +61,8 @@ let outcome = session.send("Now focus on error handling").await?;
 Every request replays the most recent finished turns that fit the context budget; the
 provider never holds conversation state. A turn too large to replay whole replays with
 its tool results, reasoning, and `write` patches replaced by short notices, or else as
-its input and final answer; the history byte limit applies the same forms when loading.
+its input and final answer; the history byte limit applies the same forms when loading,
+and a turn larger than eight times that limit loads only as its input and final answer.
 Each model response and tool result is stored as soon as it finishes. A failed or
 interrupted turn replays what it recorded plus a note naming why it stopped and any
 writes or commands whose outcome is unknown; when it does not fit, it replays with its

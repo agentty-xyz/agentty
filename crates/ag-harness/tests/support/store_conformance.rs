@@ -657,7 +657,9 @@ async fn complete_tool_heavy_turn(store: &Arc<dyn SessionStore>, id: &str) {
 async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
     for store in journaled_stores().await {
         // Arrange
-        for (id, max_history_bytes) in [("elided", 1000), ("brief", 100)] {
+        // At 600 bytes the elided form would fit, but the turn exceeds eight
+        // times the limit, so it is never loaded to weigh that form.
+        for (id, max_history_bytes) in [("elided", 1000), ("brief", 100), ("bounded", 600)] {
             store
                 .create_session(&NewSession::new(id, schema()), None, max_history_bytes)
                 .await
@@ -672,6 +674,7 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
         // Act
         let elided = store.load_session("elided").await.expect("history").turns;
         let brief = store.load_session("brief").await.expect("history").turns;
+        let bounded = store.load_session("bounded").await.expect("history").turns;
 
         // Assert
         // The older turn still loads, and the oversized turn keeps its tool
@@ -684,16 +687,15 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
             ModelMessage::ToolResult { call_id, content, .. }
                 if call_id == "r1" && content.starts_with(r#"{"context_cleared":"#)
         ));
-        assert_eq!(
-            brief,
-            vec![
-                old,
-                HistoryTurn::from(vec![
-                    ModelMessage::User("work".to_string()),
-                    ModelMessage::Assistant("{}".to_string()),
-                ]),
-            ]
-        );
+        let briefly = vec![
+            old,
+            HistoryTurn::from(vec![
+                ModelMessage::User("work".to_string()),
+                ModelMessage::Assistant("{}".to_string()),
+            ]),
+        ];
+        assert_eq!(brief, briefly);
+        assert_eq!(bounded, briefly);
     }
 }
 

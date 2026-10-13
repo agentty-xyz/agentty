@@ -6,8 +6,8 @@ use super::support::{
     ByteEstimator, read_call, reasoned_read_call, result_json, tool_result, write_call,
 };
 use crate::context::{
-    CLEARED_REASONING, ContextEstimator, HistoryTurn, TurnStop, fit_history_bytes,
-    select_recent_turns,
+    CLEARED_REASONING, ContextEstimator, ELIDED_SOURCE_LIMIT_FACTOR, HistoryTurn, TurnStop,
+    fit_history_bytes, select_recent_turns,
 };
 use crate::model::ModelMessage;
 use crate::tool::ToolCall;
@@ -126,10 +126,10 @@ fn byte_fitting_prefers_the_full_then_elided_then_brief_form() {
     let brief = retained(&turn.brief());
 
     // Act
-    let as_full = turn.clone().fit_bytes(full);
-    let as_elided = turn.clone().fit_bytes(full - 1);
-    let as_brief = turn.clone().fit_bytes(elided - 1);
-    let rejected = turn.clone().fit_bytes(brief - 1);
+    let as_full = turn.clone().fit_bytes(full, full);
+    let as_elided = turn.clone().fit_bytes(full - 1, full);
+    let as_brief = turn.clone().fit_bytes(elided - 1, full);
+    let rejected = turn.clone().fit_bytes(brief - 1, full);
 
     // Assert
     assert!(brief < elided && elided < full);
@@ -137,6 +137,23 @@ fn byte_fitting_prefers_the_full_then_elided_then_brief_form() {
     assert_eq!(as_elided, Some(turn.elided()));
     assert_eq!(as_brief, Some(turn.brief()));
     assert_eq!(rejected, None);
+}
+
+#[test]
+fn byte_fitting_skips_the_elided_form_of_a_turn_beyond_the_load_bound() {
+    // Arrange
+    let turn = tool_heavy_turn("work");
+    let full = retained(&turn);
+    let bounded_history = full.div_ceil(ELIDED_SOURCE_LIMIT_FACTOR);
+    let unbounded_history = bounded_history - 1;
+
+    // Act
+    let within_bound = turn.clone().fit_bytes(full - 1, bounded_history);
+    let beyond_bound = turn.clone().fit_bytes(full - 1, unbounded_history);
+
+    // Assert
+    assert_eq!(within_bound, Some(turn.elided()));
+    assert_eq!(beyond_bound, Some(turn.brief()));
 }
 
 #[test]

@@ -1,8 +1,9 @@
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
-use crate::context::HeuristicContextEstimator;
+use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
 use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS};
@@ -57,9 +58,10 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     assert!(tools.bash.is_none());
 }
 
-/// Runs one tool-free turn against `responses`, in order, and returns the
-/// outcome with every request the model received.
+/// Runs one tool-free turn within `context_budget` against `responses`, in
+/// order, and returns the outcome with every request the model received.
 async fn run_scripted(
+    context_budget: ContextBudget,
     responses: Vec<Result<ModelResponse, ModelError>>,
 ) -> (Result<crate::TurnOutcome, TurnError>, Vec<ModelRequest>) {
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -81,7 +83,7 @@ async fn run_scripted(
     let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
     let engine = Engine {
-        context_budget: unbounded_context_budget(),
+        context_budget,
         context_estimator: &HeuristicContextEstimator,
         effects: Effects::default(),
         file_system: &file_system,
@@ -116,7 +118,7 @@ async fn rejected_final_outputs_are_re_requested_with_bounded_feedback() {
     ];
 
     // Act
-    let (outcome, requests) = run_scripted(responses).await;
+    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
 
     // Assert
     let outcome = outcome.expect("the third output should be accepted");
@@ -151,7 +153,7 @@ async fn rejected_final_outputs_fail_the_turn_after_the_correction_limit() {
         .collect();
 
     // Act
-    let (outcome, requests) = run_scripted(responses).await;
+    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
 
     // Assert
     assert!(matches!(
@@ -159,4 +161,23 @@ async fn rejected_final_outputs_fail_the_turn_after_the_correction_limit() {
         Err(TurnError::Model(ModelError::InvalidJson { .. }))
     ));
     assert_eq!(requests.len(), MAX_OUTPUT_CORRECTIONS + 1);
+}
+
+#[tokio::test]
+async fn feedback_that_overflows_a_tool_free_request_fails_the_turn_typed() {
+    // Arrange
+    let input_weight =
+        HeuristicContextEstimator.message_weight(&ModelMessage::User("reply".to_string()));
+    let context_budget =
+        ContextBudget::new(NonZeroU64::new(input_weight + 1).expect("nonzero budget"));
+
+    // Act
+    let (outcome, requests) = run_scripted(context_budget, vec![Err(invalid_json())]).await;
+
+    // Assert
+    assert!(matches!(
+        outcome,
+        Err(TurnError::ContextBudgetExceeded { budget, .. }) if budget == input_weight + 1
+    ));
+    assert_eq!(requests.len(), 1);
 }

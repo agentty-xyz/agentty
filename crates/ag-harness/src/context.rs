@@ -41,6 +41,12 @@ const OUTCOME_KEYS: [&str; 6] = [
 /// Longest outcome string value kept in a cleared notice.
 const MAX_OUTCOME_VALUE_BYTES: usize = 256;
 
+/// Multiple of the history byte limit up to which a turn too large to load
+/// whole is still weighed in its elided form. A larger turn loads only in
+/// brief form, so a store never reads more than this multiple of the limit
+/// for one turn.
+pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
+
 /// Approximate request-weight budget for one registered model configuration.
 ///
 /// Weights are deterministic approximations produced by a [`ContextEstimator`];
@@ -268,14 +274,20 @@ impl HistoryTurn {
     }
 
     /// Returns the most complete form of this turn, full, then elided, then
-    /// brief, whose retained bytes fit `max_bytes`.
-    pub(crate) fn fit_bytes(self, max_bytes: usize) -> Option<Self> {
-        if retained_bytes(&self.messages) <= max_bytes {
+    /// brief, whose retained bytes fit `max_bytes`. The elided form is only
+    /// considered while the full turn stays within
+    /// [`ELIDED_SOURCE_LIMIT_FACTOR`] times `max_history_bytes`.
+    pub(crate) fn fit_bytes(self, max_bytes: usize, max_history_bytes: usize) -> Option<Self> {
+        let full_bytes = retained_bytes(&self.messages);
+        if full_bytes <= max_bytes {
             return Some(self);
         }
+        let elided = (full_bytes <= max_history_bytes.saturating_mul(ELIDED_SOURCE_LIMIT_FACTOR))
+            .then(|| self.elided());
 
-        [self.elided(), self.brief()]
+        elided
             .into_iter()
+            .chain([self.brief()])
             .find(|turn| retained_bytes(&turn.messages) <= max_bytes)
     }
 
@@ -647,9 +659,10 @@ impl ContextFit {
     }
 
     /// Leaves the oldest remaining earlier tool round of the current turn,
-    /// its call message with every result, out of the request and refreshes
-    /// the note that stands in for removed rounds; returns `false` when only
-    /// the latest round remains.
+    /// its call message with every result and any request-only message
+    /// before it, out of the request and refreshes the note that stands in
+    /// for removed rounds; returns `false` when no round precedes the latest
+    /// one, including when the current turn has no tool round.
     fn drop_round(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -658,15 +671,19 @@ impl ContextFit {
     ) -> bool {
         let messages = request.messages();
         let start = self.dropped_rounds.end.max(layout.input_index + 1);
-        if start >= layout.latest_round {
+        let Some(call_index) = messages
+            .get(start..layout.latest_round)
+            .and_then(|earlier| earlier.iter().position(is_tool_call_message))
+            .map(|offset| start + offset)
+        else {
             return false;
-        }
-        let end = messages[start + 1..=layout.latest_round]
+        };
+        let end = messages[call_index + 1..layout.latest_round]
             .iter()
             .position(is_tool_call_message)
-            .map_or(layout.latest_round, |offset| start + 1 + offset);
+            .map_or(layout.latest_round, |offset| call_index + 1 + offset);
         self.dropped_rounds
-            .record(tool_calls(&messages[start]), &self.write_outcomes);
+            .record(tool_calls(&messages[call_index]), &self.write_outcomes);
         self.leave_out(start..end);
         self.required = self
             .required
@@ -851,7 +868,8 @@ impl ContextFit {
 /// Selects the most recent finished turns that fit `max_bytes` of retained
 /// history, newest first, each in the most complete form that fits what is
 /// left, and stops at the first turn that does not fit even in brief form.
-/// Returns the kept turns oldest first.
+/// A turn larger than [`ELIDED_SOURCE_LIMIT_FACTOR`] times `max_bytes` is
+/// never elided. Returns the kept turns oldest first.
 pub(crate) fn fit_history_bytes(
     newest_first: impl IntoIterator<Item = HistoryTurn>,
     max_bytes: usize,
@@ -859,7 +877,7 @@ pub(crate) fn fit_history_bytes(
     let mut remaining = max_bytes;
     let mut kept = Vec::new();
     for turn in newest_first {
-        let Some(turn) = turn.fit_bytes(remaining) else {
+        let Some(turn) = turn.fit_bytes(remaining, max_bytes) else {
             break;
         };
         remaining -= retained_bytes(&turn.messages);
@@ -1063,6 +1081,9 @@ impl DroppedRounds {
 struct Layout<'a> {
     history_turn_starts: &'a [usize],
     input_index: usize,
+    /// Index of the current turn's latest tool-call message, or the message
+    /// count when the turn has none. Request-only messages, such as output
+    /// feedback, may follow it.
     latest_round: usize,
 }
 
