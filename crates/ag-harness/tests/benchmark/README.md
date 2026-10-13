@@ -37,13 +37,13 @@ AG_HARNESS_BENCHMARK_REPETITIONS=2 \
 Set `AG_HARNESS_BENCHMARK_PROVIDER` to `kimi`, `muse`, or `qwen`, and
 `AG_HARNESS_BENCHMARK_CASE` to one case name for targeted reruns.
 
-`MODEL_API_BASE_URL` and `MODEL_API_MODEL` remain optional. Kimi cases use a full-minute
-cooldown to respect its three-request-per-minute organization limit. Results stream
-after every case and record pass/fail, wall time, summed provider and turn latency,
-SQLite create/reopen latency for `persistent_memory`, successful model requests,
-executed tool calls, and provider-reported total tokens. Provider error bodies are
-redacted. Failed cases report zero activity because the public turn report is available
-only after a successful turn.
+`MODEL_API_BASE_URL`, `MODEL_API_MODEL`, and `QWEN_MODEL` (default `qwen-plus`) remain
+optional. Kimi cases use a full-minute cooldown to respect its three-request-per-minute
+organization limit. Results stream after every case and record pass/fail, wall time,
+summed provider and turn latency, SQLite create/reopen latency for `persistent_memory`,
+successful model requests, executed tool calls, and provider-reported total tokens.
+Provider error bodies are redacted. Failed cases report zero activity because the public
+turn report is available only after a successful turn.
 
 The benchmark captures OpenTelemetry metrics and spans in-process. It verifies client
 duration/token metrics plus lifecycle duration/call metrics, and requires one correlated
@@ -51,3 +51,68 @@ agent and model span for every persistent-session turn. It does not export telem
 estimate missing tokens, or calculate cost.
 
 See `results/2026-09-03.md` for the completed live persistence and compatibility report.
+
+## Context suite
+
+The context suite measures in-turn context management at a forced small `ContextBudget`.
+Each scenario runs as one `run_once` turn against a committed Git fixture generated from
+a fixed seed, so every run reads the same bytes:
+
+| Scenario             | Task                                                                                                  | Correctness checks                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `long_read_loop`     | Read 16 varied Rust-like files and list each file's `pub fn` names plus the file with the most.       | One per file (exact name set) plus the maximum file.   |
+| `doc_comment_writes` | Apply three named doc-comment edits across two files of about 250 lines; one target is past line 200. | One per edit plus the exact final contents and status. |
+| `huge_result`        | Read six small notes, then one 48 KB single-line file; return all seven code words in order.          | One per code word.                                     |
+
+Select it with `AG_HARNESS_BENCHMARK_SUITE=context` and exactly one provider per
+process. Set `QWEN_MODEL` to compare Qwen models:
+
+```sh
+AG_HARNESS_GIT_EXECUTABLE=/absolute/path/to/git \
+AG_HARNESS_BENCHMARK_SUITE=context \
+AG_HARNESS_BENCHMARK_PROVIDER=qwen \
+QWEN_MODEL=qwen3.8-max \
+AG_HARNESS_BENCHMARK_REPETITIONS=2 \
+  cargo test --locked -p ag-harness --test benchmark
+```
+
+`AG_HARNESS_BENCHMARK_CASE` selects one scenario. `AG_HARNESS_CONTEXT_WINDOW` (default
+`32000`) and `AG_HARNESS_CONTEXT_RESERVED_OUTPUT` (default `16384`) set the budget.
+`AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`) bounds each run; a run that exceeds it
+is recorded as failed. Kimi is not paced in this suite, so its three-request-per-minute
+limit makes it unsuitable without a higher quota.
+
+Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
+`target/ag-harness-context-benchmark.jsonl`) and prints it after `CONTEXT`:
+
+- `success` means every check passed; `correctness` is the passed fraction. Both are
+  derived from the final output and worktree, never from the answer text alone.
+- `model_calls`, `output_corrections`, and `tool_calls` come from the turn report.
+- `duplicate_reads` counts reads repeating an earlier file read with the same path and
+  starting line, or an identical `list`/`search` inspection.
+- `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
+  provider reported none.
+- `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
+  `dropped_tool_calls`, `truncated_results`, and `shrunk_latest_write_calls` sum
+  `ContextActivity` over every accepted request. A reduction carried into later requests
+  is counted once per request, so these measure sustained pressure rather than distinct
+  items.
+- `revision`, `model`, `window`, and `reserved_output` identify the configuration.
+  Activity fields are `null` for failed turns because the public report exists only
+  after a turn finishes; `detail` holds the error or failed checks.
+
+To compare runs, aggregate per scenario and model with `jq`:
+
+```sh
+jq -s -r 'group_by([.scenario, .model])[] | {
+    scenario: .[0].scenario, model: .[0].model, runs: length,
+    success: (map(select(.success)) | length),
+    calls: (map(.model_calls // empty) | add / length),
+    duplicates: (map(.duplicate_reads // empty) | add / length),
+    input_tokens: (map(.input_tokens // empty) | add / length),
+    wall_s: (map(.wall_ms) | add / length / 1000)
+  } | [.scenario, .model, "\(.success)/\(.runs)", .calls, .duplicates,
+       .input_tokens, .wall_s] | @tsv' results.jsonl
+```
+
+Committed baselines live under `results/` as `*-context.jsonl`.

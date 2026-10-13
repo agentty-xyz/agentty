@@ -1,5 +1,6 @@
-//! Manually executed, real-model compatibility benchmark.
+//! Manually executed, real-model compatibility and context benchmarks.
 
+mod context;
 #[path = "../support/context_budget.rs"]
 mod context_budget_fixture;
 mod summary;
@@ -14,7 +15,7 @@ use ag_harness::lifecycle::{
     LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver, ModelResponseType,
 };
 use ag_harness::model::ModelClient;
-use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QwenConfig};
+use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
 use ag_harness::turn::{ModelRequestActivity, ToolActivity};
 use ag_harness::{Harness, OutputSchema, Repository, Tool, TurnOutcome};
 use opentelemetry::global;
@@ -29,6 +30,7 @@ type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 const MODEL_API_BASE_URL: &str = "https://api.meta.ai/v1";
 const GIT_EXECUTABLE_ENV: &str = "AG_HARNESS_GIT_EXECUTABLE";
+const SUITE_ENV: &str = "AG_HARNESS_BENCHMARK_SUITE";
 const KIMI_CASE_INTERVAL: Duration = Duration::from_secs(60);
 const PERSISTENT_TURNS_PER_CASE: usize = 2;
 
@@ -45,6 +47,13 @@ const CASES: [(&str, CaseRunner); 5] = [
 
 #[tokio::main]
 async fn main() -> Result<(), DynError> {
+    match env::var(SUITE_ENV).as_deref() {
+        Err(_) | Ok("compatibility") => {}
+        Ok("context") => return context::run().await,
+        Ok(suite) => {
+            return Err(format!("{SUITE_ENV}={suite} is not compatibility or context").into());
+        }
+    }
     let repetitions = env::var("AG_HARNESS_BENCHMARK_REPETITIONS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -390,13 +399,23 @@ impl Provider {
                 api_key: env::var("MODEL_API_KEY")?,
                 base_url: env::var("MODEL_API_BASE_URL")
                     .unwrap_or_else(|_| MODEL_API_BASE_URL.to_string()),
-                model: env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_3.to_string()),
+                model: self.model(),
             })?),
             Self::Qwen => Ok(ModelClient::qwen(QwenConfig {
                 api_key: env::var("DASHSCOPE_API_KEY")?,
                 base_url: env::var("DASHSCOPE_BASE_URL")?,
-                model: "qwen-plus".to_string(),
+                model: self.model(),
             })?),
+        }
+    }
+
+    fn model(self) -> String {
+        match self {
+            Self::Kimi => env::var("KIMI_MODEL").unwrap_or_default(),
+            Self::Muse => {
+                env::var("MODEL_API_MODEL").unwrap_or_else(|_| MUSE_SPARK_1_3.to_string())
+            }
+            Self::Qwen => env::var("QWEN_MODEL").unwrap_or_else(|_| QWEN_PLUS.to_string()),
         }
     }
 
