@@ -8,7 +8,7 @@ use super::support::{
 };
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT, HeuristicContextEstimator,
-    LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, read_target,
+    LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, cleared_result_notice, read_target,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
@@ -346,4 +346,18 @@ fn read_targets_name_the_action_query_path_side_and_window() {
         // Assert
         assert_eq!(target, expected);
     }
+}
+
+#[test]
+fn read_notice_without_a_known_target_omits_the_target() {
+    // Arrange
+    let content = r#"{"content":"fn main() {}","path":"src/main.rs"}"#;
+
+    // Act
+    let notice = cleared_result_notice("read", content, None);
+
+    // Assert
+    let notice: serde_json::Value = serde_json::from_str(&notice).expect("notice json");
+    assert!(notice.get("read").is_none());
+    assert_eq!(notice["original_bytes"], content.len());
 }
