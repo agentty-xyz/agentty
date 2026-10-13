@@ -132,6 +132,8 @@ pub struct TurnReport {
     #[serde(default)]
     history: HistoryActivity,
     model_requests: Vec<ModelRequestActivity>,
+    #[serde(default)]
+    output_corrections: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -151,9 +153,18 @@ impl TurnReport {
         self.history
     }
 
-    /// Returns one entry for every provider request made during the turn.
+    /// Returns one entry for every provider request whose response the turn
+    /// accepted; rejected final outputs are counted by
+    /// [`Self::output_corrections`].
     pub fn model_requests(&self) -> &[ModelRequestActivity] {
         &self.model_requests
+    }
+
+    /// Returns how many final outputs were rejected as invalid JSON or for
+    /// violating the output schema and re-requested with corrective
+    /// feedback. Reports recorded before this field existed report none.
+    pub fn output_corrections(&self) -> usize {
+        self.output_corrections
     }
 
     /// Returns successful repository tool activity without file contents.
@@ -170,8 +181,15 @@ impl TurnReport {
             duration,
             history: HistoryActivity::default(),
             model_requests,
+            output_corrections: 0,
             tool_calls,
         }
+    }
+
+    pub(crate) fn with_output_corrections(mut self, output_corrections: usize) -> Self {
+        self.output_corrections = output_corrections;
+
+        self
     }
 }
 
@@ -221,6 +239,8 @@ impl HistoryActivity {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ModelRequestActivity {
     completion: Option<CompletionMetadata>,
+    #[serde(default)]
+    context: ContextActivity,
     duration: Duration,
     response_type: ModelResponseType,
 }
@@ -229,6 +249,12 @@ impl ModelRequestActivity {
     /// Returns sanitized provider completion metadata, when available.
     pub fn completion(&self) -> Option<&CompletionMetadata> {
         self.completion.as_ref()
+    }
+
+    /// Returns how this request was reduced to fit the context budget.
+    /// Reports recorded before this field existed report no reduction.
+    pub fn context(&self) -> ContextActivity {
+        self.context
     }
 
     /// Returns the elapsed provider-request time.
@@ -248,8 +274,96 @@ impl ModelRequestActivity {
     ) -> Self {
         Self {
             completion,
+            context: ContextActivity::default(),
             duration,
             response_type,
+        }
+    }
+
+    pub(crate) fn with_context(mut self, context: ContextActivity) -> Self {
+        self.context = context;
+
+        self
+    }
+}
+
+/// Content-free counts of how one provider request was reduced to fit the
+/// context budget.
+///
+/// Reduction applies only to the copy sent to the provider: canonical turn
+/// messages, durable journals, and replayed history keep the original
+/// content. Counts describe the whole sent request, so a reduction carried
+/// over from an earlier request of the same turn is counted again. All counts
+/// are zero when the request was sent unchanged.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ContextActivity {
+    cleared_reasoning: usize,
+    dropped_history_turns: usize,
+    dropped_tool_calls: usize,
+    elided_results: usize,
+    shrunk_latest_write_calls: usize,
+    shrunk_write_calls: usize,
+    truncated_results: usize,
+}
+
+impl ContextActivity {
+    /// Assistant messages whose provider reasoning was replaced by a short
+    /// placeholder.
+    pub fn cleared_reasoning(self) -> usize {
+        self.cleared_reasoning
+    }
+
+    /// Oldest projected history turns left out of the request.
+    pub fn dropped_history_turns(self) -> usize {
+        self.dropped_history_turns
+    }
+
+    /// Earlier tool calls of the current turn left out of the request, with
+    /// their results, behind one note naming their applied writes and
+    /// commands.
+    pub fn dropped_tool_calls(self) -> usize {
+        self.dropped_tool_calls
+    }
+
+    /// Earlier tool results replaced by a notice that they were cleared.
+    pub fn elided_results(self) -> usize {
+        self.elided_results
+    }
+
+    /// Latest-round `write` calls whose patch was replaced by a note on
+    /// their recorded outcome, as the last resort before the request fails.
+    pub fn shrunk_latest_write_calls(self) -> usize {
+        self.shrunk_latest_write_calls
+    }
+
+    /// Earlier `write` calls whose patch was replaced by a short notice.
+    pub fn shrunk_write_calls(self) -> usize {
+        self.shrunk_write_calls
+    }
+
+    /// Tool results cut to a head and tail excerpt: oversized results capped
+    /// before other reductions, and latest-round results cut further.
+    pub fn truncated_results(self) -> usize {
+        self.truncated_results
+    }
+
+    pub(crate) fn new(
+        cleared_reasoning: usize,
+        dropped_history_turns: usize,
+        dropped_tool_calls: usize,
+        elided_results: usize,
+        shrunk_latest_write_calls: usize,
+        shrunk_write_calls: usize,
+        truncated_results: usize,
+    ) -> Self {
+        Self {
+            cleared_reasoning,
+            dropped_history_turns,
+            dropped_tool_calls,
+            elided_results,
+            shrunk_latest_write_calls,
+            shrunk_write_calls,
+            truncated_results,
         }
     }
 }
@@ -490,14 +604,16 @@ pub enum TurnError {
     /// A repository write failed.
     #[error(transparent)]
     Write(#[from] WriteError),
-    /// Mandatory content exceeds the effective model's declared context
-    /// budget, before any history is considered.
-    #[error("mandatory request content weighs {required} but the model context budget is {budget}")]
+    /// Request content exceeds the effective model's declared context
+    /// budget: mandatory content before any history is considered, or a
+    /// grown in-turn request that still does not fit after every allowed
+    /// reduction.
+    #[error("request content weighs {required} but the model context budget is {budget}")]
     ContextBudgetExceeded {
         /// Total declared budget in approximate weight units.
         budget: u64,
-        /// Approximate weight of instructions, current input, advertised tool
-        /// definitions, and reserved output.
+        /// Approximate weight of the smallest request that could be formed,
+        /// including reserved output.
         required: u64,
     },
 }

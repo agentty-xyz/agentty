@@ -224,6 +224,7 @@ fn read_definition_rejects_invalid_arguments() {
         json!({ "action": "file", "path": "Cargo.toml", "offset": 0 }),
         json!({ "action": "file", "path": "Cargo.toml", "limit": 0 }),
         json!({ "action": "file", "path": "Cargo.toml", "unexpected": true }),
+        json!({ "action": "file", "path": "Cargo.toml", "offset": "500" }),
         offset_above_maximum,
         limit_above_maximum,
     ];
@@ -362,8 +363,12 @@ fn write_definition_exposes_native_function_contract() {
     assert_eq!(
         definition.description(),
         concat!(
-            "Apply one unified diff to one repository-relative text file. To create an empty ",
-            "file, use only `--- /dev/null` and `+++ b/<path>` headers."
+            "Apply one unified diff to one repository-relative text file. Hunk line counts are ",
+            "taken from the hunk body. A hunk whose context and removed lines do not match at ",
+            "its `@@` start line applies only where they match exactly one place in the file; ",
+            "copy those lines exactly and add context when they repeat. A hunk with only `+` ",
+            "lines needs a `-N,0` header to insert after line N. To create an empty file, use ",
+            "only `--- /dev/null` and `+++ b/<path>` headers."
         )
     );
     assert!(validator.is_valid(&json!({
@@ -615,6 +620,95 @@ fn read_arguments_reject_non_integral_or_out_of_range_numbers() {
         errors
             .into_iter()
             .all(|error| !error.to_string().is_empty())
+    );
+}
+
+#[test]
+fn read_arguments_accept_canonical_decimal_integer_strings() {
+    // Arrange
+    let values = [
+        (
+            r#"{"action":"file","path":"Cargo.toml","offset":"500","limit":"200"}"#,
+            (500, 200),
+        ),
+        (
+            r#"{"action":"show","path":"Cargo.toml","side":"head","offset":"1","limit":"18446744073709551615"}"#,
+            (1, u64::MAX),
+        ),
+    ];
+
+    // Act
+    let arguments = values.map(|(value, expected)| {
+        serde_json::from_str::<ReadArguments>(value)
+            .map(|arguments| (arguments, expected))
+            .expect("canonical integer strings should decode")
+    });
+
+    // Assert
+    assert!(arguments.iter().all(|(arguments, expected)| {
+        arguments.validation_error().is_none()
+            && arguments.offset() == Some(expected.0)
+            && arguments.limit() == Some(expected.1)
+    }));
+    assert_eq!(
+        serde_json::to_value(&arguments[0].0).expect("arguments should serialize"),
+        json!({ "path": "Cargo.toml", "offset": 500, "limit": 200 })
+    );
+}
+
+#[test]
+fn read_arguments_reject_non_canonical_or_out_of_range_integer_strings() {
+    // Arrange
+    let values = [
+        ("\"\"", "decimal digits"),
+        ("\"abc\"", "decimal digits"),
+        ("\"-1\"", "decimal digits"),
+        ("\"+1\"", "decimal digits"),
+        ("\"1.0\"", "decimal digits"),
+        ("\"1e2\"", "decimal digits"),
+        ("\" 5\"", "decimal digits"),
+        ("\"5 \"", "decimal digits"),
+        ("\"05\"", "decimal digits"),
+        ("\"0\"", "from 1 through u64::MAX"),
+        ("\"18446744073709551616\"", "from 1 through u64::MAX"),
+        ("true", "did not match"),
+    ];
+
+    // Act
+    let errors = values.map(|(value, expected)| {
+        let error = serde_json::from_str::<ReadArguments>(&format!(
+            r#"{{"action":"file","path":"Cargo.toml","limit":{value}}}"#
+        ))
+        .expect_err("invalid integer string should fail");
+
+        (error.to_string(), expected)
+    });
+
+    // Assert
+    for (error, expected) in errors {
+        assert!(
+            error.contains(expected),
+            "{error} should mention {expected}"
+        );
+    }
+}
+
+#[test]
+fn tool_call_from_json_accepts_read_ranges_sent_as_strings() {
+    // Arrange
+    let arguments = r#"{"path":"src/lib.rs","offset":"500","limit":"200"}"#;
+
+    // Act
+    let call = ToolCall::from_json("call-1".to_string(), "read", arguments, None)
+        .expect("string ranges should decode");
+
+    // Assert
+    let read = call.read_arguments().expect("call should be a read");
+    assert_eq!(read.offset(), Some(500));
+    assert_eq!(read.limit(), Some(200));
+    assert_eq!(
+        call.arguments_json().expect("arguments should serialize"),
+        r#"{"limit":200,"offset":500,"path":"src/lib.rs"}"#
     );
 }
 

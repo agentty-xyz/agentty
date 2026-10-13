@@ -64,7 +64,7 @@ impl Provider {
         match self {
             Self::Kimi => std::env::var("KIMI_MODEL").unwrap_or_else(|_| "kimi-k2.6".into()),
             Self::Muse => MUSE_SPARK_1_3.to_string(),
-            Self::Qwen => QWEN_PLUS.to_string(),
+            Self::Qwen => std::env::var("QWEN_MODEL").unwrap_or_else(|_| QWEN_PLUS.into()),
         }
     }
 
@@ -674,6 +674,136 @@ async fn test_compaction_checkpoint() -> Result<(), DynError> {
                 provider.name(),
                 round,
                 compaction_checkpoint(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
+// In-turn context fitting: elision, reasoning clearing, truncation
+// ---------------------------------------------------------------------------
+
+async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
+    let codes = [
+        "amber-17",
+        "basalt-29",
+        "cobalt-31",
+        "dune-43",
+        "ember-59",
+        "fjord-61",
+        "granite-73",
+        "harbor-89",
+    ];
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    for (index, code) in codes.iter().enumerate() {
+        let seed = u8::try_from(index)?;
+        let mut lines: Vec<String> = (0..72).map(|line| filler(seed + line, 80)).collect();
+        lines.insert(36, format!("The code word of this part is {code}."));
+        std::fs::write(
+            root.join(format!("part{}.txt", index + 1)),
+            lines.join("\n"),
+        )?;
+    }
+    // The large file's code word opens its only line, which alone outweighs
+    // the budget. Reads return whole lines, so any result naming the code
+    // word must be cut to a head and tail excerpt, whatever offset, limit,
+    // or search the model chooses.
+    let large = format!(
+        "The code word of the large file is ivory-97. {}\n",
+        filler(3, 36_000)
+    );
+    std::fs::write(root.join("large.txt"), large)?;
+    let directory = tempfile::tempdir()?;
+    let budget =
+        ContextBudget::new(NonZeroU64::new(7_000).ok_or("budget")?).with_reserved_output(500)?;
+    let harness = Harness::new(provider.client()?, budget)
+        .database(directory.path().join("fit.db"))
+        .repository(Repository::new(&root, GIT_EXECUTABLE)?)
+        .allow(Tool::Read)
+        .allow(Tool::Write);
+    let mut session = harness.session("fit", answer_schema()?).create().await?;
+    provider.pace().await;
+    session
+        .send(
+            "Create notes.txt containing one line `context fitting check` with the write tool, \
+             then set answer to `ok`.",
+        )
+        .await?;
+    provider.pace().await;
+    let outcome = session
+        .send(
+            "Read part1.txt through part8.txt in order with the read tool, one file per call and \
+             never several in one response, then read large.txt. Each part contains one sentence \
+             naming its code word, and large.txt names one at the start of its only line. After \
+             reading them all, set answer to the nine code words in that order, separated by \
+             commas.",
+        )
+        .await?;
+    let found = answer(outcome.output());
+    let missing: Vec<&str> = codes
+        .iter()
+        .copied()
+        .chain(["ivory-97"])
+        .filter(|code| !found.contains(code))
+        .collect();
+    let requests = outcome.report().model_requests();
+    let peak = |count: fn(&ag_harness::turn::ContextActivity) -> usize| {
+        requests
+            .iter()
+            .map(|request| count(&request.context()))
+            .max()
+            .unwrap_or(0)
+    };
+    let elided = peak(|context| context.elided_results());
+    let reasoning = peak(|context| context.cleared_reasoning());
+    let writes = peak(|context| context.shrunk_write_calls());
+    let dropped = peak(|context| context.dropped_history_turns());
+    let truncated = peak(|context| context.truncated_results());
+    let rounds = peak(|context| context.dropped_tool_calls());
+    let latest_writes = peak(|context| context.shrunk_latest_write_calls());
+    let summary = format!(
+        "requests={} elided={elided} reasoning={reasoning} writes={writes} dropped={dropped} \
+         truncated={truncated} dropped_calls={rounds} latest_writes={latest_writes}",
+        requests.len()
+    );
+    // Eight parts outweigh the budget, so reading them forces elision; the
+    // large file's code word only arrives in a truncated result.
+    if elided == 0 {
+        return Err(format!("older results were never elided: {summary}").into());
+    }
+    if found.contains("ivory-97") && truncated == 0 {
+        return Err(format!("the large result arrived without truncation: {summary}").into());
+    }
+    if !missing.is_empty() {
+        return Err(format!("lost code words {missing:?} ({summary}): {found}").into());
+    }
+
+    Ok(summary)
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_long_tool_loop_refit() -> Result<(), DynError> {
+    let mut report = Report::new("long_tool_loop");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                provider.name(),
+                round,
+                long_tool_loop(provider).await,
                 started,
             );
         }

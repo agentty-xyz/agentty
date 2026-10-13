@@ -41,6 +41,9 @@ DASHSCOPE_BASE_URL=... \
 cargo test --locked -p ag-harness --test e2e qwen::test_qwen -- --exact --ignored --nocapture
 ```
 
+The feature checks in `features.rs` run with `qwen-plus` unless `QWEN_MODEL` names
+another Qwen model.
+
 ## Images
 
 The `image` checks send ordered PNG and JPEG blocks through one-shot and durable turns

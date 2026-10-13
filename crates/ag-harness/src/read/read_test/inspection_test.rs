@@ -25,6 +25,9 @@ fn private_inspection_errors_map_to_compatible_read_errors() {
         InspectionError::Read(ReadError::OutsideRepository {
             path: "original.rs".to_string(),
         }),
+        InspectionError::PathMatchesNothing {
+            path: "src/store".to_string(),
+        },
     ];
 
     // Act
@@ -46,6 +49,90 @@ fn private_inspection_errors_map_to_compatible_read_errors() {
         &errors[3],
         ReadError::OutsideRepository { path } if path == "original.rs"
     ));
+    assert!(matches!(
+        &errors[4],
+        ReadError::Open { path, source }
+            if path == "inspection" && source.kind() == io::ErrorKind::NotFound
+    ));
+}
+
+fn expect_listing(
+    runner: &mut MockRepositoryCommandRunner,
+    path: &'static str,
+    stdout: &'static [u8],
+) {
+    runner
+        .expect_run()
+        .withf(move |_, arguments| {
+            arguments
+                == [
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                    path,
+                ]
+        })
+        .times(1)
+        .returning(move |_, _| Ok(command_output(0, stdout)));
+}
+
+#[tokio::test]
+async fn list_and_search_reject_paths_that_match_no_repository_file() {
+    // Arrange
+    let mut list_runner = MockRepositoryCommandRunner::new();
+    expect_listing(&mut list_runner, "src/store", b"");
+    let list_tool = ReadTool::new(inspection_file_system(), PathBuf::from("repo"))
+        .with_command_runner(Arc::new(list_runner));
+    let mut search_runner = MockRepositoryCommandRunner::new();
+    search_runner
+        .expect_run()
+        .withf(|_, arguments| arguments.first().is_some_and(|command| command == "grep"))
+        .times(1)
+        .returning(|_, _| Ok(command_output(1, Vec::new())));
+    expect_listing(&mut search_runner, "src/tool", b"");
+    let search_tool = ReadTool::new(inspection_file_system(), PathBuf::from("repo"))
+        .with_command_runner(Arc::new(search_runner));
+    let list = serde_json::from_value(json!({"action": "list", "path": "src/store"}))
+        .expect("list arguments should be valid");
+    let search = serde_json::from_value(json!({
+        "action": "search",
+        "query": "Store",
+        "path": "src/tool"
+    }))
+    .expect("search arguments should be valid");
+
+    // Act
+    let list_error = list_tool
+        .execute_inspection(&list)
+        .await
+        .expect_err("a missing list path should be rejected");
+    let search_error = search_tool
+        .execute_inspection(&search)
+        .await
+        .expect_err("a missing search path should be rejected");
+
+    // Assert
+    for (error, path) in [(&list_error, "src/store"), (&search_error, "src/tool")] {
+        assert!(error.is_model_correctable());
+        let result: Value = serde_json::from_str(&error.to_tool_result(path).expect("encode"))
+            .expect("rejection should be JSON");
+        assert_eq!(result["status"], "rejected");
+        assert!(
+            result["error"]
+                .as_str()
+                .expect("error text")
+                .contains(&format!("path `{path}` matches no repository file"))
+        );
+        assert!(
+            result["error"]
+                .as_str()
+                .expect("error text")
+                .contains("List its parent directory")
+        );
+    }
 }
 
 #[tokio::test]
@@ -115,6 +202,7 @@ async fn searches_literal_repository_text_and_accepts_no_matches() {
         })
         .times(1)
         .returning(|_, _| Ok(command_output(1, Vec::new())));
+    expect_listing(&mut runner, "crates", b"crates/a.rs\0");
     let tool = ReadTool::new(inspection_file_system(), PathBuf::from("repo"))
         .with_command_runner(Arc::new(runner));
     let arguments = serde_json::from_value(json!({

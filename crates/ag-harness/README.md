@@ -59,11 +59,16 @@ let outcome = session.send("Now focus on error handling").await?;
 ```
 
 Every request replays the most recent finished turns that fit the context budget; the
-provider never holds conversation state. Each model response and tool result is stored
-as soon as it finishes. A failed or interrupted turn replays what it recorded plus a
-note naming why it stopped and any writes or commands whose outcome is unknown; when it
-does not fit, only its input and note are replayed. Sessions run concurrently, with one
-active turn per session. The library never picks a database location for you.
+provider never holds conversation state. A turn too large to replay whole replays with
+its tool results, reasoning, and `write` patches replaced by short notices, or else as
+its input and final answer; the history byte limit applies the same forms when loading,
+and a turn larger than eight times that limit loads only as its input and final answer.
+Each model response and tool result is stored as soon as it finishes. A failed or
+interrupted turn replays what it recorded plus a note naming why it stopped and any
+writes or commands whose outcome is unknown; when it does not fit, it replays with its
+tool traffic replaced by notices, or else as only its input and note. Sessions run
+concurrently, with one active turn per session. The library never picks a database
+location for you.
 
 ## Turns
 
@@ -94,9 +99,25 @@ let outcome = session
   then wait on `settled()`, independently of the caller's future, until persistence,
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
-- **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn:
-  once tool traffic grows the next request past the budget, the turn fails with
-  `TurnError::ContextBudgetExceeded`.
+- **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
+  Once tool traffic grows a request past the budget, the request is sent as a reduced
+  copy without an extra model call. First, any tool result above 25% of the input budget
+  is cut to a head and tail excerpt, and the latest round's largest results are cut to
+  one common size while together they exceed 50%; an excerpt stays the same in later
+  requests. Then older tool results become notices (`read` notices name the target and
+  may be re-read; `bash`/`write` notices keep the outcome and say not to repeat), then
+  older reasoning and `write` patches are cleared, then the oldest replayed turns are
+  dropped, then the current turn's oldest tool rounds are dropped whole behind one note
+  naming the writes they applied, the commands they ran, and the reads to redo only if
+  still needed, down to 70% of the budget so later requests share a stable prefix. Only
+  as a last resort are the latest tool round's results cut further and its `write`
+  patches replaced by their recorded outcome. Stored messages are never changed;
+  `ModelRequestActivity::context` reports each reduction. A request that still cannot
+  fit fails with `TurnError::ContextBudgetExceeded`.
+- **Invalid final output gets two corrections.** A final answer that is not valid JSON
+  or violates the schema is re-requested with short, request-only feedback up to twice
+  per turn; `TurnReport::output_corrections` counts these retries, and a third rejection
+  fails the turn.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.
@@ -112,6 +133,17 @@ PNG/JPEG images for models that declare image support.
 `Repository::new` requires a trusted Git executable outside the worktree. Comparisons
 (`diff`, `show` of the base side) additionally need a host-pinned `ComparisonBase` in
 `TurnOptions::with_comparison_base`.
+
+Tool arguments tolerate common model quirks without widening the advertised schema:
+`read` `offset` and `limit` also accept a canonical decimal string such as `"500"`.
+`write` recounts hunk line counts from the hunk body, like `git apply --recount`. A hunk
+applies at its header line when it matches there exactly or ignoring trailing
+whitespace; otherwise it applies only at its single exact match in the file as already
+changed by earlier hunks, or failing that its single match ignoring trailing whitespace.
+The result's `adjusted_hunks` reports each relocated or whitespace-tolerant hunk.
+Ambiguous or unmatched hunks reject the whole patch, and insertion-only hunks still need
+an exact `-N,0` anchor. A `read` `list` or `search` path that matches no repository file
+returns a corrective tool error rather than an empty result.
 
 ### Sandboxed Bash
 
@@ -165,7 +197,7 @@ let harness = Harness::from_registry(&models, "review-model")?;
 ```
 
 - Capabilities are host declarations, not detection. The required `ContextBudget` keeps
-  the most recent whole turns that fit and fails before any provider call when mandatory
+  the most recent turns that fit and fails before any provider call when mandatory
   content cannot fit. `TurnReport::history` says what was replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
   `session.compact()` stores a schema-validated summary that later turns replay first.

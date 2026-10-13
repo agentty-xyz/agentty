@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,10 +16,21 @@ use crate::tool::WriteArguments;
 
 const BYTE_ORDER_MARK: &[u8] = b"\xef\xbb\xbf";
 const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+/// Line comparisons one patch may spend relocating hunks whose header
+/// position does not match, so repetitive targets cannot stall the turn.
+const MAX_LOCATE_COMPARISONS: usize = 8 * 1024 * 1024;
+/// Candidate line numbers named when a hunk matches several places.
+const MAX_REPORTED_CANDIDATES: usize = 8;
 
 /// Successful result of applying one repository write.
+///
+/// The model-facing result lists `adjusted_hunks` only when a hunk applied
+/// away from its header line or only after ignoring trailing whitespace, so
+/// the model can correct its line numbers.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WriteOutput {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    adjusted_hunks: Vec<HunkAdjustment>,
     bytes_written: usize,
     path: String,
     status: &'static str,
@@ -39,8 +51,9 @@ impl WriteOutput {
         serde_json::to_string(self)
     }
 
-    fn new(path: String, bytes_written: usize) -> Self {
+    fn new(path: String, bytes_written: usize, adjusted_hunks: Vec<HunkAdjustment>) -> Self {
         Self {
+            adjusted_hunks,
             bytes_written,
             path,
             status: "applied",
@@ -187,7 +200,10 @@ impl WriteTool {
                 source,
             })?;
         let current = self.read_current(&root, arguments.path()).await?;
-        let result = apply_unified_diff(arguments.path(), current.as_deref(), arguments.patch())?;
+        let PatchedText {
+            adjusted_hunks,
+            content: result,
+        } = apply_unified_diff(arguments.path(), current.as_deref(), arguments.patch())?;
         if result.len() > MAX_FILE_BYTES {
             return Err(WriteError::TargetTooLarge {
                 limit: MAX_FILE_BYTES,
@@ -249,7 +265,7 @@ impl WriteTool {
                 source,
             })?;
 
-            Ok(WriteOutput::new(path, bytes_written))
+            Ok(WriteOutput::new(path, bytes_written, adjusted_hunks))
         };
         // Retain the tool context even after cancellation ends its lifecycle
         // span.
@@ -291,6 +307,46 @@ impl WriteTool {
     }
 }
 
+/// Hunk that applied away from its header line or only after ignoring
+/// trailing whitespace. Line numbers are one-based in the original file.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct HunkAdjustment {
+    applied_line: usize,
+    header_line: usize,
+    hunk: usize,
+    #[serde(rename = "match")]
+    line_match: LineMatch,
+}
+
+/// Comparison under which a hunk's original-side lines matched the target.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LineMatch {
+    Exact,
+    IgnoringTrailingWhitespace,
+}
+
+impl LineMatch {
+    fn matches(self, source: &str, expected: &TextLine) -> bool {
+        if source.ends_with('\n') != expected.newline {
+            return false;
+        }
+        let source = source.strip_suffix('\n').unwrap_or(source);
+
+        match self {
+            Self::Exact => source == expected.content,
+            Self::IgnoringTrailingWhitespace => source.trim_end() == expected.content.trim_end(),
+        }
+    }
+}
+
+/// Patched file bytes plus the hunks that needed relocation.
+#[derive(Debug)]
+struct PatchedText {
+    adjusted_hunks: Vec<HunkAdjustment>,
+    content: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct TextLine {
     content: String,
@@ -310,13 +366,26 @@ struct PatchLine {
     text: TextLine,
 }
 
+/// One parsed hunk. Line counts are derived from the body, as with
+/// `git apply --recount`; the header's original count only distinguishes an
+/// explicit `-N,0` insertion anchor.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Hunk {
     lines: Vec<PatchLine>,
-    new_count: usize,
     new_start: usize,
     old_count: usize,
     old_start: usize,
+}
+
+impl Hunk {
+    /// Returns the lines the target must contain where the hunk applies.
+    fn original_lines(&self) -> Vec<&TextLine> {
+        self.lines
+            .iter()
+            .filter(|line| line.kind != PatchLineKind::Addition)
+            .map(|line| &line.text)
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -370,141 +439,219 @@ impl PatchTermination {
     }
 }
 
+/// Applies hunks in order to an in-memory copy of the target, so a failing
+/// hunk leaves the file untouched.
 struct HunkApplier<'a> {
+    adjusted_hunks: Vec<HunkAdjustment>,
+    comparisons_left: usize,
     new_side_terminated: bool,
-    output: String,
-    output_index: usize,
-    previous_original_end: Option<usize>,
+    output: Vec<Cow<'a, str>>,
     source_index: usize,
-    source_lines: std::str::SplitInclusive<'a, char>,
+    source_lines: Vec<&'a str>,
 }
 
 impl<'a> HunkApplier<'a> {
     fn new(current: &'a str) -> Self {
         Self {
+            adjusted_hunks: Vec::new(),
+            comparisons_left: MAX_LOCATE_COMPARISONS,
             new_side_terminated: false,
-            output: String::with_capacity(current.len()),
-            output_index: 0,
-            previous_original_end: None,
+            output: Vec::new(),
             source_index: 0,
-            source_lines: current.split_inclusive('\n'),
+            source_lines: current.split_inclusive('\n').collect(),
         }
     }
 
-    fn apply_hunk(&mut self, hunk: &Hunk) -> Result<(), WriteError> {
-        let original_index = hunk_start(hunk.old_start, hunk.old_count, "original")?;
-        let modified_index = hunk_start(hunk.new_start, hunk.new_count, "modified")?;
-        self.validate_original_range(original_index, hunk.old_count)?;
-        self.copy_source_until(original_index)?;
-        if modified_index != self.output_index {
-            return Err(patch_error(
-                "hunk modified range does not match its original range",
-            ));
-        }
+    fn apply_hunk(&mut self, number: usize, hunk: &Hunk) -> Result<(), WriteError> {
+        let original = hunk.original_lines();
+        let start = if original.is_empty() {
+            self.insertion_start(hunk)?
+        } else {
+            self.locate(number, hunk, &original)?
+        };
+        self.copy_source_until(start)?;
         for line in &hunk.lines {
-            self.apply_line(line)?;
+            self.apply_line(line);
         }
 
         Ok(())
     }
 
-    fn finish(mut self) -> Result<String, WriteError> {
-        if self.new_side_terminated && self.source_lines.next().is_some() {
+    fn finish(self, line_ending: &str) -> Result<PatchedText, WriteError> {
+        if self.new_side_terminated && self.source_index < self.source_lines.len() {
             return Err(patch_error(
                 "newline marker must terminate its affected file side",
             ));
         }
-        for source_line in self.source_lines {
-            self.output.push_str(source_line);
+        let mut output = String::new();
+        for line in self
+            .output
+            .iter()
+            .map(AsRef::as_ref)
+            .chain(self.source_lines[self.source_index..].iter().copied())
+        {
+            match line.strip_suffix('\n') {
+                Some(content) => {
+                    output.push_str(content);
+                    output.push_str(line_ending);
+                }
+                None => output.push_str(line),
+            }
         }
 
-        Ok(self.output)
+        Ok(PatchedText {
+            adjusted_hunks: self.adjusted_hunks,
+            content: output.into_bytes(),
+        })
     }
 
-    fn validate_original_range(
-        &mut self,
-        original_index: usize,
-        old_count: usize,
-    ) -> Result<(), WriteError> {
-        if self
-            .previous_original_end
-            .is_some_and(|end| original_index < end)
-        {
+    /// Places a hunk without original-side lines exactly where its `-N,0`
+    /// header says: after original line `N`.
+    fn insertion_start(&self, hunk: &Hunk) -> Result<usize, WriteError> {
+        if hunk.old_count != 0 {
+            return Err(patch_error(
+                "a hunk with only added lines needs a `-N,0` header naming the line it follows; \
+                 add context lines to place it",
+            ));
+        }
+        let start = hunk.old_start;
+        if start < self.source_index {
             return Err(patch_error(
                 "hunks must use ascending, non-overlapping original ranges",
             ));
         }
-        self.previous_original_end = Some(
-            original_index
-                .checked_add(old_count)
-                .ok_or_else(|| patch_error("hunk original range overflowed"))?,
-        );
-
-        Ok(())
-    }
-
-    fn copy_source_until(&mut self, original_index: usize) -> Result<(), WriteError> {
-        while self.source_index < original_index {
-            if self.new_side_terminated {
-                return Err(patch_error(
-                    "newline marker must terminate its affected file side",
-                ));
-            }
-            let source_line = self
-                .source_lines
-                .next()
-                .ok_or_else(|| patch_error("hunk starts beyond the end of the target"))?;
-            self.output.push_str(source_line);
-            self.output_index += 1;
-            self.source_index += 1;
+        if start > self.source_lines.len() {
+            return Err(patch_error("hunk starts beyond the end of the target"));
+        }
+        let modified_index = hunk_start(hunk.new_start, hunk.lines.len(), "modified")?;
+        if modified_index != self.output.len() + (start - self.source_index) {
+            return Err(patch_error(
+                "hunk modified range does not match its original range",
+            ));
         }
 
+        Ok(start)
+    }
+
+    /// Returns where a hunk with original-side lines applies: its header line
+    /// when those lines match there exactly or, failing that, ignoring
+    /// trailing whitespace; otherwise the single place in the file, as
+    /// already changed by earlier hunks, where they match exactly or, failing
+    /// that, ignoring trailing whitespace.
+    fn locate(
+        &mut self,
+        number: usize,
+        hunk: &Hunk,
+        original: &[&TextLine],
+    ) -> Result<usize, WriteError> {
+        let header_index = hunk_start(hunk.old_start, original.len(), "original")?;
+        if header_index >= self.source_index {
+            if block_matches(&self.source_lines, header_index, original, LineMatch::Exact) {
+                return Ok(header_index);
+            }
+            let tolerant = LineMatch::IgnoringTrailingWhitespace;
+            if block_matches(&self.source_lines, header_index, original, tolerant) {
+                self.adjusted_hunks.push(HunkAdjustment {
+                    applied_line: header_index + 1,
+                    header_line: hunk.old_start,
+                    hunk: number,
+                    line_match: tolerant,
+                });
+
+                return Ok(header_index);
+            }
+        }
+        let too_repetitive = || {
+            patch_error(format!(
+                "hunk {number} is too repetitive to locate within the comparison limit; add \
+                 distinctive context lines or split the patch into smaller writes"
+            ))
+        };
+        let remaining = &self.source_lines[self.source_index..];
+        self.comparisons_left = self
+            .comparisons_left
+            .checked_sub(self.output.len() + remaining.len())
+            .ok_or_else(too_repetitive)?;
+        let evolving: Vec<&str> = self
+            .output
+            .iter()
+            .map(AsRef::as_ref)
+            .chain(remaining.iter().copied())
+            .collect();
+        for line_match in [LineMatch::Exact, LineMatch::IgnoringTrailingWhitespace] {
+            let candidates =
+                find_matches(&evolving, original, line_match, &mut self.comparisons_left)
+                    .ok_or_else(too_repetitive)?;
+            match candidates.as_slice() {
+                [] => {}
+                [candidate] => {
+                    let Some(offset) = candidate.checked_sub(self.output.len()) else {
+                        return Err(patch_error(format!(
+                            "hunk {number} matches the target only at line {}, which is at or \
+                             before an earlier hunk; hunks must use ascending, non-overlapping \
+                             original ranges",
+                            candidate + 1
+                        )));
+                    };
+                    let start = self.source_index + offset;
+                    self.adjusted_hunks.push(HunkAdjustment {
+                        applied_line: start + 1,
+                        header_line: hunk.old_start,
+                        hunk: number,
+                        line_match,
+                    });
+
+                    return Ok(start);
+                }
+                _ => return Err(ambiguous_hunk_error(number, &candidates, line_match)),
+            }
+        }
+
+        Err(patch_error(format!(
+            "hunk {number} context and removed lines do not match the target at header line {} or \
+             anywhere else; re-read the file and copy those lines exactly",
+            hunk.old_start
+        )))
+    }
+
+    fn copy_source_until(&mut self, start: usize) -> Result<(), WriteError> {
+        if self.new_side_terminated && self.source_index < start {
+            return Err(patch_error(
+                "newline marker must terminate its affected file side",
+            ));
+        }
+        self.output.extend(
+            self.source_lines[self.source_index..start]
+                .iter()
+                .map(|line| Cow::Borrowed(*line)),
+        );
+        self.source_index = start;
+
         Ok(())
     }
 
-    fn apply_line(&mut self, line: &PatchLine) -> Result<(), WriteError> {
+    /// Applies one located line; context lines keep the target's own text so
+    /// whitespace-tolerant matches never rewrite unchanged lines.
+    fn apply_line(&mut self, line: &PatchLine) {
         match line.kind {
             PatchLineKind::Addition => {
-                push_text_line(&mut self.output, &line.text);
-                self.output_index += 1;
+                let mut added = line.text.content.clone();
+                if line.text.newline {
+                    added.push('\n');
+                }
+                self.output.push(Cow::Owned(added));
                 self.new_side_terminated = !line.text.newline;
             }
             PatchLineKind::Context => {
-                let source_line = self.next_matching_source_line(
-                    &line.text,
-                    "hunk context does not match the target",
-                )?;
-                self.output.push_str(source_line);
-                self.output_index += 1;
+                self.output
+                    .push(Cow::Borrowed(self.source_lines[self.source_index]));
                 self.source_index += 1;
                 self.new_side_terminated = !line.text.newline;
             }
             PatchLineKind::Removal => {
-                self.next_matching_source_line(
-                    &line.text,
-                    "hunk removal does not match the target",
-                )?;
                 self.source_index += 1;
             }
         }
-
-        Ok(())
-    }
-
-    fn next_matching_source_line(
-        &mut self,
-        expected: &TextLine,
-        mismatch_error: &'static str,
-    ) -> Result<&'a str, WriteError> {
-        let source_line = self
-            .source_lines
-            .next()
-            .ok_or_else(|| patch_error(mismatch_error))?;
-        if !source_line_matches(source_line, expected) {
-            return Err(patch_error(mismatch_error));
-        }
-
-        Ok(source_line)
     }
 }
 
@@ -512,20 +659,15 @@ fn apply_unified_diff(
     requested_path: &str,
     current: Option<&[u8]>,
     unified_patch: &str,
-) -> Result<Vec<u8>, WriteError> {
+) -> Result<PatchedText, WriteError> {
     let diff = parse_unified_diff(unified_patch)?;
     validate_headers(requested_path, current.is_some(), &diff)?;
     let (bom, text) = decode_text(requested_path, current.unwrap_or_default())?;
     let (line_ending, normalized) = normalize_line_endings(requested_path, text)?;
-    let mut output = apply_hunks(&normalized, &diff.hunks)?;
-    if line_ending == "\r\n" {
-        output = output.replace('\n', "\r\n");
-    }
-    let mut bytes = Vec::with_capacity(bom.len() + output.len());
-    bytes.extend_from_slice(bom);
-    bytes.extend_from_slice(output.as_bytes());
+    let mut patched = apply_hunks(&normalized, &diff.hunks, line_ending)?;
+    patched.content.splice(0..0, bom.iter().copied());
 
-    Ok(bytes)
+    Ok(patched)
 }
 
 fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
@@ -540,12 +682,13 @@ fn parse_unified_diff(patch: &str) -> Result<UnifiedDiff, WriteError> {
     let mut termination = PatchTermination::default();
     while let Some(header) = lines.next() {
         let header = strip_patch_newline(header);
-        let (old_start, old_count, new_start, new_count) = parse_hunk_header(header)?;
+        let (old_start, old_count, new_start) = parse_hunk_header(header)?;
         let hunk_lines = parse_hunk_lines(&mut lines, &mut termination)?;
-        validate_hunk_line_counts(&hunk_lines, old_count, new_count)?;
+        if hunk_lines.is_empty() {
+            return Err(patch_error("hunk contains no patch lines"));
+        }
         hunks.push(Hunk {
             lines: hunk_lines,
-            new_count,
             new_start,
             old_count,
             old_start,
@@ -604,26 +747,6 @@ fn parse_patch_line(line: &str) -> Result<PatchLine, WriteError> {
     })
 }
 
-fn validate_hunk_line_counts(
-    hunk_lines: &[PatchLine],
-    old_count: usize,
-    new_count: usize,
-) -> Result<(), WriteError> {
-    let actual_old = hunk_lines
-        .iter()
-        .filter(|line| line.kind != PatchLineKind::Addition)
-        .count();
-    let actual_new = hunk_lines
-        .iter()
-        .filter(|line| line.kind != PatchLineKind::Removal)
-        .count();
-    if actual_old != old_count || actual_new != new_count {
-        return Err(patch_error("hunk line counts do not match its header"));
-    }
-
-    Ok(())
-}
-
 fn parse_header(line: Option<&str>, prefix: &str) -> Result<String, WriteError> {
     let line = line.ok_or_else(|| patch_error("patch is missing file headers"))?;
     let line = strip_patch_newline(line);
@@ -640,7 +763,9 @@ fn parse_header(line: Option<&str>, prefix: &str) -> Result<String, WriteError> 
     Ok(path.to_string())
 }
 
-fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize, usize), WriteError> {
+/// Returns the original start and count and the modified start. The
+/// modified count is validated but unused because counts are recounted.
+fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize), WriteError> {
     let ranges = header
         .strip_prefix("@@ -")
         .and_then(|header| header.split_once(" @@").map(|(ranges, _)| ranges))
@@ -649,9 +774,9 @@ fn parse_hunk_header(header: &str) -> Result<(usize, usize, usize, usize), Write
         .split_once(" +")
         .ok_or_else(|| patch_error("invalid unified diff hunk ranges"))?;
     let (old_start, old_count) = parse_range(old_range)?;
-    let (new_start, new_count) = parse_range(new_range)?;
+    let (new_start, _) = parse_range(new_range)?;
 
-    Ok((old_start, old_count, new_start, new_count))
+    Ok((old_start, old_count, new_start))
 }
 
 fn parse_range(range: &str) -> Result<(usize, usize), WriteError> {
@@ -740,13 +865,17 @@ fn normalize_line_endings<'a>(
     Ok(("\n", std::borrow::Cow::Borrowed(text)))
 }
 
-fn apply_hunks(current: &str, hunks: &[Hunk]) -> Result<String, WriteError> {
+fn apply_hunks(
+    current: &str,
+    hunks: &[Hunk],
+    line_ending: &str,
+) -> Result<PatchedText, WriteError> {
     let mut applier = HunkApplier::new(current);
-    for hunk in hunks {
-        applier.apply_hunk(hunk)?;
+    for (index, hunk) in hunks.iter().enumerate() {
+        applier.apply_hunk(index + 1, hunk)?;
     }
 
-    applier.finish()
+    applier.finish(line_ending)
 }
 
 fn hunk_start(start: usize, count: usize, side: &str) -> Result<usize, WriteError> {
@@ -759,16 +888,72 @@ fn hunk_start(start: usize, count: usize, side: &str) -> Result<usize, WriteErro
         .ok_or_else(|| patch_error(format!("non-empty hunk cannot start at {side} line zero")))
 }
 
-fn source_line_matches(source: &str, expected: &TextLine) -> bool {
-    source.ends_with('\n') == expected.newline
-        && source.strip_suffix('\n').unwrap_or(source) == expected.content
+fn block_matches(
+    lines: &[&str],
+    start: usize,
+    original: &[&TextLine],
+    line_match: LineMatch,
+) -> bool {
+    lines
+        .get(start..start.saturating_add(original.len()))
+        .is_some_and(|window| {
+            window
+                .iter()
+                .zip(original)
+                .all(|(source, expected)| line_match.matches(source, expected))
+        })
 }
 
-fn push_text_line(output: &mut String, line: &TextLine) {
-    output.push_str(&line.content);
-    if line.newline {
-        output.push('\n');
+/// Returns every start index where `original` matches `lines`, or `None`
+/// once the comparison budget runs out.
+fn find_matches(
+    lines: &[&str],
+    original: &[&TextLine],
+    line_match: LineMatch,
+    comparisons_left: &mut usize,
+) -> Option<Vec<usize>> {
+    let mut matches = Vec::new();
+    let Some(last_start) = lines.len().checked_sub(original.len()) else {
+        return Some(matches);
+    };
+    'starts: for start in 0..=last_start {
+        for (source, expected) in lines[start..].iter().zip(original) {
+            *comparisons_left = comparisons_left.checked_sub(1)?;
+            if !line_match.matches(source, expected) {
+                continue 'starts;
+            }
+        }
+        matches.push(start);
     }
+
+    Some(matches)
+}
+
+fn ambiguous_hunk_error(number: usize, candidates: &[usize], line_match: LineMatch) -> WriteError {
+    let mut lines = candidates
+        .iter()
+        .take(MAX_REPORTED_CANDIDATES)
+        .map(|candidate| (candidate + 1).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if candidates.len() > MAX_REPORTED_CANDIDATES {
+        lines.push_str(", ...");
+    }
+    let numbering = if number > 1 {
+        " (counted after this patch's earlier hunks)"
+    } else {
+        ""
+    };
+    let comparison = match line_match {
+        LineMatch::Exact => "",
+        LineMatch::IgnoringTrailingWhitespace => " after ignoring trailing whitespace",
+    };
+
+    patch_error(format!(
+        "hunk {number} does not match at its header line and matches the target at lines \
+         {lines}{numbering}{comparison}; re-read the file and add context lines so the hunk \
+         matches exactly one place"
+    ))
 }
 
 fn strip_patch_newline(line: &str) -> &str {

@@ -13,7 +13,7 @@ use super::support::{
     read_call_with_path, read_harness, readable_file_system, readable_file_system_with,
     response_with_metadata, response_without_metadata,
 };
-use crate::context::{ContextBudget, ContextEstimator};
+use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -637,4 +637,171 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
             required: 23,
         })
     ));
+}
+
+fn repeatable_file_system(content: Vec<u8>) -> MockFileSystem {
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_canonicalize()
+        .returning(|path| Ok(path.to_path_buf()));
+    file_system
+        .expect_open_beneath()
+        .returning(move |_, _| Ok(Box::new(Cursor::new(content.clone()))));
+
+    file_system
+}
+
+#[tokio::test]
+async fn long_read_loops_send_reduced_copies_within_the_budget() {
+    // Arrange
+    let content = format!("{}\n", "x".repeat(79)).repeat(100).into_bytes();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    let calls = AtomicUsize::new(0);
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        recorded.lock().expect("requests lock").push(request);
+        let call = calls.fetch_add(1, Ordering::SeqCst);
+        let response = if call < 6 {
+            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
+                .expect("read arguments should be valid");
+            ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
+        } else {
+            ModelResponse::Output(json!({"summary": "read everything"}))
+        };
+
+        Ok(response_without_metadata(response))
+    });
+    let budget = 6_000;
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("budgeted", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                context_budget: ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
+                image_input: false,
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+    let harness = Harness::from_registry(&registry, "budgeted")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(repeatable_file_system(content));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes repeatedly", object_schema())
+        .await
+        .expect("the loop should fit by eliding older results");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let estimator = HeuristicContextEstimator;
+    let tool_weight: u64 = requests[0]
+        .tools()
+        .iter()
+        .map(|tool| estimator.tool_definition_weight(tool))
+        .sum();
+    for request in requests.iter() {
+        let weight: u64 = request
+            .messages()
+            .iter()
+            .map(|message| estimator.message_weight(message))
+            .sum();
+        assert!(weight + tool_weight <= budget);
+        let latest = request.messages().last().expect("message");
+        if let ModelMessage::ToolResult { content, .. } = latest {
+            assert!(!content.contains("context_cleared"));
+        }
+    }
+    let elided: Vec<usize> = outcome
+        .report()
+        .model_requests()
+        .iter()
+        .map(|request| request.context().elided_results())
+        .collect();
+    assert_eq!(elided[0], 0);
+    assert!(elided.windows(2).all(|pair| pair[0] <= pair[1]));
+    assert!(elided[6] > 0);
+}
+
+#[tokio::test]
+async fn very_long_read_loops_drop_their_oldest_rounds_to_stay_within_the_budget() {
+    // Arrange
+    let rounds = 200;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    let calls = AtomicUsize::new(0);
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        recorded.lock().expect("requests lock").push(request);
+        let call = calls.fetch_add(1, Ordering::SeqCst);
+        let response = if call < rounds {
+            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
+                .expect("read arguments should be valid");
+            ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
+        } else {
+            ModelResponse::Output(json!({"summary": "read everything"}))
+        };
+
+        Ok(response_without_metadata(response))
+    });
+    let budget = 4_000;
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("budgeted", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                context_budget: ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
+                image_input: false,
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+    let harness = Harness::from_registry(&registry, "budgeted")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(repeatable_file_system(b"ok\n".to_vec()));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes many times", object_schema())
+        .await
+        .expect("the loop should fit by dropping its oldest rounds");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let estimator = HeuristicContextEstimator;
+    let tool_weight: u64 = requests[0]
+        .tools()
+        .iter()
+        .map(|tool| estimator.tool_definition_weight(tool))
+        .sum();
+    for request in requests.iter() {
+        let weight: u64 = request
+            .messages()
+            .iter()
+            .map(|message| estimator.message_weight(message))
+            .sum();
+        assert!(weight + tool_weight <= budget);
+    }
+    let last = requests.last().expect("final request");
+    assert!(matches!(
+        &last.messages()[1],
+        ModelMessage::User(note) if note.contains("earlier tool call(s) of this turn")
+    ));
+    let dropped = outcome
+        .report()
+        .model_requests()
+        .last()
+        .expect("final request activity")
+        .context()
+        .dropped_tool_calls();
+    assert!(dropped > 0);
+    assert!(dropped < rounds);
 }

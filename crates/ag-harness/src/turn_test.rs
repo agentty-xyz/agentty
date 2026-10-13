@@ -193,6 +193,6 @@ fn context_budget_error_has_stable_classification() {
     assert_eq!(error_type, TurnErrorType::ContextBudget);
     assert_eq!(
         error.to_string(),
-        "mandatory request content weighs 21 but the model context budget is 8"
+        "request content weighs 21 but the model context budget is 8"
     );
 }

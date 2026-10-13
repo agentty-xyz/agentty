@@ -299,15 +299,16 @@ async fn treats_repository_path_filters_as_literal() {
     .expect("literal list arguments should be valid");
 
     // Act
-    let (result, _) = tool
+    let error = tool
         .execute_inspection(&arguments)
         .await
-        .expect("literal path inspection should succeed");
-    let result: Value = serde_json::from_str(&result).expect("list result should be JSON");
+        .expect_err("a literal path naming no file should be rejected");
 
     // Assert
-    assert_eq!(result["result"], json!([]));
-    assert_eq!(result["truncated"], false);
+    assert!(matches!(
+        error,
+        InspectionError::PathMatchesNothing { path } if path == ":(top)Cargo.toml"
+    ));
 }
 
 #[tokio::test]

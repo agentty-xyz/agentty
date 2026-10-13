@@ -25,7 +25,8 @@ use crate::{Repository, Tool, ToolPolicy, TurnOptions};
 async fn rejects_schema_invalid_output_from_injected_model() {
     // Arrange
     let mut model = model();
-    model.expect_complete().times(1).returning(|_| {
+    // The invalid output is re-requested twice before the turn fails.
+    model.expect_complete().times(3).returning(|_| {
         Ok(response_without_metadata(ModelResponse::Output(json!({
             "summary": 42
         }))))
@@ -54,7 +55,7 @@ async fn rejects_schema_invalid_output_from_injected_model() {
     let events = events
         .lock()
         .expect("event recorder should not be poisoned");
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 8);
     assert!(events.iter().any(|event| matches!(
         event.kind(),
         LifecycleEventKind::ModelRequestFailed {

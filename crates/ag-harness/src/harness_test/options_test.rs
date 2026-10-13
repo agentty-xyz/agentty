@@ -431,7 +431,8 @@ async fn options_persistence_failure_prevents_execution_and_reports_session_fail
 async fn failed_schema_override_does_not_leak_into_the_next_turn() {
     // Arrange
     let mut model = model();
-    model.expect_complete().times(2).returning(|_| {
+    // The integer turn rejects its object output and re-requests it twice.
+    model.expect_complete().times(4).returning(|_| {
         Ok(response_without_metadata(ModelResponse::Output(
             json!({"summary":"done"}),
         )))
