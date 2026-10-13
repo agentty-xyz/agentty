@@ -11,8 +11,9 @@ use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentModel;
 
 use super::{
-    BudgetedModel, ModelSelection, NativeHarnessConfig, ResumeOnlyModel, bash_environment,
-    default_model, output_schema, reasoning_effort, repository, turn_options, unicode_environment,
+    BudgetedModel, FALLBACK_CONTEXT_LIMITS, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
+    bash_environment, default_model, output_schema, reasoning_effort, repository, turn_options,
+    unicode_environment,
 };
 
 /// Builds an environment snapshot from string pairs.
@@ -125,6 +126,47 @@ fn model_selection_round_trips_registration_keys() {
     assert_eq!(ModelSelection::from_key("kimi-k3"), None);
     assert_eq!(ModelSelection::from_key("qwen/kimi-k3"), None);
     assert!(ModelSelection::resolve("claude-opus-5-5").is_err());
+}
+
+#[test]
+/// Registers each served model under the current revision with its declared
+/// context limits, and uncataloged models with the conservative fallback.
+fn registrations_declare_revision_and_per_model_context_budgets() {
+    // Arrange
+    let environment = environment(&[
+        ("DASHSCOPE_API_KEY", "key"),
+        ("DASHSCOPE_BASE_URL", "http://qwen"),
+        ("KIMI_API_KEY", "key"),
+        ("KIMI_BASE_URL", "http://kimi"),
+        ("MODEL_API_KEY", "key"),
+    ]);
+    let models = ModelProvider::all()
+        .iter()
+        .flat_map(|provider| provider.known_models().iter().copied());
+
+    // Act / Assert
+    for model in models {
+        let selection = ModelSelection::resolve(model).expect("served model");
+        let registry = selection.registry(&environment, None).expect("registry");
+        let registration = registry.resolve(&selection.key()).expect("registration");
+        let budget = registration.capabilities().context_budget;
+        let limits = AgentModel::parse_persisted(model)
+            .ok()
+            .and_then(AgentModel::context_limits)
+            .unwrap_or(FALLBACK_CONTEXT_LIMITS);
+        assert_eq!(registration.identity().revision(), "agentty-native-2");
+        assert_eq!(
+            budget.max_request_weight().get(),
+            limits.context_window_tokens,
+            "{model}"
+        );
+        assert_eq!(
+            budget.reserved_output_weight(),
+            limits.input_headroom_tokens,
+            "{model}"
+        );
+    }
+    assert_eq!(FALLBACK_CONTEXT_LIMITS.input_token_budget(), 79_616);
 }
 
 #[tokio::test]

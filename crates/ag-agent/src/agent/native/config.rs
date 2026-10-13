@@ -28,12 +28,10 @@ use async_trait::async_trait;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
 /// it and require the same value on resume.
-const REGISTRATION_REVISION: &str = "agentty-native-1";
+const REGISTRATION_REVISION: &str = "agentty-native-2";
 /// Conservative limits for a harness model without declared limits.
-const FALLBACK_CONTEXT_LIMITS: ModelContextLimits = ModelContextLimits {
-    context_window_tokens: 128_000,
-    input_headroom_tokens: 16_384,
-};
+const FALLBACK_CONTEXT_LIMITS: ModelContextLimits =
+    ModelContextLimits::with_estimate_margin(128_000, 16_384);
 /// Placeholder endpoint for resume-only registrations, which never send
 /// requests.
 const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";

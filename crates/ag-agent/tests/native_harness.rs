@@ -25,6 +25,9 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const MUSE_MODEL: &str = "muse-spark-1.3";
 const QWEN_MODEL: &str = "qwen-plus";
+/// Served Muse model without catalog limits, so the small fallback context
+/// budget applies.
+const FALLBACK_BUDGET_MODEL: &str = "muse-spark-1.3-contributor";
 /// Heading present only in a full instruction bootstrap.
 const FULL_CONTRACT: &str = "Structured response protocol:";
 /// Heading present only in a compact refresh reminder.
@@ -287,7 +290,7 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
     let config = config(data_root.path(), environment(&server));
     let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
     let resume_request = |prompt: String, provider_conversation_id: Option<String>| {
-        let mut request = turn_request(worktree.path(), MUSE_MODEL, &prompt);
+        let mut request = turn_request(worktree.path(), FALLBACK_BUDGET_MODEL, &prompt);
         request.request_kind = AgentRequestKind::SessionResume;
         request.continuation = continuing(provider_conversation_id);
 
@@ -300,7 +303,7 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
         "session-evict",
         turn_request(
             worktree.path(),
-            MUSE_MODEL,
+            FALLBACK_BUDGET_MODEL,
             &format!("First question {}", "x".repeat(220_000)),
         ),
     )
@@ -342,6 +345,71 @@ async fn evicted_bootstrap_turn_resends_the_full_session_contract() {
     assert_eq!(bodies[2].matches(FULL_CONTRACT).count(), 1);
     // Only the replayed second turn carries a reminder.
     assert_eq!(bodies[2].matches(REFRESH_REMINDER).count(), 1);
+}
+
+#[tokio::test]
+async fn switching_to_a_smaller_window_fits_history_to_the_new_budget() {
+    // Arrange
+    let server = MockServer::start().await;
+    respond(&server, "Third question", answer("Third answer"), 1).await;
+    respond(&server, "Second question", answer("Second answer"), 2).await;
+    respond(&server, "First question", answer("First answer"), 3).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+    let resume_request = |model: &str, prompt: String, provider_conversation_id: Option<String>| {
+        let mut request = turn_request(worktree.path(), model, &prompt);
+        request.request_kind = AgentRequestKind::SessionResume;
+        request.continuation = continuing(provider_conversation_id);
+
+        request
+    };
+    // Both large turns fit the cataloged model's window together, but not
+    // the fallback budget.
+    let (first, _) = run_turn(
+        &channel,
+        "session-shrink",
+        turn_request(
+            worktree.path(),
+            MUSE_MODEL,
+            &format!("First question {}", "x".repeat(220_000)),
+        ),
+    )
+    .await;
+    let first = first.expect("first turn should succeed");
+    let (second, _) = run_turn(
+        &channel,
+        "session-shrink",
+        resume_request(
+            MUSE_MODEL,
+            format!("Second question {}", "y".repeat(230_000)),
+            first.provider_conversation_id,
+        ),
+    )
+    .await;
+    let second = second.expect("second turn should succeed");
+
+    // Act
+    let (third, _) = run_turn(
+        &channel,
+        "session-shrink",
+        resume_request(
+            FALLBACK_BUDGET_MODEL,
+            "Third question".to_string(),
+            second.provider_conversation_id,
+        ),
+    )
+    .await;
+
+    // Assert
+    third.expect("third turn should succeed on the smaller window");
+    let bodies = request_bodies(&server).await;
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies[1].contains("First answer"));
+    assert!(bodies[2].contains(FALLBACK_BUDGET_MODEL));
+    assert!(!bodies[2].contains("First answer"));
+    assert!(bodies[2].contains("Second answer"));
 }
 
 #[tokio::test]
