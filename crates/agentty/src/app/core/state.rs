@@ -2048,6 +2048,56 @@ impl App {
         };
     }
 
+    /// Leaves input mode when its session is archived, retaining the transcript
+    /// position and discarding unsent drafts and partial clarification answers.
+    /// Composer-owned images are removed; late clipboard results use the normal
+    /// orphan cleanup path after their pending request is dropped.
+    pub(crate) async fn reconcile_terminal_session_input_mode(&mut self) {
+        let (session_id, scroll_offset) = match &self.mode {
+            AppMode::Prompt {
+                session_id,
+                scroll_offset,
+                ..
+            }
+            | AppMode::Question {
+                session_id,
+                scroll_offset,
+                ..
+            } => (session_id.clone(), *scroll_offset),
+            _ => return,
+        };
+        if !self
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(|session| matches!(session.status, Status::Done | Status::Canceled))
+        {
+            return;
+        }
+
+        let previous_mode = std::mem::replace(
+            &mut self.mode,
+            AppMode::View {
+                session_id: session_id.clone(),
+                scroll_offset,
+            },
+        );
+        if let AppMode::Prompt {
+            attachment_state, ..
+        } = previous_mode
+        {
+            let attachments = attachment_state
+                .attachments
+                .into_iter()
+                .chain(attachment_state.archived_attachments)
+                .collect();
+            self.cleanup_prompt_attachments(attachments).await;
+        }
+
+        self.discard_prompt_progress(&session_id).await;
+        self.question_progress.remove(&session_id);
+        self.mark_dirty();
+    }
+
     /// Enters the interactive clarification panel when the actively viewed
     /// session has reached [`Status::Question`] but the UI is still on the
     /// plain session view.

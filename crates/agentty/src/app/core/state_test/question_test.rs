@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -5,11 +6,124 @@ use super::support::{
     test_app_viewing_reconcile_session, test_prompt_mode_snapshot, test_turn_applied_state,
 };
 use crate::app::core::event::AppEvent;
+use crate::app::prompt_intent::PromptImagePasteUpdate;
+use crate::domain::composer::{PendingImagePaste, PromptAttachment};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress};
 use crate::domain::session::{SessionDiffState, SessionId, SessionStats, Status};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
+
+#[tokio::test]
+async fn terminal_input_reconciliation_discards_prompt_and_cleans_all_owned_images() {
+    // Arrange
+    for status in [Status::Done, Status::Canceled] {
+        let mut app =
+            test_app_viewing_reconcile_session(status, Vec::new(), "terminal-input").await;
+        let managed_root = crate::app::agentty_home().join("tmp");
+        fs::create_dir_all(&managed_root).expect("managed tmp root");
+        let temp = tempfile::tempdir_in(managed_root).expect("image fixture");
+        let images = temp.path().join("images");
+        fs::create_dir(&images).expect("images");
+        let paths =
+            ["active.png", "undo.png", "saved.png", "late.png"].map(|name| images.join(name));
+        for path in &paths {
+            fs::write(path, "image").expect("image fixture");
+        }
+        let mut saved = test_prompt_mode_snapshot("session-1".into());
+        saved
+            .attachment_state
+            .attachments
+            .push(PromptAttachment::new(3, paths[2].clone()));
+        app.save_prompt_progress(saved);
+        let mut active = test_prompt_mode_snapshot("session-1".into());
+        active.scroll_offset = Some(5);
+        active
+            .attachment_state
+            .attachments
+            .push(PromptAttachment::new(1, paths[0].clone()));
+        active
+            .attachment_state
+            .archived_attachments
+            .push(PromptAttachment::new(2, paths[1].clone()));
+        active.attachment_state.pending_image_paste = Some(PendingImagePaste {
+            anchor: Some(0),
+            request_id: 7,
+        });
+        app.mode = active.into_prompt_mode();
+
+        // Act
+        app.reconcile_terminal_session_input_mode().await;
+        app.apply_prompt_image_paste_update(PromptImagePasteUpdate {
+            request_id: 7,
+            result: Ok(paths[3].clone()),
+            session_id: "session-1".into(),
+        })
+        .await;
+
+        // Assert
+        assert!(
+            matches!(app.mode, AppMode::View { ref session_id, scroll_offset: Some(5) } if session_id == "session-1")
+        );
+        assert!(!app.prompt_progress.contains_key("session-1"));
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+}
+
+#[tokio::test]
+async fn terminal_input_reconciliation_discards_partial_question_answers() {
+    // Arrange
+    for status in [Status::Done, Status::Canceled] {
+        let mut app =
+            test_app_viewing_reconcile_session(status, Vec::new(), "terminal-question").await;
+        app.enter_question_mode("session-1", vec![QuestionItem::new("Continue?")]);
+        if let AppMode::Question {
+            input,
+            scroll_offset,
+            ..
+        } = &mut app.mode
+        {
+            *input = InputState::with_text("unfinished answer".into());
+            *scroll_offset = Some(4);
+        }
+        app.question_progress.insert(
+            "session-1".into(),
+            QuestionProgress {
+                current_index: 0,
+                input: InputState::with_text("saved answer".into()),
+                responses: Vec::new(),
+                selected_option_index: None,
+            },
+        );
+
+        // Act
+        app.reconcile_terminal_session_input_mode().await;
+
+        // Assert
+        assert!(
+            matches!(app.mode, AppMode::View { ref session_id, scroll_offset: Some(4) } if session_id == "session-1")
+        );
+        assert!(!app.question_progress.contains_key("session-1"));
+    }
+}
+
+#[tokio::test]
+async fn terminal_input_reconciliation_preserves_active_or_unloaded_composers() {
+    // Arrange
+    let mut app =
+        test_app_viewing_reconcile_session(Status::Review, Vec::new(), "active-input").await;
+    for session_id in ["session-1", "not-loaded"] {
+        app.mode = test_prompt_mode_snapshot(session_id.into()).into_prompt_mode();
+
+        // Act
+        app.reconcile_terminal_session_input_mode().await;
+
+        // Assert
+        assert!(
+            matches!(app.mode, AppMode::Prompt { ref input, .. } if input.text() == "saved reply")
+        );
+    }
+}
 
 #[tokio::test]
 async fn reconcile_open_session_question_mode_enters_question_mode_from_view() {

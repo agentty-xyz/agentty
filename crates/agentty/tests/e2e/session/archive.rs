@@ -1,5 +1,6 @@
 //! Archive pagination and collapse through the real terminal and repository.
 
+use ag_session::{SessionMessageKind, test_support as model_fixture};
 use testty::assertion;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
@@ -7,6 +8,81 @@ use testty::region::Region;
 use super::fixture::E2eResult;
 use crate::common;
 use crate::common::{FeatureTest, SessionSeed};
+
+#[tokio::test]
+async fn session_archive_chat_hides_composer() -> E2eResult {
+    // Arrange
+    for status in ["Done", "Canceled"] {
+        FeatureTest::new(format!("session_archive_chat_{status}"))
+            .with_git()
+            .with_terminal_size(120, 30)
+            .setup(move |env| {
+                Box::pin(async move {
+                    common::seed_active_project_setting(env).await?;
+                    common::seed_session(
+                        env,
+                        SessionSeed::regular(
+                            "archived-chat",
+                            model_fixture::CODEX_MODEL_ID,
+                            "main",
+                            status,
+                        )
+                        .with_title("Archived conversation"),
+                    )
+                    .await?;
+                    common::open_database(env)
+                        .await?
+                        .sessions()
+                        .append_session_message(
+                            "archived-chat",
+                            SessionMessageKind::AssistantAnswer,
+                            "Archived transcript remains readable.",
+                        )
+                        .await?;
+
+                    Ok(())
+                })
+            })
+            .run(
+                |scenario| {
+                    // Act
+                    scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .wait_for_text("Archived conversation", 5000)
+                        .press_key("Enter")
+                        .wait_for_text("c: continue", 5000)
+                        .wait_for_stable_frame(300, 5000)
+                        .capture_labeled("archive", "Archived chat without a composer")
+                        .press_key("q")
+                        .wait_for_text("ARCHIVE", 5000)
+                },
+                |frame, report| {
+                    Box::pin(async move {
+                        // Assert
+                        let archived = common::frame_from_capture(&report.captures[0]);
+                        let full = Region::full(archived.cols(), archived.rows());
+                        for text in [
+                            "Archived transcript remains readable.",
+                            "q: back",
+                            "c: continue",
+                            "j/k: scroll",
+                            "?: help",
+                        ] {
+                            assertion::assert_text_in_region(&archived, text, &full);
+                        }
+                        for text in ["Auto Edit", "Started", "╭"] {
+                            assertion::assert_not_visible(&archived, text);
+                        }
+                        let full = Region::full(frame.cols(), frame.rows());
+                        assertion::assert_text_in_region(frame, "Archived conversation", &full);
+                    })
+                },
+            )
+            .await?;
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn session_archive_load_more_and_show_less_pages() -> E2eResult {

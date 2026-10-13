@@ -29,10 +29,14 @@ title, followed by changed-line totals, active-work timer, token usage, and link
 review request. The composer’s bottom border shows how long ago the session started,
 such as `Started 4m ago`, and keeps it visible when you switch focus to the chat. The
 composer shows `agent/model [reasoning]`, response style, speed when supported, and
-permissions. It stays visible and inactive while viewing a session; press `Enter` to
-activate a reply when available. The footer shows the active directory, branch, and
-ahead/behind counts. Up to eight session agent turns can execute at once; additional
-turns wait for capacity while their sessions remain responsive.
+permissions. It stays visible and inactive while viewing an active session; press
+`Enter` to activate a reply when available. Archived sessions hide the composer and give
+its space to the transcript, keeping navigation and continuation controls visible. The
+session returns to transcript view if it is archived while you are typing; unsent
+drafts, partial answers, and their attached images are discarded. The footer shows the
+active directory, branch, and ahead/behind counts. Up to eight session agent turns can
+execute at once; additional turns wait for capacity while their sessions remain
+responsive.
 
 ### Projects and Discovery
 

@@ -249,11 +249,13 @@ where
     ///
     /// Pending app events are reduced before draw so touched sessions refresh
     /// from their live handles without a full per-frame session sweep. The open
+    /// session first leaves input mode if it has been archived. The open
     /// session view then reconciles into the clarification panel when its
     /// session has reached `Status::Question`, covering cases where the live
     /// `AgentResponseReceived` projection did not flip the view.
     async fn run_cycle(&mut self) -> io::Result<EventResult> {
         self.app.process_pending_app_events().await;
+        self.app.reconcile_terminal_session_input_mode().await;
         self.app.reconcile_open_session_question_mode().await;
         self.app
             .expire_project_sync_status(self.clock.now_instant());

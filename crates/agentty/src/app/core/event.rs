@@ -1065,6 +1065,7 @@ impl App {
         }
 
         self.apply_app_event_batch(event_batch).await;
+        self.reconcile_terminal_session_input_mode().await;
     }
 
     /// Processes one bounded batch of currently queued app events without

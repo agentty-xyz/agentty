@@ -7,7 +7,7 @@ use crate::domain::agent::ReasoningLevel;
 use crate::domain::question::QuestionItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
-    Session, can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
+    Session, Status, can_merge_session_branch_in_stack, can_mutate_session_branch_in_stack,
     can_rebase_session_branch_in_stack, can_reply_to_session_in_stack,
     can_start_staged_session_in_stack,
 };
@@ -88,12 +88,22 @@ impl SessionChatLayoutPlan {
             None,
             input.area.width.saturating_sub(2),
         ));
-        let prompt_panel =
-            prepare_prompt_panel(input.area, input.mode, input.review_text, input.session);
-        let bottom_height = prompt_panel.as_ref().map_or_else(
-            || non_prompt_bottom_height(input.area, input.mode),
-            PreparedPromptPanel::panel_height,
-        );
+        let (prompt_panel, bottom_height) =
+            if matches!(input.session.status, Status::Done | Status::Canceled) {
+                (
+                    None,
+                    SINGLE_ROW_FOOTER_HEIGHT.min(input.area.height.saturating_sub(1)),
+                )
+            } else {
+                let prompt_panel =
+                    prepare_prompt_panel(input.area, input.mode, input.review_text, input.session);
+                let bottom_height = prompt_panel.as_ref().map_or_else(
+                    || non_prompt_bottom_height(input.area, input.mode),
+                    PreparedPromptPanel::panel_height,
+                );
+
+                (prompt_panel, bottom_height)
+            };
         let areas =
             layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
         let question_panel_areas = question_panel_areas(areas.bottom_area, input.mode);
@@ -312,6 +322,7 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Renders the composer and footer, or the interactive question panel.
+    /// Archived sessions render only the navigation footer.
     ///
     /// Every composer right-aligns `started_label` in its bottom border when it
     /// fits.
@@ -323,6 +334,17 @@ impl<'a> SessionChatPage<'a> {
         started_label: &str,
     ) {
         let bottom_area = layout_plan.areas.bottom_area;
+
+        if matches!(session.status, Status::Done | Status::Canceled) {
+            f.render_widget(
+                Paragraph::new(session_format::session_view_footer_line(
+                    self.view_help_state(session),
+                )),
+                bottom_area,
+            );
+
+            return;
+        }
 
         if let AppMode::Prompt { input, .. } = self.mode {
             let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref() else {

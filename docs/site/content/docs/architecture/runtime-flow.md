@@ -56,6 +56,10 @@ of application and terminal events, renders an immutable snapshot, and waits for
 work. It owns presentation state and shared render caches. Event-driven refresh is
 primary; periodic polling provides recovery from missed updates.
 
+Terminal session updates leave prompt and question input modes before further input is
+dispatched. The foreground loop also reconciles restored modes before rendering. Unsent
+composer state and its image attachments are discarded on this transition.
+
 Activity snapshots follow the same worker/runtime event path as progress. The session
 host reduces them by attempt and operation identity, then stores a display-only usage
 message immediately after the final answer or failure notice. These messages participate
