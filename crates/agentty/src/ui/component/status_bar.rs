@@ -163,8 +163,7 @@ impl Component for StatusBar<'_> {
             version_spans.push(Span::raw(" | "));
             version_spans.push(Span::styled(
                 format!(
-                    "{latest_available_version} version available update with npm i -g \
-                     agentty@latest"
+                    "{latest_available_version} available — rerun your original install command"
                 ),
                 Style::default()
                     .fg(style::palette::warning())

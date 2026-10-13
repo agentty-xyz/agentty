@@ -32,13 +32,38 @@ invocations appear alongside them.
 
 ## Installation
 
-### npm (recommended, supports auto-update)
+### npm (recommended)
+
+The `npm`, Bun, and `pnpm` packages require Node.js on your `PATH`. Global installs
+support automatic updates through the original package manager when Agentty can identify
+it.
 
 ```sh
 npm install -g agentty
 ```
 
 ### Other methods
+
+<details>
+<summary>Bun</summary>
+
+```sh
+bun add --global agentty
+```
+
+</details>
+
+<details>
+<summary>pnpm</summary>
+
+```sh
+pnpm add --global agentty
+```
+
+If `pnpm` reports a global bin-directory error, run `pnpm setup`, reopen your terminal,
+and retry.
+
+</details>
 
 <details>
 <summary>npx (run without installing)</summary>

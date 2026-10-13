@@ -807,8 +807,8 @@ async fn real_version_task_runner_uses_external_commands_when_enabled() {
     let npm_path = command_dir.path().join("npm");
     std::fs::write(
         &npm_path,
-        "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then printf '\"999.0.0\"'; else printf 'updated'; \
-         fi\n",
+        "#!/bin/sh\nif [ \"$1\" = \"view\" ]; then printf '\"999.0.0\"'; elif [ \"$1\" = \"root\" \
+         ]; then printf '%s' \"$AGENTTY_TEST_GLOBAL_ROOT\"; else printf 'updated'; fi\n",
     )
     .expect("failed to write fake npm command");
     let mut permissions = std::fs::metadata(&npm_path)
@@ -821,6 +821,12 @@ async fn real_version_task_runner_uses_external_commands_when_enabled() {
     let current_test_binary =
         std::env::current_exe().expect("failed to resolve current test binary");
 
+    let global_root = command_dir.path().join("global");
+    let binary_directory = global_root.join("agentty/node_modules/.bin_real");
+    std::fs::create_dir_all(&binary_directory).expect("global installation fixture");
+    std::os::unix::fs::symlink(&current_test_binary, binary_directory.join("agentty"))
+        .expect("installed binary link");
+
     // Act
     let output = tokio::process::Command::new(current_test_binary)
         .arg("--exact")
@@ -828,6 +834,7 @@ async fn real_version_task_runner_uses_external_commands_when_enabled() {
         .arg("--nocapture")
         .env("PATH", command_dir.path())
         .env(REAL_VERSION_TASK_CHILD_ENV, "1")
+        .env("AGENTTY_TEST_GLOBAL_ROOT", global_root)
         .output()
         .await
         .expect("failed to run isolated version-task test");

@@ -30,7 +30,7 @@ impl App {
     /// Builds the app state from persisted data and starts background
     /// housekeeping tasks.
     ///
-    /// When `auto_update` is `true`, a background `npm i -g agentty@latest`
+    /// When `auto_update` is `true`, a background global package-manager update
     /// runs automatically after detecting a newer version at startup or in an
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under

@@ -1,11 +1,13 @@
 //! Version discovery and auto-update helpers.
 
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use semver::Version;
 use serde::Deserialize;
+use serde_json::Value;
 use tokio::process::Command;
 use tokio::time;
 use tracing::{debug, warn};
@@ -14,7 +16,7 @@ const AGENTTY_NPM_PACKAGE: &str = "agentty";
 const NPM_REGISTRY_LATEST_URL: &str = "https://registry.npmjs.org/agentty/latest";
 /// Maximum runtime for each npm/curl version-discovery command.
 const VERSION_LOOKUP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-/// Maximum runtime for the npm global-install command.
+/// Maximum runtime for a package-manager global-install command.
 const VERSION_UPDATE_COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Typed error returned by version infrastructure operations.
@@ -23,6 +25,13 @@ const VERSION_UPDATE_COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
 /// command errors without parsing opaque strings.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum VersionError {
+    /// The running binary cannot be tied to exactly one global installer.
+    #[error(
+        "Update manually with your original installer: npm i -g agentty@latest, bun add -g \
+         agentty@latest, pnpm add -g agentty@latest, or rerun the Cargo/shell installation command"
+    )]
+    UnknownInstallation,
+
     /// A version command subprocess failed to launch or produce output.
     #[error("Failed to run `{command}`: {message}")]
     CommandSpawn {
@@ -88,6 +97,9 @@ impl VersionCommandOutput {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 trait VersionCommandRunner: Send + Sync {
+    /// Resolves installation links without relying on path naming conventions.
+    fn canonicalize_path(&self, path: &Path) -> Option<PathBuf>;
+
     /// Runs one command and returns normalized output for parsing.
     async fn run_command(
         &self,
@@ -102,6 +114,10 @@ struct RealVersionCommandRunner;
 
 #[async_trait]
 impl VersionCommandRunner for RealVersionCommandRunner {
+    fn canonicalize_path(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok()
+    }
+
     async fn run_command(
         &self,
         program: &str,
@@ -140,28 +156,146 @@ async fn run_version_command_with_timeout(
     })
 }
 
-/// Runs `npm i -g agentty@latest` with a cancellable deadline.
-pub(crate) async fn run_npm_update() -> Result<String, VersionError> {
-    run_npm_update_with_runner(&RealVersionCommandRunner).await
+/// Runs the original global package manager, or requires a manual update.
+pub(crate) async fn run_update() -> Result<String, VersionError> {
+    let executable = std::env::current_exe().ok();
+
+    run_update_with_runner(executable.as_deref(), &RealVersionCommandRunner).await
 }
 
-/// Runs the npm update through one injected command boundary.
-async fn run_npm_update_with_runner(
+/// Supported global package managers. Local and transient installs are manual.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackageManager {
+    Npm,
+    Bun,
+    Pnpm,
+}
+
+impl PackageManager {
+    fn program(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Bun => "bun",
+            Self::Pnpm => "pnpm",
+        }
+    }
+
+    fn discovery_args(self) -> Vec<String> {
+        let args = match self {
+            Self::Npm => vec!["root", "--global"],
+            Self::Pnpm => vec!["list", "--global", "--depth", "0", "--json"],
+            Self::Bun => vec!["pm", "bin", "--global"],
+        };
+
+        args.into_iter().map(str::to_string).collect()
+    }
+
+    fn update_args(self) -> Vec<String> {
+        let operation = match self {
+            Self::Npm => "i",
+            Self::Bun | Self::Pnpm => "add",
+        };
+
+        [operation, "-g", "agentty@latest"]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// Matches the current binary to configured global locations before mutation.
+async fn run_update_with_runner(
+    executable: Option<&Path>,
+    command_runner: &dyn VersionCommandRunner,
+) -> Result<String, VersionError> {
+    let executable = executable
+        .and_then(|path| command_runner.canonicalize_path(path))
+        .ok_or(VersionError::UnknownInstallation)?;
+    let mut matches = Vec::new();
+    for manager in [
+        PackageManager::Npm,
+        PackageManager::Bun,
+        PackageManager::Pnpm,
+    ] {
+        let Ok(output) = command_runner
+            .run_command(
+                manager.program(),
+                manager.discovery_args(),
+                VERSION_LOOKUP_COMMAND_TIMEOUT,
+            )
+            .await
+        else {
+            continue;
+        };
+        let Ok(directory) = output.successful_stdout(manager.program()) else {
+            continue;
+        };
+        let candidates = match manager {
+            PackageManager::Pnpm => {
+                let Ok(packages) = serde_json::from_str::<Vec<Value>>(&directory) else {
+                    continue;
+                };
+
+                packages
+                    .iter()
+                    .filter_map(|package| {
+                        package["dependencies"][AGENTTY_NPM_PACKAGE]["path"].as_str()
+                    })
+                    .map(Path::new)
+                    .filter(|path| path.is_absolute())
+                    .map(|path| path.join("node_modules/.bin_real/agentty"))
+                    .collect::<Vec<_>>()
+            }
+            PackageManager::Npm | PackageManager::Bun => {
+                let directory = Path::new(directory.trim());
+                if !directory.is_absolute() {
+                    continue;
+                }
+                let package = if manager == PackageManager::Bun {
+                    let Some(launcher) =
+                        command_runner.canonicalize_path(&directory.join("agentty"))
+                    else {
+                        continue;
+                    };
+                    let Some(package) = launcher.parent() else {
+                        continue;
+                    };
+
+                    package.to_path_buf()
+                } else {
+                    directory.join(AGENTTY_NPM_PACKAGE)
+                };
+
+                vec![package.join("node_modules/.bin_real/agentty")]
+            }
+        };
+        if candidates.iter().any(|candidate| {
+            command_runner.canonicalize_path(candidate).as_ref() == Some(&executable)
+        }) {
+            matches.push(manager);
+        }
+    }
+    let [manager] = matches.as_slice() else {
+        return Err(VersionError::UnknownInstallation);
+    };
+
+    run_package_update_with_runner(*manager, command_runner).await
+}
+
+/// Runs one identified global installer through the injected command boundary.
+async fn run_package_update_with_runner(
+    manager: PackageManager,
     command_runner: &dyn VersionCommandRunner,
 ) -> Result<String, VersionError> {
     let output = command_runner
         .run_command(
-            "npm",
-            vec![
-                "i".to_string(),
-                "-g".to_string(),
-                "agentty@latest".to_string(),
-            ],
+            manager.program(),
+            manager.update_args(),
             VERSION_UPDATE_COMMAND_TIMEOUT,
         )
         .await?;
 
-    output.successful_stdout("npm")
+    output.successful_stdout(manager.program())
 }
 
 #[derive(Debug, Deserialize)]

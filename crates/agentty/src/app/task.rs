@@ -71,7 +71,8 @@ pub(crate) trait VersionTaskRunner: Send + Sync {
     async fn run_update(&self) -> bool;
 }
 
-/// Production version task runner backed by npm/curl infrastructure.
+/// Production version task runner backed by registry and installer
+/// infrastructure.
 pub(crate) struct RealVersionTaskRunner;
 
 #[async_trait]
@@ -81,7 +82,7 @@ impl VersionTaskRunner for RealVersionTaskRunner {
     }
 
     async fn run_update(&self) -> bool {
-        version::run_npm_update().await.is_ok()
+        version::run_update().await.is_ok()
     }
 }
 
@@ -408,13 +409,13 @@ impl TaskService {
 
     /// Spawns an immediate and then hourly background check for newer
     /// `agentty` versions on npmjs, optionally followed by an automatic
-    /// `npm i -g agentty@latest` update.
+    /// global package-manager update.
     ///
     /// The task emits [`AppEvent::VersionAvailabilityUpdated`] with
     /// `Some("vX.Y.Z")` only when a newer version is detected. When
     /// `auto_update` is `true` and a newer version exists, the task
     /// subsequently emits [`AppEvent::UpdateStatusChanged`] with
-    /// `InProgress`, then `Complete` or `Failed` depending on the npm
+    /// `InProgress`, then `Complete` or `Failed` depending on the
     /// install outcome.
     ///
     /// The injected runner controls external lookups and updates; unit tests
@@ -495,8 +496,8 @@ impl TaskService {
         })
     }
 
-    /// Runs `npm i -g agentty@latest` in a bounded background task and emits
-    /// update progress events.
+    /// Runs the original global package manager in a bounded background task
+    /// and emits update progress events.
     async fn run_background_update(
         app_event_tx: &mpsc::UnboundedSender<AppEvent>,
         newer_version: &str,
