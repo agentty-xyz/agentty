@@ -23,12 +23,17 @@ impl ProviderCallBudget {
         }
     }
 
+    /// Returns the remaining shared provider attempts without reserving one.
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
+    }
+
     /// Checks for exhaustion without charging a turn at an outer boundary.
     ///
     /// # Errors
     /// Returns an input-size reduction error when no slots remain.
     pub fn ensure_available(&self) -> Result<(), OneShotError> {
-        if self.remaining.load(Ordering::Relaxed) == 0 {
+        if self.remaining() == 0 {
             return Err(Self::exhausted());
         }
 

@@ -14,7 +14,7 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::test_support::{AppServerTurnResponse, MockAppServerClient};
+use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
 use crate::{RuntimeConfig, SessionRunClient};
 
 #[tokio::test]
@@ -159,6 +159,7 @@ async fn cancellation_before_submission_bounds_unresponsive_shutdown() {
 #[tokio::test]
 async fn failed_cleanup_before_submission_preserves_the_interruption_and_records_failure() {
     // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
     let exporter = InMemorySpanExporter::default();
     global::set_tracer_provider(
         SdkTracerProvider::builder()

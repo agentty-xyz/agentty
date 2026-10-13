@@ -117,6 +117,14 @@ impl Span {
         self.context.span().set_attribute(KeyValue::new(key, value));
     }
 
+    /// Links an observed workflow phase without changing this span's parent.
+    pub fn link(&self, context: &Context) {
+        let linked = context.span().span_context().clone();
+        if linked.is_valid() && linked != *self.context.span().span_context() {
+            self.context.span().add_link(linked, Vec::new());
+        }
+    }
+
     /// Records a content-free milestone on this operation.
     pub fn event(&self, name: &'static str) {
         self.context.span().add_event(name, Vec::new());

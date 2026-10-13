@@ -217,10 +217,13 @@ After a successful file-changing turn, Agentty creates or updates one evolving c
 with a message generated from the cumulative changes. The project's Fast model and
 coauthor setting apply. Reverting all changes removes the empty session commit.
 
-Large diffs are summarized within an eight-call budget. If that budget or the agent's
-input limit is reached, commit generation falls back to changed filenames, chat history,
-and the existing commit message. If the fallback also fails, auto-commit stops and
-leaves the worktree intact.
+Large diffs use bounded file excerpts with explicit omission markers, avoiding a chain
+of model summaries. If the agent rejects the input, generation falls back to bounded
+changed filenames, recent chat history, and the existing message. Primary generation,
+fallback, and protocol repairs share one eight-call budget. Exhaustion or fallback
+failure stops auto-commit and leaves the worktree intact. Repeated hook diagnostics
+ignore changing build progress, durations, and process IDs when detecting stalled
+assistance.
 
 An index lock is retried for up to five seconds. A persistent lock produces
 `[Commit Error]`; Agentty does not remove it. Wait for active Git operations to finish.

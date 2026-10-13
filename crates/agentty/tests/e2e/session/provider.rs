@@ -837,7 +837,7 @@ async fn claude_session_launch_allows_web_tools() -> E2eResult {
     Ok(())
 }
 
-/// Seeds a large change whose diff summarizer cannot produce a valid reduction.
+/// Seeds a large change whose bounded diff prompt exceeds the provider limit.
 async fn seed_commit_input_limit_project(env: &BuilderEnv) -> E2eResult {
     let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
@@ -846,10 +846,14 @@ prompt=$(cat)
 case "$prompt" in
   *"Use only the changed file list"*)
     printf '%s' "$prompt" > "$AGENTTY_TEST_EVIDENCE/fallback-prompt"
+    printf 'fallback\n' >> "$AGENTTY_TEST_EVIDENCE/commit-calls"
     response='{"answer":"Recover commit from conversation"}'
     ;;
-  *"Summarize the supplied fragment"*)
-    response='{"answer":""}'
+  *"Generate the canonical session commit message"*)
+    printf '%s' "$prompt" > "$AGENTTY_TEST_EVIDENCE/primary-prompt"
+    printf 'primary\n' >> "$AGENTTY_TEST_EVIDENCE/commit-calls"
+    printf 'Input exceeds the maximum length of the provider context\n' >&2
+    exit 1
     ;;
   *"Review the Git diff for display in a terminal UI."*)
     response='{"project_impact":[],"suggestions":[]}'
@@ -891,8 +895,8 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
     .await
 }
 
-/// Verify a failed diff reduction still commits pending work using files and
-/// chat.
+/// Verify a provider rejects bounded diff evidence and pending work still
+/// commits using files and chat without restarting the rejected request.
 #[tokio::test]
 async fn test_session_commit_input_limit_fallback() -> E2eResult {
     // Arrange
@@ -920,7 +924,19 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                     // A stable frame can occur before the committing loader
                     // first paints, so wait for the commit notice instead of
                     // frame stability.
-                    .wait_for_text("[Commit] committed with hash", 30000)
+                    .eventually(
+                        Duration::from_secs(30),
+                        Duration::from_millis(50),
+                        |frame| {
+                            let full = Region::full(frame.cols(), frame.rows());
+
+                            assertion::match_text_in_region(
+                                frame,
+                                "[Commit] committed with hash",
+                                &full,
+                            )
+                        },
+                    )
                     .capture_labeled(
                         "fallback_commit",
                         "Commit recovers from the diff input limit",
@@ -930,6 +946,16 @@ async fn test_session_commit_input_limit_fallback() -> E2eResult {
                 Box::pin(async move {
                     assertion::assert_not_visible(frame, "[Commit Error]");
                     assertion::assert_not_visible(frame, "[Commit Assist]");
+                    let primary = std::fs::read_to_string(evidence.path().join("primary-prompt"))
+                        .expect("bounded diff prompt should be rejected");
+                    assert!(primary.len() < 60_000);
+                    assert!(primary.contains("bounded diff excerpts"));
+                    assert!(primary.contains("DIFF_ONLY_SENTINEL"));
+                    assert_eq!(
+                        std::fs::read_to_string(evidence.path().join("commit-calls"))
+                            .expect("commit calls should be recorded"),
+                        "primary\nfallback\n"
+                    );
                     let prompt = std::fs::read_to_string(evidence.path().join("fallback-prompt"))
                         .expect("fallback prompt should be submitted");
                     for expected in [

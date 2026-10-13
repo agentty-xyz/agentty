@@ -132,6 +132,14 @@ repos:
         always_run: true
         pass_filenames: false
         stages: [manual]
+      - id: validate
+        name: coordinated affected-package validation
+        description: Run cataloged clippy and focused tests with build coordination; requires AGENTTY_TEST_PACKAGES.
+        entry: cargo run --locked -q -p ag-xtask -- validate
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [manual]
       - id: test-ag-forge-src
         name: cargo nextest ag-forge src
         description: Source tests for `crates/ag-forge/src`.
@@ -291,7 +299,8 @@ repos:
           --lib --bins --examples --test check_execution_boundary --test check_instruction
           --test check_migration --test test_focused --test sandbox
           --test public_api --test lifecycle --test telemetry --test benchmark_summary
-          --test native_harness --locked --profile ci
+          --test native_harness --test validation --test publish_order
+          --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
           --no-default-ignore-filename-regex --ignore-filename-regex
           "(/rustc/|/(tests|benches)/|/(tests\.rs|[0-9a-zA-Z_-]+[_-]tests?\.rs)$|/target/llvm-cov-target/|/\.cargo/(registry|git)/|/\.rustup/toolchains/)"

@@ -37,4 +37,5 @@ fn budget_clones_share_attempt_limits_and_preserve_input_size_classification() {
     // Assert
     assert!(is_input_size_error(&error.to_string()));
     assert!(budget.consume().is_err());
+    assert_eq!(budget.remaining(), 0);
 }

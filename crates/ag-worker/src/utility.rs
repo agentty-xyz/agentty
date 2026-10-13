@@ -261,6 +261,9 @@ impl Execution {
             session_id: scope.session_id,
         };
         let span = Span::child("utility.run");
+        if let Some(phase) = &context.phase_trace {
+            span.link(phase);
+        }
         span.attribute("agentty.harness", request.harness.clone());
         span.attribute("gen_ai.request.model", request.model.clone());
         if let Some(session_id) = &run.session_id {

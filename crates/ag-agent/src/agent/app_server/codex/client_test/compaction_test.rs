@@ -193,6 +193,16 @@ async fn run_turn_with_runtime_compacts_proactively_before_turn_start() {
     assert_eq!(output_tokens, 3);
     assert_eq!(state.latest_input_tokens, 12);
     assert_compaction_span(&exporter, "completed");
+    assert!(
+        exporter
+            .get_finished_spans()
+            .expect("spans")
+            .iter()
+            .any(|span| span.name == "agent.compaction"
+                && span
+                    .attributes
+                    .contains(&KeyValue::new("agentty.compaction.trigger", "proactive")))
+    );
     assert_eq!(
         stream_rx.try_recv().ok(),
         Some(AppServerStreamEvent::ProgressUpdate(
@@ -239,6 +249,17 @@ async fn run_turn_with_runtime_compacts_and_retries_after_context_overflow() {
     assert_eq!(output_tokens, 5);
     assert_eq!(state.latest_input_tokens, 21);
     assert_compaction_span(&exporter, "completed");
+    assert!(
+        exporter
+            .get_finished_spans()
+            .expect("spans")
+            .iter()
+            .any(|span| span.name == "agent.compaction"
+                && span.attributes.contains(&KeyValue::new(
+                    "agentty.compaction.trigger",
+                    "context_overflow"
+                )))
+    );
     assert_eq!(
         stream_rx.try_recv().ok(),
         Some(AppServerStreamEvent::ProgressUpdate(

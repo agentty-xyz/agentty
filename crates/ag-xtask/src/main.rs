@@ -3,6 +3,7 @@
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
+mod validation;
 
 use std::process::ExitCode;
 
@@ -28,6 +29,8 @@ enum Command {
     /// Validates SQL migration numbering across workspace crates.
     #[command(name = "check-migrations")]
     Migrations,
+    /// Runs cataloged checks with package selection and target coordination.
+    Validate(validation::Options),
 }
 
 /// Runs the selected maintenance command and returns the process exit code.
@@ -39,6 +42,7 @@ fn main() -> ExitCode {
         Some(Command::ExecutionBoundary) => check_execution_boundary::run(),
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),
+        Some(Command::Validate(options)) => validation::run(options),
     };
 
     if let Err(err) = result {

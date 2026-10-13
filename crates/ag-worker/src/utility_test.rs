@@ -9,11 +9,14 @@ use ag_contracts::{
     PermissionMode, ReasoningLevel, SessionStats, SpeedMode,
 };
 use ag_protocol::AgentResponse;
+use ag_telemetry::{Span, TraceContextExt as _};
 use async_trait::async_trait;
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::test_support::{AppServerTurnResponse, MockAppServerClient};
+use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
 use crate::{
     HeartbeatClock, RunClient, RunInfo, RunRepository, RunScope, RunState, RunWorker,
     RuntimeConfig, in_scope, scoped_client,
@@ -864,4 +867,77 @@ async fn utility_forwards_activity_sink_to_runtime() {
     // Assert
     assert_eq!(receiver.recv().await, Some(event));
     assert!(receiver.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn utility_phase_links_preserve_captured_turn_ownership() {
+    // Arrange
+    let _guard = TRACER_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let mut runtime = ag_contracts::MockOneShotClient::new();
+    runtime
+        .expect_submit_cancellable()
+        .times(2)
+        .returning(|_, _| Ok(result()));
+    runtime.expect_close().once().return_const(());
+    let worker = Arc::new(RunWorker::with_client(
+        Arc::new(runtime),
+        Arc::new(Repository::default()),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    ));
+    let root = Span::root("session.turn", Vec::new());
+    let owner_id = root.context().span().span_context().span_id();
+    let owner_trace = root.context().span().span_context().trace_id();
+    // Act
+    Span::root("unrelated.turn", Vec::new())
+        .scope(async {
+            Span::child("commit.message")
+                .scope(async {
+                    Span::child("utility.run").scope(async {}).await;
+                })
+                .await;
+        })
+        .await;
+    root.scope(async {
+        let captured = scoped_client(worker.clone(), RunScope::default());
+        Span::child("commit.message")
+            .scope(async {
+                captured.submit(request()).await.expect("phase submission");
+            })
+            .await;
+        Span::root("other.turn", Vec::new())
+            .scope(async {
+                captured
+                    .submit(request())
+                    .await
+                    .expect("captured submission");
+            })
+            .await;
+    })
+    .await;
+    worker.shutdown().await;
+    // Assert
+    let spans = exporter.get_finished_spans().expect("exported spans");
+    let phase = spans
+        .iter()
+        .find(|span| span.name == "commit.message" && span.span_context.trace_id() == owner_trace)
+        .expect("phase");
+    let utilities = spans
+        .iter()
+        .filter(|span| span.name == "utility.run" && span.span_context.trace_id() == owner_trace)
+        .collect::<Vec<_>>();
+    assert_eq!(utilities.len(), 2);
+    assert!(utilities.iter().all(|span| span.parent_span_id == owner_id));
+    assert_eq!(utilities[0].links.links.len(), 1);
+    assert_eq!(utilities[0].links.links[0].span_context, phase.span_context);
+    assert_eq!(
+        utilities[1].links.links,
+        [] as [opentelemetry::trace::Link; 0]
+    );
 }

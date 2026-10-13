@@ -310,6 +310,7 @@ async fn codex_operations_keep_attempt_parentage_outcomes_and_numeric_metadata()
 
     // Assert
     assert_children(&spans, types.len() + 9);
+    assert_completed_provider_metadata(&spans);
     assert_eq!(
         spans
             .iter()
@@ -631,6 +632,19 @@ async fn pending_operations_close_when_the_attempt_future_is_canceled() {
     // Assert
     let spans = exporter.get_finished_spans().expect("spans");
     assert_children(&spans, 1);
+    let pending = spans
+        .iter()
+        .find(|span| span.name == "agent.tool")
+        .expect("pending operation");
+    assert!(pending.attributes.contains(&KeyValue::new(
+        "agentty.provider.completion.observed",
+        false
+    )));
+    assert!(
+        pending
+            .attributes
+            .contains(&KeyValue::new("agentty.timing.incomplete", true))
+    );
     assert!(
         outcomes(&spans)
             .iter()
@@ -844,4 +858,24 @@ fn gemini(update: &Value) -> Value {
 
 fn antigravity(step: &Value) -> Value {
     json!({"event": "step_update", "step_update": step})
+}
+
+fn assert_completed_provider_metadata(spans: &[SpanData]) {
+    assert!(
+        spans
+            .iter()
+            .filter(|span| span.name != "agent.attempt")
+            .all(|span| span
+                .attributes
+                .contains(&KeyValue::new("agentty.provider.completion.observed", true)))
+    );
+    assert!(
+        spans
+            .iter()
+            .filter(|span| span.name == "agent.compaction")
+            .all(|span| span.attributes.contains(&KeyValue::new(
+                "agentty.compaction.trigger",
+                "provider_native"
+            )))
+    );
 }

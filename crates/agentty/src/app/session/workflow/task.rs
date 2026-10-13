@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 use askama::Template;
 use tokio::sync::mpsc;
@@ -941,7 +942,7 @@ impl SessionTaskService {
     /// injected one-shot client.
     ///
     /// Input-limit failures retry with cumulative changed filenames and the
-    /// user/assistant transcript, using a fresh bounded utility call budget.
+    /// bounded user/assistant transcript, sharing the primary call budget.
     ///
     /// # Errors
     /// Returns an error if the worktree is clean, the cumulative session diff
@@ -974,8 +975,11 @@ impl SessionTaskService {
             ));
         }
 
-        let diff = git_client
-            .diff(folder.clone(), base_branch.to_string())
+        let diff = Span::child("commit.diff")
+            .run(
+                git_client.diff(folder.clone(), base_branch.to_string()),
+                |_| Outcome::Failed,
+            )
             .await?;
         let has_session_commit = git_client
             .has_commits_since(folder.clone(), base_branch.to_string())
@@ -986,11 +990,16 @@ impl SessionTaskService {
             None
         };
         let user_requests = Self::commit_user_requests(transcript);
+        let call_budget = ag_contracts::ProviderCallBudget::new(COMMIT_MESSAGE_MAX_PROVIDER_CALLS);
         let generated_commit_message = Self::generate_session_commit_message_with_client(
             folder.as_path(),
             (session_agent, reasoning_level, speed_mode),
             diff.as_str(),
-            (current_commit_message.as_deref(), &user_requests),
+            (
+                current_commit_message.as_deref(),
+                &user_requests,
+                &call_budget,
+            ),
             run_client,
             include_coauthored_by_agentty,
             false,
@@ -998,38 +1007,26 @@ impl SessionTaskService {
         .await;
         let generated_commit_message = match generated_commit_message {
             Err(error) if is_input_size_error(&error) => {
+                call_budget.ensure_available()?;
                 let changed_files = git_client
                     .diff_changed_files(folder.clone(), base_branch.to_string())
                     .await?;
-                let chat_history = transcript
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .messages()
-                    .iter()
-                    .filter(|message| {
-                        matches!(
-                            message.kind,
-                            SessionMessageKind::UserPrompt | SessionMessageKind::AssistantAnswer
-                        )
-                    })
-                    .map(|message| {
-                        serde_json::json!({
-                            "role": message.kind.as_str(),
-                            "content": message.content,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let fallback_context = serde_json::json!({
-                    "changed_files": changed_files,
-                    "chat_history": chat_history,
-                })
-                .to_string();
+                let fallback_context = super::commit_context::fallback(
+                    &changed_files,
+                    &transcript
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
 
                 Self::generate_session_commit_message_with_client(
                     folder.as_path(),
                     (session_agent, reasoning_level, speed_mode),
                     &fallback_context,
-                    (current_commit_message.as_deref(), &user_requests),
+                    (
+                        current_commit_message.as_deref(),
+                        &user_requests,
+                        &call_budget,
+                    ),
                     run_client,
                     include_coauthored_by_agentty,
                     true,
@@ -1039,12 +1036,15 @@ impl SessionTaskService {
             result => result?,
         };
 
-        git_client
-            .commit_all_preserving_single_commit(
-                folder.clone(),
-                base_branch.to_string(),
-                generated_commit_message.clone(),
-                git::SingleCommitMessageStrategy::Replace,
+        Span::child("commit.git")
+            .run(
+                git_client.commit_all_preserving_single_commit(
+                    folder.clone(),
+                    base_branch.to_string(),
+                    generated_commit_message.clone(),
+                    git::SingleCommitMessageStrategy::Replace,
+                ),
+                |_| Outcome::Failed,
             )
             .await?;
 
@@ -1091,7 +1091,7 @@ impl SessionTaskService {
     ///
     /// # Errors
     /// Returns an error when prompt rendering fails, the one-shot agent call
-    /// fails, or bounded input summarization cannot satisfy the provider limit.
+    /// fails, or bounded evidence cannot satisfy the provider limit.
     async fn generate_session_commit_message_with_client(
         folder: &Path,
         agent_settings: (
@@ -1100,42 +1100,70 @@ impl SessionTaskService {
             crate::domain::agent::SpeedMode,
         ),
         diff: &str,
-        message_context: (Option<&str>, &str),
+        message_context: (Option<&str>, &str, &ag_contracts::ProviderCallBudget),
         run_client: &dyn RunClient,
         include_coauthored_by_agentty: bool,
         fallback: bool,
     ) -> Result<String, SessionError> {
         let (session_agent, reasoning_level, speed_mode) = agent_settings;
-        let (current_commit_message, user_requests) = message_context;
-        let (submission, _) = crate::app::diff_prompt::submit(
-            run_client,
-            ag_contracts::OneShotRequest {
-                activity_tx: None,
-                execution_policy: ag_contracts::ExecutionPolicy::default(),
-                provider_call_budget: None,
-                harness: (session_agent.kind()).to_string(),
-                child_pid: None,
-                folder: folder.to_path_buf(),
-                model: (session_agent.model()).as_str().to_string(),
-                permission_mode: ag_contracts::PermissionMode::ReadOnly,
-                prompt: String::new(),
-                request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
-                reasoning_level,
-                speed_mode,
-            },
-            diff,
-            current_commit_message.unwrap_or_default(),
-            COMMIT_MESSAGE_MAX_PROVIDER_CALLS,
-            |diff, context| {
-                crate::app::diff_prompt::render_result(Self::session_commit_message_prompt(
-                    diff,
-                    Some(context),
-                    user_requests,
-                    fallback,
-                ))
-            },
-        )
-        .await?;
+        let (current_commit_message, user_requests, call_budget) = message_context;
+        let preparation = Span::child("commit.context");
+        preparation.attribute(
+            "agentty.input.bytes",
+            i64::try_from(diff.len()).unwrap_or(i64::MAX),
+        );
+        let bounded_diff = super::commit_context::diff(diff);
+        let bounded_message =
+            super::commit_context::excerpt(current_commit_message.unwrap_or_default(), 3_000);
+        let bounded_message = bounded_message
+            .as_str()
+            .map_or_else(|| bounded_message.to_string(), str::to_string);
+        let prompt = Self::session_commit_message_prompt(
+            &bounded_diff,
+            Some(&bounded_message),
+            user_requests,
+            fallback,
+        )?;
+        preparation.attribute("agentty.input.compacted", bounded_diff != diff);
+        preparation.finish(Outcome::Completed);
+        if prompt.len() > crate::app::diff_prompt::PROMPT_BUDGET {
+            return Err(SessionError::OneShot(ag_contracts::OneShotError::new(
+                "Input exceeds the maximum length of the commit prompt budget",
+            )));
+        }
+        call_budget.ensure_available()?;
+        let generation = Span::child(if fallback {
+            "commit.fallback"
+        } else {
+            "commit.message"
+        });
+        generation.attribute(
+            "agentty.provider.budget.remaining",
+            i64::try_from(call_budget.remaining()).unwrap_or(i64::MAX),
+        );
+        generation.attribute(
+            "agentty.input.bytes",
+            i64::try_from(prompt.len()).unwrap_or(i64::MAX),
+        );
+        let submission = generation
+            .run(
+                run_client.submit(ag_contracts::OneShotRequest {
+                    activity_tx: None,
+                    execution_policy: ag_contracts::ExecutionPolicy::default(),
+                    provider_call_budget: Some(call_budget.clone()),
+                    harness: (session_agent.kind()).to_string(),
+                    child_pid: None,
+                    folder: folder.to_path_buf(),
+                    model: (session_agent.model()).as_str().to_string(),
+                    permission_mode: ag_contracts::PermissionMode::ReadOnly,
+                    prompt,
+                    request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
+                    reasoning_level,
+                    speed_mode,
+                }),
+                |_| Outcome::Failed,
+            )
+            .await?;
         let answer_text = submission.response.to_answer_display_text();
         let trimmed_answer_text = answer_text.trim();
         let validated_message = if trimmed_answer_text.is_empty() {

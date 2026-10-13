@@ -5,16 +5,15 @@ use ag_contracts::{
     AgentRequestKind, OneShotError, OneShotRequest, OneShotSubmission, PermissionMode,
     ReasoningLevel, SessionStats, SpeedMode, is_input_size_error,
 };
-use ag_protocol::{AgentResponse, diff_fence};
+use ag_protocol::AgentResponse;
 use ag_session::{AgentKind, AgentModel};
-use ag_worker::{MockRunClient, RunClient};
+use ag_worker::MockRunClient;
 
 use super::{
     MAX_PROVIDER_CALLS, PROMPT_BUDGET, SUMMARY_CHUNK_BYTES, chunks, render_result, summarize,
     summarize_context, summary_with_repair,
 };
 use crate::app::AppError;
-use crate::app::session::SessionError;
 
 fn request() -> OneShotRequest {
     OneShotRequest {
@@ -38,180 +37,6 @@ fn answer(text: &str) -> OneShotSubmission {
         response: AgentResponse::plain(text),
         stats: SessionStats::default(),
     }
-}
-
-fn render(diff: &str, context: &str) -> String {
-    format!("FINAL\n{context}\n{diff}")
-}
-
-async fn submit(
-    client: &dyn RunClient,
-    request: OneShotRequest,
-    diff: &str,
-    context: &str,
-    render: impl Fn(&str, &str) -> Result<String, OneShotError>,
-) -> Result<(OneShotSubmission, bool), OneShotError> {
-    super::submit(client, request, diff, context, MAX_PROVIDER_CALLS, render).await
-}
-
-#[tokio::test]
-async fn small_diff_preserves_input_and_settings() {
-    // Arrange
-    let mut client = MockRunClient::new();
-    client.expect_submit().once().returning(|request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        assert_eq!(request.prompt, "FINAL\nintent\n+hello");
-        assert_eq!(request.request_kind, AgentRequestKind::FocusedReview);
-        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        Ok(answer("result"))
-    });
-
-    // Act
-    let (submission, summarized) =
-        submit(&client, request(), "+hello", "intent", |diff, context| {
-            Ok(render(diff, context))
-        })
-        .await
-        .expect("operation should succeed");
-
-    // Assert
-    assert_eq!(submission.response.answer, "result");
-    assert!(!summarized);
-}
-
-#[tokio::test]
-async fn caller_call_limit_stops_large_diff_reduction() {
-    // Arrange
-    let mut client = MockRunClient::new();
-    client.expect_submit().times(2).returning(|request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        Ok(answer("Short summary."))
-    });
-
-    // Act
-    let error = super::submit(
-        &client,
-        request(),
-        &"x".repeat(SUMMARY_CHUNK_BYTES * 3),
-        "",
-        2,
-        |diff, context| Ok(render(diff, context)),
-    )
-    .await
-    .expect_err("reduction should stop at the caller's cap");
-
-    // Assert
-    assert!(error.to_string().contains("provider call limit reached"));
-}
-
-#[tokio::test]
-async fn budgets_huge_unicode_diff_history_and_fences_before_submission() {
-    // Arrange
-    let diff = format!(
-        "diff --git a/first b/first\n{}\ndiff --git a/middle b/middle\n{}\ndiff --git a/last \
-         b/last\n{}",
-        "🦀".repeat(100_000),
-        "`".repeat(100_000),
-        "+end\n".repeat(100_000)
-    );
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let seen_calls = Arc::clone(&seen);
-    let mut client = MockRunClient::new();
-    client.expect_submit().returning(move |request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        assert!(request.prompt.len() <= PROMPT_BUDGET);
-        assert_eq!(request.permission_mode, PermissionMode::ReadOnly);
-        assert_eq!(request.model, AgentModel::ClaudeSonnet55.as_str());
-        seen_calls
-            .lock()
-            .expect("operation should succeed")
-            .push(request.prompt.clone());
-        if request.prompt.starts_with("FINAL") {
-            assert_eq!(request.reasoning_level, ReasoningLevel::Medium);
-            return Ok(answer("result"));
-        }
-        assert_eq!(request.reasoning_level, ReasoningLevel::Low);
-        assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
-        Ok(answer("Preserve each file change and accepted decisions."))
-    });
-
-    // Act
-    let (_, summarized) = submit(
-        &client,
-        request(),
-        &diff,
-        &"history decision\n".repeat(50_000),
-        |diff, context| Ok(render(diff, context)),
-    )
-    .await
-    .expect("operation should succeed");
-
-    // Assert
-    assert!(summarized);
-    let seen = seen.lock().expect("operation should succeed");
-    for path in ["a/first", "a/middle", "a/last", "history decision"] {
-        assert!(seen.iter().any(|prompt| prompt.contains(path)), "{path}");
-    }
-    assert!(
-        seen.last()
-            .expect("operation should succeed")
-            .contains("Summarized input")
-    );
-}
-
-#[tokio::test]
-async fn exact_size_rejection_retries_only_smaller_prompts() {
-    // Arrange
-    let lengths = Arc::new(Mutex::new(Vec::new()));
-    let observed = Arc::clone(&lengths);
-    let mut client = MockRunClient::new();
-    client.expect_submit().returning(move |request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        if request.prompt.starts_with("FINAL") {
-            let mut lengths = observed.lock().expect("operation should succeed");
-            lengths.push(request.prompt.len());
-            if lengths.len() == 1 {
-                return Err(OneShotError::new(
-                    "Input exceeds the maximum length of 1048576 characters.",
-                ));
-            }
-            return Ok(answer("result"));
-        }
-        Ok(answer("Change behavior."))
-    });
-
-    // Act
-    let (_, summarized) = submit(
-        &client,
-        request(),
-        &"x".repeat(40_000),
-        "",
-        |diff, context| Ok(render(diff, context)),
-    )
-    .await
-    .expect("operation should succeed");
-
-    // Assert
-    assert!(summarized);
-    let lengths = lengths.lock().expect("operation should succeed");
-    assert_eq!(lengths.len(), 2);
-    assert!(lengths[1] < lengths[0]);
 }
 
 #[tokio::test]
@@ -254,28 +79,6 @@ async fn summary_rejection_splits_chunks_without_losing_the_tail() {
     assert!(prompts[1].len() < prompts[0].len());
     assert!(prompts.iter().any(|prompt| prompt.contains("TAIL")));
     assert!(summary.len() <= 2000);
-}
-
-#[tokio::test]
-async fn stops_on_unreducible_input_or_non_size_errors() {
-    // Arrange
-    for diagnostic in ["network timeout", "context_window_exceeded"] {
-        let mut client = MockRunClient::new();
-        client
-            .expect_submit()
-            .once()
-            .returning(move |_| Err(OneShotError::new(diagnostic)));
-
-        // Act
-        let error = submit(&client, request(), "tiny", "", |diff, context| {
-            Ok(render(diff, context))
-        })
-        .await
-        .expect_err("operation should fail");
-
-        // Assert
-        assert_eq!(error.to_string(), diagnostic);
-    }
 }
 
 #[tokio::test]
@@ -518,29 +321,6 @@ async fn persistent_invalid_summary_reports_distinct_terminal_diagnostics() {
 }
 
 #[tokio::test]
-async fn rejects_unbudgetable_template_and_render_failure() {
-    // Arrange
-    let client = MockRunClient::new();
-
-    // Act
-    let oversized = submit(&client, request(), "", "", |_, _| {
-        Ok("x".repeat(PROMPT_BUDGET + 1))
-    })
-    .await;
-    let invalid = submit(&client, request(), "", "", |_, _| {
-        render_result(Err(AppError::Workflow("render".to_string())))
-    })
-    .await;
-
-    // Assert
-    assert!(oversized.is_err());
-    assert_eq!(
-        invalid.expect_err("operation should fail").to_string(),
-        "render"
-    );
-}
-
-#[tokio::test]
 async fn rejects_reduction_without_progress() {
     // Arrange
     let mut client = MockRunClient::new();
@@ -600,283 +380,6 @@ fn chunks_preserve_unicode_newlines_and_file_attribution() {
 }
 
 #[tokio::test]
-async fn fencing_overhead_triggers_reduction_below_nominal_content_allowances() {
-    // Arrange
-    let diff = "`".repeat(19_000);
-    let history = "h".repeat(7_000);
-    let mut client = MockRunClient::new();
-    client.expect_submit().returning(|request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        assert!(request.prompt.len() <= PROMPT_BUDGET);
-        Ok(answer("Preserve the documented changes."))
-    });
-
-    // Act
-    let (_, summarized) = submit(&client, request(), &diff, &history, |diff, history| {
-        let fence = diff_fence(diff);
-        Ok(format!("{fence}diff\n{diff}\n{fence}\n{history}"))
-    })
-    .await
-    .expect("fencing overhead should be reduced");
-
-    // Assert
-    assert!(summarized);
-}
-
-#[tokio::test]
-async fn repeated_size_rejections_have_a_bounded_retry_count() {
-    // Arrange
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&attempts);
-    let mut client = MockRunClient::new();
-    client.expect_submit().returning(move |request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        if request.prompt.starts_with("FINAL") {
-            seen.lock()
-                .expect("attempts lock")
-                .push(request.prompt.len());
-            return Err(OneShotError::new("contextWindowExceeded"));
-        }
-        Ok(answer(&"`".repeat(summary_output_limit(&request))))
-    });
-
-    // Act
-    let result = submit(
-        &client,
-        request(),
-        &"d".repeat(25_000),
-        &"h".repeat(25_000),
-        |diff, context| {
-            let diff_delimiter = diff_fence(diff);
-            let context_delimiter = diff_fence(context);
-            let diff = format!("{diff_delimiter}diff\n{diff}\n{diff_delimiter}");
-            let context = format!("{context_delimiter}text\n{context}\n{context_delimiter}");
-            Ok(format!("FINAL\n{diff}\n{context}"))
-        },
-    )
-    .await;
-
-    // Assert
-    assert!(result.is_err());
-    let attempts = attempts.lock().expect("attempts lock");
-    assert_eq!(attempts.len(), 3);
-    assert!(attempts.windows(2).all(|sizes| sizes[1] < sizes[0]));
-}
-
-#[tokio::test]
-async fn render_failure_after_summarization_propagates() {
-    // Arrange
-    let mut client = MockRunClient::new();
-    client
-        .expect_submit()
-        .returning(|_| Ok(answer("short summary")));
-
-    // Act
-    let result = submit(
-        &client,
-        request(),
-        &"x".repeat(70_000),
-        "",
-        |diff, context| {
-            if diff.contains("Summarized input") {
-                return render_result(Err(SessionError::Workflow(
-                    "summary render failed".to_string(),
-                )));
-            }
-            Ok(render(diff, context))
-        },
-    )
-    .await;
-
-    // Assert
-    assert_eq!(
-        result.expect_err("render should fail").to_string(),
-        "summary render failed"
-    );
-}
-
-/// Simulates a provider returning the largest permitted summary.
-fn summary_output_limit(request: &OneShotRequest) -> usize {
-    request
-        .prompt
-        .split("within ")
-        .nth(1)
-        .expect("summary bound")
-        .split_whitespace()
-        .next()
-        .expect("byte count")
-        .parse()
-        .expect("numeric bound")
-}
-
-#[tokio::test]
-async fn mebibyte_diff_uses_large_chunks_and_bounded_recursive_reduction() {
-    // Arrange
-    let prompts = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&prompts);
-    let mut client = MockRunClient::new();
-    client.expect_submit().returning(move |request| {
-        request
-            .provider_call_budget
-            .as_ref()
-            .expect("shared budget")
-            .consume()?;
-        assert!(request.prompt.len() <= PROMPT_BUDGET);
-        seen.lock()
-            .expect("prompts lock")
-            .push(request.prompt.clone());
-        if request.prompt.starts_with("FINAL") {
-            Ok(answer("result"))
-        } else {
-            Ok(answer(&"s".repeat(summary_output_limit(&request))))
-        }
-    });
-    let diff = format!("{}TAIL", "X".repeat(1_048_576));
-
-    // Act
-    let (_, summarized) = submit(&client, request(), &diff, "", |diff, context| {
-        Ok(render(diff, context))
-    })
-    .await
-    .expect("large diff should succeed");
-
-    // Assert
-    assert!(summarized);
-    let prompts = prompts.lock().expect("prompts lock");
-    assert!(prompts.len() <= 24, "{} calls for one MiB", prompts.len());
-    assert!(prompts[0].len() > 55_000);
-    assert_eq!(
-        prompts
-            .iter()
-            .filter(|prompt| !prompt.starts_with("FINAL"))
-            .map(|prompt| prompt.matches('X').count())
-            .sum::<usize>(),
-        1_048_576
-    );
-    assert!(prompts.iter().any(|prompt| prompt.contains("TAIL")));
-    assert!(prompts.last().expect("final prompt").starts_with("FINAL"));
-}
-
-#[tokio::test]
-async fn provider_call_budget_is_shared_by_all_reduction_stages_and_final_submission() {
-    // Arrange
-    for (diff_chunks, context_chunks, full_summary) in [
-        (MAX_PROVIDER_CALLS + 1, 0, false), // Initial diff chunks.
-        (MAX_PROVIDER_CALLS, 0, true),      // Recursive summaries.
-        (MAX_PROVIDER_CALLS - 1, 2, false), // Session context.
-        (MAX_PROVIDER_CALLS, 0, false),     // Final submission.
-    ] {
-        let mut client = MockRunClient::new();
-        client
-            .expect_submit()
-            .times(MAX_PROVIDER_CALLS)
-            .returning(move |request| {
-                request
-                    .provider_call_budget
-                    .as_ref()
-                    .expect("shared budget")
-                    .consume()?;
-                assert_eq!(request.request_kind, AgentRequestKind::UtilityPrompt);
-                Ok(answer(&"s".repeat(if full_summary {
-                    summary_output_limit(&request)
-                } else {
-                    5
-                })))
-            });
-
-        // Act
-        let error = submit(
-            &client,
-            request(),
-            &"x".repeat(SUMMARY_CHUNK_BYTES * diff_chunks),
-            &"h".repeat(SUMMARY_CHUNK_BYTES * context_chunks),
-            |diff, context| Ok(render(diff, context)),
-        )
-        .await
-        .expect_err("call budget should stop generation");
-
-        // Assert
-        assert!(error.to_string().contains("provider call limit reached"));
-        assert!(is_input_size_error(&error.to_string()));
-    }
-}
-
-#[tokio::test]
-async fn provider_size_rejections_consume_the_shared_call_budget() {
-    // Arrange
-    let mut client = MockRunClient::new();
-    client
-        .expect_submit()
-        .times(MAX_PROVIDER_CALLS)
-        .returning(|request| {
-            request
-                .provider_call_budget
-                .as_ref()
-                .expect("shared budget")
-                .consume()?;
-            if request.prompt.len() > 4_000 {
-                Err(OneShotError::new("contextWindowExceeded"))
-            } else {
-                Ok(answer("short"))
-            }
-        });
-
-    // Act
-    let error = submit(
-        &client,
-        request(),
-        &"x".repeat(1_048_576),
-        "",
-        |diff, context| Ok(render(diff, context)),
-    )
-    .await
-    .expect_err("repeated splitting should exhaust the budget");
-
-    // Assert
-    assert!(
-        error.to_string().contains("provider call limit reached"),
-        "{error}"
-    );
-}
-
-#[tokio::test]
-async fn hidden_repair_turns_reduce_the_number_of_allowed_submissions() {
-    // Arrange
-    let mut client = MockRunClient::new();
-    client
-        .expect_submit()
-        .times(MAX_PROVIDER_CALLS / 2)
-        .returning(|request| {
-            let budget = request.provider_call_budget.expect("shared budget");
-            budget.consume()?; // Initial provider turn.
-            budget.consume()?; // Protocol repair turn.
-            Ok(answer("short"))
-        });
-
-    // Act
-    let error = submit(
-        &client,
-        request(),
-        &"x".repeat(SUMMARY_CHUNK_BYTES * 40),
-        "",
-        |diff, context| Ok(render(diff, context)),
-    )
-    .await
-    .expect_err("repair turns exhaust the budget");
-
-    // Assert
-    assert!(error.to_string().contains("provider call limit reached"));
-}
-
-#[tokio::test]
 async fn history_reduction_preserves_verification_provenance_contract() {
     // Arrange
     let mut client = MockRunClient::new();
@@ -905,4 +408,16 @@ async fn history_reduction_preserves_verification_provenance_contract() {
 
     // Assert
     assert!(summary.contains("rerun affected checks"));
+}
+
+#[test]
+fn render_errors_preserve_host_diagnostics() {
+    // Arrange
+    let result = Err(AppError::Workflow("render failed".into()));
+    // Act
+    let error = render_result(result).expect_err("invalid render");
+    let success = render_result(Ok::<_, AppError>("rendered".into()));
+    // Assert
+    assert_eq!(error.to_string(), "render failed");
+    assert_eq!(success.expect("render"), "rendered");
 }

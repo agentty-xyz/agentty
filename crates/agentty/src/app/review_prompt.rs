@@ -9,6 +9,7 @@ use ag_contracts::{
     is_input_size_error,
 };
 use ag_protocol::{AgentResponse, FocusedReview, FocusedReviewSeverity};
+use ag_telemetry::{Outcome, Span};
 use ag_worker::RunClient;
 
 use super::diff_prompt::{self, MAX_PROVIDER_CALLS, MIN_CHUNK_BYTES, PROMPT_BUDGET};
@@ -403,7 +404,14 @@ async fn submit_review(
             "Input exceeds the maximum length of the review prompt budget",
         ));
     }
-    let submission = client.submit(request.clone()).await?;
+    let phase = Span::child("review.fragment");
+    phase.attribute(
+        "agentty.input.bytes",
+        i64::try_from(request.prompt.len()).unwrap_or(i64::MAX),
+    );
+    let submission = phase
+        .run(client.submit(request.clone()), |_| Outcome::Failed)
+        .await?;
 
     parse_response(&submission.response)
 }

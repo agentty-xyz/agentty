@@ -171,3 +171,9 @@ destination; execution crates use its span guards with default features disabled
 HTTP receivers verify protobuf payloads and exporter failure, while in-memory exporters
 verify span ownership and asynchronous context. Trace boundaries report observable
 backend activity without inferring hidden model or tool timings.
+
+Validation coordination injects metadata, process, fingerprint, ledger, and lock
+boundaries. Public CLI tests use stub executables; a native lock test verifies exclusive
+access and release. Provider event fixtures verify cumulative usage, duplicate updates,
+unknown counters, compaction, and phase ownership. These checks do not measure live
+provider latency or establish message quality for omitted diff evidence.

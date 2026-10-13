@@ -2,8 +2,165 @@
 
 use serde_json::Value;
 
+/// Retained thread counters, separated from the latest request's context size.
+#[derive(Clone)]
+pub(super) struct UsageTracker {
+    pub(super) latest_input: Option<u64>,
+    baseline_observed: bool,
+    observed: bool,
+    previous: Option<(u64, u64)>,
+    previous_cached: Option<u64>,
+    turn: Option<(u64, u64)>,
+    turn_cached: Option<u64>,
+}
+
+impl UsageTracker {
+    /// Resumed threads have no trustworthy cumulative baseline yet.
+    pub(super) fn resumed(&mut self) {
+        self.previous = None;
+        self.previous_cached = None;
+    }
+
+    pub(super) fn begin_turn(&mut self) {
+        self.baseline_observed = false;
+        self.observed = false;
+        self.turn = Some((0, 0));
+        self.turn_cached = Some(0);
+    }
+
+    /// Discards stale baselines after turns lacking complete cumulative usage.
+    /// A new snapshot still establishes a baseline when this turn's total is
+    /// unknown.
+    pub(super) fn finish_turn(&mut self) {
+        if !self.baseline_observed {
+            self.resumed();
+        }
+    }
+
+    /// Native compaction invalidates the previous request's context estimate.
+    pub(super) fn clear_context(&mut self) {
+        self.latest_input = None;
+    }
+
+    pub(super) fn observe(&mut self, response: &Value, expected_turn: Option<&str>) {
+        if matches!(
+            response.get("method").and_then(Value::as_str),
+            Some("item/completed")
+        ) && response
+            .pointer("/params/item/type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| matches!(kind, "contextCompaction" | "context_compaction"))
+        {
+            self.clear_context();
+        }
+        let Some(usage) = thread_token_usage_for_turn(response, expected_turn) else {
+            if !self.observed
+                && let Some(last) = extract_turn_usage_for_turn(response, expected_turn)
+            {
+                self.latest_input = Some(last.0);
+            }
+            return;
+        };
+        self.observed = true;
+        let last_breakdown = usage.get("last").or_else(|| usage.get("last_token_usage"));
+        self.latest_input = last_breakdown
+            .and_then(|last| last.get("inputTokens").or_else(|| last.get("input_tokens")))
+            .and_then(Value::as_u64);
+        let total = usage
+            .get("total")
+            .or_else(|| usage.get("total_token_usage"));
+        if let Some(total) = total {
+            let current = (
+                total
+                    .get("inputTokens")
+                    .or_else(|| total.get("input_tokens"))
+                    .and_then(Value::as_u64),
+                total
+                    .get("outputTokens")
+                    .or_else(|| total.get("output_tokens"))
+                    .and_then(Value::as_u64),
+            );
+            if let (Some(input), Some(output)) = current {
+                self.baseline_observed = true;
+                let delta = self.previous.map(|previous| {
+                    if input < previous.0 || output < previous.1 {
+                        (input, output)
+                    } else {
+                        (input - previous.0, output - previous.1)
+                    }
+                });
+                self.turn = self.turn.zip(delta).map(|(turn, delta)| {
+                    (
+                        turn.0.saturating_add(delta.0),
+                        turn.1.saturating_add(delta.1),
+                    )
+                });
+                self.previous = Some((input, output));
+            } else {
+                self.baseline_observed = false;
+                self.turn = None;
+            }
+            let cached = total
+                .get("cachedInputTokens")
+                .or_else(|| total.get("cached_input_tokens"))
+                .and_then(Value::as_u64);
+            self.turn_cached = self.turn_cached.zip(self.previous_cached).zip(cached).map(
+                |((turn, previous), current)| {
+                    turn.saturating_add(if current < previous {
+                        current
+                    } else {
+                        current - previous
+                    })
+                },
+            );
+            self.previous_cached = cached;
+        } else {
+            // Last-only notifications cannot distinguish duplicate events
+            // from distinct provider calls with equal usage.
+            self.turn = None;
+            self.turn_cached = None;
+            self.baseline_observed = false;
+        }
+    }
+
+    pub(super) fn totals(&self) -> Option<(u64, u64)> {
+        self.turn
+            .filter(|_| self.observed && self.previous.is_some())
+    }
+
+    pub(super) fn record(&self) {
+        ag_telemetry::current_attribute("agentty.usage.aggregate_known", self.totals().is_some());
+        if let Some(input) = self.latest_input {
+            ag_telemetry::current_attribute(
+                "agentty.context.last_request.input_tokens",
+                i64::try_from(input).unwrap_or(i64::MAX),
+            );
+        }
+        if let Some(cached) = self.turn_cached.filter(|_| self.totals().is_some()) {
+            ag_telemetry::current_attribute(
+                "gen_ai.usage.cache_read.input_tokens",
+                i64::try_from(cached).unwrap_or(i64::MAX),
+            );
+        }
+    }
+}
+
+impl Default for UsageTracker {
+    fn default() -> Self {
+        Self {
+            baseline_observed: false,
+            observed: false,
+            previous: Some((0, 0)),
+            previous_cached: Some(0),
+            latest_input: None,
+            turn: None,
+            turn_cached: None,
+        }
+    }
+}
+
 /// Resolves final turn usage by preferring `turn/completed` payload usage and
-/// falling back to the last seen usage update when completion omits it.
+/// falling back to the last per-request usage update when completion omits it.
 pub(super) fn resolve_turn_usage(
     completed_turn_usage: Option<(u64, u64)>,
     latest_stream_usage: Option<(u64, u64)>,
@@ -15,17 +172,18 @@ pub(super) fn resolve_turn_usage(
 
 /// Updates usage trackers for one app-server response line.
 ///
-/// Usage is read from modern `thread/tokenUsage/updated` notifications first,
-/// then from legacy `turn.usage` payloads for backwards compatibility.
+/// Per-request usage is read from modern `thread/tokenUsage/updated`
+/// notifications first, then legacy `turn.usage` payloads. Cumulative totals
+/// belong only to the retained baseline tracker.
 pub(super) fn update_turn_usage_from_response(
     response_value: &Value,
     expected_turn_id: Option<&str>,
     completed_turn_usage: &mut Option<(u64, u64)>,
     latest_stream_usage: &mut Option<(u64, u64)>,
 ) {
-    if let Some(turn_usage) = extract_thread_token_usage_for_turn(response_value, expected_turn_id)
-    {
-        *latest_stream_usage = Some(turn_usage);
+    if thread_token_usage_for_turn(response_value, expected_turn_id).is_some() {
+        *latest_stream_usage =
+            extract_thread_token_usage_for_turn(response_value, expected_turn_id);
 
         return;
     }
@@ -80,11 +238,35 @@ pub(super) fn extract_turn_usage_for_turn(
     extract_turn_usage(response_value)
 }
 
-/// Extracts per-turn usage from `thread/tokenUsage/updated` notifications.
+/// Extracts only the latest request's usage, never cumulative thread totals.
 pub(super) fn extract_thread_token_usage_for_turn(
     response_value: &Value,
     expected_turn_id: Option<&str>,
 ) -> Option<(u64, u64)> {
+    let token_usage = thread_token_usage_for_turn(response_value, expected_turn_id)?;
+    let breakdown = token_usage
+        .get("last")
+        .or_else(|| token_usage.get("last_token_usage"))?;
+
+    let input_tokens = breakdown
+        .get("inputTokens")
+        .and_then(Value::as_u64)
+        .or_else(|| breakdown.get("input_tokens").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let output_tokens = breakdown
+        .get("outputTokens")
+        .and_then(Value::as_u64)
+        .or_else(|| breakdown.get("output_tokens").and_then(Value::as_u64))
+        .unwrap_or(0);
+
+    Some((input_tokens, output_tokens))
+}
+
+/// Validates ownership before exposing counters to either usage tracker.
+fn thread_token_usage_for_turn<'response>(
+    response_value: &'response Value,
+    expected_turn_id: Option<&str>,
+) -> Option<&'response Value> {
     let method = response_value.get("method").and_then(Value::as_str)?;
     if method != "thread/tokenUsage/updated" && method != "thread/token_usage/updated" {
         return None;
@@ -101,27 +283,9 @@ pub(super) fn extract_thread_token_usage_for_turn(
         }
     }
 
-    let token_usage = params
+    params
         .get("tokenUsage")
-        .or_else(|| params.get("token_usage"))?;
-    let breakdown = token_usage
-        .get("last")
-        .or_else(|| token_usage.get("last_token_usage"))
-        .or_else(|| token_usage.get("total"))
-        .or_else(|| token_usage.get("total_token_usage"))?;
-
-    let input_tokens = breakdown
-        .get("inputTokens")
-        .and_then(Value::as_u64)
-        .or_else(|| breakdown.get("input_tokens").and_then(Value::as_u64))
-        .unwrap_or(0);
-    let output_tokens = breakdown
-        .get("outputTokens")
-        .and_then(Value::as_u64)
-        .or_else(|| breakdown.get("output_tokens").and_then(Value::as_u64))
-        .unwrap_or(0);
-
-    Some((input_tokens, output_tokens))
+        .or_else(|| params.get("token_usage"))
 }
 
 #[cfg(test)]
