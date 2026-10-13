@@ -7,14 +7,18 @@ use std::os::unix::fs::PermissionsExt;
 use agentty::app::Tab;
 use agentty::db::{DB_DIR, DB_FILE, Database};
 use agentty::domain::agent::ReasoningLevel;
+use agentty::domain::theme::ColorTheme;
 use testty::assertion;
+use testty::frame::TerminalFrame;
 use testty::journey::Journey;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
+use testty::scenario::Scenario;
 use testty::step::Step;
 
-use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
+use crate::{common, selection};
 
 const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 3;
 const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 7;
@@ -51,7 +55,20 @@ fn seed_gemini_settings_cli_stub(env: &BuilderEnv) -> Result<(), Box<dyn std::er
 async fn seed_settings_navigation_models(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_settings_models(env, false).await
+    seed_settings_models(env, false).await?;
+
+    seed_settings_tab(env).await
+}
+
+/// Starts both the semantic proof and its recording on the Settings tab.
+async fn seed_settings_tab(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
+    common::seed_active_project_setting(env).await?;
+    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+    let database = Database::open(&db_path).await?;
+
+    persist_active_tab_for_test(&database, Tab::Settings).await?;
+
+    Ok(())
 }
 
 /// Seeds deterministic selector values and starts the feature demo on Settings.
@@ -154,7 +171,14 @@ async fn seed_settings_model_reasoning_levels(
 async fn settings_tab_shows_content() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_content")
-        .setup(|env| Box::pin(async move { seed_gemini_settings_cli_stub(env) }))
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                seed_gemini_settings_cli_stub(env)?;
+
+                seed_settings_tab(env).await
+            })
+        })
         .with_stub_only_path()
         .zola(
             "Settings tab",
@@ -166,8 +190,7 @@ async fn settings_tab_shows_content() {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(1500)
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_text("Default Smart Model", 5000)
                     .viewing_pause_ms(3000)
                     .capture_labeled("settings_tab", "Settings tab with all rows")
             },
@@ -194,6 +217,58 @@ async fn settings_tab_shows_content() {
         .expect("feature test failed");
 }
 
+/// Highlighting follows the selected row across settings sections without a
+/// glyph.
+#[tokio::test]
+async fn settings_selection_highlight() {
+    // Arrange, Act, Assert
+    FeatureTest::new("settings_selection_highlight")
+        .env("NO_COLOR", "")
+        .with_terminal_size(100, 24)
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::switch_to_tab("Settings"))
+                    .capture_labeled("initial", "Highlight on Theme")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("next_global", "Highlight on Orchestrator Parallelism")
+                    .press_key("j")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("project", "Highlight on Default Smart Model")
+                    .press_key("k")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("back_global", "Highlight on Auto-approve Research")
+            },
+            |_frame, report| {
+                Box::pin(async move {
+                    let selected_labels = [
+                        "Theme",
+                        "Orchestrator Parallelism",
+                        "Default Smart Model",
+                        "Auto-approve Research",
+                    ];
+                    assert_eq!(report.captures.len(), selected_labels.len());
+                    for (capture, selected_label) in report.captures.iter().zip(selected_labels) {
+                        let frame = common::frame_from_capture(capture);
+                        let (foreground, background) =
+                            selection::selection_colors(ColorTheme::Current);
+                        selection::assert_selected_label(
+                            &frame,
+                            selected_label,
+                            Some((foreground, background)),
+                        );
+                    }
+                })
+            },
+        )
+        .await
+        .expect("feature test failed");
+}
+
 /// Verify that `j` and `k` navigate through settings rows.
 ///
 /// Opens the Settings tab and presses `j` multiple times to move the
@@ -205,6 +280,7 @@ async fn settings_tab_shows_content() {
 async fn settings_jk_navigation() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_navigation")
+        .with_git()
         .with_terminal_size(100, 24)
         .setup(|env| Box::pin(async move { seed_settings_navigation_models(env).await }))
         .zola(
@@ -216,8 +292,7 @@ async fn settings_jk_navigation() {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_text("Default Smart Model", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("initial", "Settings tab at first row")
                     .press_key("j")
@@ -305,110 +380,160 @@ async fn settings_jk_navigation() {
 /// Opens the Settings tab, moves to the Smart role selector, opens the
 /// model dropdown, advances through the reasoning and speed dropdowns, and
 /// selects Fast without saving so semantic and VHS runs begin from identical
-/// state. Captures each stage for the GIF.
+/// state. Both monochrome and colored passes verify that highlighting moves
+/// from `Normal` to `Fast`.
 #[tokio::test]
 async fn settings_dropdown_selects_value() {
     // Arrange, Act, Assert
-    FeatureTest::new("settings_edit")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_settings_dropdown_models(env).await }))
-        .zola(
-            "Settings editing",
-            "Choose model, reasoning, and response-speed defaults.",
-            154,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .wait_for_text("claude/claude-opus-5-5", 5000)
-                    .viewing_pause_ms(2000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .capture_labeled(
-                        "before_edit",
-                        "Smart model, reasoning, and speed before selection",
-                    )
-                    .press_key("Enter")
-                    .wait_for_text("Select model", 3000)
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("model_dropdown", "Choose the Smart model")
-                    .press_key("Enter")
-                    .wait_for_text("Select reasoning level", 3000)
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("reasoning_dropdown", "Choose Smart model reasoning")
-                    .press_key("Enter")
-                    .wait_for_text("Select response speed", 3000)
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled("speed_dropdown", "Choose Smart model response speed")
-                    .press_key("j")
-                    .wait_for_text("> Fast", 3000)
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(2500)
-                    .capture_labeled("speed_selected", "Fast response speed selected")
-            },
-            |frame, report| {
+    for colors_enabled in [false, true] {
+        let feature_name = if colors_enabled {
+            "settings_edit_highlight"
+        } else {
+            "settings_edit"
+        };
+        let feature = FeatureTest::new(feature_name)
+            .with_git()
+            .setup(|env| Box::pin(async move { seed_settings_dropdown_models(env).await }));
+        let feature = if colors_enabled {
+            feature.env("NO_COLOR", "")
+        } else {
+            feature.zola(
+                "Settings editing",
+                "Choose model, reasoning, and response-speed defaults.",
+                154,
+            )
+        };
+        feature
+            .run(settings_dropdown_scenario, move |frame, report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
-
-                    assert_eq!(
-                        report.captures.len(),
-                        5,
-                        "Expected captures before, at all selector stages, and after selection"
-                    );
-
-                    let before_frame = common::frame_from_capture(&report.captures[0]);
-                    let before_full = Region::full(before_frame.cols(), before_frame.rows());
-                    assertion::assert_text_in_region(&before_frame, "[low, Normal]", &before_full);
-
-                    let model_frame = common::frame_from_capture(&report.captures[1]);
-                    let model_full = Region::full(model_frame.cols(), model_frame.rows());
-                    assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
-                    assertion::assert_text_in_region(&model_frame, "codex/", &model_full);
-
-                    let reasoning_frame = common::frame_from_capture(&report.captures[2]);
-                    let reasoning_full =
-                        Region::full(reasoning_frame.cols(), reasoning_frame.rows());
-                    assertion::assert_text_in_region(
-                        &reasoning_frame,
-                        "Select reasoning level",
-                        &reasoning_full,
-                    );
-                    assertion::assert_text_in_region(&reasoning_frame, "> low", &reasoning_full);
-                    assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
-                    assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
-
-                    let speed_frame = common::frame_from_capture(&report.captures[3]);
-                    let speed_full = Region::full(speed_frame.cols(), speed_frame.rows());
-                    assertion::assert_text_in_region(
-                        &speed_frame,
-                        "Select response speed",
-                        &speed_full,
-                    );
-                    assertion::assert_text_in_region(&speed_frame, "Normal", &speed_full);
-                    assertion::assert_text_in_region(&speed_frame, "Fast", &speed_full);
-
-                    let selected_frame = common::frame_from_capture(&report.captures[4]);
-                    let selected_full = Region::full(selected_frame.cols(), selected_frame.rows());
-                    assertion::assert_text_in_region(
-                        &selected_frame,
-                        "Select response speed",
-                        &selected_full,
-                    );
-                    assertion::assert_text_in_region(&selected_frame, "> Fast", &selected_full);
+                    assert_settings_dropdown(frame, report, colors_enabled);
                 })
-            },
+            })
+            .await
+            .expect("feature test failed");
+    }
+}
+
+/// Runs the same journey for the published and colored dropdown proofs.
+fn settings_dropdown_scenario(scenario: Scenario) -> Scenario {
+    scenario
+        .compose(&common::wait_for_agentty_startup())
+        .wait_for_text("claude/claude-opus-5-5", 5000)
+        .viewing_pause_ms(2000)
+        .press_key("j")
+        .wait_for_stable_frame(200, 3000)
+        .press_key("j")
+        .wait_for_stable_frame(200, 3000)
+        .press_key("j")
+        .wait_for_stable_frame(200, 3000)
+        .capture_labeled(
+            "before_edit",
+            "Smart model, reasoning, and speed before selection",
         )
-        .await
-        .expect("feature test failed");
+        .press_key("Enter")
+        .wait_for_text("Select model", 3000)
+        .wait_for_stable_frame(200, 3000)
+        .viewing_pause_ms(1500)
+        .capture_labeled("model_dropdown", "Choose the Smart model")
+        .press_key("Enter")
+        .wait_for_text("Select reasoning level", 3000)
+        .wait_for_stable_frame(200, 3000)
+        .viewing_pause_ms(1500)
+        .capture_labeled("reasoning_dropdown", "Choose Smart model reasoning")
+        .press_key("Enter")
+        .wait_for_text("Select response speed", 3000)
+        .wait_for_stable_frame(200, 3000)
+        .viewing_pause_ms(1500)
+        .capture_labeled("speed_dropdown", "Choose Smart model response speed")
+        .press_key("j")
+        .wait_for_text("Fast", 3000)
+        .wait_for_stable_frame(200, 3000)
+        .viewing_pause_ms(2500)
+        .capture_labeled("speed_selected", "Fast response speed selected")
+}
+
+fn assert_settings_dropdown(frame: &TerminalFrame, report: &ProofReport, colors_enabled: bool) {
+    let full = Region::full(frame.cols(), frame.rows());
+    assertion::assert_text_in_region(frame, "Default Smart Model", &full);
+
+    assert_eq!(
+        report.captures.len(),
+        5,
+        "Expected captures before, at all selector stages, and after selection"
+    );
+
+    let before_frame = common::frame_from_capture(&report.captures[0]);
+    let before_full = Region::full(before_frame.cols(), before_frame.rows());
+    assertion::assert_text_in_region(&before_frame, "[low, Normal]", &before_full);
+
+    let model_frame = common::frame_from_capture(&report.captures[1]);
+    let model_full = Region::full(model_frame.cols(), model_frame.rows());
+    assertion::assert_text_in_region(&model_frame, "Select model", &model_full);
+    assertion::assert_text_in_region(&model_frame, "codex/", &model_full);
+
+    let reasoning_frame = common::frame_from_capture(&report.captures[2]);
+    let reasoning_full = Region::full(reasoning_frame.cols(), reasoning_frame.rows());
+    assertion::assert_text_in_region(&reasoning_frame, "Select reasoning level", &reasoning_full);
+    assertion::assert_text_in_region(&reasoning_frame, "low", &reasoning_full);
+    assertion::assert_text_in_region(&reasoning_frame, "xhigh", &reasoning_full);
+    assertion::assert_text_in_region(&reasoning_frame, "max", &reasoning_full);
+
+    let speed_frame = common::frame_from_capture(&report.captures[3]);
+    let speed_full = Region::full(speed_frame.cols(), speed_frame.rows());
+    assertion::assert_text_in_region(&speed_frame, "Select response speed", &speed_full);
+    assertion::assert_text_in_region(&speed_frame, "Normal", &speed_full);
+    assertion::assert_text_in_region(&speed_frame, "Fast", &speed_full);
+    assert_response_speed_selection(&speed_frame, "Normal", colors_enabled);
+
+    let selected_frame = common::frame_from_capture(&report.captures[4]);
+    let selected_full = Region::full(selected_frame.cols(), selected_frame.rows());
+    assertion::assert_text_in_region(&selected_frame, "Select response speed", &selected_full);
+    assertion::assert_text_in_region(&selected_frame, "Fast", &selected_full);
+    assert_response_speed_selection(&selected_frame, "Fast", colors_enabled);
+}
+
+/// Checks the adjacent dropdown options, excluding the model values behind it.
+fn assert_response_speed_selection(
+    frame: &TerminalFrame,
+    selected_label: &str,
+    colors_enabled: bool,
+) {
+    let normal_matches = frame.find_text("Normal");
+    let fast_matches = frame.find_text("Fast");
+    let options = fast_matches
+        .iter()
+        .filter_map(|fast| {
+            normal_matches
+                .iter()
+                .find(|normal| {
+                    normal.rect.col == fast.rect.col && normal.rect.row + 1 == fast.rect.row
+                })
+                .map(|normal| (normal, fast))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(options.len(), 1, "response-speed options must be visible");
+    let (normal, fast) = options[0];
+    let (foreground, background) = selection::selection_colors(ColorTheme::Current);
+    for (label, option) in [("Normal", normal), ("Fast", fast)] {
+        if label == selected_label {
+            if colors_enabled {
+                assert_eq!(option.foreground, Some(foreground), "selected {label}");
+                assert_eq!(option.background, Some(background), "selected {label}");
+            } else {
+                assert_eq!(option.foreground, None, "monochrome {label}");
+                assert_eq!(option.background, None, "monochrome {label}");
+                assert!(option.style.inverse(), "selected {label} must be inverted");
+            }
+            assert!(option.style.bold(), "selected {label} must be bold");
+        } else if colors_enabled {
+            assert_ne!(option.background, Some(background), "unselected {label}");
+        } else {
+            assert!(
+                !option.style.inverse(),
+                "unselected {label} must not be inverted"
+            );
+        }
+    }
 }
 
 /// Verify that each role persists and shows its own default reasoning level.
@@ -662,6 +787,8 @@ async fn test_input_undo_redo() {
 async fn settings_theme_switch() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_theme_switch")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_settings_tab(env).await }))
         .zola(
             "Settings theme switch",
             "Select Agentty Default, Agentty Green, and Dark Horizon themes from settings.",
@@ -671,8 +798,7 @@ async fn settings_theme_switch() {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_text("Default Smart Model", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("before_theme_switch", "Theme setting before switching")
                     .press_key("Enter")
@@ -765,6 +891,8 @@ async fn settings_theme_switch() {
 async fn settings_help_shows_edit_hint() {
     // Arrange, Act, Assert
     FeatureTest::new("settings_help")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_settings_tab(env).await }))
         .zola(
             "Settings help",
             "Press ? on the Settings tab to see settings-specific keybindings.",
@@ -774,8 +902,7 @@ async fn settings_help_shows_edit_hint() {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::switch_to_tab("Settings"))
+                    .wait_for_text("Default Smart Model", 5000)
                     .viewing_pause_ms(2000)
                     .compose(&common::open_help_overlay())
                     .viewing_pause_ms(3000)

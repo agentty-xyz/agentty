@@ -5,10 +5,10 @@ use ratatui::layout::Constraint;
 use ratatui::widgets::TableState;
 
 use super::{
-    EMPTY_SESSIONS_HINT, ROW_HIGHLIGHT_SYMBOL, SessionListPage, TABLE_COLUMN_SPACING, column_width,
-    model_column_width, prepare_grouped_table_state, prepared_session_rows, reasoning_level_color,
-    selected_render_row, selected_session_id, session_list_help_line, size_color,
-    status_column_width, timer_column_width, tree_position_label,
+    EMPTY_SESSIONS_HINT, SessionListPage, TABLE_COLUMN_SPACING, column_width, model_column_width,
+    prepare_grouped_table_state, prepared_session_rows, reasoning_level_color, selected_render_row,
+    selected_session_id, session_list_help_line, size_color, status_column_width,
+    timer_column_width, tree_position_label,
 };
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::agent::{AgentModel, ReasoningLevel};
@@ -128,18 +128,6 @@ fn test_status_bar_fyi_rotates_between_session_list_messages() {
 }
 
 #[test]
-fn test_row_highlight_symbol_uses_background_only_selection() {
-    // Arrange
-    let highlight_symbol = ROW_HIGHLIGHT_SYMBOL;
-
-    // Act
-    let is_empty_symbol = highlight_symbol.is_empty();
-
-    // Assert
-    assert!(is_empty_symbol);
-}
-
-#[test]
 fn test_table_column_spacing_is_wider_for_readability() {
     // Arrange
     let expected_spacing = 2;
@@ -247,7 +235,7 @@ fn test_render_group_labels_show_counts_with_spacing_between_sections() {
 }
 
 #[test]
-fn test_render_conflicted_session_appends_red_title_alert() {
+fn test_render_selected_conflict_alert_stays_readable() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(120, 12);
@@ -279,11 +267,11 @@ fn test_render_conflicted_session_appends_red_title_alert() {
     // Assert
     let conflict_cell = find_text_start_cell(terminal.backend().buffer(), "[merge conflict]")
         .expect("merge conflict alert should be visible");
-    assert_eq!(conflict_cell.fg, style::palette::danger());
+    assert_eq!(conflict_cell.fg, style::palette::text_selection());
 }
 
 #[test]
-fn test_render_ready_pr_appends_green_title_label() {
+fn test_render_selected_ready_pr_label_stays_readable() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(120, 12);
@@ -318,7 +306,7 @@ fn test_render_ready_pr_appends_green_title_label() {
     // Assert
     let label_cell = find_text_start_cell(terminal.backend().buffer(), "[ready]")
         .expect("ready PR label should be visible");
-    assert_eq!(label_cell.fg, style::palette::success());
+    assert_eq!(label_cell.fg, style::palette::text_selection());
 }
 
 #[test]
@@ -519,7 +507,7 @@ fn test_reasoning_level_color_matches_schema() {
 }
 
 #[test]
-fn test_render_session_row_colors_reasoning_level_within_model_column() {
+fn test_render_selected_reasoning_level_stays_readable() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(100, 12);
@@ -530,7 +518,7 @@ fn test_render_session_row_colors_reasoning_level_within_model_column() {
     session.agent = model_fixture::codex_selection();
     session.reasoning_level_override = Some(ReasoningLevel::High);
     let sessions = vec![session];
-    let expected_reasoning_color = reasoning_level_color(ReasoningLevel::High);
+    let expected_reasoning_color = style::palette::text_selection();
 
     // Act
     terminal
@@ -547,7 +535,7 @@ fn test_render_session_row_colors_reasoning_level_within_model_column() {
         find_text_start_cell(buffer, model_fixture::CODEX_MODEL_ID).unwrap_or(fallback_cell);
     let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
 
-    assert_eq!(model_cell.fg, style::palette::text());
+    assert_eq!(model_cell.fg, style::palette::text_selection());
     assert_eq!(reasoning_cell.fg, expected_reasoning_color);
 }
 
@@ -636,7 +624,7 @@ fn test_render_session_row_connects_stacked_child_to_parent() {
     let buffer = terminal.backend().buffer();
     let fallback_cell = &buffer.content()[0];
     let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
-    assert_eq!(tree_cell.fg, style::palette::text_muted());
+    assert_eq!(tree_cell.fg, style::palette::text_selection());
     assert_eq!(tree_cell.bg, style::palette::surface_selection());
     assert_ne!(tree_cell.fg, tree_cell.bg);
 }
@@ -1042,7 +1030,7 @@ fn test_render_keeps_selected_new_status_text_visible() {
     let title_cell = find_text_start_cell(buffer, "new-1").unwrap_or(fallback_cell);
     let new_cell = find_text_start_cell(buffer, "Draft").unwrap_or(fallback_cell);
     assert_ne!(title_cell.fg, title_cell.bg);
-    assert_eq!(new_cell.fg, style::palette::text_muted());
+    assert_eq!(new_cell.fg, style::palette::text_selection());
     assert_eq!(new_cell.bg, style::palette::surface_selection());
     assert_ne!(new_cell.fg, new_cell.bg);
 }

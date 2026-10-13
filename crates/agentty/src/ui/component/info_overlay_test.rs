@@ -271,14 +271,14 @@ fn test_popup_width_expands_for_long_link_lines() {
 #[test]
 fn test_longest_unwrapped_line_width_uses_terminal_display_width() {
     // Arrange
-    let overlay = InfoOverlay::new("Branch pushed", "PR表");
+    let overlay = InfoOverlay::new("Branch pushed", "PR表表");
 
     // Act
     let longest_line_width = overlay.longest_unwrapped_line_width();
 
     // Assert
-    assert_eq!(longest_line_width, UnicodeWidthStr::width("PR表"));
-    assert_eq!(longest_line_width, 4);
+    assert_eq!(longest_line_width, UnicodeWidthStr::width("PR表表"));
+    assert_eq!(longest_line_width, 6);
 }
 
 #[test]

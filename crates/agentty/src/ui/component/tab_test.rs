@@ -39,9 +39,14 @@ fn test_tab_spans_highlight_the_active_tab() {
     assert_eq!(spans[0].style.fg, Some(style::palette::text_muted()));
     assert_eq!(spans[2].style.fg, Some(style::palette::text_subtle()));
     assert_eq!(spans[4].style.fg, Some(style::palette::text_muted()));
-    assert_eq!(spans[6].style.fg, Some(style::palette::warning()));
-    assert_eq!(spans[6].style.bg, Some(style::palette::surface()));
+    assert_eq!(spans[6].style.fg, Some(style::palette::text_selection()));
+    assert_eq!(spans[6].style.bg, Some(style::palette::surface_selection()));
     assert!(spans[6].style.add_modifier.contains(Modifier::BOLD));
+    assert!(
+        spans
+            .iter()
+            .all(|span| !span.style.add_modifier.contains(Modifier::UNDERLINED))
+    );
 }
 
 #[test]
@@ -68,8 +73,8 @@ fn test_tab_spans_include_selected_project_name_in_project_scope_label() {
     );
     assert_eq!(spans[2].style.fg, Some(style::palette::accent_soft()));
     assert!(spans[2].style.add_modifier.contains(Modifier::BOLD));
-    assert_eq!(spans[4].style.fg, Some(style::palette::warning()));
-    assert_eq!(spans[4].style.bg, Some(style::palette::surface()));
+    assert_eq!(spans[4].style.fg, Some(style::palette::text_selection()));
+    assert_eq!(spans[4].style.bg, Some(style::palette::surface_selection()));
 }
 
 #[test]

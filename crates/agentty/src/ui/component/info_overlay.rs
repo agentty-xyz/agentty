@@ -9,7 +9,7 @@ use crate::ui::component::tachyon_loader::TachyonLoaderEffect;
 use crate::ui::icon::Icon;
 use crate::ui::markdown::render_markdown;
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 const MIN_OVERLAY_HEIGHT: u16 = 9;
 const MIN_OVERLAY_WIDTH: u16 = 44;
@@ -171,7 +171,8 @@ impl<'a> InfoOverlay<'a> {
             Line::from(vec![Span::styled(loading_text, loading_indicator_style())])
                 .alignment(Alignment::Center)
         } else {
-            Line::from(vec![Span::styled(" OK ", ok_button_style())]).alignment(Alignment::Center)
+            Line::from(vec![Span::styled(" OK ", style::selection_style())])
+                .alignment(Alignment::Center)
         }
     }
 
@@ -291,14 +292,6 @@ impl Component for InfoOverlay<'_> {
             );
         }
     }
-}
-
-/// Style for the `OK` confirmation button.
-fn ok_button_style() -> Style {
-    Style::default()
-        .fg(palette::surface_overlay())
-        .bg(palette::accent())
-        .add_modifier(Modifier::BOLD)
 }
 
 /// Style for the loading spinner text.

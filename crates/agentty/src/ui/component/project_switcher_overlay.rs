@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::domain::project::ProjectListItem;
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 /// Minimum popup width sized for the help hint, which is wider than typical
 /// project labels plus the active-session column.
@@ -125,13 +125,7 @@ impl<'a> ProjectSwitcherOverlay<'a> {
             let row_text =
                 format!(" {label:<label_width$} {active_count_label:>ACTIVE_COUNT_WIDTH$} ");
 
-            return Line::from(Span::styled(
-                row_text,
-                Style::default()
-                    .fg(palette::surface_overlay())
-                    .bg(palette::accent())
-                    .add_modifier(Modifier::BOLD),
-            ));
+            return Line::from(Span::styled(row_text, style::selection_style()));
         }
 
         let label_style = if is_active {
@@ -143,7 +137,7 @@ impl<'a> ProjectSwitcherOverlay<'a> {
         };
 
         Line::from(vec![
-            Span::styled(" ", Style::default().fg(palette::text_subtle())),
+            Span::raw(" "),
             Span::styled(format!("{label:<label_width$}"), label_style),
             Span::styled(
                 format!(" {active_count_label:>ACTIVE_COUNT_WIDTH$} "),

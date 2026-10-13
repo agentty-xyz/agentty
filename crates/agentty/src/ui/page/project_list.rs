@@ -25,9 +25,6 @@ const HEATMAP_CELL_WIDTH: usize = 2;
 
 const HEATMAP_DAY_LABEL_WIDTH: usize = 4;
 
-/// Uses row-background highlighting without a textual cursor glyph.
-const ROW_HIGHLIGHT_SYMBOL: &str = "";
-
 const ACTIVE_PROJECT_MARKER: &str = "* ";
 
 /// Horizontal spacing between project-table columns.
@@ -124,7 +121,7 @@ impl Page for ProjectListPage<'_> {
             .block(agent_cli_block)
             .wrap(Wrap { trim: true });
 
-        let selected_style = Style::default().bg(style::palette::surface_selection());
+        let selected_style = style::selection_style();
         let header_cells = ["Project", "Branch", "Sessions", "Path"]
             .iter()
             .map(|header| left_aligned_cell(*header));
@@ -151,8 +148,7 @@ impl Page for ProjectListPage<'_> {
                     .title("Projects")
                     .border_style(style::border_style()),
             )
-            .row_highlight_style(selected_style)
-            .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
+            .row_highlight_style(selected_style);
 
         f.render_stateful_widget(table, project_area, self.table_state);
         f.render_widget(heatmap_panel, heatmap_area);

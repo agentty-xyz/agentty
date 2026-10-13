@@ -40,7 +40,7 @@ fn test_stack_append_parent_overlay_renders_candidates_and_hint() {
         selected_line
             .spans
             .iter()
-            .any(|span| span.style.bg == Some(palette::accent()))
+            .any(|span| span.style.bg == Some(palette::surface_selection()))
     );
 }
 

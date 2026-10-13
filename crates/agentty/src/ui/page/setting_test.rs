@@ -4,25 +4,106 @@ use ratatui::text::Line;
 use ratatui::widgets::{Table, TableState};
 
 use super::{
-    ROW_HIGHLIGHT_SYMBOL, TABLE_COLUMN_SPACING, project_section_title,
-    render_settings_selector_dropdown, section_table_state, settings_footer_line_for_mode,
-    settings_section_height, settings_selector_dropdown_area, settings_selector_dropdown_lines,
+    SettingsPage, TABLE_COLUMN_SPACING, project_section_title, render_settings_selector_dropdown,
+    section_table_state, settings_footer_line_for_mode, settings_section_height,
+    settings_selector_dropdown_area, settings_selector_dropdown_lines,
     settings_selector_option_window_start, settings_table_rows,
 };
+use crate::domain::theme::ColorTheme;
 use crate::presentation::help_action;
-use crate::presentation::setting::{SettingsSelectorDropdown, SettingsSelectorDropdownOption};
-use crate::ui::style;
+use crate::presentation::setting::{
+    SettingsScreenSnapshot, SettingsSelectorDropdown, SettingsSelectorDropdownOption,
+};
+use crate::ui::{Page, style};
 
 #[test]
-fn test_row_highlight_symbol_uses_background_only_selection() {
-    // Arrange
-    let highlight_symbol = ROW_HIGHLIGHT_SYMBOL;
+fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
+    for theme in ColorTheme::ALL {
+        for selected_row_index in [None, Some(0), Some(1), Some(2), Some(3)] {
+            // Arrange
+            let _theme_scope = style::scoped_active_theme(theme);
+            let snapshot = SettingsScreenSnapshot {
+                footer_hint: "",
+                global_rows: vec![
+                    ("Theme", theme.label().to_string()),
+                    ("Orchestrator Parallelism", "3".to_string()),
+                ],
+                launch_configuration_list_editor: None,
+                project_rows: vec![
+                    (
+                        "Default Smart Model",
+                        "gemini/gemini-3.1-pro-preview [xhigh]".to_string(),
+                    ),
+                    ("Default Fast Model", "Fast".to_string()),
+                ],
+                selected_row_index,
+                selector_dropdown: None,
+            };
+            let backend = ratatui::backend::TestBackend::new(80, 20);
+            let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+            let mut page = SettingsPage::new(&snapshot, None);
 
-    // Act
-    let is_empty_symbol = highlight_symbol.is_empty();
+            // Act
+            terminal
+                .draw(|frame| page.render(frame, frame.area()))
+                .expect("failed to draw settings page");
 
-    // Assert
-    assert!(is_empty_symbol);
+            // Assert
+            let buffer = terminal.backend().buffer();
+            let mut label_columns = Vec::new();
+            for (row_index, (label, setting_value)) in snapshot
+                .global_rows
+                .iter()
+                .chain(&snapshot.project_rows)
+                .enumerate()
+            {
+                let (row_y, row_text) = (0..buffer.area.height)
+                    .map(|row_y| {
+                        let row_text: String = (0..buffer.area.width)
+                            .map(|column_x| buffer[(column_x, row_y)].symbol())
+                            .collect();
+
+                        (row_y, row_text)
+                    })
+                    .find(|(_, row_text)| row_text.contains(label))
+                    .expect("expected settings row");
+                assert!(
+                    row_text.contains(setting_value),
+                    "expected the complete value for {label}: {row_text}"
+                );
+                let label_byte_index = row_text.find(label).expect("expected settings label");
+                let label_column = row_text[..label_byte_index].chars().count();
+                let label_column_u16 = u16::try_from(label_column).expect("label column fits");
+                let is_selected = selected_row_index == Some(row_index);
+                if is_selected {
+                    assert_eq!(
+                        buffer[(label_column_u16, row_y)].fg,
+                        style::palette::text_selection()
+                    );
+                    assert_eq!(
+                        buffer[(label_column_u16, row_y)].bg,
+                        style::palette::surface_selection()
+                    );
+                }
+
+                label_columns.push(label_column);
+            }
+
+            assert!(
+                label_columns
+                    .iter()
+                    .all(|column| *column == label_columns[0])
+            );
+            assert_eq!(
+                buffer
+                    .content()
+                    .iter()
+                    .filter(|cell| cell.symbol() == ">")
+                    .count(),
+                0
+            );
+        }
+    }
 }
 
 #[test]
@@ -163,8 +244,11 @@ fn test_settings_selector_dropdown_lines_highlight_selected_option() {
 
     // Assert
     assert_eq!(lines.len(), 4);
-    assert_eq!(lines[1].spans[0].style.bg, Some(style::palette::accent()));
-    assert!(lines[1].to_string().contains("> Agentty Green"));
+    assert_eq!(
+        lines[1].spans[0].style.bg,
+        Some(style::palette::surface_selection())
+    );
+    assert!(lines[1].to_string().contains("Agentty Green"));
     assert!(lines[3].to_string().contains("Enter: select"));
 }
 
@@ -191,7 +275,7 @@ fn test_settings_selector_dropdown_lines_window_to_selected_option() {
         .join("\n");
 
     // Assert
-    assert!(dropdown_text.contains("> Option 10"));
+    assert!(dropdown_text.contains("Option 10"));
     assert!(!dropdown_text.contains("Option 0"));
     assert!(lines.len() <= 5);
 }

@@ -60,7 +60,7 @@ fn test_launch_configuration_overlay_render_contains_hint_text() {
 }
 
 #[test]
-fn test_launch_configuration_overlay_lines_selected_row_uses_background_without_marker() {
+fn test_launch_configuration_overlay_lines_selected_row_has_highlight_without_selector_glyph() {
     // Arrange
     let commands = vec!["cargo test".to_string(), "npm run dev".to_string()];
     let overlay = LaunchConfigurationOverlay::new(&commands).selected_command_index(1);
@@ -75,12 +75,13 @@ fn test_launch_configuration_overlay_lines_selected_row_uses_background_without_
         .collect();
 
     // Assert
+    assert!(selected_text.starts_with(' '));
     assert!(!selected_text.contains('>'));
     assert!(
         selected_line
             .spans
             .iter()
-            .all(|span| span.style.bg == Some(palette::accent()))
+            .all(|span| span.style.bg == Some(palette::surface_selection()))
     );
 }
 

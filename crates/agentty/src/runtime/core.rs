@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use ag_orchestration::{OrchestrationCoordinator, OrchestrationSchedule};
 use async_trait::async_trait;
+use crossterm::style::Colored;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
 use tokio::sync::mpsc;
@@ -17,6 +18,7 @@ use tokio::sync::mpsc;
 use crate::app::App;
 use crate::infra::clock::{self, Clock};
 use crate::runtime::{FRAME_INTERVAL, PresentationState, event, terminal};
+use crate::ui::style;
 
 /// Fallback redraw cadence for visible spinner and timer UI when no new
 /// events arrive.
@@ -324,6 +326,11 @@ where
     terminal
         .draw(|frame| {
             presentation.render(&snapshot, frame);
+            style::prepare_terminal_frame(
+                frame.buffer_mut(),
+                snapshot.theme,
+                Colored::ansi_color_disabled_memoized(),
+            );
         })
         .map_err(backend_err)?;
     presentation.record_rendered_surface(&snapshot);

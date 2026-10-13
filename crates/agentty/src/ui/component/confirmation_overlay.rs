@@ -1,12 +1,12 @@
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 const MIN_OVERLAY_HEIGHT: u16 = 7;
 const MIN_OVERLAY_WIDTH: u16 = 30;
@@ -74,10 +74,7 @@ impl Component for ConfirmationOverlay<'_> {
         let message_width = overlay::overlay_content_width(popup_area.width);
         let message = truncate_with_ellipsis(self.message, message_width);
 
-        let selected_option_style = Style::default()
-            .fg(palette::surface_overlay())
-            .bg(palette::accent())
-            .add_modifier(Modifier::BOLD);
+        let selected_option_style = style::selection_style();
         let unselected_option_style = Style::default().fg(palette::text());
         let first_option_style = if self.selected_first {
             selected_option_style

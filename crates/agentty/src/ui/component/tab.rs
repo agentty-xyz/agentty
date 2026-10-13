@@ -75,13 +75,7 @@ fn tab_span(tab: Tab, current_tab: Tab) -> Span<'static> {
     let label = format!(" {} ", tab_label(tab));
 
     if tab == current_tab {
-        return Span::styled(
-            label,
-            Style::default()
-                .bg(style::palette::surface())
-                .fg(style::palette::warning())
-                .add_modifier(Modifier::BOLD),
-        );
+        return Span::styled(label, style::selection_style());
     }
 
     Span::styled(label, Style::default().fg(style::palette::text_muted()))

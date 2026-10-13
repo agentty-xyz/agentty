@@ -1486,9 +1486,10 @@ impl<'a> DiffPage<'a> {
                     .selected_range
                     .is_some_and(|range| range.contains(&display_row))
                 {
-                    paint_line.style = paint_line.style.add_modifier(Modifier::REVERSED);
+                    let selected_style = style::selection_style();
+                    paint_line.style = paint_line.style.patch(selected_style);
                     for span in &mut paint_line.spans {
-                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                        span.style = span.style.patch(selected_style);
                     }
                 }
 
@@ -1504,24 +1505,20 @@ impl<'a> DiffPage<'a> {
         is_selected: bool,
         content_width: usize,
     ) -> Vec<Line<'static>> {
-        let background = if is_editing {
-            style::palette::surface_selection()
+        let background = style::palette::surface_prompt();
+        let content_style = if is_selected || is_editing {
+            style::selection_style()
         } else {
-            style::palette::surface_prompt()
+            Style::default().fg(style::palette::text()).bg(background)
         };
-        let selected_modifier = if is_selected && !is_editing {
-            Modifier::REVERSED
+        let chrome_style = if is_selected || is_editing {
+            content_style
         } else {
-            Modifier::empty()
+            Style::default()
+                .fg(style::palette::accent())
+                .bg(background)
+                .add_modifier(Modifier::BOLD)
         };
-        let content_style = Style::default()
-            .fg(style::palette::text())
-            .bg(background)
-            .add_modifier(selected_modifier);
-        let chrome_style = Style::default()
-            .fg(style::palette::accent())
-            .bg(background)
-            .add_modifier(Modifier::BOLD | selected_modifier);
         let comment_margin = COMMENT_INPUT_HORIZONTAL_MARGIN.min(content_width);
         let box_width = content_width.saturating_sub(comment_margin);
         if box_width < 5 {
@@ -1718,9 +1715,10 @@ impl<'a> DiffPage<'a> {
                 let mut paint_line = text_util::borrowed_paint_line(line);
                 let rendered_index = start_index.saturating_add(visible_index);
                 if selected_range.is_some_and(|range| range.contains(&rendered_index)) {
-                    paint_line.style = paint_line.style.add_modifier(Modifier::REVERSED);
+                    let selected_style = style::selection_style();
+                    paint_line.style = paint_line.style.patch(selected_style);
                     for span in &mut paint_line.spans {
-                        span.style = span.style.add_modifier(Modifier::REVERSED);
+                        span.style = span.style.patch(selected_style);
                     }
                 }
 

@@ -10,7 +10,7 @@ use crate::presentation::setting::{
     LaunchConfigurationListEditorMode, LaunchConfigurationListEditorSnapshot,
 };
 use crate::ui::style::palette;
-use crate::ui::{Component, overlay};
+use crate::ui::{Component, overlay, style};
 
 const FOOTER_LINE_COUNT: usize = 3;
 const MIN_OVERLAY_HEIGHT: u16 = 11;
@@ -123,10 +123,7 @@ impl<'a> LaunchConfigurationListEditor<'a> {
             Line::from(""),
             Line::from(Span::styled(
                 format!(" {input_text:<command_width$}"),
-                Style::default()
-                    .fg(palette::surface_overlay())
-                    .bg(palette::accent())
-                    .add_modifier(Modifier::BOLD),
+                style::selection_style(),
             )),
             Line::from(""),
             Line::from(vec![Span::styled(
@@ -191,15 +188,12 @@ fn command_line(command: &str, command_width: usize, is_selected: bool) -> Line<
     if is_selected {
         return Line::from(Span::styled(
             format!(" {command_label:<command_width$}"),
-            Style::default()
-                .fg(palette::surface_overlay())
-                .bg(palette::accent())
-                .add_modifier(Modifier::BOLD),
+            style::selection_style(),
         ));
     }
 
     Line::from(vec![
-        Span::styled(" ", Style::default().fg(palette::text_subtle())),
+        Span::raw(" "),
         Span::styled(command_label, Style::default().fg(palette::text())),
     ])
 }

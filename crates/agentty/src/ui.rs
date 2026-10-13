@@ -44,3 +44,7 @@ pub use render::SessionReviewSnapshot;
 pub use render::render;
 /// UI-owned cache store shared by render and scroll-metric paths.
 pub use render_cache::RenderCacheStore;
+
+#[cfg(test)]
+#[path = "ui/selection_test.rs"]
+mod selection_tests;

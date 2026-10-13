@@ -20,6 +20,10 @@ merge locally or publish a review request. See
 - **Settings**: Configure appearance, orchestration, model defaults, and launch
   commands.
 
+Selected rows, options, and tabs use bold text and contrasting background colors.
+Selection colors stay readable across themes when terminal colors are enabled. With
+`NO_COLOR`, selections use bold reverse video without a selector glyph.
+
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
 title, followed by changed-line totals, active-work timer, token usage, and linked
 review request. The composer’s bottom border shows how long ago the session started,
@@ -506,6 +510,9 @@ using the Fast model. Draft titles update as messages are staged; committed work
 the commit title. Failed refinement leaves the provisional title in place.
 
 ## Settings Scope
+
+The highlighted row is the selected setting. Move the selection with `j` / `k`, then
+press `Enter` to open or edit the setting.
 
 <a id="usage-settings-scope"></a> **Global settings** include theme, orchestrator
 parallelism (one to eight workers, default three), and research auto-approval. Project

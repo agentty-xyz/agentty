@@ -431,6 +431,21 @@ pub(crate) async fn seed_active_project_setting(
     Ok(())
 }
 
+/// Starts the semantic proof and VHS replay on the Projects dashboard.
+///
+/// Pre-registering the project avoids first-launch defaults changing when
+/// the recording reuses the database populated by the semantic proof.
+pub(crate) async fn seed_projects_startup_tab(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    seed_active_project_setting(env).await?;
+    let database = open_database(env).await?;
+    crate::test_support::persist_active_tab_for_test(&database, agentty::app::Tab::Projects)
+        .await?;
+
+    Ok(())
+}
+
 /// Seed one additional never-opened Git project and start Agentty on the
 /// Sessions tab so project-switching scenarios share deterministic setup.
 ///

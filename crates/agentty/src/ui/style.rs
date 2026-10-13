@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use ag_tui_text::{TextPalette, TextRenderSettings};
-use ratatui::style::{Color, Style};
+use ratatui::buffer::Buffer;
+use ratatui::style::{Color, Modifier, Style};
 
 use super::icon::Icon;
 use crate::domain::session::{ReviewRequestState, Status};
@@ -133,6 +134,12 @@ pub mod palette {
         token_color(|palette| palette.text)
     }
 
+    /// Readable foreground paired with the fixed RGB selection surface.
+    #[must_use]
+    pub fn text_selection() -> Color {
+        token_color(|palette| palette.text_selection)
+    }
+
     /// Muted text color for secondary copy.
     #[must_use]
     pub fn text_muted() -> Color {
@@ -217,6 +224,8 @@ pub struct ThemePalette {
     pub text: Color,
     /// Muted text color for secondary copy.
     pub text_muted: Color,
+    /// Readable foreground paired with the fixed RGB selection surface.
+    pub text_selection: Color,
     /// Extra-muted text color for placeholders and hints.
     pub text_subtle: Color,
     /// Warning color for in-progress and caution states.
@@ -237,12 +246,13 @@ const CURRENT_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(28, 38, 48),
     surface_danger: Color::Rgb(48, 24, 24),
     surface_elevated: Color::Black,
-    surface_selection: Color::DarkGray,
+    surface_selection: Color::Rgb(50, 62, 78),
     surface_success: Color::Rgb(18, 44, 26),
     surface_overlay: Color::Black,
     surface_prompt: Color::Rgb(35, 42, 55),
     text: Color::White,
     text_muted: Color::Gray,
+    text_selection: Color::Rgb(245, 245, 245),
     text_subtle: Color::DarkGray,
     success: Color::Green,
     success_soft: Color::LightGreen,
@@ -264,12 +274,13 @@ const GREEN_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(12, 28, 14),
     surface_danger: Color::Rgb(44, 18, 18),
     surface_elevated: Color::Rgb(10, 32, 12),
-    surface_selection: Color::Rgb(6, 18, 8),
+    surface_selection: Color::Rgb(24, 54, 28),
     surface_success: Color::Rgb(12, 38, 17),
     surface_overlay: Color::Black,
     surface_prompt: Color::Rgb(6, 18, 8),
     text: Color::Rgb(205, 245, 211),
     text_muted: Color::Rgb(126, 159, 120),
+    text_selection: Color::Rgb(205, 245, 211),
     text_subtle: Color::Rgb(54, 88, 58),
     success: Color::Rgb(86, 184, 105),
     success_soft: Color::Rgb(68, 145, 80),
@@ -305,6 +316,7 @@ const DARK_HORIZON_PALETTE: ThemePalette = ThemePalette {
     surface_prompt: Color::Rgb(22, 24, 31),
     text: Color::Rgb(214, 217, 232),
     text_muted: Color::Rgb(132, 136, 168),
+    text_selection: Color::Rgb(214, 217, 232),
     text_subtle: Color::Rgb(96, 100, 128),
     success: Color::Rgb(41, 211, 152),
     success_soft: Color::Rgb(126, 219, 188),
@@ -343,6 +355,42 @@ pub(crate) fn scoped_active_theme(theme: ColorTheme) -> ActiveThemeScope {
 #[must_use]
 pub fn border_style() -> Style {
     Style::default().fg(palette::border())
+}
+
+/// Readable selection colors independent of terminal-defined ANSI palettes.
+///
+/// Selected labels use bold text and a contrasting background.
+#[must_use]
+pub fn selection_style() -> Style {
+    Style::default()
+        .fg(palette::text_selection())
+        .bg(palette::surface_selection())
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Prepares a frame for the backend's color support before serialization.
+///
+/// Crossterm's suppressed color commands reset attributes. Resetting every
+/// cell's colors avoids those commands; reverse video preserves selections
+/// even among other bold labels.
+pub(crate) fn prepare_terminal_frame(
+    buffer: &mut Buffer,
+    theme: ColorTheme,
+    colors_disabled: bool,
+) {
+    if !colors_disabled {
+        return;
+    }
+
+    let selection_background = theme_palette(theme).surface_selection;
+    for cell in &mut buffer.content {
+        if cell.bg == selection_background {
+            cell.modifier.insert(Modifier::BOLD | Modifier::REVERSED);
+        }
+        cell.fg = Color::Reset;
+        cell.bg = Color::Reset;
+        cell.underline_color = Color::Reset;
+    }
 }
 
 /// Returns a stable cache discriminator for the active color theme.
@@ -420,7 +468,12 @@ pub fn forge_indicator_color(state: Option<ReviewRequestState>) -> Color {
 /// Returns the complete color palette for the active theme.
 #[must_use]
 fn active_palette() -> ThemePalette {
-    match active_theme() {
+    theme_palette(active_theme())
+}
+
+/// Resolves a theme without changing the process-wide active palette.
+fn theme_palette(theme: ColorTheme) -> ThemePalette {
+    match theme {
         ColorTheme::Green => GREEN_PALETTE,
         ColorTheme::DarkHorizon => DARK_HORIZON_PALETTE,
         ColorTheme::Current => CURRENT_PALETTE,

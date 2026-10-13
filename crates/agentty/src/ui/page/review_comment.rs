@@ -124,13 +124,7 @@ impl<'a> ReviewCommentPage<'a> {
                     .title(title)
                     .border_style(style::border_style()),
             )
-            .highlight_style(
-                Style::default()
-                    .fg(style::palette::text())
-                    .bg(style::palette::surface_selection())
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▶ ");
+            .highlight_style(style::selection_style());
         let mut state = ListState::default();
         if is_focused && item_count > 0 {
             let selected_entry_index =

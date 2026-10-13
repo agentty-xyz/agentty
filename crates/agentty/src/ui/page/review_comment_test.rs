@@ -153,6 +153,36 @@ fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
 }
 
 #[test]
+fn review_comment_highlight_uses_readable_selection_colors_in_every_theme() {
+    for theme in ColorTheme::ALL {
+        // Arrange
+        let _theme_scope = style::scoped_active_theme(theme);
+        let snapshot = comment_snapshot();
+
+        // Act
+        let buffer = render_review_comment_page(Some(&snapshot), None, false, 1, 0, (140, 24));
+
+        // Assert
+        let selected_cell = buffer
+            .content()
+            .iter()
+            .find(|cell| {
+                cell.bg == style::palette::surface_selection()
+                    && cell.fg == style::palette::text_selection()
+            })
+            .expect("selected review comment");
+        assert!(!buffer.content().iter().any(|cell| cell.symbol() == ">"));
+        assert_eq!(selected_cell.fg, style::palette::text_selection());
+        assert_eq!(selected_cell.bg, style::palette::surface_selection());
+        assert!(
+            selected_cell
+                .modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
+    }
+}
+
+#[test]
 fn test_render_shows_comment_selector_and_general_detail() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Current);

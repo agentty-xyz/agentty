@@ -1,7 +1,7 @@
 use ag_tui_text::text_util::truncate_with_ellipsis;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap};
 
@@ -11,8 +11,6 @@ use crate::presentation::setting::{
 };
 use crate::ui::{Component, Page, component, layout, overlay, style};
 
-/// Uses row-background highlighting without a textual cursor glyph.
-const ROW_HIGHLIGHT_SYMBOL: &str = "";
 /// Horizontal spacing between settings-table columns.
 const TABLE_COLUMN_SPACING: u16 = 2;
 /// Minimum dropdown height that leaves room for one option and the help hint.
@@ -49,7 +47,7 @@ impl Page for SettingsPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
-        let selected_style = Style::default().bg(style::palette::surface_selection());
+        let selected_style = style::selection_style();
         let global_rows = settings_table_rows(&self.snapshot.global_rows);
         let project_rows = settings_table_rows(&self.snapshot.project_rows);
         let global_row_count = global_rows.len();
@@ -74,7 +72,12 @@ impl Page for SettingsPage<'_> {
             .constraints(section_heights)
             .split(areas.main_area);
 
-        let table_columns = [Constraint::Percentage(50), Constraint::Percentage(50)];
+        // Keep values wide enough for long model names on 80-column terminals.
+        let name_column_width = table_chunks[0]
+            .width
+            .saturating_sub(TABLE_COLUMN_SPACING + 2)
+            / 2;
+        let table_columns = [Constraint::Length(name_column_width), Constraint::Fill(1)];
 
         let global_table = Table::new(global_rows, table_columns)
             .column_spacing(TABLE_COLUMN_SPACING)
@@ -84,8 +87,7 @@ impl Page for SettingsPage<'_> {
                     .title(global_section_title)
                     .border_style(style::border_style()),
             )
-            .row_highlight_style(selected_style)
-            .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
+            .row_highlight_style(selected_style);
 
         let project_table = Table::new(project_rows, table_columns)
             .column_spacing(TABLE_COLUMN_SPACING)
@@ -95,8 +97,7 @@ impl Page for SettingsPage<'_> {
                     .title(project_section_title)
                     .border_style(style::border_style()),
             )
-            .row_highlight_style(selected_style)
-            .highlight_symbol(ROW_HIGHLIGHT_SYMBOL);
+            .row_highlight_style(selected_style);
 
         let mut global_table_state = global_table_state;
         let mut project_table_state = project_table_state;
@@ -270,7 +271,7 @@ fn settings_selector_dropdown_lines(
     popup_height: u16,
 ) -> Vec<Line<'static>> {
     let label_width = overlay::overlay_content_width(popup_width)
-        .saturating_sub(2)
+        .saturating_sub(1)
         .max(1);
     let option_count = selector_dropdown.options.len();
     let selected_index = selector_dropdown
@@ -344,19 +345,13 @@ fn settings_selector_dropdown_option_line(
     let option_label = truncate_with_ellipsis(&option.label, label_width);
 
     if is_selected {
-        let selected_label = format!("> {option_label:<label_width$}");
+        let selected_label = format!(" {option_label:<label_width$}");
 
-        return Line::from(Span::styled(
-            selected_label,
-            Style::default()
-                .fg(style::palette::surface_overlay())
-                .bg(style::palette::accent())
-                .add_modifier(Modifier::BOLD),
-        ));
+        return Line::from(Span::styled(selected_label, style::selection_style()));
     }
 
     Line::from(vec![
-        Span::styled("  ", Style::default().fg(style::palette::text_subtle())),
+        Span::styled(" ", Style::default().fg(style::palette::text_subtle())),
         Span::styled(option_label, Style::default().fg(style::palette::text())),
     ])
 }

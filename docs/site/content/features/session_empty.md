@@ -1,6 +1,6 @@
 +++
 title = "Empty session state"
-description = "See how Agentty guides session creation and hides empty groups."
+description = "See empty-session guidance and the available session types."
 weight = 40
 [extra]
 gif = "session_empty.gif"

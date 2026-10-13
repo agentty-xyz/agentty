@@ -142,6 +142,7 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("claude_model_picker_lists_current_models")
         .with_git()
+        .env("NO_COLOR", "1")
         .run(
             |scenario| {
                 scenario
@@ -157,9 +158,11 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
-                    .wait_for_text("> antigravity", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("antigravity_selected", "antigravity provider selected")
                     .press_key("Down")
-                    .wait_for_text("> claude", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("claude_selected", "claude provider selected")
                     .press_key("Enter")
                     .wait_for_text("claude-opus-5-5", 3000)
                     .capture_labeled(
@@ -167,8 +170,12 @@ async fn claude_model_picker_lists_current_models() -> E2eResult {
                         "Claude model picker lists current models",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    for (capture, label) in report.captures.iter().zip(["antigravity", "claude"]) {
+                        let provider_frame = common::frame_from_capture(capture);
+                        crate::selection::assert_selected_label(&provider_frame, label, None);
+                    }
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "claude-fable-5-1", &full);
                     assertion::assert_text_in_region(frame, "claude-opus-5-5", &full);
@@ -239,6 +246,7 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("codex_model_picker_lists_current_models")
         .with_git()
+        .env("NO_COLOR", "1")
         .setup(|env| Box::pin(async move { seed_all_model_picker_cli_stubs(env) }))
         .run(
             |scenario| {
@@ -255,11 +263,14 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Down")
-                    .wait_for_text("> antigravity", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("antigravity_selected", "antigravity provider selected")
                     .press_key("Down")
-                    .wait_for_text("> claude", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("claude_selected", "claude provider selected")
                     .press_key("Down")
-                    .wait_for_text("> codex", 3000)
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("codex_selected", "codex provider selected")
                     .press_key("Enter")
                     .wait_for_text("gpt-6-astra", 3000)
                     .capture_labeled(
@@ -267,8 +278,17 @@ async fn codex_model_picker_lists_current_models() -> E2eResult {
                         "Codex model picker lists current models",
                     )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
+                    for (capture, label) in
+                        report
+                            .captures
+                            .iter()
+                            .zip(["antigravity", "claude", "codex"])
+                    {
+                        let provider_frame = common::frame_from_capture(capture);
+                        crate::selection::assert_selected_label(&provider_frame, label, None);
+                    }
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_not_visible(frame, "gpt-5.6-sol");
                     assertion::assert_not_visible(frame, "gpt-6-sol");
