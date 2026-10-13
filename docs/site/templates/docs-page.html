@@ -603,9 +603,9 @@ var renderCounter = 0;
 
     mermaid.initialize(mermaidConfig());
 
-    for (var host of hosts) {
-      await renderMermaidHost(mermaid, host);
-    }
+    await Promise.all(Array.from(hosts, function (host) {
+      return renderMermaidHost(mermaid, host);
+    }));
   }
 
   /** Keep rendered diagrams in sync with the docs theme switcher. */
