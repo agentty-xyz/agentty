@@ -11,6 +11,7 @@ mod diff_prompt;
 mod error;
 mod merge_queue;
 mod project;
+mod project_catalog;
 pub(crate) mod prompt_intent;
 mod reducer;
 mod review;

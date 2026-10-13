@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "\nSELECT project_id AS \"project_id!: i64\",\n       value AS \"value!: String\"\nFROM project_setting\nWHERE name = ?\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "project_id!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "project_setting",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "name": "value!: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "project_setting",
+            "name": "value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cea9513c34ac182768d00ba41d6e1cd64b7f3d5be8d5c700b09acb812b34d3cc"
+}

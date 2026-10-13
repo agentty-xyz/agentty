@@ -12,13 +12,18 @@ use crate::presentation::app_mode::{DiffFocus, DiffSidebarFocus};
 use crate::test_support::SessionFixtureBuilder;
 
 #[test]
-fn test_project_list_actions_exclude_new_session_shortcut() {
+fn test_project_list_actions_include_explicit_registration_and_discovery() {
     // Arrange
     // Act
     let actions = project_list_actions();
 
     // Assert
-    assert!(!actions.iter().any(|action| action.key == "a"));
+    assert!(
+        actions
+            .iter()
+            .any(|action| action.key == "a" && action.popup_label == "Add project by path")
+    );
+    assert!(actions.iter().any(|action| action.key == "d"));
 }
 
 #[test]

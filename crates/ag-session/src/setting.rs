@@ -53,6 +53,10 @@ pub enum SettingName {
     LastUsedModelAsDefault,
     /// Persists how many orchestration children may run at once.
     OrchestrationParallelism,
+    /// Distinguishes registered projects from non-repository launch contexts.
+    ProjectCatalogVisible,
+    /// Records dismissal of the one-time project discovery suggestion.
+    ProjectDiscoveryPromptSeen,
     /// Persists the random installation ID attached to telemetry events.
     TelemetryInstallationId,
     /// Persists the active terminal color theme.
@@ -83,6 +87,8 @@ impl SettingName {
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
             Self::OrchestrationParallelism => "OrchestrationParallelism",
+            Self::ProjectCatalogVisible => "ProjectCatalogVisible",
+            Self::ProjectDiscoveryPromptSeen => "ProjectDiscoveryPromptSeen",
             Self::TelemetryInstallationId => "TelemetryInstallationId",
             Self::Theme => "Theme",
         }

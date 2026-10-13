@@ -1,6 +1,5 @@
 //! App startup and project-catalog helper workflows.
 
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -23,7 +22,6 @@ use crate::domain::session_order;
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs::FsClient;
-use crate::infra::project_discovery::ProjectDiscoveryClient;
 
 /// Startup project context resolved before the first render.
 pub(crate) struct StartupProjectContext {
@@ -111,9 +109,8 @@ impl AppStartup {
     /// Resolves startup project state and persists active-project metadata.
     pub(crate) async fn load_startup_project_context(
         db: &AppRepositories,
-        fs_client: &dyn FsClient,
         git_client: &Arc<dyn GitClient>,
-        project_discovery_client: &dyn ProjectDiscoveryClient,
+        fs_client: &dyn FsClient,
         working_dir: &Path,
         git_branch: Option<String>,
         current_project_id: i64,
@@ -125,8 +122,7 @@ impl AppStartup {
             .ok()
             .flatten()
             .is_some();
-        let startup_active_project_id =
-            Self::resolve_startup_active_project_id(db, fs_client, current_project_id).await;
+        let startup_active_project_id = current_project_id;
         let startup_active_project = Self::load_project(
             db,
             startup_active_project_id,
@@ -135,13 +131,7 @@ impl AppStartup {
         )
         .await;
         let startup_working_dir = startup_active_project.path.clone();
-        let startup_git_branch = if startup_working_dir.as_path() == working_dir {
-            git_branch
-        } else {
-            git_client
-                .detect_git_info(startup_working_dir.clone())
-                .await
-        };
+        let startup_git_branch = git_branch;
         let startup_git_upstream_ref = Self::load_git_upstream_ref(
             git_client.as_ref(),
             startup_working_dir.as_path(),
@@ -179,13 +169,17 @@ impl AppStartup {
                     startup_working_dir.display()
                 ))
             })?;
-        Self::refresh_project_catalog_on_startup(db, git_client.as_ref(), project_discovery_client)
-            .await;
-
-        let project_items = Self::load_project_items(db, fs_client).await;
+        let launch_is_repository = fs_client.exists(working_dir.join(".git"));
+        Self::persist_startup_catalog_visibility(db, active_project_id, launch_is_repository)
+            .await?;
+        let project_items = Self::load_project_items(db).await;
         let active_project_name =
             Self::project_title_for_id(&project_items, active_project_id, &startup_working_dir);
-        let initial_tab = Self::load_startup_tab(db, had_active_project_setting).await;
+        let initial_tab = if launch_is_repository {
+            Self::load_startup_tab(db, had_active_project_setting).await
+        } else {
+            Tab::Projects
+        };
 
         Ok(StartupProjectContext {
             active_project_id,
@@ -301,88 +295,37 @@ impl AppStartup {
     }
 
     /// Loads project list entries for the projects tab.
-    pub(crate) async fn load_project_items(
-        db: &AppRepositories,
-        fs_client: &dyn FsClient,
-    ) -> Vec<ProjectListItem> {
+    pub(crate) async fn load_project_items(db: &AppRepositories) -> Vec<ProjectListItem> {
         let session_worktree_root = super::core::agentty_home().join(AGENTTY_WT_DIR);
 
-        Self::load_project_items_with_session_worktree_root(
-            db,
-            fs_client,
-            session_worktree_root.as_path(),
-        )
-        .await
+        Self::load_project_items_with_session_worktree_root(db, session_worktree_root.as_path())
+            .await
     }
 
     /// Loads project list entries with one caller-provided worktree root.
     pub(crate) async fn load_project_items_with_session_worktree_root(
         db: &AppRepositories,
-        fs_client: &dyn FsClient,
         session_worktree_root: &Path,
     ) -> Vec<ProjectListItem> {
-        Self::visible_project_rows(
+        let project_rows = Self::visible_project_rows(
             db.projects()
                 .load_projects_with_stats()
                 .await
                 .unwrap_or_default(),
-            fs_client,
             session_worktree_root,
-        )
-        .into_iter()
-        .map(Self::project_list_item_from_row)
-        .collect()
-    }
-
-    /// Refreshes the persisted project catalog from the user home directory
-    /// through the injected project-discovery boundary.
-    pub(crate) async fn refresh_project_catalog_on_startup(
-        db: &AppRepositories,
-        git_client: &dyn GitClient,
-        project_discovery_client: &dyn ProjectDiscoveryClient,
-    ) {
-        let session_worktree_root = super::core::agentty_home().join(AGENTTY_WT_DIR);
-        let home_directory = env::home_dir();
-
-        Self::load_projects_from_home_directory(
-            db,
-            git_client,
-            project_discovery_client,
-            session_worktree_root.as_path(),
-            home_directory.as_deref(),
-        )
-        .await;
-    }
-
-    /// Discovers git repositories under the user home directory through the
-    /// injected project-discovery boundary and persists them.
-    pub(crate) async fn load_projects_from_home_directory(
-        db: &AppRepositories,
-        git_client: &dyn GitClient,
-        project_discovery_client: &dyn ProjectDiscoveryClient,
-        session_worktree_root: &Path,
-        home_directory: Option<&Path>,
-    ) {
-        let Some(home_directory) = home_directory.map(Path::to_path_buf) else {
-            return;
-        };
-
-        let Ok(discovered_project_paths) = project_discovery_client
-            .discover_home_project_paths(home_directory, session_worktree_root.to_path_buf())
+        );
+        let visibility = db
+            .settings()
+            .load_project_setting_values(SettingName::ProjectCatalogVisible)
             .await
-        else {
-            return;
-        };
+            .unwrap_or_default();
 
-        for project_path in discovered_project_paths {
-            let git_branch = git_client.detect_git_info(project_path.clone()).await;
-            let project_path = project_path.to_string_lossy().to_string();
-            // Best-effort: project metadata persistence is non-critical.
-            let _ = db
-                .projects()
-                .upsert_project(project_path.as_str(), git_branch)
-                .await;
-        }
+        project_rows
+            .into_iter()
+            // Unclassified legacy projects retain access to their saved history.
+            .filter(|row| visibility.get(&row.id).map(String::as_str) != Some("false"))
+            .map(Self::project_list_item_from_row)
+            .collect()
     }
 
     /// Returns whether a persisted project path points to an agentty worktree.
@@ -396,7 +339,6 @@ impl AppStartup {
     /// Filters persisted project rows down to visible project list entries.
     pub(crate) fn visible_project_rows(
         project_rows: Vec<crate::infra::db::ProjectListRow>,
-        fs_client: &dyn FsClient,
         session_worktree_root: &Path,
     ) -> Vec<crate::infra::db::ProjectListRow> {
         project_rows
@@ -405,25 +347,9 @@ impl AppStartup {
                 !Self::is_session_worktree_project_path(
                     project_row.path.as_str(),
                     session_worktree_root,
-                ) && Self::is_existing_project_path(fs_client, project_row.path.as_str())
-                    && Self::is_git_repository_project_path(fs_client, project_row.path.as_str())
+                )
             })
             .collect()
-    }
-
-    /// Returns whether one persisted project path still resolves to a
-    /// directory.
-    pub(crate) fn is_existing_project_path(fs_client: &dyn FsClient, project_path: &str) -> bool {
-        fs_client.is_dir(PathBuf::from(project_path))
-    }
-
-    /// Returns whether one persisted project path has a direct git metadata
-    /// marker, either as a `.git` directory or linked-worktree `.git` file.
-    pub(crate) fn is_git_repository_project_path(
-        fs_client: &dyn FsClient,
-        project_path: &str,
-    ) -> bool {
-        fs_client.exists(Path::new(project_path).join(".git"))
     }
 
     /// Converts a project row into the domain project model.
@@ -496,32 +422,6 @@ impl AppStartup {
             .ok()
     }
 
-    /// Resolves startup active project id from settings.
-    pub(crate) async fn resolve_startup_active_project_id(
-        db: &AppRepositories,
-        fs_client: &dyn FsClient,
-        current_project_id: i64,
-    ) -> i64 {
-        let Some(stored_project_id) = db.settings().load_active_project_id().await.ok().flatten()
-        else {
-            return current_project_id;
-        };
-        let Some(project_row) = db
-            .projects()
-            .get_project(stored_project_id)
-            .await
-            .ok()
-            .flatten()
-        else {
-            return current_project_id;
-        };
-        if !Self::is_existing_project_path(fs_client, project_row.path.as_str()) {
-            return current_project_id;
-        }
-
-        stored_project_id
-    }
-
     /// Loads one project and falls back to the current working directory.
     pub(crate) async fn load_project(
         db: &AppRepositories,
@@ -543,6 +443,31 @@ impl AppStartup {
             path: fallback_working_dir.to_path_buf(),
             updated_at: 0,
         }
+    }
+
+    /// Classifies launch contexts without demoting previously registered
+    /// repositories.
+    async fn persist_startup_catalog_visibility(
+        db: &AppRepositories,
+        project_id: i64,
+        launch_is_repository: bool,
+    ) -> Result<(), AppError> {
+        let catalog_visible = launch_is_repository
+            || db
+                .settings()
+                .get_project_setting(project_id, SettingName::ProjectCatalogVisible)
+                .await?
+                .as_deref()
+                == Some("true");
+        db.settings()
+            .upsert_project_setting(
+                project_id,
+                SettingName::ProjectCatalogVisible,
+                if catalog_visible { "true" } else { "false" },
+            )
+            .await?;
+
+        Ok(())
     }
 }
 

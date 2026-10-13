@@ -162,6 +162,10 @@ pattern.
 
 ## Usage
 
+Launch Agentty from the repository you want to work in. Project discovery is opt-in: the
+startup suggestion defaults to **Skip**, and the **Projects** tab supports adding a
+repository by path (`a`) or scanning a chosen folder (`d`).
+
 ```sh
 agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates

@@ -1,10 +1,62 @@
 //! Public repository contracts remain available without `test-utils`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use ag_session::AgentSelectionMetadata;
+use ag_session::{AgentSelectionMetadata, SettingName};
 use ag_store::Database;
 use ag_worker::RunInfo;
+
+#[tokio::test]
+async fn project_setting_values_load_selected_key_for_all_projects() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    let first = database
+        .projects()
+        .upsert_project("first", None)
+        .await
+        .expect("first");
+    let second = database
+        .projects()
+        .upsert_project("second", None)
+        .await
+        .expect("second");
+    database
+        .projects()
+        .upsert_project("legacy", None)
+        .await
+        .expect("legacy");
+    let settings = database.settings();
+    let empty = settings
+        .load_project_setting_values(SettingName::ProjectCatalogVisible)
+        .await
+        .expect("empty batch");
+    settings
+        .upsert_project_setting(first, SettingName::ProjectCatalogVisible, "false")
+        .await
+        .expect("hidden project");
+    settings
+        .upsert_project_setting(second, SettingName::ProjectCatalogVisible, "true")
+        .await
+        .expect("visible project");
+    settings
+        .upsert_project_setting(first, SettingName::LaunchConfiguration, "launch")
+        .await
+        .expect("unrelated setting");
+
+    // Act
+    let values = settings
+        .load_project_setting_values(SettingName::ProjectCatalogVisible)
+        .await
+        .expect("visibility batch");
+
+    // Assert
+    assert_eq!(empty, HashMap::new());
+    assert_eq!(
+        values,
+        HashMap::from([(first, "false".to_string()), (second, "true".to_string())])
+    );
+}
 
 #[tokio::test]
 async fn worker_settlement_preserves_in_flight_cancellation_for_workflow_commands() {

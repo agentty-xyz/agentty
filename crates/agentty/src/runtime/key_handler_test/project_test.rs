@@ -77,7 +77,8 @@ async fn test_handle_project_switcher_key_enter_switches_to_selected_project() {
     // Arrange
     let (mut app, base_dir) = crate::test_support::new_git_test_app().await;
     let second_project_dir = base_dir.path().join("beta-project");
-    std::fs::create_dir_all(&second_project_dir).expect("failed to create second project dir");
+    std::fs::create_dir_all(second_project_dir.join(".git"))
+        .expect("failed to create second project dir");
     let second_project_path = second_project_dir
         .canonicalize()
         .expect("failed to canonicalize second project dir");
@@ -177,5 +178,26 @@ async fn test_handle_project_switcher_key_enter_on_active_project_only_closes_po
     // Assert
     assert!(matches!(result, Ok(EventResult::Continue)));
     assert_eq!(app.active_project_id(), active_project_id);
+    assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn test_handle_project_catalog_key_dispatch_closes_dialog() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    app.project_catalog_message("No repositories found".to_string());
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).expect("terminal");
+    let presentation = crate::runtime::PresentationState::default();
+    // Act
+    super::super::handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await
+    .expect("key");
+    // Assert
     assert!(matches!(app.mode, AppMode::List));
 }

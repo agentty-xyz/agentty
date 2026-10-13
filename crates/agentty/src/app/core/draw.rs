@@ -74,6 +74,7 @@ impl App {
             | AppMode::SessionCreation { .. }
             | AppMode::StackAppendParentSelection { .. }
             | AppMode::PreCommitHookWarning { .. }
+            | AppMode::ProjectCatalog { .. }
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. } => {

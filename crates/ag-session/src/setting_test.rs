@@ -53,6 +53,11 @@ fn test_as_str_returns_persisted_keys() {
             SettingName::TelemetryInstallationId,
             "TelemetryInstallationId",
         ),
+        (
+            SettingName::ProjectDiscoveryPromptSeen,
+            "ProjectDiscoveryPromptSeen",
+        ),
+        (SettingName::ProjectCatalogVisible, "ProjectCatalogVisible"),
         (SettingName::Theme, "Theme"),
     ];
 
@@ -87,6 +92,7 @@ fn test_display_matches_as_str() {
         SettingName::LaunchConfiguration,
         SettingName::LastUsedModelAsDefault,
         SettingName::OrchestrationParallelism,
+        SettingName::ProjectCatalogVisible,
         SettingName::TelemetryInstallationId,
         SettingName::Theme,
     ];

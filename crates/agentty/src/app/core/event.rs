@@ -65,6 +65,11 @@ pub(crate) enum AppRuntimeEvent {
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
+    /// User-authorized repository scan completed; cancelled results are
+    /// ignored.
+    ProjectDiscoveryCompleted {
+        completion: crate::app::project_catalog::ProjectDiscoveryCompletion,
+    },
     /// Result of external session creation, acknowledged after snapshot
     /// refresh.
     SessionCreationCompleted {
@@ -428,6 +433,7 @@ pub(super) struct AppEventBatch {
     pub(super) stacked_parent_turns_completed: HashSet<SessionId>,
     pub(super) sync_main_completion: Option<SyncMainCompletion>,
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
+    project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
     pub(super) update_status: Option<UpdateStatus>,
 }
 
@@ -456,7 +462,8 @@ impl AppEventBatch {
         if !turn_ends.is_empty() {
             before_snapshot_effects.push(AppEventEffect::RecordTurnEnds(turn_ends));
         }
-        let changes_observable_state = self.should_reload_sessions
+        let changes_observable_state = !self.project_discovery_completions.is_empty()
+            || self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
             || self.git_status_update.is_some()
@@ -524,6 +531,9 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::ProjectDiscoveryCompleted { completion } => {
+                self.project_discovery_completions.push(completion);
+            }
             AppEvent::SessionReviewCommentResolutionUpdated {
                 comment_count,
                 session_id,
@@ -698,7 +708,8 @@ impl AppEventBatch {
             | AppEvent::SessionWorkflowNoticeUpdated { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
-            AppEvent::ReviewProgressUpdated { .. }
+            AppEvent::ProjectDiscoveryCompleted { .. }
+            | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::GitStatusUpdated { .. }
@@ -717,9 +728,7 @@ impl AppEventBatch {
             | AppEvent::RefreshGitStatus
             | AppEvent::SessionReviewCommentResolutionUpdated { .. }
             | AppEvent::SessionTurnStarted { .. }
-            | AppEvent::SessionTurnEnded { .. } => {
-                unreachable!("top-level app event should be collected before runtime events")
-            }
+            | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
         }
     }
 
@@ -816,7 +825,8 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::ReviewProgressUpdated { .. }
+            AppEvent::ProjectDiscoveryCompleted { .. }
+            | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::AtMentionEntriesLoaded { .. }
@@ -845,9 +855,7 @@ impl AppEventBatch {
             | AppEvent::SessionTitleGenerationFinished { .. }
             | AppEvent::SessionReviewCommentResolutionUpdated { .. }
             | AppEvent::SessionTurnStarted { .. }
-            | AppEvent::SessionTurnEnded { .. } => {
-                unreachable!("top-level app event should be collected before runtime events")
-            }
+            | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
         }
     }
 
@@ -1110,6 +1118,9 @@ impl App {
         self.apply_app_event_effects(before_snapshot_effects).await;
         for session_id in std::mem::take(&mut event_batch.session_rebase_review_invalidated_ids) {
             self.clear_review_output(&session_id);
+        }
+        for completion in std::mem::take(&mut event_batch.project_discovery_completions) {
+            self.complete_project_discovery(completion);
         }
         self.apply_batch_runtime_updates(&mut event_batch);
 
@@ -1972,6 +1983,7 @@ impl App {
             | AppMode::SessionCreation { .. }
             | AppMode::StackAppendParentSelection { .. }
             | AppMode::PreCommitHookWarning { .. }
+            | AppMode::ProjectCatalog { .. }
             | AppMode::ProjectSwitcher { .. }
             | AppMode::Confirmation { .. }
             | AppMode::SyncBlockedPopup { .. }

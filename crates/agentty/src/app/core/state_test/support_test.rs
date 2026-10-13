@@ -643,7 +643,13 @@ impl AppClients {
         self
     }
 
-    /// Replaces the startup project-discovery boundary while preserving the
+    /// Supplies the optional home root for discovery invitation tests.
+    pub(crate) fn with_project_discovery_home(mut self, home: Option<PathBuf>) -> Self {
+        self.project_discovery_home = home;
+        self
+    }
+
+    /// Replaces the project-discovery boundary while preserving the
     /// remaining clients.
     #[must_use]
     pub(crate) fn with_project_discovery_client(

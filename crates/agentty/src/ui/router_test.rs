@@ -1178,3 +1178,18 @@ fn render_mode_overlay_renders_publish_input() {
     assert!(text.contains("Publish Review Request"));
     assert!(text.contains("wt/session-publish"));
 }
+
+#[test]
+fn render_project_catalog_keeps_list_background_and_explicit_scope() {
+    // Arrange
+    let mode = AppMode::ProjectCatalog {
+        dialog: crate::presentation::project_catalog::ProjectCatalogDialog::Message {
+            message: "Explicit project access".to_string(),
+        },
+    };
+    // Act
+    let (handled, text) = render_list_backed_mode(&mode);
+    // Assert
+    assert!(handled);
+    assert!(text.contains("Explicit project access"));
+}

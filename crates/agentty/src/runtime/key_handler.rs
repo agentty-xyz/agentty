@@ -53,6 +53,7 @@ where
     } else {
         match &app.mode {
             AppMode::List => mode::list::handle(app, key).await,
+            AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
             AppMode::SessionCreation { .. } => {
                 unreachable!("session creation mode is handled before dispatch matching")
             }

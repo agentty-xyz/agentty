@@ -20,6 +20,8 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::setting::SettingsScreenSnapshot;
+use crate::ui::component::info_overlay::InfoOverlay;
+use crate::ui::component::project_catalog_overlay::ProjectCatalogOverlay;
 use crate::ui::{
     Component, Page, RenderContext, SessionReviewSnapshot, component, markdown, overlay, page,
 };
@@ -330,6 +332,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
         | AppMode::SessionCreation { .. }
         | AppMode::StackAppendParentSelection { .. }
         | AppMode::PreCommitHookWarning { .. }
+        | AppMode::ProjectCatalog { .. }
         | AppMode::ProjectSwitcher { .. }
         | AppMode::SyncBlockedPopup { .. }
         | AppMode::Confirmation { .. } => Surface::List,
@@ -540,6 +543,7 @@ fn render_mode_overlay(
         | AppMode::Question { .. }
         | AppMode::DiffLoading { .. }
         | AppMode::Diff { .. } => {}
+        AppMode::ProjectCatalog { dialog } => ProjectCatalogOverlay { dialog }.render(f, area),
         AppMode::SessionCreation {
             selected_option_index,
         } => component::session_creation_overlay::SessionCreationOverlay::new(
@@ -557,8 +561,7 @@ fn render_mode_overlay(
             render_stack_append_parent_overlay(f, area, shared, session_id, *selected_parent_index);
         }
         AppMode::PreCommitHookWarning { message } => {
-            component::info_overlay::InfoOverlay::new("Pre-commit hook warning", message)
-                .render(f, area);
+            InfoOverlay::new("Pre-commit hook warning", message).render(f, area);
         }
         AppMode::ProjectSwitcher {
             selected_option_index,

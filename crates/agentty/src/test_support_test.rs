@@ -324,9 +324,8 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
 ) -> app::test_support::AppClients {
     let mut project_discovery_client = MockProjectDiscoveryClient::new();
     project_discovery_client
-        .expect_discover_home_project_paths()
-        .times(0..)
-        .returning(|_, _| Box::pin(async { Ok(Vec::new()) }));
+        .expect_discover_project_paths()
+        .times(0);
 
     app::test_support::AppClients::new()
         .with_background_tasks_disabled()
@@ -335,6 +334,7 @@ pub(crate) fn test_app_clients_with_available_agent_kinds(
             available_agent_kinds,
         }))
         .with_project_discovery_client(Arc::new(project_discovery_client))
+        .with_project_discovery_home(None)
 }
 
 /// Builds one client bundle with deterministic agent availability for test

@@ -160,6 +160,10 @@ async fn run_application(
     let base_path = home.join(AGENTTY_WT_DIR);
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let git_client = RealGitClient;
+    let working_dir = git_client
+        .find_git_repo_root(working_dir.clone())
+        .await
+        .unwrap_or(working_dir);
     let git_branch = git_client.detect_git_info(working_dir.clone()).await;
 
     let db_path = home.join(DB_DIR).join(DB_FILE);

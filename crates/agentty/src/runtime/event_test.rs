@@ -1059,3 +1059,16 @@ async fn test_event_batch_propagates_scroll_measurement_error() {
         }
     ));
 }
+
+#[tokio::test]
+async fn test_process_paste_event_updates_project_path_input() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    app.open_project_path_input(false);
+    // Act
+    process_paste_event(&mut app, "~/my repo\r\nignored").await;
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::ProjectCatalog { dialog: crate::presentation::project_catalog::ProjectCatalogDialog::PathInput { input, .. } } if input.text() == "~/my repo")
+    );
+}

@@ -1,113 +1,114 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use super::super::{AGENTTY_WT_DIR, App};
-use super::support::{create_git_repo_marker, project_list_row_fixture};
+use super::support::{create_git_repo_marker, project_list_row_fixture, seed_materialized_session};
 use crate::app::{AppError, Tab};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SESSION_DATA_DIR, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::db::AppRepositories;
-use crate::infra::fs::RealFsClient;
-use crate::infra::project_discovery::{HOME_PROJECT_SCAN_MAX_RESULTS, RealProjectDiscoveryClient};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::setting::SettingsAction;
 
-#[test]
-fn discover_home_project_paths_includes_git_repos_and_excludes_session_worktrees() {
+/// Root-normalized startup must leave assigned subdirectory history accessible.
+#[tokio::test]
+async fn test_upgrade_can_open_legacy_subdirectory_sessions_and_settings() {
     // Arrange
-    let home_directory = tempdir().expect("failed to create temp dir");
-    let top_level_repo = home_directory.path().join("agentty");
-    create_git_repo_marker(top_level_repo.as_path());
-    let nested_repo = home_directory.path().join("code").join("service");
-    create_git_repo_marker(nested_repo.as_path());
-    let session_worktree_root = home_directory.path().join("agentty-worktrees");
-    let session_worktree_repo = session_worktree_root.join("a1b2c3d4");
-    create_git_repo_marker(session_worktree_repo.as_path());
+    let temp = tempdir().expect("fixture");
+    let root = temp.path().join("repo");
+    let legacy = root.join("legacy-subdir");
+    let base = temp.path().join("wt");
+    create_git_repo_marker(&root);
+    fs::create_dir_all(&legacy).expect("legacy directory");
+    let database = AppRepositories::in_memory().await.expect("db");
+    let legacy_id = database
+        .projects()
+        .upsert_project(&legacy.to_string_lossy(), None)
+        .await
+        .expect("legacy project");
+    seed_materialized_session(
+        &database,
+        &base,
+        legacy_id,
+        "legacy-session",
+        Status::Review,
+    )
+    .await;
+    database
+        .settings()
+        .upsert_project_setting(legacy_id, SettingName::LaunchConfiguration, "legacy-launch")
+        .await
+        .expect("legacy setting");
+    let mut app = App::new_with_clients(
+        base,
+        root.clone(),
+        None,
+        database.clone(),
+        crate::test_support::test_app_clients(),
+    )
+    .await
+    .expect("startup");
+    assert_ne!(app.active_project_id(), legacy_id);
+    assert!(app.sessions.sessions().is_empty());
 
     // Act
-    let discovered_project_paths =
-        App::discover_home_project_paths(home_directory.path(), session_worktree_root.as_path());
+    app.switch_project(legacy_id)
+        .await
+        .expect("open legacy project");
 
     // Assert
-    assert!(
-        discovered_project_paths.contains(&top_level_repo),
-        "top-level git repository should be discovered"
-    );
-    assert!(
-        discovered_project_paths.contains(&nested_repo),
-        "nested git repository should be discovered"
-    );
-    assert!(
-        !discovered_project_paths.contains(&session_worktree_repo),
-        "session worktree repositories must be excluded"
-    );
-}
-
-#[test]
-fn discover_home_project_paths_respects_repository_limit() {
-    // Arrange
-    let home_directory = tempdir().expect("failed to create temp dir");
-    for index in 0..=HOME_PROJECT_SCAN_MAX_RESULTS {
-        let repository = home_directory.path().join(format!("repo-{index}"));
-        create_git_repo_marker(repository.as_path());
-    }
-
-    // Act
-    let discovered_project_paths = App::discover_home_project_paths(
-        home_directory.path(),
-        Path::new("/tmp/non-session-worktree"),
-    );
-
-    // Assert
+    assert_eq!(app.active_project_id(), legacy_id);
+    assert_eq!(app.working_dir(), legacy);
+    assert_eq!(app.settings.launch_configuration, "legacy-launch");
+    assert_eq!(app.sessions.sessions()[0].id.as_str(), "legacy-session");
     assert_eq!(
-        discovered_project_paths.len(),
-        HOME_PROJECT_SCAN_MAX_RESULTS
+        database
+            .projects()
+            .get_project(legacy_id)
+            .await
+            .expect("project")
+            .expect("legacy row")
+            .path,
+        legacy.to_string_lossy()
     );
 }
 
 #[tokio::test]
-/// Verifies the startup-only catalog refresh discovers repositories before
-/// the first project list load.
-async fn refresh_project_catalog_on_startup_discovers_home_directory_repositories() {
+async fn test_switch_project_rejects_missing_and_non_repository_paths() {
     // Arrange
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let home_directory = tempdir().expect("failed to create temp dir");
-    let discovered_repo = home_directory.path().join("agentty");
-    create_git_repo_marker(discovered_repo.as_path());
-    let fs_client = RealFsClient;
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    let session_worktree_root = home_directory.path().join(".agentty").join(AGENTTY_WT_DIR);
-    mock_git_client
-        .expect_detect_git_info()
-        .times(1)
-        .returning(|_| Box::pin(async { Some("main".to_string()) }));
-
-    // Act
-    App::load_projects_from_home_directory(
-        &database,
-        &mock_git_client,
-        &RealProjectDiscoveryClient,
-        session_worktree_root.as_path(),
-        Some(home_directory.path()),
+    let temp = tempdir().expect("fixture");
+    let root = temp.path().join("repo");
+    create_git_repo_marker(&root);
+    let ordinary = temp.path().join("ordinary");
+    fs::create_dir_all(&ordinary).expect("ordinary directory");
+    let database = AppRepositories::in_memory().await.expect("db");
+    let mut app = App::new_with_clients(
+        temp.path().join("wt"),
+        root,
+        None,
+        database.clone(),
+        crate::test_support::test_app_clients(),
     )
-    .await;
-
-    let project_items = App::load_project_items_with_session_worktree_root(
-        &database,
-        &fs_client,
-        session_worktree_root.as_path(),
-    )
-    .await;
-
-    // Assert
-    assert_eq!(project_items.len(), 1);
-    assert_eq!(project_items[0].project.path, discovered_repo);
-    assert_eq!(project_items[0].project.git_branch.as_deref(), Some("main"));
+    .await
+    .expect("startup");
+    let active_id = app.active_project_id();
+    for path in [ordinary, temp.path().join("missing")] {
+        let id = database
+            .projects()
+            .upsert_project(&path.to_string_lossy(), None)
+            .await
+            .expect("project");
+        // Act
+        let result = app.switch_project(id).await;
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(app.active_project_id(), active_id);
+    }
 }
 
 #[tokio::test]
@@ -116,6 +117,8 @@ async fn test_switch_project_reloads_project_scoped_settings() {
     let base_dir = tempdir().expect("failed to create temp dir");
     let second_project_dir = tempdir().expect("failed to create second temp dir");
     let base_path = base_dir.path().to_path_buf();
+    create_git_repo_marker(base_dir.path());
+    create_git_repo_marker(second_project_dir.path());
     let database = AppRepositories::in_memory().await.expect("db should open");
     let first_project_id = database
         .projects()
@@ -201,50 +204,6 @@ async fn test_switch_project_reloads_project_scoped_settings() {
             .selected_row_index,
         Some(0)
     );
-}
-
-#[tokio::test]
-async fn resolve_startup_active_project_id_falls_back_when_stored_project_path_is_missing() {
-    // Arrange
-    let current_project_dir = tempdir().expect("failed to create current project dir");
-    let current_project_path = current_project_dir.path().to_path_buf();
-    let missing_project_path = current_project_path.join("removed-project");
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let current_project_id = database
-        .projects()
-        .upsert_project(
-            &current_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to insert current project");
-    let missing_project_id = database
-        .projects()
-        .upsert_project(
-            &missing_project_path.to_string_lossy(),
-            Some("main".to_string()),
-        )
-        .await
-        .expect("failed to insert missing project");
-    database
-        .settings()
-        .set_active_project_id(missing_project_id)
-        .await
-        .expect("failed to persist active project");
-    let missing_project_path = missing_project_path.clone();
-    let mut fs_client = crate::infra::fs::MockFsClient::new();
-    fs_client
-        .expect_is_dir()
-        .once()
-        .withf(move |path| path == &missing_project_path)
-        .return_const(false);
-
-    // Act
-    let resolved_project_id =
-        App::resolve_startup_active_project_id(&database, &fs_client, current_project_id).await;
-
-    // Assert
-    assert_eq!(resolved_project_id, current_project_id);
 }
 
 #[tokio::test]
@@ -375,13 +334,11 @@ async fn load_project_items_uses_persisted_rows_without_home_scan() {
     let home_directory = tempdir().expect("failed to create temp dir");
     let discovered_repo = home_directory.path().join("agentty");
     create_git_repo_marker(discovered_repo.as_path());
-    let fs_client = RealFsClient;
     let session_worktree_root = home_directory.path().join(".agentty").join(AGENTTY_WT_DIR);
 
     // Act
     let project_items = App::load_project_items_with_session_worktree_root(
         &database,
-        &fs_client,
         session_worktree_root.as_path(),
     )
     .await;
@@ -402,52 +359,21 @@ async fn load_project_items_uses_persisted_rows_without_home_scan() {
 }
 
 #[test]
-fn visible_project_rows_excludes_missing_nongit_and_session_worktree_projects() {
+fn visible_project_rows_keeps_saved_history_without_filesystem_access() {
     // Arrange
-    let existing_project_path = "/home/test/src/agentty".to_string();
-    let nongit_project_path = "/home/test/src/notes".to_string();
-    let session_worktree_project_path = "/home/test/.agentty/wt/a1b2c3d4".to_string();
-    let missing_project_path = "/home/test/src/removed".to_string();
-    let session_worktree_root = Path::new("/home/test/.agentty/wt");
-    let project_rows = vec![
-        project_list_row_fixture(1, existing_project_path.clone()),
-        project_list_row_fixture(2, nongit_project_path.clone()),
-        project_list_row_fixture(3, session_worktree_project_path),
-        project_list_row_fixture(4, missing_project_path.clone()),
+    let root = Path::new("/home/test/.agentty/wt");
+    let rows = vec![
+        project_list_row_fixture(1, "/saved/project".to_string()),
+        project_list_row_fixture(2, "/missing/project".to_string()),
+        project_list_row_fixture(3, "/home/test/.agentty/wt/session".to_string()),
     ];
-    let mut fs_client = crate::infra::fs::MockFsClient::new();
-    let existing_project_path_for_match = PathBuf::from(existing_project_path.clone());
-    let existing_git_marker_for_match = existing_project_path_for_match.join(".git");
-    let nongit_project_path_for_match = PathBuf::from(nongit_project_path);
-    let missing_project_path_for_match = PathBuf::from(missing_project_path);
-    fs_client
-        .expect_is_dir()
-        .once()
-        .withf(move |path| path == &existing_project_path_for_match)
-        .return_const(true);
-    fs_client
-        .expect_exists()
-        .once()
-        .withf(move |path| path == &existing_git_marker_for_match)
-        .return_const(true);
-    fs_client
-        .expect_is_dir()
-        .once()
-        .withf(move |path| path == &nongit_project_path_for_match)
-        .return_const(true);
-    fs_client.expect_exists().once().return_const(false);
-    fs_client
-        .expect_is_dir()
-        .once()
-        .withf(move |path| path == &missing_project_path_for_match)
-        .return_const(false);
-
     // Act
-    let visible_rows = App::visible_project_rows(project_rows, &fs_client, session_worktree_root);
-
+    let visible = App::visible_project_rows(rows, root);
     // Assert
-    assert_eq!(visible_rows.len(), 1);
-    assert_eq!(visible_rows[0].path, existing_project_path);
+    assert_eq!(
+        visible.iter().map(|row| row.id).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
 }
 
 #[tokio::test]
@@ -540,7 +466,7 @@ async fn test_new_with_clients_falls_back_from_stale_active_project_and_loads_cu
             .any(|item| item.project.id == current_project_id)
     );
     assert!(
-        !project_items
+        project_items
             .iter()
             .any(|item| item.project.id == missing_project_id)
     );
@@ -579,23 +505,4 @@ async fn test_new_with_clients_defaults_to_sessions_when_active_project_exists()
 
     // Assert
     assert_eq!(app.tabs.current(), Tab::Sessions);
-}
-
-#[test]
-fn is_existing_project_path_returns_true_when_fs_client_reports_directory() {
-    // Arrange
-    let project_path = "/home/test/src/agentty";
-    let expected_path = PathBuf::from(project_path);
-    let mut fs_client = crate::infra::fs::MockFsClient::new();
-    fs_client
-        .expect_is_dir()
-        .once()
-        .withf(move |path| path == &expected_path)
-        .return_const(true);
-
-    // Act
-    let project_exists = App::is_existing_project_path(&fs_client, project_path);
-
-    // Assert
-    assert!(project_exists);
 }
