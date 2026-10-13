@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ag_tui_text::text_util::wrap_lines;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -20,23 +21,16 @@ pub(crate) struct ProjectCatalogOverlay<'a> {
 
 impl ProjectCatalogOverlay<'_> {
     /// Paints the scope explanation and the explicit Discover/Skip choices.
-    fn render_suggestion(
-        f: &mut Frame,
-        message_area: Rect,
-        choices_area: Rect,
-        root: &Path,
-        selected: usize,
-    ) {
+    fn render_suggestion(f: &mut Frame, area: Rect, root: &Path, selected: usize) {
         let message = format!(
             "Discover Git repositories in your home directory?\n{}\n\nThis scans subfolders and \
              may trigger macOS folder-access prompts. Nothing is scanned if you skip. You can \
              discover in a chosen folder from Projects later.",
             root.display()
         );
-        f.render_widget(
-            Paragraph::new(message).wrap(Wrap { trim: true }),
-            message_area,
-        );
+        let width = area.width.min(70);
+        let content_width = overlay::overlay_content_width(width);
+        let lines = wrap_lines(&message, content_width);
         let labels = [" Discover ", " Skip "]
             .into_iter()
             .enumerate()
@@ -52,10 +46,72 @@ impl ProjectCatalogOverlay<'_> {
                 Span::styled(label, style)
             })
             .collect::<Vec<_>>();
+        let help = wrap_lines(
+            "y: discover | n/Esc: skip | Left/Right: choose | Enter: confirm",
+            content_width,
+        );
+        let line_count = lines
+            .iter()
+            .map(|line| line.width().div_ceil(content_width).max(1))
+            .sum::<usize>()
+            + help.len()
+            + 3;
+        let popup = overlay::centered_popup_area(
+            area,
+            0,
+            0,
+            width,
+            overlay::overlay_required_height(line_count),
+        );
+        let block = overlay::overlay_block("Discover repositories?", palette::accent());
+        let inner = block.inner(popup);
+        let help_height = u16::try_from(help.len())
+            .unwrap_or(u16::MAX)
+            .min(inner.height.saturating_sub(1));
+        let gap = u16::from(inner.height > help_height.saturating_add(3));
+        let [message_area, _, choices_area, _, help_area] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(gap),
+            Constraint::Length(1),
+            Constraint::Length(gap),
+            Constraint::Length(help_height),
+        ])
+        .areas(inner);
+        overlay::clear_popup_area(f, popup);
+        f.render_widget(block, popup);
+        f.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: true }),
+            message_area,
+        );
         f.render_widget(
             Paragraph::new(Line::from(labels)).alignment(Alignment::Center),
             choices_area,
         );
+        f.render_widget(
+            Paragraph::new(help).style(Style::default().fg(palette::text_muted())),
+            help_area,
+        );
+    }
+
+    /// Paints a standard dialog frame and help, returning its content areas.
+    fn render_dialog_frame(f: &mut Frame, area: Rect, title: &str, help: &str) -> [Rect; 2] {
+        let popup = overlay::centered_popup_area(area, 80, 65, 50, 12);
+        let block = overlay::overlay_block(title, palette::accent());
+        let inner = block.inner(popup);
+        overlay::clear_popup_area(f, popup);
+        f.render_widget(block, popup);
+        let [content_area, details_area, help_area] = Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+        f.render_widget(
+            Paragraph::new(help).style(Style::default().fg(palette::text_muted())),
+            help_area,
+        );
+
+        [content_area, details_area]
     }
 
     /// Paints result selection and any registration failure without saving
@@ -100,39 +156,22 @@ impl ProjectCatalogOverlay<'_> {
 
 impl Component for ProjectCatalogOverlay<'_> {
     fn render(&self, f: &mut Frame, area: Rect) {
-        let popup = overlay::centered_popup_area(area, 80, 65, 50, 12);
-        let title = match self.dialog {
-            ProjectCatalogDialog::SuggestHome { .. } => "Discover repositories?",
-            ProjectCatalogDialog::PathInput {
-                discover: false, ..
-            } => "Add project",
-            ProjectCatalogDialog::PathInput { discover: true, .. } => "Discover projects in folder",
-            ProjectCatalogDialog::Scanning { .. } => "Discovering repositories",
-            ProjectCatalogDialog::Results { .. } => "Select repositories to add",
-            ProjectCatalogDialog::Message { .. } => "Projects",
-        };
-        let block = overlay::overlay_block(title, palette::accent());
-        let inner = block.inner(popup);
-        overlay::clear_popup_area(f, popup);
-        f.render_widget(block, popup);
-        let sections = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(3),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-        let muted = Style::default().fg(palette::text_muted());
-        let mut help = "Enter/Esc: close";
         match self.dialog {
             ProjectCatalogDialog::SuggestHome { root, selected } => {
-                Self::render_suggestion(f, sections[0], sections[1], root, *selected);
-                help = "y: discover | n/Esc: skip | Left/Right: choose | Enter: confirm";
+                Self::render_suggestion(f, area, root, *selected);
             }
             ProjectCatalogDialog::PathInput {
                 discover,
                 error,
                 input,
             } => {
+                let title = if *discover {
+                    "Discover projects in folder"
+                } else {
+                    "Add project"
+                };
+                let [message_area, input_area] =
+                    Self::render_dialog_frame(f, area, title, "Enter: submit | Esc: cancel");
                 let message = error.as_deref().unwrap_or(if *discover {
                     "Scan only this folder and its subfolders. This may trigger folder-access \
                      prompts. Select results before saving."
@@ -142,12 +181,17 @@ impl Component for ProjectCatalogOverlay<'_> {
                 });
                 f.render_widget(
                     Paragraph::new(message).wrap(Wrap { trim: true }),
-                    sections[0],
+                    message_area,
                 );
-                ChatInput::new("Path", input.text(), input.cursor).render(f, sections[1]);
-                help = "Enter: submit | Esc: cancel";
+                ChatInput::new("Path", input.text(), input.cursor).render(f, input_area);
             }
             ProjectCatalogDialog::Scanning { root } => {
+                let [message_area, _] = Self::render_dialog_frame(
+                    f,
+                    area,
+                    "Discovering repositories",
+                    "Esc: cancel scan",
+                );
                 f.render_widget(
                     Paragraph::new(format!(
                         "Scanning {}\nUp to 5 levels and 200 repositories. Hidden and \
@@ -155,33 +199,38 @@ impl Component for ProjectCatalogOverlay<'_> {
                         root.display()
                     ))
                     .wrap(Wrap { trim: true }),
-                    sections[0],
+                    message_area,
                 );
-                help = "Esc: cancel scan";
             }
             ProjectCatalogDialog::Results {
                 paths,
                 selected,
                 error,
             } => {
+                let [list_area, message_area] = Self::render_dialog_frame(
+                    f,
+                    area,
+                    "Select repositories to add",
+                    "j/k: navigate | Space: select | Enter: add selected | Esc: cancel",
+                );
                 Self::render_results(
                     f,
-                    sections[0],
-                    sections[1],
+                    list_area,
+                    message_area,
                     paths,
                     *selected,
                     error.as_deref(),
                 );
-                help = "j/k: navigate | Space: select | Enter: add selected | Esc: cancel";
             }
             ProjectCatalogDialog::Message { message } => {
+                let [message_area, _] =
+                    Self::render_dialog_frame(f, area, "Projects", "Enter/Esc: close");
                 f.render_widget(
                     Paragraph::new(message.as_str()).wrap(Wrap { trim: true }),
-                    sections[0],
+                    message_area,
                 );
             }
         }
-        f.render_widget(Paragraph::new(help).style(muted), sections[2]);
     }
 }
 
