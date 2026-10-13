@@ -26,7 +26,7 @@ pub struct NewSessionReviewCommentResolution {
 /// Row returned for one unfinished review-comment resolution operation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionReviewCommentResolutionRow {
-    /// Full commit hash that must remain reachable from the pushed branch.
+    /// Full commit hash that must match the pushed branch tip.
     pub commit_hash: Option<String>,
     /// Whether a forge reply attempt may already have exposed the token.
     pub is_posting: bool,
@@ -69,6 +69,18 @@ pub struct SessionReviewRequestRow {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait ReviewRepository: Send + Sync {
+    /// Retains authorized threads before a turn and invalidates their previous
+    /// outcomes until the agent has evaluated the current worktree again.
+    async fn prepare_session_review_comment_turn(
+        &self,
+        id: &str,
+        thread_ids: &[String],
+    ) -> Result<(), DbError>;
+
+    /// Loads unfinished targets for the currently linked open review request,
+    /// including operations saved before durable targets were introduced.
+    async fn load_session_review_comment_targets(&self, id: &str) -> Result<Vec<String>, DbError>;
+
     /// Binds newly inserted operations to the commit produced for their turn.
     async fn bind_session_review_comment_resolutions_to_commit(
         &self,
@@ -77,7 +89,9 @@ pub trait ReviewRepository: Send + Sync {
         commit_hash: &str,
     ) -> Result<(), DbError>;
 
-    /// Discards unfinished operations created with the supplied reply tokens.
+    /// Discards unposted operations created with the supplied reply tokens.
+    /// Retains possibly posted replies and clears their commit binding so a
+    /// later revalidated turn can retry without duplicating the forge reply.
     async fn discard_session_review_comment_resolutions(
         &self,
         id: &str,
@@ -164,7 +178,11 @@ DO UPDATE SET
     reply = excluded.reply,
     reply_token = excluded.reply_token,
     resolution = excluded.resolution,
-    is_posting = 0
+    is_posting = CASE
+        WHEN session_review_comment_resolution.reply_token = excluded.reply_token
+        THEN session_review_comment_resolution.is_posting
+        ELSE 0
+    END
 WHERE session_review_comment_resolution.commit_hash IS NULL
 ",
             session_id,
@@ -184,6 +202,64 @@ WHERE session_review_comment_resolution.commit_hash IS NULL
 
 #[async_trait]
 impl ReviewRepository for SqliteReviewRepository {
+    async fn prepare_session_review_comment_turn(
+        &self,
+        id: &str,
+        thread_ids: &[String],
+    ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+        for thread_id in thread_ids {
+            let inserted = sqlx::query!(
+                "INSERT INTO session_review_comment_target
+                 SELECT session_id, display_id, ? FROM session_review_request
+                 WHERE session_id = ? AND state = 'Open'
+                 ON CONFLICT DO UPDATE SET thread_id = excluded.thread_id",
+                thread_id,
+                id
+            )
+            .execute(&mut *transaction)
+            .await?;
+            if inserted.rows_affected() != 1 {
+                return Err(DbError::InvalidData {
+                    entity: "review-comment target",
+                    reason: "the session no longer has an open linked review request".to_string(),
+                });
+            }
+            sqlx::query!(
+                "UPDATE session_review_comment_resolution SET commit_hash = NULL
+                 WHERE session_id = ? AND thread_id = ? AND review_request_display_id =
+                 (SELECT display_id FROM session_review_request WHERE session_id = ?)",
+                id,
+                thread_id,
+                id
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn load_session_review_comment_targets(&self, id: &str) -> Result<Vec<String>, DbError> {
+        Ok(sqlx::query_scalar!(
+            r#"SELECT target.thread_id AS "thread_id!" FROM (
+                 SELECT session_id, review_request_display_id, thread_id
+                 FROM session_review_comment_target
+                 UNION
+                 SELECT session_id, review_request_display_id, thread_id
+                 FROM session_review_comment_resolution
+             ) AS target JOIN session_review_request AS review
+             ON review.session_id = target.session_id
+             AND review.display_id = target.review_request_display_id
+             WHERE target.session_id = ? AND review.state = 'Open'
+             ORDER BY target.thread_id"#,
+            id
+        )
+        .fetch_all(&self.0)
+        .await?)
+    }
+
     async fn bind_session_review_comment_resolutions_to_commit(
         &self,
         id: &str,
@@ -221,9 +297,23 @@ WHERE session_id = ?
         for resolution in resolutions {
             sqlx::query!(
                 r"
+UPDATE session_review_comment_resolution
+SET commit_hash = NULL
+WHERE session_id = ?
+  AND reply_token = ?
+  AND is_posting = 1
+",
+                id,
+                resolution.reply_token
+            )
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query!(
+                r"
 DELETE FROM session_review_comment_resolution
 WHERE session_id = ?
   AND reply_token = ?
+  AND is_posting = 0
 ",
                 id,
                 resolution.reply_token
@@ -394,6 +484,18 @@ WHERE session_id = ?
         id: &str,
         reply_token: &str,
     ) -> Result<(), DbError> {
+        let mut transaction = self.0.begin().await?;
+        sqlx::query!(
+            "DELETE FROM session_review_comment_target
+             WHERE session_id = ? AND (review_request_display_id, thread_id) IN
+             (SELECT review_request_display_id, thread_id FROM session_review_comment_resolution
+              WHERE session_id = ? AND reply_token = ?)",
+            id,
+            id,
+            reply_token
+        )
+        .execute(&mut *transaction)
+        .await?;
         let delete_result = sqlx::query!(
             r"
 DELETE FROM session_review_comment_resolution
@@ -403,7 +505,7 @@ WHERE session_id = ?
             id,
             reply_token
         )
-        .execute(&self.0)
+        .execute(&mut *transaction)
         .await?;
         if delete_result.rows_affected() != 1 {
             return Err(DbError::InvalidData {
@@ -411,6 +513,7 @@ WHERE session_id = ?
                 reason: format!("delete matched no row for token `{reply_token}`"),
             });
         }
+        transaction.commit().await?;
 
         Ok(())
     }

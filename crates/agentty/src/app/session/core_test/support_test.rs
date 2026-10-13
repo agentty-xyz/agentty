@@ -6,7 +6,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ag_contracts::{OneShotError, OneShotSubmission};
 use ag_forge::{
-    ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+    ForgeKind, ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
+    ReviewRequestState, ReviewRequestSummary,
 };
 use ag_git as git;
 use ag_protocol::AgentResponse;
@@ -20,8 +21,8 @@ use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
-    SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionRole, SessionSize, SessionStats,
-    Status,
+    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionRole, SessionSize,
+    SessionStats, Status,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
@@ -1105,6 +1106,27 @@ pub(super) async fn prepare_review_comment_resolution_session(app: &mut App) -> 
         .update_session_status_with_timing_at(&session_id, "Review", 0)
         .await
         .expect("failed to persist review status");
+    app.services
+        .db()
+        .reviews()
+        .update_session_review_request(
+            &session_id,
+            Some(ReviewRequest {
+                last_refreshed_at: 100,
+                summary: ReviewRequestSummary {
+                    display_id: "#42".to_string(),
+                    forge_kind: ForgeKind::GitHub,
+                    source_branch: format!("wt/{session_id}"),
+                    state: ReviewRequestState::Open,
+                    status_summary: None,
+                    target_branch: "main".to_string(),
+                    title: "Review fixture".to_string(),
+                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+                },
+            }),
+        )
+        .await
+        .expect("failed to link review request");
     app.review_cache.insert(
         session_id.clone(),
         ReviewCacheEntry::Ready {

@@ -8,6 +8,7 @@ use ag_forge as forge;
 use ag_git::GitClient;
 use ag_worker::RunClient;
 use tokio::sync::{OwnedMutexGuard, mpsc};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::SessionTaskService;
@@ -67,7 +68,10 @@ pub(super) struct PublishedBranchAutoPushStartInput {
 
 /// Starts one detached auto-push task for a session that already tracks a
 /// published upstream branch.
-pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushStartInput) {
+pub(super) fn start_published_branch_auto_push(
+    input: PublishedBranchAutoPushStartInput,
+    cancel_token: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
     let branch_operation_guard = input.branch_operation_guard;
     let sync_operation_id = Uuid::new_v4().to_string();
     let review_request_metadata_sync =
@@ -106,8 +110,59 @@ pub(super) fn start_published_branch_auto_push(input: PublishedBranchAutoPushSta
     };
     tokio::spawn(async move {
         let _branch_operation_guard = branch_operation_guard;
-        run_published_branch_auto_push_task(auto_push_input).await;
-    });
+        // Drop in-flight Git/forge futures before releasing serialization.
+        // Their command runners kill child processes on drop; persisted posting
+        // markers retain any remote result that may already have taken effect.
+        tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => {
+                let _ = auto_push_input.app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
+                    persistent_notice: Some(TranscriptNotice::BranchPushError.format(
+                        "Publishing stopped; unfinished review thread updates remain pending.",
+                    )),
+                    session_id: auto_push_input.session_id.clone(),
+                    sync_operation_id: auto_push_input.sync_operation_id.clone(),
+                    sync_status: PublishedBranchSyncStatus::Failed,
+                });
+            }
+            () = run_published_branch_auto_push_task(&auto_push_input) => {}
+        }
+    })
+}
+
+/// Shared inputs for durable review-thread effects after any successful push.
+pub(crate) struct ReviewCommentSyncInput {
+    /// Event sink for persisted transcript updates.
+    pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    /// Durable review operations and transcript repository.
+    pub(crate) db: AppRepositories,
+    /// Worktree whose branch was pushed.
+    pub(crate) folder: PathBuf,
+    /// Git boundary for commit verification and remote discovery.
+    pub(crate) git_client: Arc<dyn GitClient>,
+    /// Authenticated forge boundary.
+    pub(crate) review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    /// Session owning the review operations.
+    pub(crate) session_id: SessionId,
+    /// Shared transcript projection versions.
+    pub(crate) session_update_versions: crate::app::service::SessionUpdateVersionMap,
+    /// Live transcript mirrored by durable notices.
+    pub(crate) transcript: Arc<Mutex<SessionTranscript>>,
+}
+
+impl From<&PublishedBranchAutoPushInput> for ReviewCommentSyncInput {
+    fn from(input: &PublishedBranchAutoPushInput) -> Self {
+        Self {
+            app_event_tx: input.app_event_tx.clone(),
+            db: input.db.clone(),
+            folder: input.folder.clone(),
+            git_client: Arc::clone(&input.git_client),
+            review_request_client: Arc::clone(&input.review_request_client),
+            session_id: input.session_id.clone(),
+            session_update_versions: input.session_update_versions.clone(),
+            transcript: Arc::clone(&input.transcript),
+        }
+    }
 }
 
 /// Owned inputs needed by one detached published-branch auto-push task across
@@ -160,11 +215,11 @@ pub(super) struct ReviewRequestMetadataEvaluationInput {
 /// Runs one detached auto-push for a previously published session branch and
 /// reports its state through the app event pipeline.
 pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPushInput) {
-    run_published_branch_auto_push_task(input).await;
+    run_published_branch_auto_push_task(&input).await;
 }
 
 /// Executes one detached published-branch auto-push from owned task inputs.
-async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput) {
+async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInput) {
     let remote_branch_name = remote_branch_name_from_upstream_ref(&input.published_upstream_ref);
     let push_result = branch_publish::push_session_branch_to_remote(
         &input.db,
@@ -180,9 +235,9 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
     match push_result {
         Ok(_) => {
             if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
-                sync_linked_review_request_metadata_after_push(&input, metadata_sync_input).await;
+                sync_linked_review_request_metadata_after_push(input, metadata_sync_input).await;
             }
-            resolve_review_comments_after_push(&input).await;
+            resolve_review_comments_after_push(&ReviewCommentSyncInput::from(input)).await;
 
             let message = TranscriptNotice::BranchPush
                 .format("Auto-pushed published branch after completed turn.");
@@ -191,8 +246,8 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
                     persistent_notice: Some(message),
-                    session_id: input.session_id,
-                    sync_operation_id: input.sync_operation_id,
+                    session_id: input.session_id.clone(),
+                    sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Succeeded,
                 });
         }
@@ -203,8 +258,8 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
                     persistent_notice: Some(message),
-                    session_id: input.session_id,
-                    sync_operation_id: input.sync_operation_id,
+                    session_id: input.session_id.clone(),
+                    sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Failed,
                 });
         }
@@ -213,7 +268,7 @@ async fn run_published_branch_auto_push_task(input: PublishedBranchAutoPushInput
 
 /// Posts agent-authored replies and resolves fixed allowlisted review threads
 /// after the updated branch is visible on the forge.
-async fn resolve_review_comments_after_push(input: &PublishedBranchAutoPushInput) {
+pub(crate) async fn resolve_review_comments_after_push(input: &ReviewCommentSyncInput) {
     let operations = match input
         .db
         .reviews()
@@ -240,7 +295,7 @@ async fn resolve_review_comments_after_push(input: &PublishedBranchAutoPushInput
         .iter()
         .filter(|operation| operation.resolution == "fixed")
         .count();
-    let linked_review_request = match load_open_review_request(input).await {
+    let linked_review_request = match load_open_review_request(&input.db, &input.session_id).await {
         Ok(Some(linked_review_request)) => linked_review_request,
         Ok(None) => {
             append_missing_open_review_request_notice(input, expected_reply_count).await;
@@ -314,11 +369,11 @@ async fn resolve_review_comments_after_push(input: &PublishedBranchAutoPushInput
 
 /// Keeps only operations whose fix commit exactly matches the pushed tip.
 async fn review_comment_operations_matching_pushed_head(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operations: Vec<SessionReviewCommentResolutionRow>,
 ) -> Option<Vec<SessionReviewCommentResolutionRow>> {
     let mut matching_operations = Vec::new();
-    let mut stale_operations = Vec::new();
+    let mut stale_count = 0;
     let mut unbound_count = 0;
 
     for operation in operations {
@@ -337,7 +392,7 @@ async fn review_comment_operations_matching_pushed_head(
             .await;
         match reachability {
             Ok((0, 0)) => matching_operations.push(operation),
-            Ok(_) => stale_operations.push(operation),
+            Ok(_) => stale_count += 1,
             Err(error) => {
                 append_review_comment_commit_verification_failure_notice(input, &error.to_string())
                     .await;
@@ -347,10 +402,6 @@ async fn review_comment_operations_matching_pushed_head(
         }
     }
 
-    let stale_count = stale_operations.len();
-    for operation in &stale_operations {
-        remove_review_comment_operation(input, operation).await;
-    }
     if stale_count != 0 {
         append_stale_review_comment_operations_notice(input, stale_count).await;
     }
@@ -363,7 +414,7 @@ async fn review_comment_operations_matching_pushed_head(
 
 /// Resolves the authenticated forge remote used for post-push thread effects.
 async fn review_comment_resolution_remote(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     expected_reply_count: usize,
     expected_resolution_count: usize,
 ) -> Option<forge::ForgeRemote> {
@@ -417,7 +468,7 @@ async fn review_comment_resolution_remote(
 /// Refreshes live thread state so retries can skip already-posted replies and
 /// avoid mutating threads that disappeared after selection.
 async fn live_review_comment_snapshot(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     remote: &forge::ForgeRemote,
     display_id: &str,
     expected_reply_count: usize,
@@ -452,7 +503,7 @@ async fn live_review_comment_snapshot(
 
 /// Posts each accepted reply and resolves only fixed outcomes.
 async fn post_review_comment_operations(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operations: &[SessionReviewCommentResolutionRow],
     remote: &forge::ForgeRemote,
     display_id: &str,
@@ -474,7 +525,7 @@ async fn post_review_comment_operations(
 
 /// Applies one persisted reply and optional fixed-thread resolution.
 async fn apply_review_comment_operation(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operation: &SessionReviewCommentResolutionRow,
     remote: &forge::ForgeRemote,
     display_id: &str,
@@ -527,7 +578,7 @@ async fn apply_review_comment_operation(
 
 /// Ensures one reply is posted or recoverably recognized from a prior try.
 async fn ensure_review_comment_reply(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operation: &SessionReviewCommentResolutionRow,
     remote: &forge::ForgeRemote,
     display_id: &str,
@@ -580,7 +631,7 @@ async fn ensure_review_comment_reply(
 
 /// Completes a replied operation, resolving the forge thread when requested.
 async fn complete_review_comment_operation(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operation: &SessionReviewCommentResolutionRow,
     remote: &forge::ForgeRemote,
     display_id: &str,
@@ -627,7 +678,7 @@ async fn complete_review_comment_operation(
 
 /// Records that one operation may expose its reply token to the forge.
 async fn mark_review_comment_operation_posting(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operation: &SessionReviewCommentResolutionRow,
 ) -> bool {
     match input
@@ -652,7 +703,7 @@ async fn mark_review_comment_operation_posting(
 
 /// Removes one operation after its requested forge effects finish.
 async fn remove_review_comment_operation(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     operation: &SessionReviewCommentResolutionRow,
 ) {
     if let Err(error) = input
@@ -680,7 +731,7 @@ fn review_comment_reply_body(reply: &str, reply_token: &str) -> String {
 
 /// Reports that durable review-comment work could not be loaded after push.
 async fn append_review_comment_operation_load_failure_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     error: &str,
 ) {
     let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
@@ -699,7 +750,7 @@ async fn append_review_comment_operation_load_failure_notice(
 
 /// Reports that commit ancestry could not be checked after a successful push.
 async fn append_review_comment_commit_verification_failure_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     error: &str,
 ) {
     let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
@@ -717,14 +768,14 @@ async fn append_review_comment_commit_verification_failure_notice(
     .await;
 }
 
-/// Reports saved outcomes discarded after the pushed tip changed.
+/// Reports saved outcomes awaiting re-evaluation after the pushed tip changed.
 async fn append_stale_review_comment_operations_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     stale_count: usize,
 ) {
     let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
-        "Discarded {stale_count} saved review thread update(s) because the pushed branch tip no \
-         longer exactly matches the reported fix commit. Reopen review comments to retry."
+        "Retained {stale_count} saved review thread update(s) because the pushed branch tip no \
+         longer exactly matches the reported fix commit. Continue the session to re-evaluate them."
     ));
     SessionTaskService::append_workflow_notice(
         &input.transcript,
@@ -739,7 +790,7 @@ async fn append_stale_review_comment_operations_notice(
 
 /// Reports operations retained after commit binding was interrupted.
 async fn append_unbound_review_comment_operations_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     unbound_count: usize,
 ) {
     let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
@@ -761,7 +812,7 @@ async fn append_unbound_review_comment_operations_notice(
 /// Reports that the review request disappeared or became terminal between
 /// comment selection and post-push outcome application.
 async fn append_missing_open_review_request_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     expected_reply_count: usize,
 ) {
     let message = TranscriptNotice::ReviewCommentsWarning.format(format!(
@@ -782,7 +833,7 @@ async fn append_missing_open_review_request_notice(
 
 /// Appends a concise durable result for post-push review-thread updates.
 async fn append_review_comment_resolution_notice(
-    input: &PublishedBranchAutoPushInput,
+    input: &ReviewCommentSyncInput,
     replied_count: usize,
     expected_reply_count: usize,
     resolved_count: usize,
@@ -818,7 +869,7 @@ async fn sync_linked_review_request_metadata_after_push(
     input: &PublishedBranchAutoPushInput,
     metadata_sync_input: &ReviewRequestMetadataSyncInput,
 ) {
-    let linked_review_request = match load_open_review_request(input).await {
+    let linked_review_request = match load_open_review_request(&input.db, &input.session_id).await {
         Ok(Some(linked_review_request)) => linked_review_request,
         Ok(None) => return,
         Err(error) => {
@@ -870,12 +921,12 @@ async fn sync_linked_review_request_metadata_after_push(
 
 /// Loads the linked review request when it is still open.
 async fn load_open_review_request(
-    input: &PublishedBranchAutoPushInput,
+    db: &AppRepositories,
+    session_id: &str,
 ) -> Result<Option<ReviewRequest>, SessionError> {
-    let review_request = input
-        .db
+    let review_request = db
         .reviews()
-        .load_session_review_request(&input.session_id)
+        .load_session_review_request(session_id)
         .await
         .map_err(SessionError::from)?
         .and_then(review_request_from_row);

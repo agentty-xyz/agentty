@@ -10,12 +10,17 @@ use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
 
 use super::{
-    PublishedBranchAutoPushInput, ReviewRequestMetadataEvaluationInput,
+    PublishedBranchAutoPushInput, ReviewCommentSyncInput, ReviewRequestMetadataEvaluationInput,
     ReviewRequestMetadataSyncInput, resolve_review_comments_after_push, review_comment_reply_body,
     sync_linked_review_request_metadata_after_push,
 };
-use crate::domain::session::{ReviewRequest, ReviewRequestState};
+use crate::app::branch_publish::{
+    BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
+};
+use crate::app::session::session_branch;
+use crate::domain::session::{PublishBranchAction, ReviewRequest, ReviewRequestState, Status};
 use crate::domain::session_message::SessionTranscript;
+use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
 
 #[derive(Clone, Copy)]
@@ -256,7 +261,7 @@ async fn review_comment_resolution_reports_reply_and_resolution_failures() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -267,13 +272,32 @@ async fn review_comment_resolution_reports_reply_and_resolution_failures() {
 }
 
 #[tokio::test]
-async fn review_comment_resolution_replies_to_all_outcomes_and_resolves_only_fixed() {
+async fn manual_push_retries_all_saved_replies_and_resolves_only_fixed() {
     // Arrange
     let db = linked_review_request_db().await;
     let mut git_client = MockGitClient::new();
-    git_client.expect_repo_url().once().returning(|_| {
+    git_client.expect_repo_url().times(2).returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
+    git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session_branch("session-id")) }));
+    git_client
+        .expect_push_current_branch_to_remote_branch()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+    db.reviews()
+        .prepare_session_review_comment_turn(
+            "session-id",
+            &["no-change".to_string(), "fixed".to_string()],
+        )
+        .await
+        .expect("targets");
     let mut review_request_client = MockReviewRequestClient::new();
     review_request_client
         .expect_detect_remote()
@@ -309,9 +333,41 @@ async fn review_comment_resolution_replies_to_all_outcomes_and_resolves_only_fix
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    let result = run_branch_publish_action(
+        PublishBranchAction::Push,
+        BranchPublishTaskContext {
+            app_event_tx: input.app_event_tx,
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            session: BranchPublishTaskSession {
+                base_branch: "main".to_string(),
+                folder: input.folder,
+                id: input.session_id,
+                published_upstream_ref: Some(input.published_upstream_ref),
+                review_request: Some(open_review_request("#42")),
+                status: Status::Review,
+            },
+            session_update_versions: input.session_update_versions,
+            transcript: input.transcript,
+        },
+        input.db.clone(),
+        Arc::new(RealClock),
+        input.git_client,
+        input.review_request_client,
+        Some("wt/session-id".to_string()),
+    )
+    .await;
 
     // Assert
+    assert!(result.is_ok());
+    assert_eq!(
+        input
+            .db
+            .reviews()
+            .load_session_review_comment_targets("session-id")
+            .await
+            .expect("targets"),
+        Vec::<String>::new()
+    );
     assert_eq!(
         last_transcript_message(&transcript),
         "[Review Comments] Replied to 2 review thread(s) and resolved 1 fixed thread(s)."
@@ -364,7 +420,7 @@ async fn review_comment_resolution_reuses_matching_reply_before_retrying_resolut
         .expect("failed to persist posting state");
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -415,7 +471,7 @@ async fn review_comment_resolution_does_not_trust_matching_reply_while_pending()
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -452,7 +508,7 @@ async fn review_comment_resolution_reports_disappeared_live_thread() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -497,7 +553,7 @@ async fn review_comment_resolution_reports_live_snapshot_failure() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -537,7 +593,7 @@ async fn review_comment_resolution_does_not_reply_to_concurrently_resolved_threa
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -569,7 +625,7 @@ async fn review_comment_resolution_reports_repository_remote_failure() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -602,7 +658,7 @@ async fn review_comment_resolution_reports_remote_detection_failure() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -628,7 +684,7 @@ async fn review_comment_resolution_skips_sessions_without_open_linked_review() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -658,7 +714,7 @@ async fn review_comment_resolution_reports_operation_load_failure() {
     pool.close().await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -706,7 +762,7 @@ async fn review_comment_resolution_reports_posting_progress_failure() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -769,7 +825,7 @@ async fn review_comment_resolution_counts_replied_thread_resolved_during_retry()
         .expect("failed to persist posting state");
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -807,7 +863,7 @@ async fn review_comment_resolution_reports_link_load_failure() {
         persisted_resolution_test_input(db, git_client, MockReviewRequestClient::new());
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
 
     // Assert
     assert_eq!(
@@ -836,7 +892,7 @@ async fn review_comment_resolution_rejects_operations_for_an_old_review_request(
         .expect("failed to replace linked review request");
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
     let operations = db
         .reviews()
         .load_session_review_comment_resolutions("session-id")
@@ -854,7 +910,7 @@ async fn review_comment_resolution_rejects_operations_for_an_old_review_request(
 }
 
 #[tokio::test]
-async fn review_comment_resolution_discards_fix_commit_removed_by_rebase() {
+async fn review_comment_resolution_retains_fix_commit_removed_by_rebase() {
     // Arrange
     let db = linked_review_request_db().await;
     let mut git_client = MockGitClient::new();
@@ -869,7 +925,7 @@ async fn review_comment_resolution_discards_fix_commit_removed_by_rebase() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
     let operations = db
         .reviews()
         .load_session_review_comment_resolutions("session-id")
@@ -877,12 +933,12 @@ async fn review_comment_resolution_discards_fix_commit_removed_by_rebase() {
         .expect("failed to load discarded review operation");
 
     // Assert
-    assert_eq!(operations, Vec::new());
+    assert_eq!(operations.len(), 1);
     assert_eq!(
         last_transcript_message(&transcript),
-        "[Review Comments Warning] Discarded 1 saved review thread update(s) because the pushed \
-         branch tip no longer exactly matches the reported fix commit. Reopen review comments to \
-         retry."
+        "[Review Comments Warning] Retained 1 saved review thread update(s) because the pushed \
+         branch tip no longer exactly matches the reported fix commit. Continue the session to \
+         re-evaluate them."
     );
 }
 
@@ -903,7 +959,7 @@ async fn review_comment_resolution_retains_unbound_operation_for_fresh_retry() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
     let operations = db
         .reviews()
         .load_session_review_comment_resolutions("session-id")
@@ -937,7 +993,7 @@ async fn review_comment_resolution_retries_when_commit_check_fails() {
     .await;
 
     // Act
-    resolve_review_comments_after_push(&input).await;
+    resolve_review_comments_after_push(&ReviewCommentSyncInput::from(&input)).await;
     let operations = db
         .reviews()
         .load_session_review_comment_resolutions("session-id")

@@ -89,6 +89,11 @@ policy propagation; PTY scenarios inspect real OTLP payloads with capture enable
 disabled. Provider fields absent from these supported event shapes remain a live backend
 qualification gap, rather than inferred telemetry.
 
+Public repository tests verify that unfinished forge review targets survive reopening
+the database, remain scoped to their open review request, and clear with the completed
+forge operation. Worker and forge mocks cover clarification continuation, serialized
+post-push effects, manual retries, and stale-commit rejection.
+
 Focused review persistence is checked against its active invocation in SQLite. Store
 tests exercise the write and invalidation boundary with the real adapter, including
 atomic archival and retrieval of completed discovery and consolidation call records.

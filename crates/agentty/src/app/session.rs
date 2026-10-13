@@ -24,4 +24,7 @@ pub(crate) use workflow::load::{
     SessionLoadInput, load_session_transcript, migrate_active_sessions_off_retired_models,
     migrate_session_off_retired_model,
 };
+pub(crate) use workflow::published_branch::{
+    ReviewCommentSyncInput, resolve_review_comments_after_push,
+};
 pub(crate) use workflow::refresh::SyncReviewRequestOutcome;

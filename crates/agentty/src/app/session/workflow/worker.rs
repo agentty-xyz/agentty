@@ -1606,13 +1606,9 @@ impl SessionWorkerService {
                 request_kind,
                 replay_transcript,
                 prompt,
-                mut turn_metadata,
+                turn_metadata,
                 ..
             } => {
-                if !turn_metadata.review_comment_thread_ids.is_empty() {
-                    turn_metadata.published_upstream_ref =
-                        context.load_published_upstream_ref().await;
-                }
                 turn::run_channel_turn(
                     context,
                     Arc::clone(run_client),
@@ -1624,6 +1620,48 @@ impl SessionWorkerService {
                 .await
             }
         }
+    }
+
+    /// Restores unfinished, request-scoped targets at execution time, including
+    /// question answers and chat messages queued before the previous turn
+    /// ended.
+    pub(super) async fn prepare_review_comment_turn(
+        context: &SessionWorkerContext,
+        turn_metadata: &mut TurnMetadata,
+        prompt: &mut TurnPrompt,
+    ) -> Result<(), SessionError> {
+        let pending = context
+            .db
+            .reviews()
+            .load_session_review_comment_targets(&context.session_id)
+            .await?;
+        let has_pending = !pending.is_empty();
+        for thread_id in pending {
+            if !turn_metadata.review_comment_thread_ids.contains(&thread_id) {
+                turn_metadata.review_comment_thread_ids.push(thread_id);
+            }
+        }
+        if turn_metadata.review_comment_thread_ids.is_empty() {
+            return Ok(());
+        }
+        context
+            .db
+            .reviews()
+            .prepare_session_review_comment_turn(
+                &context.session_id,
+                &turn_metadata.review_comment_thread_ids,
+            )
+            .await?;
+        turn_metadata.published_upstream_ref = context.load_published_upstream_ref().await;
+        if has_pending {
+            let targets = serde_json::json!(turn_metadata.review_comment_thread_ids);
+            let continuation = include_str!("../../template/review_comment_continuation_prompt.md")
+                .replace("{{ thread_ids }}", &targets.to_string());
+            prompt.text.push_str("\n\n");
+            prompt.text.push_str(&continuation);
+        }
+
+        Ok(())
     }
 
     /// Publishes one review request inside the serialized session worker.
@@ -1646,8 +1684,11 @@ impl SessionWorkerService {
         let result = run_branch_publish_action(
             PublishBranchAction::PublishPullRequest,
             BranchPublishTaskContext {
+                app_event_tx: context.app_event_tx.clone(),
                 branch_operation_lock: Arc::clone(&context.branch_operation_lock),
                 session: branch_publish_session,
+                session_update_versions: context.session_update_versions.clone(),
+                transcript: Arc::clone(&context.transcript),
             },
             context.db.clone(),
             Arc::clone(&context.clock),

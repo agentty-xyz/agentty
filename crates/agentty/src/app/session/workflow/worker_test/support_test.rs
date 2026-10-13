@@ -280,7 +280,15 @@ pub(super) async fn apply_worker_turn_result(
     turn_metadata: TurnMetadata,
     turn_result: Result<TurnResult, AgentError>,
 ) -> Result<Status, SessionError> {
-    let post_turn_context = PostTurnContext::from_worker(context, auto_commit_run_client());
+    let post_turn_context = PostTurnContext::from_worker(
+        context,
+        auto_commit_run_client(),
+        context
+            .cancel_token
+            .lock()
+            .expect("turn cancellation")
+            .clone(),
+    );
 
     apply_turn_result(
         &post_turn_context,
@@ -856,9 +864,8 @@ pub(super) async fn assert_later_push_skips_review_operations(context: &SessionW
         },
     )
     .await;
-    let event = app_event_rx
-        .recv()
-        .await
+    let event = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }))
         .expect("later push should report completion");
 
     assert!(matches!(
