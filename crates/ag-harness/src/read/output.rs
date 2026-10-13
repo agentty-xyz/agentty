@@ -203,6 +203,11 @@ pub(crate) enum InspectionError {
     RepositoryCommandRejected { detail: String },
     #[error("repository inspection returned non-UTF-8 output")]
     InvalidUtf8,
+    #[error(
+        "path `{path}` matches no repository file; it may not exist. List its parent directory to \
+         see what exists"
+    )]
+    PathMatchesNothing { path: String },
     #[error(transparent)]
     Read(#[from] ReadError),
 }
@@ -212,7 +217,9 @@ impl InspectionError {
         match self {
             Self::RepositoryCommand { .. } => false,
             Self::Read(error) => error.is_model_correctable(),
-            Self::RepositoryCommandRejected { .. } | Self::InvalidUtf8 => true,
+            Self::RepositoryCommandRejected { .. }
+            | Self::InvalidUtf8
+            | Self::PathMatchesNothing { .. } => true,
         }
     }
 
@@ -228,6 +235,10 @@ impl InspectionError {
                 source: io::Error::other(detail),
             },
             Self::InvalidUtf8 => ReadError::InvalidUtf8 { line: 1, path },
+            Self::PathMatchesNothing { .. } => ReadError::Open {
+                source: io::Error::new(io::ErrorKind::NotFound, self.to_string()),
+                path,
+            },
             Self::Read(error) => error,
         }
     }

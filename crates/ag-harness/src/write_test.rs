@@ -55,9 +55,10 @@ fn applies_update_and_create_patches() {
         .expect("empty create patch should apply");
 
     // Assert
-    assert_eq!(updated, b"one\nthree\n");
-    assert_eq!(created, b"hello\nworld\n");
-    assert_eq!(empty_file, b"");
+    assert_eq!(updated.content, b"one\nthree\n");
+    assert_eq!(updated.adjusted_hunks, Vec::new());
+    assert_eq!(created.content, b"hello\nworld\n");
+    assert_eq!(empty_file.content, b"");
 }
 
 #[test]
@@ -85,8 +86,8 @@ fn preserves_crlf_bom_and_final_newline_conventions() {
     .expect("patch should preserve regular CRLF text");
 
     // Assert
-    assert_eq!(output, b"\xef\xbb\xbfnew");
-    assert_eq!(regular, b"one\r\nthree\r\n");
+    assert_eq!(output.content, b"\xef\xbb\xbfnew");
+    assert_eq!(regular.content, b"one\r\nthree\r\n");
 }
 
 #[test]
@@ -107,7 +108,7 @@ fn permits_old_side_termination_before_new_additions() {
         .expect("new-side additions may follow old-side termination");
 
     // Assert
-    assert_eq!(output, b"old\nnew\n");
+    assert_eq!(output.content, b"old\nnew\n");
 }
 
 #[test]
@@ -175,8 +176,6 @@ fn rejects_malformed_unified_diffs() {
             "-old\n\\ No newline at end of file\n",
             "\\ No newline at end of file\n",
         ),
-        "--- a/file\n+++ b/file\n@@ -1,2 +1 @@\n x\n",
-        "--- a/file\n+++ b/file\n@@ -1 +1,2 @@\n x\n",
         "--- a/file\r+++ b/file\r@@ -1 +1 @@\r x",
     ];
 
@@ -301,11 +300,16 @@ fn rejects_out_of_order_hunks_before_offset_adjustment() {
     );
 
     // Act
-    let error = apply_unified_diff("file", Some(b"first\nfirst\ntarget\n"), patch)
+    let error = apply_unified_diff("file", Some(b"first\nsecond\ntarget\n"), patch)
         .expect_err("out-of-order hunks should fail");
 
     // Assert
     assert!(matches!(error, WriteError::Patch { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("hunk 2 matches the target only at line 1")
+    );
     assert!(error.to_string().contains("ascending"));
 }
 
@@ -319,7 +323,7 @@ fn applies_zero_count_hunk_at_unified_diff_boundary() {
         .expect("standard insertion hunk should apply");
 
     // Assert
-    assert_eq!(output, b"first\ninserted\nsecond\n");
+    assert_eq!(output.content, b"first\ninserted\nsecond\n");
 }
 
 #[test]
@@ -364,7 +368,298 @@ fn applies_many_insertions_in_linear_order() {
         .expect("insertion hunks should apply");
 
     // Assert
-    assert_eq!(output, expected.as_bytes());
+    assert_eq!(output.content, expected.as_bytes());
+}
+
+fn numbered_lines(count: usize, replacements: &[(usize, &str)]) -> String {
+    let mut text = String::new();
+    for number in 1..=count {
+        match replacements.iter().find(|(line, _)| *line == number) {
+            Some((_, replacement)) => writeln!(text, "{replacement}"),
+            None => writeln!(text, "line-{number}"),
+        }
+        .expect("string write should succeed");
+    }
+
+    text
+}
+
+#[test]
+fn recounts_hunk_line_counts_from_the_body() {
+    // Arrange
+    let patches = [
+        "--- a/file\n+++ b/file\n@@ -1,5 +1,9 @@\n one\n-two\n+three\n",
+        "--- a/file\n+++ b/file\n@@ -1,2 +1 @@\n one\n+between\n",
+        "--- a/file\n+++ b/file\n@@ -1 +1,2 @@\n one\n two\n+three\n",
+    ];
+
+    // Act
+    let outputs = patches.map(|patch| {
+        apply_unified_diff("file", Some(b"one\ntwo\n"), patch)
+            .expect("miscounted header should apply after recounting")
+    });
+
+    // Assert
+    assert_eq!(outputs[0].content, b"one\nthree\n");
+    assert_eq!(outputs[1].content, b"one\nbetween\ntwo\n");
+    assert_eq!(outputs[2].content, b"one\ntwo\nthree\n");
+    assert!(
+        outputs
+            .iter()
+            .all(|output| output.adjusted_hunks.is_empty())
+    );
+}
+
+#[test]
+fn rejects_empty_hunks_and_unanchored_insertions() {
+    // Arrange
+    let empty_hunk = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n";
+    let unanchored = "--- a/file\n+++ b/file\n@@ -1 +2 @@\n+inserted\n";
+
+    // Act
+    let empty_error = parse_unified_diff(empty_hunk).expect_err("empty hunk should fail");
+    let unanchored_error = apply_unified_diff("file", Some(b"one\ntwo\n"), unanchored)
+        .expect_err("insertion without a zero-count anchor should fail");
+
+    // Assert
+    assert!(empty_error.to_string().contains("no patch lines"));
+    assert!(unanchored_error.to_string().contains("`-N,0`"));
+}
+
+#[test]
+fn relocates_hunk_with_window_relative_header_to_its_unique_match() {
+    // Arrange
+    let current = numbered_lines(300, &[(222, "    value = compute()")]);
+    let patch = concat!(
+        "--- a/file\n+++ b/file\n@@ -19,3 +19,4 @@\n",
+        " line-221\n",
+        "-    value = compute()\n",
+        "+    value = compute()?\n",
+        "+    check(value)\n",
+        " line-223\n",
+    );
+
+    // Act
+    let output = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect("unique hunk should relocate");
+
+    // Assert
+    let expected = numbered_lines(300, &[(222, "    value = compute()?\n    check(value)")]);
+    assert_eq!(output.content, expected.as_bytes());
+    assert_eq!(
+        serde_json::to_value(&output.adjusted_hunks).expect("adjustments should encode"),
+        json!([{ "applied_line": 221, "header_line": 19, "hunk": 1, "match": "exact" }])
+    );
+}
+
+#[test]
+fn prefers_exact_header_match_over_other_identical_blocks() {
+    // Arrange
+    let current = numbered_lines(100, &[(10, "    return None"), (95, "    return None")]);
+    let patch = "--- a/file\n+++ b/file\n@@ -95 +95 @@\n-    return None\n+    return value\n";
+
+    // Act
+    let output = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect("header line should select the matching block");
+
+    // Assert
+    let expected = numbered_lines(100, &[(10, "    return None"), (95, "    return value")]);
+    assert_eq!(output.content, expected.as_bytes());
+    assert_eq!(output.adjusted_hunks, Vec::new());
+}
+
+#[test]
+fn prefers_trailing_whitespace_header_match_over_exact_match_elsewhere() {
+    // Arrange
+    let current = numbered_lines(60, &[(10, "    retry();  "), (50, "    retry();")]);
+    let patch = "--- a/file\n+++ b/file\n@@ -10 +10 @@\n-    retry();\n+    retry(3);\n";
+
+    // Act
+    let output = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect("whitespace-tolerant header match should apply");
+
+    // Assert
+    let expected = numbered_lines(60, &[(10, "    retry(3);"), (50, "    retry();")]);
+    assert_eq!(output.content, expected.as_bytes());
+    assert_eq!(
+        serde_json::to_value(&output.adjusted_hunks).expect("adjustments should encode"),
+        json!([{
+            "applied_line": 10,
+            "header_line": 10,
+            "hunk": 1,
+            "match": "ignoring_trailing_whitespace"
+        }])
+    );
+}
+
+#[test]
+fn rejects_insertions_before_earlier_hunks_or_past_the_end() {
+    // Arrange
+    let current = b"one\ntwo\nthree\n";
+    let backwards = "--- a/file\n+++ b/file\n@@ -3 +3 @@\n-three\n+3\n@@ -1,0 +2 @@\n+inserted\n";
+    let past_end = "--- a/file\n+++ b/file\n@@ -4,0 +5 @@\n+inserted\n";
+
+    // Act
+    let backwards_error = apply_unified_diff("file", Some(current), backwards)
+        .expect_err("insertion before an earlier hunk should fail");
+    let past_end_error = apply_unified_diff("file", Some(current), past_end)
+        .expect_err("insertion past the end should fail");
+
+    // Assert
+    assert!(
+        backwards_error
+            .to_string()
+            .contains("ascending, non-overlapping")
+    );
+    assert!(past_end_error.to_string().contains("beyond the end"));
+}
+
+#[test]
+fn rejects_relocation_with_multiple_candidates() {
+    // Arrange
+    let current = numbered_lines(100, &[(10, "    return None"), (95, "    return None")]);
+    let patch = "--- a/file\n+++ b/file\n@@ -48 +48 @@\n-    return None\n+    return value\n";
+    let repeated = "x\n".repeat(12);
+    let repeated_patch = "--- a/file\n+++ b/file\n@@ -40 +40 @@\n-x\n+y\n";
+
+    // Act
+    let error = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect_err("ambiguous hunk should fail");
+    let repeated_error = apply_unified_diff("file", Some(repeated.as_bytes()), repeated_patch)
+        .expect_err("ambiguous hunk should fail");
+
+    // Assert
+    assert!(matches!(error, WriteError::Patch { .. }));
+    assert!(error.to_string().contains("hunk 1 does not match"));
+    assert!(error.to_string().contains("at lines 10, 95;"));
+    assert!(error.to_string().contains("re-read the file"));
+    assert!(
+        repeated_error
+            .to_string()
+            .contains("at lines 1, 2, 3, 4, 5, 6, 7, 8, ...;")
+    );
+}
+
+#[test]
+fn rejects_hunk_that_matches_nowhere() {
+    // Arrange
+    let cases = [
+        (
+            b"old".as_slice(),
+            "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n",
+        ),
+        (
+            b"a\n".as_slice(),
+            "--- a/file\n+++ b/file\n@@ -7,3 +7,3 @@\n a\n-b\n+c\n d\n",
+        ),
+    ];
+
+    // Act
+    let errors = cases.map(|(current, patch)| {
+        apply_unified_diff("file", Some(current), patch).expect_err("unmatched hunk should fail")
+    });
+
+    // Assert
+    assert!(
+        errors[0]
+            .to_string()
+            .contains("at header line 1 or anywhere else")
+    );
+    assert!(
+        errors[1]
+            .to_string()
+            .contains("at header line 7 or anywhere else")
+    );
+}
+
+#[test]
+fn relocates_only_unique_trailing_whitespace_insensitive_matches() {
+    // Arrange
+    let current = "keep  \ntarget \nend\n";
+    let patch = "--- a/file\n+++ b/file\n@@ -1,2 +1,2 @@\n keep\n-target\n+changed\n";
+    let ambiguous = "same \nsame\t\n";
+    let ambiguous_patch = "--- a/file\n+++ b/file\n@@ -5 +5 @@\n-same\n+other\n";
+    let exact_first = "value \nvalue\n";
+    let exact_patch = "--- a/file\n+++ b/file\n@@ -5 +5 @@\n-value\n+other\n";
+
+    // Act
+    let output = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect("unique whitespace-insensitive match should apply");
+    let ambiguous_error = apply_unified_diff("file", Some(ambiguous.as_bytes()), ambiguous_patch)
+        .expect_err("ambiguous whitespace-insensitive match should fail");
+    let exact = apply_unified_diff("file", Some(exact_first.as_bytes()), exact_patch)
+        .expect("exact match should win over whitespace-insensitive matches");
+
+    // Assert
+    assert_eq!(output.content, b"keep  \nchanged\nend\n");
+    assert_eq!(
+        serde_json::to_value(&output.adjusted_hunks).expect("adjustments should encode"),
+        json!([{
+            "applied_line": 1,
+            "header_line": 1,
+            "hunk": 1,
+            "match": "ignoring_trailing_whitespace"
+        }])
+    );
+    assert!(
+        ambiguous_error
+            .to_string()
+            .contains("at lines 1, 2 after ignoring trailing whitespace")
+    );
+    assert_eq!(exact.content, b"value \nother\n");
+    assert_eq!(exact.adjusted_hunks[0].applied_line, 2);
+}
+
+#[test]
+fn relocates_later_hunks_against_content_changed_by_earlier_hunks() {
+    // Arrange
+    let current = numbered_lines(8, &[(2, "return None"), (6, "return None")]);
+    let patch = concat!(
+        "--- a/file\n+++ b/file\n",
+        "@@ -2 +2 @@\n-return None\n+return first\n",
+        "@@ -1 +1 @@\n-return None\n+return second\n",
+    );
+    let ambiguous_patch = concat!(
+        "--- a/file\n+++ b/file\n",
+        "@@ -1 +1 @@\n line-1\n",
+        "@@ -1 +1 @@\n-return None\n+return second\n",
+    );
+
+    // Act
+    let output = apply_unified_diff("file", Some(current.as_bytes()), patch)
+        .expect("second hunk should relocate after the first");
+    let error = apply_unified_diff("file", Some(current.as_bytes()), ambiguous_patch)
+        .expect_err("second hunk should stay ambiguous");
+
+    // Assert
+    let expected = numbered_lines(8, &[(2, "return first"), (6, "return second")]);
+    assert_eq!(output.content, expected.as_bytes());
+    assert_eq!(
+        serde_json::to_value(&output.adjusted_hunks).expect("adjustments should encode"),
+        json!([{ "applied_line": 6, "header_line": 1, "hunk": 2, "match": "exact" }])
+    );
+    assert!(error.to_string().contains(
+        "hunk 2 does not match at its header line and matches the target at lines 2, 6 (counted \
+         after this patch's earlier hunks)"
+    ));
+}
+
+#[test]
+fn rejects_hunks_too_repetitive_to_locate() {
+    // Arrange
+    let current = "x\n".repeat(1024 * 1024);
+    let mut patch = String::from("--- a/file\n+++ b/file\n@@ -1,9 +1,9 @@\n");
+    for _ in 0..8 {
+        patch.push_str(" x\n");
+    }
+    patch.push_str("-z\n+y\n");
+
+    // Act
+    let error = apply_unified_diff("file", Some(current.as_bytes()), &patch)
+        .expect_err("repetitive search should stop at the comparison limit");
+
+    // Assert
+    assert!(error.to_string().contains("too repetitive"));
 }
 
 #[tokio::test]
@@ -407,6 +702,78 @@ async fn write_tool_applies_patch_through_file_system_boundary() {
         .expect("result should be JSON"),
         json!({ "bytes_written": 4, "path": "file.txt", "status": "applied" })
     );
+}
+
+#[tokio::test]
+async fn write_tool_reports_relocated_hunks_in_its_result() {
+    // Arrange
+    let mut file_system = rooted_file_system();
+    file_system
+        .expect_open_beneath()
+        .times(1)
+        .returning(|_, _| Ok(Box::new(Cursor::new(b"first\nold\n".to_vec()))));
+    file_system
+        .expect_replace_beneath()
+        .times(1)
+        .withf(|_, _, _, content| content == b"first\nnew\n")
+        .returning(|_, _, _, _| Ok(()));
+    let tool = WriteTool::new(Arc::new(file_system), PathBuf::from("repo"));
+    let arguments = arguments(
+        "file.txt",
+        "--- a/file.txt\n+++ b/file.txt\n@@ -7,1 +7,1 @@\n-old\n+new\n",
+    );
+
+    // Act
+    let output = tool
+        .execute(&arguments, "write-call")
+        .await
+        .expect("relocated write should succeed");
+
+    // Assert
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &output.to_tool_result().expect("result should encode")
+        )
+        .expect("result should be JSON"),
+        json!({
+            "adjusted_hunks": [
+                { "applied_line": 2, "header_line": 7, "hunk": 1, "match": "exact" }
+            ],
+            "bytes_written": 10,
+            "path": "file.txt",
+            "status": "applied"
+        })
+    );
+}
+
+#[tokio::test]
+async fn write_tool_rejects_whole_patch_when_a_later_hunk_fails() {
+    // Arrange
+    let mut file_system = rooted_file_system();
+    file_system
+        .expect_open_beneath()
+        .times(1)
+        .returning(|_, _| Ok(Box::new(Cursor::new(b"one\ntwo\nthree\n".to_vec()))));
+    file_system.expect_replace_beneath().times(0);
+    let tool = WriteTool::new(Arc::new(file_system), PathBuf::from("repo"));
+    let arguments = arguments(
+        "file.txt",
+        concat!(
+            "--- a/file.txt\n+++ b/file.txt\n",
+            "@@ -1 +1 @@\n-one\n+uno\n",
+            "@@ -3 +3 @@\n-missing\n+tres\n",
+        ),
+    );
+
+    // Act
+    let error = tool
+        .execute(&arguments, "write-call")
+        .await
+        .expect_err("patch with an unmatched hunk should fail");
+
+    // Assert
+    assert!(error.is_model_correctable());
+    assert!(error.to_string().contains("hunk 2 context"));
 }
 
 #[tokio::test]

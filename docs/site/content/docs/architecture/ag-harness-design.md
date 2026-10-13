@@ -66,8 +66,28 @@ crates/
 
 A turn continues until the model responds without requesting a tool, and the terminal
 response must satisfy the caller's schema. There is no tool-call limit: cancellation and
-the required `ContextBudget` bound a turn, which fails typed once the next request no
-longer fits.
+the required `ContextBudget` bound a turn.
+
+Before every model request the engine fits the request to the budget without a model
+call. Fitting works on a copy, so canonical turn messages, the durable journal, and
+replayed history keep the original content. Once a request exceeds the budget it is
+reduced to 70% of its capacity, in order: older tool results become tool-aware notices
+(oldest first, replayed history before the current turn), then older assistant reasoning
+becomes a non-empty placeholder (providers that replay reasoning still receive the
+field), then older `write` patches become a note on their recorded outcome, then the
+oldest replayed turns are dropped, then the current turn's oldest tool rounds are
+dropped whole, each call message with all its results, behind one bounded note that
+counts the removed calls and names the writes they applied and the commands they ran.
+Tool calls keep their identifiers, so tool groups stay well-formed, and the latest tool
+round is never reduced by these steps. Each step is a watermark into the append-only
+canonical messages that later requests replay, so successive requests share a stable
+prefix and reduce further only when the budget is exceeded again; each reduced message
+is cached, so a request between watermark advances only weighs and appends its new
+messages. If the request still does not fit, the latest round's largest results are cut
+to a head and tail excerpt that asks for a narrower read, and as the last resort its
+`write` patches are replaced by their recorded outcome; only when even that fails does
+the turn fail typed. Each `ModelRequestActivity` reports the reductions its request
+carried.
 
 ```mermaid
 flowchart TD
@@ -92,7 +112,8 @@ a stopped turn keeps everything it already did.
 - Failed and interrupted turns re-enter model context with what they recorded, never as
   completed history: tool calls without a result get a placeholder result in the request
   only, and a closing stop note names the cause and the writes and commands whose
-  outcome is unknown. A stopped turn that does not fit replays only its input and note.
+  outcome is unknown. A stopped turn that does not fit replays with its tool traffic
+  replaced by notices, or else as only its input and note.
 - Reservation and model switching run in one store-owned atomic section that reads the
   admission state and records the harness's decision: recorded host requests first, then
   the model generation, an idle session, and no unresolved command.
@@ -107,8 +128,16 @@ a stopped turn keeps everything it already did.
   schema-validated summary checkpoint that request projection replays ahead of the
   remaining recent turns.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
-  by its registration: requests keep the most recent whole turns that fit, and mandatory
-  content that cannot fit fails with a typed error before any provider call.
+  by its registration: requests keep the most recent turns that fit, each whole, with
+  its tool traffic replaced by notices, or as its input and final output (input and stop
+  note for a stopped turn), and mandatory content that cannot fit fails with a typed
+  error before any provider call.
+- The byte-based history limit keeps each turn too large to load whole in its elided or
+  brief form, so one oversized turn no longer hides itself and every older turn. Every
+  store selects the same forms; SQLite decides whole and brief turns from stored sizes
+  and loads a turn's full payload only when its elided form might fit. Every turn
+  acquisition reloads history from the store, so live and resumed sessions replay the
+  same turns.
 - Each durable turn's `TurnReport` carries a `HistoryActivity` stating how many loaded
   turns were replayed or evicted and whether a checkpoint summary was replayed, so hosts
   observe context projection instead of inferring it from model answers.
@@ -127,8 +156,17 @@ workspace fencing.
 
 All tools are denied by default; per-turn policy enables them explicitly.
 
-- `read` — bounded file, list, search, and `show(head)` inspection.
-- `write` — applies one bounded git-style unified diff.
+- `read` — bounded file, list, search, and `show(head)` inspection. Line `offset` and
+  `limit` also accept canonical decimal strings, though the schema advertises integers.
+  A `list` or `search` path that matches no repository file returns a corrective tool
+  error instead of an empty result, so an invented path is not mistaken for an empty
+  directory.
+- `write` — applies one bounded git-style unified diff atomically. Hunk counts are
+  recounted from the body. A hunk applies at its header line when it matches there
+  exactly or ignoring trailing whitespace; otherwise it is relocated only to a unique
+  exact match, or else a unique match ignoring trailing whitespace, in the content as
+  changed by earlier hunks. Ambiguous or unmatched hunks reject the patch, and the
+  result's `adjusted_hunks` reports every relocated or whitespace-tolerant hunk.
 - Comparisons (`diff`, `show(base)`) additionally require a host-pinned `ComparisonBase`
   commit; no base is ever chosen implicitly.
 - `bash` — requires an explicit per-turn `BashConfig` naming an executor: the native
@@ -163,7 +201,14 @@ per-minute quota can be waited out. Model content is parsed as one JSON object; 
 that wraps the object in Markdown fences or surrounding prose is accepted when the
 embedded object parses, and every accepted value is still validated against the
 requested schema. Invalid content is reported with the parser diagnostic, the leading
-character, and the length, never the content itself.
+character, and the length, never the content itself. A final output rejected as invalid
+JSON or for violating the schema is re-requested up to twice in the same turn: the
+engine appends a request-only feedback message carrying that bounded diagnostic and
+asking for a single JSON value, and the follow-up request goes through the same context
+fitting. Neither the rejected output nor the feedback is journaled, because only
+finished, accepted exchanges belong in replayed history;
+`TurnReport::output_corrections` counts the retries, and a third rejection fails the
+turn with the original error type.
 
 ## Input and output
 

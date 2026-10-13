@@ -519,7 +519,6 @@ impl Session {
 
             return Err(error);
         }
-        self.history.push(HistoryTurn::from(turn));
 
         Ok(outcome)
     }
@@ -553,21 +552,27 @@ impl Session {
             }
             None => (None, available_history_weight),
         };
-        let (mut messages, evicted_turns) =
+        let (turns, evicted_turns) =
             context::select_recent_turns(estimator, self.history.turns(), remaining_weight);
         let history = HistoryActivity::new(
             checkpoint_message.is_some(),
             evicted_turns,
             loaded_turns.saturating_sub(evicted_turns),
         );
-        if let Some(checkpoint_message) = checkpoint_message {
-            messages.insert(0, checkpoint_message);
-        }
-        if let Some(system_prompt) = &self.system_prompt {
-            messages.insert(0, ModelMessage::System(system_prompt.clone()));
+        let mut messages: Vec<ModelMessage> = self
+            .system_prompt
+            .iter()
+            .map(|system_prompt| ModelMessage::System(system_prompt.clone()))
+            .chain(checkpoint_message)
+            .collect();
+        let mut history_turn_starts = Vec::with_capacity(turns.len());
+        for turn in turns {
+            history_turn_starts.push(messages.len());
+            messages.extend(turn);
         }
         let retained_messages = messages.len();
-        let request = ModelRequest::with_history(messages, input, options.schema().clone());
+        let request = ModelRequest::with_history(messages, input, options.schema().clone())
+            .with_history_turn_starts(history_turn_starts);
 
         (request, retained_messages, history)
     }
@@ -680,8 +685,10 @@ impl SessionBuilder {
     }
 }
 
+/// Finished history replayed by the next turn. Every turn acquisition and
+/// session resume replaces it with the turns the store loads, so a live
+/// session and a resumed one replay the same history.
 pub(crate) struct SessionHistory {
-    bytes: usize,
     max_bytes: usize,
     turns: VecDeque<HistoryTurn>,
 }
@@ -689,7 +696,6 @@ pub(crate) struct SessionHistory {
 impl SessionHistory {
     pub(crate) fn new(max_bytes: usize) -> Self {
         Self {
-            bytes: 0,
             max_bytes,
             turns: VecDeque::new(),
         }
@@ -699,32 +705,11 @@ impl SessionHistory {
         &self.turns
     }
 
-    pub(crate) fn push(&mut self, turn: HistoryTurn) {
-        self.bytes = self.bytes.saturating_add(retained_bytes(&turn.messages));
-        self.turns.push_back(turn);
-
-        while self.bytes > self.max_bytes && !self.turns.is_empty() {
-            let evicted_bytes = self
-                .turns
-                .pop_front()
-                .map_or(self.bytes, |evicted| retained_bytes(&evicted.messages));
-            self.bytes = self.bytes.saturating_sub(evicted_bytes);
-        }
-    }
-
+    /// Replaces the history with the most recent loaded turns that fit the
+    /// byte limit, each in its most complete fitting form.
     fn replace(&mut self, turns: Vec<HistoryTurn>) {
-        self.bytes = 0;
-        self.turns.clear();
-        for turn in turns {
-            self.push(turn);
-        }
+        self.turns = context::fit_history_bytes(turns.into_iter().rev(), self.max_bytes).into();
     }
-}
-
-fn retained_bytes(messages: &[ModelMessage]) -> usize {
-    messages.iter().fold(0, |bytes, message| {
-        bytes.saturating_add(message.retained_bytes())
-    })
 }
 
 /// One durable turn being configured, created by [`Session::turn`].
@@ -1095,9 +1080,7 @@ impl Harness {
         let loaded = database.load_session(id).await?;
         self.validate_session_model(id, &loaded)?;
         let mut history = SessionHistory::new(loaded.max_history_bytes);
-        for turn in loaded.turns {
-            history.push(turn);
-        }
+        history.replace(loaded.turns);
 
         Ok(Session {
             checkpoint: loaded.checkpoint,

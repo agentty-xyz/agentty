@@ -897,6 +897,21 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         once.report().history(),
         ag_harness::turn::HistoryActivity::default()
     );
+    assert_eq!(once.report().output_corrections(), 0);
+    let context = once.report().model_requests()[0].context();
+    assert_eq!(context, ag_harness::turn::ContextActivity::default());
+    assert_eq!(
+        (
+            context.elided_results(),
+            context.cleared_reasoning(),
+            context.shrunk_write_calls(),
+            context.dropped_history_turns(),
+            context.truncated_results(),
+            context.dropped_tool_calls(),
+            context.shrunk_latest_write_calls(),
+        ),
+        (0, 0, 0, 0, 0, 0, 0)
+    );
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
     let requests = requests

@@ -927,13 +927,15 @@ fn assert_agent_metric_contract(
         inference_calls.data_points[0].sum,
         Some(f64::from(expected_model_calls))
     );
-    let two_call_turns = expected_model_calls - expected_turns;
+    // One turn re-requests its invalid output twice, so it makes three
+    // inference calls; every other turn makes one or two.
+    let two_call_turns = expected_model_calls - expected_turns - 2;
     assert_eq!(
         inference_calls.data_points[0].bucket_counts,
         [
-            u64::from(expected_turns - two_call_turns),
+            u64::from(expected_turns - two_call_turns - 1),
             u64::from(two_call_turns),
-            0,
+            1,
             0,
             0,
             0,
@@ -1090,7 +1092,9 @@ fn expected_initial_trace_signatures() -> BTreeSet<TurnTraceSignature<'static>> 
             error_type: Some("provider_error"),
         },
         TurnTraceSignature {
-            children: vec![expected_model_child(Some("invalid_output"), None, None)],
+            children: (0..3)
+                .map(|_| expected_model_child(Some("invalid_output"), None, None))
+                .collect(),
             error_type: Some("invalid_output"),
         },
         TurnTraceSignature {
@@ -1637,8 +1641,19 @@ fn lifecycle_responses() -> Vec<ResponseTemplate> {
             &json!({"content": r#"{"summary":"sensitive-response-content"}"#}),
         ),
         ResponseTemplate::new(503).set_body_string("sensitive-provider-error-body"),
+        // The invalid output is re-requested twice before the turn fails.
         lifecycle_response(
             "response-4",
+            "stop",
+            &json!({"content": r#"{"unexpected":"sensitive-invalid-output"}"#}),
+        ),
+        lifecycle_response(
+            "response-4b",
+            "stop",
+            &json!({"content": r#"{"unexpected":"sensitive-invalid-output"}"#}),
+        ),
+        lifecycle_response(
+            "response-4c",
             "stop",
             &json!({"content": r#"{"unexpected":"sensitive-invalid-output"}"#}),
         ),
@@ -1723,11 +1738,11 @@ async fn mount_lifecycle_responses(server: &MockServer, pending_started: Arc<Not
         .and(path("/chat/completions"))
         .respond_with(SequenceResponder {
             next_response: Arc::new(AtomicUsize::new(0)),
-            pending_response: 7,
+            pending_response: 9,
             pending_started,
             responses: lifecycle_responses().into(),
         })
-        .expect(10)
+        .expect(12)
         .mount(server)
         .await;
 }
@@ -1811,7 +1826,7 @@ fn signal_requests(requests: &[OtlpRequest]) -> (Vec<&OtlpRequest>, Vec<&OtlpReq
 }
 
 fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
-    assert_lifecycle_metric_request(request, 8, 6, 6);
+    assert_lifecycle_metric_request(request, 10, 8, 6);
     let OtlpPayload::Metrics(payload) = &request.payload else {
         unreachable!("initial lifecycle metrics should be present");
     };
@@ -1826,7 +1841,7 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
             (None, 5),
             (Some("503"), 1),
             (Some("cancelled"), 1),
-            (Some("invalid_output"), 1),
+            (Some("invalid_output"), 3),
         ]
         .into_iter()
         .collect()
@@ -1846,8 +1861,8 @@ fn assert_initial_lifecycle_metrics(request: &OtlpRequest) {
 }
 
 fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
-    let spans = assert_lifecycle_trace_request(request, 6, 8);
-    assert_eq!(spans.len(), 16);
+    let spans = assert_lifecycle_trace_request(request, 6, 10);
+    assert_eq!(spans.len(), 18);
     assert_eq!(
         turn_trace_signatures(&spans),
         expected_initial_trace_signatures()
@@ -1880,7 +1895,7 @@ fn assert_initial_lifecycle_traces(request: &OtlpRequest) {
             (None, 5),
             (Some("503"), 1),
             (Some("cancelled"), 1),
-            (Some("invalid_output"), 1),
+            (Some("invalid_output"), 3),
         ]
         .into_iter()
         .collect()
@@ -2044,7 +2059,7 @@ async fn run_otlp_lifecycle_contract_fixture() {
     let (metric_requests, trace_requests) = signal_requests(&shutdown_requests);
     assert_eq!(metric_requests.len(), 2);
     assert_eq!(trace_requests.len(), 2);
-    assert_lifecycle_metric_request(metric_requests[1], 9, 7, 7);
+    assert_lifecycle_metric_request(metric_requests[1], 11, 9, 7);
     let shutdown_spans = assert_lifecycle_trace_request(trace_requests[1], 1, 1);
     assert_eq!(shutdown_spans.len(), 2);
     for request in &shutdown_requests {

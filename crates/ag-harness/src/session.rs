@@ -20,7 +20,7 @@ use crate::admission::{
     Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
 use crate::compaction::{CheckpointError, SessionCheckpoint};
-use crate::context::{HistoryTurn, TurnStop};
+use crate::context::{self, HistoryTurn, TurnStop};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{ExecutionIdentity, HostRequest, HostTurnRecord, HostTurnStatus};
@@ -123,7 +123,6 @@ struct ModelIdentityRow {
 struct SessionMessageRow {
     error_type: Option<String>,
     kind: String,
-    message_position: i64,
     payload: String,
     status: String,
     turn_position: i64,
@@ -150,9 +149,19 @@ struct TurnConfigurationRow {
 
 struct TurnSizeRow {
     input_bytes: i64,
+    output_bytes: i64,
     retained_bytes: i64,
-    stopped: bool,
     turn_position: i64,
+}
+
+/// Form in which one turn of the history window replays.
+enum WindowForm {
+    /// Every message, loaded after the window is chosen.
+    Full,
+    /// The turn's elided form, already loaded to weigh it.
+    Elided(HistoryTurn),
+    /// Only the input and final message, loaded after the window is chosen.
+    Brief,
 }
 
 struct UnfinishedEffectRow {
@@ -1503,10 +1512,11 @@ pub struct LoadedSession {
     pub schema: OutputSchema,
     /// Session's retained system prompt.
     pub system_prompt: Option<String>,
-    /// Recent finished turns after the checkpoint boundary, oldest first.
-    /// A completed turn carries all its messages. A failed or interrupted
-    /// turn carries its persisted messages and stop record, or only its input
-    /// when its messages do not fit the byte budget.
+    /// Recent finished turns after the checkpoint boundary, oldest first,
+    /// each in the most complete form that fits the byte budget: all its
+    /// messages, its tool traffic replaced by notices, or only its input and,
+    /// for a completed turn, its final output with reasoning cleared. A failed
+    /// or interrupted turn also carries its stop record.
     pub turns: Vec<HistoryTurn>,
 }
 
@@ -1968,16 +1978,59 @@ async fn load_turns_from(
     max_history_bytes: usize,
     after_turn: Option<i64>,
 ) -> Result<Vec<HistoryTurn>, SessionError> {
-    let Some((oldest_turn, brief_turns)) =
-        history_window(connection, session_id, max_history_bytes, after_turn).await?
-    else {
+    let window = history_window(connection, session_id, max_history_bytes, after_turn).await?;
+    let Some(oldest_turn) = window.last().map(|(position, _)| *position) else {
         return Ok(Vec::new());
     };
+    let positions = |wanted: fn(&WindowForm) -> bool| {
+        let positions: Vec<i64> = window
+            .iter()
+            .filter(|(_, form)| wanted(form))
+            .map(|(position, _)| *position)
+            .collect();
+
+        Value::from(positions).to_string()
+    };
+    let full_turns = positions(|form| matches!(form, WindowForm::Full));
+    let brief_turns = positions(|form| matches!(form, WindowForm::Brief));
+    let mut loaded = load_turn_messages(connection, session_id, &full_turns, &brief_turns)
+        .await?
+        .into_iter()
+        .peekable();
+    let mut turns = Vec::with_capacity(window.len());
+    for (position, form) in window.into_iter().rev() {
+        let mut next_loaded = || {
+            loaded
+                .next_if(|(loaded_position, _)| *loaded_position == position)
+                .map(|(_, turn)| turn)
+        };
+        let turn = match form {
+            WindowForm::Full => next_loaded(),
+            WindowForm::Elided(turn) => Some(turn),
+            WindowForm::Brief => next_loaded().map(|turn| turn.brief()),
+        };
+        turns.extend(turn.map(|turn| (position, turn)));
+    }
+    if turns.iter().any(|(_, turn)| turn.stop.is_some()) {
+        attach_unfinished_effects(connection, session_id, oldest_turn, &mut turns).await?;
+    }
+
+    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+}
+
+/// Loads every message of the `full_turns` and only the input and final
+/// message of the `brief_turns`, both JSON arrays of turn positions, grouped
+/// by turn in ascending order.
+async fn load_turn_messages(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    full_turns: &str,
+    brief_turns: &str,
+) -> Result<Vec<(i64, HistoryTurn)>, SessionError> {
     let rows = sqlx::query_as!(
         SessionMessageRow,
         r#"
 SELECT message.turn_position AS "turn_position!: i64",
-       message.message_position AS "message_position!: i64",
        message.kind AS "kind!: String",
        message.payload AS "payload!: String",
        turn.status AS "status!: String",
@@ -1987,12 +2040,21 @@ JOIN session_turn AS turn
   ON turn.session_id = message.session_id
  AND turn.turn_position = message.turn_position
 WHERE message.session_id = ?
-  AND message.turn_position >= ?
   AND turn.status IN ('completed', 'failed', 'interrupted')
+  AND (message.turn_position IN (SELECT value FROM json_each(?))
+       OR (message.turn_position IN (SELECT value FROM json_each(?))
+           AND (message.message_position = 0
+                OR message.message_position = (
+                    SELECT MAX(last.message_position)
+                    FROM session_message AS last
+                    WHERE last.session_id = message.session_id
+                      AND last.turn_position = message.turn_position
+                ))))
 ORDER BY message.turn_position, message.message_position
 "#,
         session_id,
-        oldest_turn
+        full_turns,
+        brief_turns
     )
     .fetch_all(&mut *connection)
     .await
@@ -2000,9 +2062,6 @@ ORDER BY message.turn_position, message.message_position
     let mut turns = Vec::<(i64, HistoryTurn)>::new();
 
     for row in rows {
-        if row.message_position != 0 && brief_turns.contains(&row.turn_position) {
-            continue;
-        }
         let message = EncodedMessage::into_message(&row.kind, &row.payload)?;
         match turns.last_mut() {
             Some((position, turn)) if *position == row.turn_position => {
@@ -2024,11 +2083,8 @@ ORDER BY message.turn_position, message.message_position
             }
         }
     }
-    if turns.iter().any(|(_, turn)| turn.stop.is_some()) {
-        attach_unfinished_effects(connection, session_id, oldest_turn, &mut turns).await?;
-    }
 
-    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+    Ok(turns)
 }
 
 /// Names the writes and commands of loaded stopped turns that have no
@@ -2089,17 +2145,20 @@ fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut T
         .and_then(|(_, turn)| turn.stop.as_mut())
 }
 
-/// Returns the oldest turn position whose most recent finished turns fit
-/// `max_history_bytes`, and the stopped turns that fit only as their input.
+/// Returns, newest first, the most recent finished turns that fit
+/// `max_history_bytes`, each in the most complete form that fits what is
+/// left, exactly as [`context::fit_history_bytes`] selects them, and stops at
+/// the first turn that does not fit even in brief form. Stored sizes decide
+/// whole and brief turns without loading them; only a turn that fits briefly
+/// but not whole is loaded here, to weigh its elided form.
 async fn history_window(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
-) -> Result<Option<(i64, Vec<i64>)>, SessionError> {
-    let mut retained_bytes = 0_usize;
-    let mut oldest_turn = None;
-    let mut brief_turns = Vec::new();
+) -> Result<Vec<(i64, WindowForm)>, SessionError> {
+    let mut remaining = max_history_bytes;
+    let mut window = Vec::new();
     let mut before_turn = None;
 
     'pages: loop {
@@ -2117,18 +2176,33 @@ async fn history_window(
                     reason: format!("session `{session_id}` has an invalid retained byte count"),
                 })
             };
-            let full_bytes = retained_bytes.saturating_add(decode(turn_size.retained_bytes)?);
-            let input_bytes = retained_bytes.saturating_add(decode(turn_size.input_bytes)?);
-            if full_bytes <= max_history_bytes {
-                retained_bytes = full_bytes;
-            } else if turn_size.stopped && input_bytes <= max_history_bytes {
-                retained_bytes = input_bytes;
-                brief_turns.push(turn_size.turn_position);
+            let full_bytes = decode(turn_size.retained_bytes)?;
+            let brief_bytes =
+                decode(turn_size.input_bytes)?.saturating_add(decode(turn_size.output_bytes)?);
+            let position = turn_size.turn_position;
+            let (form, bytes) = if full_bytes <= remaining {
+                (WindowForm::Full, full_bytes)
+            } else if brief_bytes <= remaining {
+                let full_turn = Value::from(vec![position]).to_string();
+                let elided = load_turn_messages(connection, session_id, &full_turn, "[]")
+                    .await?
+                    .pop()
+                    .map(|(_, turn)| turn.elided())
+                    .filter(|turn| context::retained_bytes(&turn.messages) <= remaining);
+                match elided {
+                    Some(turn) => {
+                        let bytes = context::retained_bytes(&turn.messages);
+
+                        (WindowForm::Elided(turn), bytes)
+                    }
+                    None => (WindowForm::Brief, brief_bytes),
+                }
             } else {
                 break 'pages;
-            }
-            oldest_turn = Some(turn_size.turn_position);
-            before_turn = Some(turn_size.turn_position);
+            };
+            remaining -= bytes;
+            window.push((position, form));
+            before_turn = Some(position);
         }
 
         if !page_is_full {
@@ -2136,7 +2210,7 @@ async fn history_window(
         }
     }
 
-    Ok(oldest_turn.map(|oldest_turn| (oldest_turn, brief_turns)))
+    Ok(window)
 }
 
 async fn load_turn_size_page(
@@ -2150,6 +2224,7 @@ async fn load_turn_size_page(
     else {
         return Ok(Vec::new());
     };
+    let cleared_reasoning_bytes = i64::try_from(context::CLEARED_REASONING.len()).unwrap_or(0);
 
     sqlx::query_as!(
         TurnSizeRow,
@@ -2158,7 +2233,19 @@ SELECT message.turn_position AS "turn_position!: i64",
        SUM(message.retained_bytes) AS "retained_bytes!: i64",
        SUM(CASE WHEN message.message_position = 0 THEN message.retained_bytes ELSE 0 END)
            AS "input_bytes!: i64",
-       MAX(turn.status <> 'completed') AS "stopped!: bool"
+       SUM(CASE WHEN turn.status = 'completed'
+                 AND message.message_position > 0
+                 AND message.message_position = (
+                     SELECT MAX(last.message_position)
+                     FROM session_message AS last
+                     WHERE last.session_id = message.session_id
+                       AND last.turn_position = message.turn_position
+                 )
+                THEN message.retained_bytes - CASE WHEN message.kind = 'assistant_reasoning'
+                    THEN MAX(0, LENGTH(CAST(json_extract(message.payload, '$.reasoning_content')
+                                            AS BLOB)) - ?)
+                    ELSE 0 END
+                ELSE 0 END) AS "output_bytes!: i64"
 FROM session_message AS message
 JOIN session_turn AS turn
   ON turn.session_id = message.session_id
@@ -2171,6 +2258,7 @@ GROUP BY message.turn_position
 ORDER BY message.turn_position DESC
 LIMIT ?
 "#,
+        cleared_reasoning_bytes,
         session_id,
         inclusive_end,
         after_turn,

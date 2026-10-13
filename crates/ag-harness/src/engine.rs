@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::bash::{BashArguments, BashError};
-use crate::context;
 use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -20,6 +19,11 @@ use crate::turn::{
     sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
+use crate::{context, schema_contract};
+
+/// Final outputs a turn may have rejected for invalid JSON or a schema
+/// violation and re-requested with corrective feedback before failing.
+pub(crate) const MAX_OUTPUT_CORRECTIONS: usize = 2;
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
@@ -44,21 +48,44 @@ impl Engine<'_> {
         let started_at = Instant::now();
         let recorder = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
+        let mut context_fit = context::ContextFit::default();
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
+        let mut output_corrections = 0;
         let mut tool_calls = Vec::new();
 
         loop {
-            let (response, activity, reasoning_content) = self
-                .complete_model_request(&request, model_request_index, turn_id)
-                .await?;
+            // Tool traffic grows the request between model calls; a grown
+            // request that no longer fits is sent as a reduced copy, and one
+            // that cannot be reduced enough fails typed here instead of
+            // overflowing the provider context.
+            let (fitted, context_activity) =
+                context_fit.fit(self.context_estimator, self.context_budget, &request)?;
+            let completed = self
+                .complete_model_request(fitted.unwrap_or(&request), model_request_index, turn_id)
+                .await;
             model_request_index = model_request_index.saturating_add(1);
-            model_requests.push(activity);
+            let (response, activity, reasoning_content) = match completed {
+                // An invalid final output is re-requested with request-only
+                // feedback; neither it nor the feedback is journaled, so
+                // replayed history keeps only completed exchanges.
+                Err(
+                    error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
+                ) if output_corrections < MAX_OUTPUT_CORRECTIONS => {
+                    output_corrections += 1;
+                    request.record_output_feedback(output_feedback(&error));
+
+                    continue;
+                }
+                completed => completed?,
+            };
+            model_requests.push(activity.with_context(context_activity));
 
             match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
-                    let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls);
+                    let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
+                        .with_output_corrections(output_corrections);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
@@ -86,10 +113,6 @@ impl Engine<'_> {
                     }
                 }
             }
-            // Tool traffic grows the request between model calls; a grown
-            // request that no longer fits fails typed here instead of
-            // overflowing the provider context.
-            context::admit_grown_request(self.context_estimator, self.context_budget, &request)?;
         }
     }
 
@@ -511,6 +534,15 @@ async fn execute_write_tool(
             }),
         Err(error) => Err(error.into()),
     }
+}
+
+/// Renders the bounded feedback that re-requests a rejected final output.
+fn output_feedback(error: &ModelError) -> String {
+    format!(
+        "[harness] Your previous final response was rejected ({}). Respond with only a single \
+         JSON value that matches the output schema, with no prose or Markdown around it.",
+        schema_contract::bounded_diagnostic(error)
+    )
 }
 
 #[cfg(test)]

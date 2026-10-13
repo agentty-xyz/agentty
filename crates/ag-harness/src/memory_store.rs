@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::time::Instant;
 
-use crate::context::{HistoryTurn, TurnStop};
+use crate::context::{self, HistoryTurn, TurnStop};
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
@@ -598,32 +598,17 @@ impl Record {
             .checkpoint
             .as_ref()
             .map_or(-1, crate::store::SessionCheckpoint::covered_through);
-        let mut remaining = self.configuration.max_history_bytes;
-        let mut turns = Vec::new();
-        for turn in
-            self.turns.iter().rev().filter(|turn| {
-                turn.status != Status::Running && turn.owner.turn_position() > boundary
-            })
-        {
-            let stop = self.stop(turn);
-            let mut messages = turn.messages.as_slice();
-            let mut bytes = retained_bytes(messages);
-            if bytes > remaining && stop.is_some() {
-                messages = &messages[..messages.len().min(1)];
-                bytes = retained_bytes(messages);
-            }
-            if bytes > remaining {
-                break;
-            }
-            remaining -= bytes;
-            turns.push(HistoryTurn {
-                messages: messages.to_vec(),
-                stop,
+        let newest_first = self
+            .turns
+            .iter()
+            .rev()
+            .filter(|turn| turn.status != Status::Running && turn.owner.turn_position() > boundary)
+            .map(|turn| HistoryTurn {
+                messages: turn.messages.clone(),
+                stop: self.stop(turn),
             });
-        }
-        turns.reverse();
 
-        turns
+        context::fit_history_bytes(newest_first, self.configuration.max_history_bytes)
     }
 
     /// Describes a stopped turn and its effects without a recorded outcome.
@@ -684,12 +669,6 @@ enum Status {
     Completed,
     Failed,
     Interrupted,
-}
-
-fn retained_bytes(messages: &[ModelMessage]) -> usize {
-    messages.iter().fold(0_usize, |bytes, message| {
-        bytes.saturating_add(message.retained_bytes())
-    })
 }
 
 fn lost(owner: &TurnOwner) -> SessionError {

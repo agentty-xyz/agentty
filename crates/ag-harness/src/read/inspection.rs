@@ -48,6 +48,13 @@ impl ReadTool {
                     .map_err(|_| InspectionError::InvalidUtf8)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if let Some(path) = arguments.path_filter()
+            && paths.is_empty()
+        {
+            return Err(InspectionError::PathMatchesNothing {
+                path: path.to_string(),
+            });
+        }
         let (paths, limited) = Self::limit_items(paths, arguments.limit());
         let truncated = limited || output.truncated;
         let summary = arguments.path_filter().unwrap_or(".").to_string();
@@ -74,16 +81,46 @@ impl ReadTool {
             "--".to_string(),
         ];
         command.push(arguments.path_filter().unwrap_or(".").to_string());
+        let root = self.repository_root().await?;
         let output = self
-            .run_command(command, &[0, 1])
+            .run_command_at(&root, command, &[0, 1])
             .await?
             .retain_complete_records(b'\n');
         let text = std::str::from_utf8(&output.stdout).map_err(|_| InspectionError::InvalidUtf8)?;
         let matches = text.lines().map(str::to_string).collect::<Vec<_>>();
+        if let Some(path) = arguments.path_filter()
+            && matches.is_empty()
+        {
+            self.ensure_path_matches(&root, path).await?;
+        }
         let (matches, limited) = Self::limit_items(matches, arguments.limit());
         let result = Self::bounded_items_result("search", &matches, limited || output.truncated);
 
         Ok((result, query.to_string()))
+    }
+
+    /// Rejects a search path that matches no listable repository file, so an
+    /// invented path gets a corrective error instead of an empty result.
+    async fn ensure_path_matches(&self, root: &Path, path: &str) -> Result<(), InspectionError> {
+        let command = [
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            path,
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let output = self.run_command_at(root, command, &[0]).await?;
+        if output.stdout.is_empty() {
+            return Err(InspectionError::PathMatchesNothing {
+                path: path.to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     pub(super) async fn diff(

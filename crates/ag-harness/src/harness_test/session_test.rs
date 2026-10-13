@@ -10,9 +10,9 @@ use super::support::{
     model, object_schema, read_call, response_without_metadata, send_with_resumed_session,
     turn_started_id, wait_for_stored_turn_state,
 };
-use crate::context::HistoryTurn;
+use crate::context::{self, HistoryTurn};
 use crate::context_budget_fixture::unbounded_context_budget;
-use crate::harness::{Harness, SessionHistory, retained_bytes};
+use crate::harness::{Harness, SessionHistory};
 use crate::lifecycle::{LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelErrorType, ModelMessage, ModelResponse};
 use crate::session::{Database, SessionError};
@@ -196,19 +196,63 @@ fn chat_history_evicts_complete_tool_turns() {
         ModelMessage::User("latest".to_string()),
         ModelMessage::Assistant(r#"{"summary":"new"}"#.to_string()),
     ];
-    let max_bytes = retained_bytes(&tool_turn).max(retained_bytes(&latest_turn));
+    // The older turn does not fit beside the latest one even in brief form.
+    let max_bytes = context::retained_bytes(&latest_turn);
     let mut history = SessionHistory::new(max_bytes);
 
     // Act
-    history.push(HistoryTurn::from(tool_turn));
-    history.push(HistoryTurn::from(latest_turn.clone()));
+    history.replace(vec![
+        HistoryTurn::from(tool_turn),
+        HistoryTurn::from(latest_turn.clone()),
+    ]);
 
     // Assert
     assert_eq!(
         history.turns().iter().cloned().collect::<Vec<_>>(),
         vec![HistoryTurn::from(latest_turn)]
     );
-    assert!(history.bytes <= max_bytes);
+}
+
+#[test]
+fn history_keeps_an_oversized_turn_briefly_and_clears_when_none_fits() {
+    // Arrange
+    let older = vec![ModelMessage::User("older".to_string())];
+    let oversized = vec![
+        ModelMessage::User("work".to_string()),
+        ModelMessage::AssistantToolCall(read_call("call")),
+        ModelMessage::ToolResult {
+            call_id: "call".to_string(),
+            content: "x".repeat(400),
+            name: "read".to_string(),
+        },
+        ModelMessage::Assistant("{}".to_string()),
+    ];
+    let mut history = SessionHistory::new(20);
+
+    // Act
+    history.replace(vec![
+        HistoryTurn::from(older.clone()),
+        HistoryTurn::from(oversized.clone()),
+    ]);
+    let reduced = history.turns().iter().cloned().collect::<Vec<_>>();
+    history.replace(vec![
+        HistoryTurn::from(older.clone()),
+        HistoryTurn::from(oversized),
+        HistoryTurn::from(vec![ModelMessage::User("y".repeat(21))]),
+    ]);
+
+    // Assert
+    assert_eq!(
+        reduced,
+        vec![
+            HistoryTurn::from(older),
+            HistoryTurn::from(vec![
+                ModelMessage::User("work".to_string()),
+                ModelMessage::Assistant("{}".to_string()),
+            ]),
+        ]
+    );
+    assert!(history.turns().is_empty());
 }
 
 #[tokio::test]
@@ -402,9 +446,11 @@ async fn session_replays_a_failed_turn_after_completed_turns() {
                 "summary": "first"
             }))))
         });
+    // The invalid output is re-requested twice before the turn fails, and
+    // neither attempt nor feedback replays later.
     model
         .expect_complete()
-        .times(1)
+        .times(3)
         .in_sequence(&mut sequence)
         .returning(|_| {
             Err(ModelError::SchemaViolation {
@@ -771,4 +817,65 @@ END
                 .contains("injected persistence failure")
         );
     }
+}
+
+#[tokio::test]
+async fn corrected_final_outputs_replay_without_the_rejected_attempt() {
+    // Arrange
+    let mut model = model();
+    let call_count = Arc::new(AtomicUsize::new(0));
+    model.expect_complete().times(3).returning(move |request| {
+        match call_count.fetch_add(1, Ordering::SeqCst) {
+            0 => Err(ModelError::InvalidJson {
+                reason: "content starts with 'I'".to_string(),
+            }),
+            1 => {
+                assert!(matches!(
+                    request.messages().last(),
+                    Some(ModelMessage::User(feedback)) if feedback.starts_with("[harness]")
+                ));
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "first answer"
+                }))))
+            }
+            _ => {
+                assert_eq!(
+                    request.messages(),
+                    &[
+                        ModelMessage::User("first question".to_string()),
+                        ModelMessage::Assistant(r#"{"summary":"first answer"}"#.to_string()),
+                        ModelMessage::User("second question".to_string()),
+                    ]
+                );
+
+                Ok(response_without_metadata(ModelResponse::Output(json!({
+                    "summary": "second answer"
+                }))))
+            }
+        }
+    });
+    let directory = tempdir().expect("temporary directory should be created");
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("harness.db"));
+    let mut session = harness
+        .session("session-a", object_schema())
+        .create()
+        .await
+        .expect("session should be created");
+
+    // Act
+    let first = session
+        .send("first question")
+        .await
+        .expect("the corrected turn should succeed");
+    let second = session
+        .send("second question")
+        .await
+        .expect("second chat turn should succeed");
+
+    // Assert
+    assert_eq!(first.report().output_corrections(), 1);
+    assert_eq!(second.report().output_corrections(), 0);
+    assert_eq!(second.output(), &json!({"summary": "second answer"}));
 }

@@ -512,6 +512,8 @@ pub enum ModelMetadataError {
 /// Provider-neutral input for one model request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelRequest {
+    history_turn_starts: Vec<usize>,
+    input_index: usize,
     lifecycle_observed: bool,
     messages: Vec<ModelMessage>,
     model_reasoning_effort: Option<ReasoningEffort>,
@@ -537,9 +539,12 @@ impl ModelRequest {
         let input = input.into();
         let prompt = input.joined_text();
         let mut messages = messages;
+        let input_index = messages.len();
         messages.push(input.into_user_message());
 
         Self {
+            history_turn_starts: Vec::new(),
+            input_index,
             lifecycle_observed: false,
             messages,
             model_reasoning_effort: None,
@@ -596,6 +601,46 @@ impl ModelRequest {
         self.model_reasoning_effort
     }
 
+    /// Marks where each projected history turn starts among the leading
+    /// messages, so context fitting can drop the oldest turns whole.
+    pub(crate) fn with_history_turn_starts(mut self, history_turn_starts: Vec<usize>) -> Self {
+        self.history_turn_starts = history_turn_starts;
+
+        self
+    }
+
+    /// Returns the ascending message indices where projected history turns
+    /// start; empty when the request carries no projected history turns.
+    pub(crate) fn history_turn_starts(&self) -> &[usize] {
+        &self.history_turn_starts
+    }
+
+    /// Returns the index of the current turn's input message.
+    pub(crate) fn input_index(&self) -> usize {
+        self.input_index
+    }
+
+    /// Returns a copy of this request that sends `messages` instead of its
+    /// canonical conversation.
+    pub(crate) fn with_fitted_messages(&self, messages: Vec<ModelMessage>) -> Self {
+        Self {
+            history_turn_starts: Vec::new(),
+            input_index: self.input_index,
+            lifecycle_observed: self.lifecycle_observed,
+            messages,
+            model_reasoning_effort: self.model_reasoning_effort,
+            prompt: self.prompt.clone(),
+            schema: self.schema.clone(),
+            tools: self.tools.clone(),
+        }
+    }
+
+    /// Returns this request's messages for in-place maintenance of a fitted
+    /// copy.
+    pub(crate) fn messages_mut(&mut self) -> &mut Vec<ModelMessage> {
+        &mut self.messages
+    }
+
     pub(crate) fn advertises_tool(&self, name: &str) -> bool {
         self.tools.iter().any(|tool| tool.name() == name)
     }
@@ -626,6 +671,11 @@ impl ModelRequest {
             content,
             name: call.name().to_string(),
         })
+    }
+
+    /// Appends request-only harness feedback after a rejected final output.
+    pub(crate) fn record_output_feedback(&mut self, feedback: String) -> &ModelMessage {
+        self.record(ModelMessage::User(feedback))
     }
 
     pub(crate) fn record_output_with_reasoning(

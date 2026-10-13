@@ -35,8 +35,12 @@ const INVALID_READ_PATH: &str = "path must be repository-relative without empty,
                                  `.git` components; omit it to inspect the repository root";
 pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 64 * 1024;
 const WRITE_DESCRIPTION: &str = concat!(
-    "Apply one unified diff to one repository-relative text file. To create an empty file, use ",
-    "only `--- /dev/null` and `+++ b/<path>` headers."
+    "Apply one unified diff to one repository-relative text file. Hunk line counts are taken ",
+    "from the hunk body. A hunk whose context and removed lines do not match at its `@@` start ",
+    "line applies only where they match exactly one place in the file; copy those lines exactly ",
+    "and add context when they repeat. A hunk with only `+` lines needs a `-N,0` header to ",
+    "insert after line N. To create an empty file, use only `--- /dev/null` and `+++ b/<path>` ",
+    "headers."
 );
 const WRITE_NAME: &str = "write";
 
@@ -373,7 +377,9 @@ pub enum ToolCallArguments<'a> {
 /// Omitting `action` preserves the original file-read contract. The other
 /// fields are action-specific. Unsafe paths and field combinations rejected by
 /// an action are retained so the harness can return corrective tool feedback
-/// instead of executing them.
+/// instead of executing them. `offset` and `limit` are advertised as integers
+/// but also decode from strings holding a canonical decimal integer, such as
+/// `"500"`, under the same range checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ReadArguments {
     #[serde(default, skip_serializing_if = "is_default")]
@@ -603,19 +609,42 @@ where
     Ok(patch)
 }
 
+/// Accepts a positive integer as a JSON number or as a string holding a
+/// canonical decimal integer, which some models (for example `qwen3.8-max`)
+/// send for line offsets and limits. Strings with signs, whitespace, leading
+/// zeros, fractions, or exponents are rejected.
 fn deserialize_optional_positive_integer<'de, D>(
     deserializer: D,
 ) -> Result<Option<NonZeroU64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let Some(number) = Option::<Number>::deserialize(deserializer)? else {
-        return Ok(None);
+    let integer = match Option::<IntegerArgument>::deserialize(deserializer)? {
+        None => return Ok(None),
+        Some(IntegerArgument::Number(number)) => parse_positive_json_integer(&number.to_string()),
+        Some(IntegerArgument::Text(text)) => {
+            if !is_canonical_decimal_integer(&text) {
+                return Err(de::Error::custom(
+                    "integer string must contain only decimal digits without leading zeros",
+                ));
+            }
+
+            text.parse::<u64>().ok()
+        }
     };
-    parse_positive_json_integer(&number.to_string())
+
+    integer
         .and_then(NonZeroU64::new)
         .map(Some)
         .ok_or_else(|| de::Error::custom("number must be an integer from 1 through u64::MAX"))
+}
+
+/// Integer tool argument sent either as a JSON number or as a string.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum IntegerArgument {
+    Number(Number),
+    Text(String),
 }
 
 /// Bounds a read path before it can be echoed in corrective feedback; other
@@ -657,6 +686,13 @@ fn validate_query(query: String) -> Result<String, &'static str> {
     }
 
     Ok(query)
+}
+
+/// Returns whether `text` is `0` or a digit string without leading zeros.
+fn is_canonical_decimal_integer(text: &str) -> bool {
+    !text.is_empty()
+        && text.bytes().all(|byte| byte.is_ascii_digit())
+        && (text == "0" || !text.starts_with('0'))
 }
 
 fn parse_positive_json_integer(number: &str) -> Option<u64> {

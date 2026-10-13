@@ -614,6 +614,166 @@ async fn journaled_backends_keep_only_the_input_of_a_stopped_turn_over_the_byte_
     }
 }
 
+/// Completes a turn whose tool traffic alone exceeds a small history budget.
+async fn complete_tool_heavy_turn(store: &Arc<dyn SessionStore>, id: &str) {
+    for (input, messages) in [
+        ("old", Vec::new()),
+        (
+            "work",
+            vec![
+                ModelMessage::AssistantToolCall(
+                    ToolCall::from_json("r1".to_string(), "read", r#"{"path":"big.txt"}"#, None)
+                        .expect("read call"),
+                ),
+                ModelMessage::ToolResult {
+                    call_id: "r1".to_string(),
+                    content: "x".repeat(5000),
+                    name: "read".to_string(),
+                },
+            ],
+        ),
+    ] {
+        let turn = AcquiredTurn::begin(
+            Arc::clone(store),
+            id,
+            &TurnInput::from(input),
+            &options(),
+            0,
+        )
+        .await
+        .expect("turn");
+        store
+            .append_messages(turn.owner(), &messages)
+            .await
+            .expect("append");
+        store
+            .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+            .await
+            .expect("complete");
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
+    for store in journaled_stores().await {
+        // Arrange
+        for (id, max_history_bytes) in [("elided", 1000), ("brief", 100)] {
+            store
+                .create_session(&NewSession::new(id, schema()), None, max_history_bytes)
+                .await
+                .expect("create");
+            complete_tool_heavy_turn(&store, id).await;
+        }
+        let old = HistoryTurn::from(vec![
+            ModelMessage::User("old".to_string()),
+            ModelMessage::Assistant("{}".to_string()),
+        ]);
+
+        // Act
+        let elided = store.load_session("elided").await.expect("history").turns;
+        let brief = store.load_session("brief").await.expect("history").turns;
+
+        // Assert
+        // The older turn still loads, and the oversized turn keeps its tool
+        // group with the result replaced by a cleared notice.
+        assert_eq!(elided.len(), 2);
+        assert_eq!(elided[0], old);
+        assert_eq!(elided[1].messages.len(), 4);
+        assert!(matches!(
+            &elided[1].messages[2],
+            ModelMessage::ToolResult { call_id, content, .. }
+                if call_id == "r1" && content.starts_with(r#"{"context_cleared":"#)
+        ));
+        assert_eq!(
+            brief,
+            vec![
+                old,
+                HistoryTurn::from(vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::Assistant("{}".to_string()),
+                ]),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn journaled_backends_size_a_brief_turn_with_its_final_reasoning_cleared() {
+    for store in journaled_stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("reasoned", schema()), None, 100)
+            .await
+            .expect("create");
+        for (input, final_message) in [
+            ("old", ModelMessage::Assistant("{}".to_string())),
+            (
+                "work",
+                ModelMessage::AssistantReasoning {
+                    content: "{}".to_string(),
+                    reasoning_content: "r".repeat(500),
+                },
+            ),
+        ] {
+            let turn = AcquiredTurn::begin(
+                Arc::clone(&store),
+                "reasoned",
+                &TurnInput::from(input),
+                &options(),
+                0,
+            )
+            .await
+            .expect("turn");
+            store
+                .append_messages(
+                    turn.owner(),
+                    &[
+                        ModelMessage::AssistantToolCall(
+                            ToolCall::from_json("r1".to_string(), "read", r#"{"path":"a"}"#, None)
+                                .expect("read call"),
+                        ),
+                        ModelMessage::ToolResult {
+                            call_id: "r1".to_string(),
+                            content: "x".repeat(input.len() * 20),
+                            name: "read".to_string(),
+                        },
+                    ],
+                )
+                .await
+                .expect("append");
+            store
+                .complete_turn(turn.owner(), &[final_message])
+                .await
+                .expect("complete");
+        }
+
+        // Act
+        let loaded = store.load_session("reasoned").await.expect("history");
+
+        // Assert
+        // Only the brief form fits the newest turn, and it counts the final
+        // reasoning as the cleared placeholder it replays, leaving room for
+        // the older turn in brief form too.
+        assert_eq!(
+            loaded.turns,
+            vec![
+                HistoryTurn::from(vec![
+                    ModelMessage::User("old".to_string()),
+                    ModelMessage::Assistant("{}".to_string()),
+                ]),
+                HistoryTurn::from(vec![
+                    ModelMessage::User("work".to_string()),
+                    ModelMessage::AssistantReasoning {
+                        content: "{}".to_string(),
+                        reasoning_content: "[reasoning cleared to fit the context window]"
+                            .to_string(),
+                    },
+                ]),
+            ]
+        );
+    }
+}
+
 #[tokio::test]
 async fn all_backends_preserve_ordered_image_input_in_history() {
     // Arrange
