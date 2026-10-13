@@ -37,19 +37,7 @@ fn run(output: &mut impl Write) -> io::Result<()> {
     writeln!(output, "  Identical: {}", diff.is_identical())?;
     writeln!(output, "  Summary: {:?}", diff.summary())?;
 
-    let regions = diff.changed_regions();
-    writeln!(output, "  Changed regions: {}", regions.len())?;
-    for region in &regions {
-        writeln!(
-            output,
-            "    Row {}, cols {}..{}: {:?}",
-            region.region.row,
-            region.region.col,
-            region.region.col + region.region.width,
-            region.change_type,
-        )?;
-    }
-    writeln!(output)?;
+    write_changed_regions(output, &diff)?;
 
     // --- Example 3: Multi-line update simulating a dashboard refresh ---
     writeln!(output, "--- Example 3: Dashboard Refresh ---")?;
@@ -67,19 +55,7 @@ fn run(output: &mut impl Write) -> io::Result<()> {
 
     writeln!(output, "  Summary: {:?}", diff.summary())?;
 
-    let regions = diff.changed_regions();
-    writeln!(output, "  Changed regions: {}", regions.len())?;
-    for region in &regions {
-        writeln!(
-            output,
-            "    Row {}, cols {}..{}: {:?}",
-            region.region.row,
-            region.region.col,
-            region.region.col + region.region.width,
-            region.change_type,
-        )?;
-    }
-    writeln!(output)?;
+    write_changed_regions(output, &diff)?;
 
     // --- Example 4: Per-cell inspection ---
     writeln!(output, "--- Example 4: Per-Cell Inspection ---")?;
@@ -101,6 +77,25 @@ fn run(output: &mut impl Write) -> io::Result<()> {
     writeln!(output, "  (. = unchanged, T = text changed)")?;
 
     writeln!(output, "\n=== Frame diffing showcase complete! ===")?;
+
+    Ok(())
+}
+
+/// Writes the changed regions shared by the text and dashboard examples.
+fn write_changed_regions(output: &mut impl Write, diff: &FrameDiff) -> io::Result<()> {
+    let regions = diff.changed_regions();
+    writeln!(output, "  Changed regions: {}", regions.len())?;
+    for region in &regions {
+        writeln!(
+            output,
+            "    Row {}, cols {}..{}: {:?}",
+            region.region.row,
+            region.region.col,
+            region.region.col + region.region.width,
+            region.change_type,
+        )?;
+    }
+    writeln!(output)?;
 
     Ok(())
 }

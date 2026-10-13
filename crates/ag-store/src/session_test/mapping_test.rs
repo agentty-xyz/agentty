@@ -1,5 +1,5 @@
 use crate::review::SessionReviewRequestRow;
-use crate::session::SessionJoinRow;
+use crate::session::{SessionJoinRow, SessionListRow};
 
 /// Verifies `SessionJoinRow::into_session_row()` drops partially
 /// populated review-request columns instead of surfacing an invalid row
@@ -56,6 +56,64 @@ fn test_session_join_row_maps_review_request_columns() {
         session_row.review_request,
         Some(expected_review_request_row())
     );
+}
+
+#[test]
+fn list_and_detail_mappings_preserve_all_shared_columns() {
+    // Arrange
+    let full = SessionJoinRow::fixture_for_test().into_session_row();
+    let joined = SessionJoinRow::fixture_for_test();
+
+    // Act
+    let from_full = SessionListRow::from(full);
+    let from_join = joined.into_session_list_row();
+
+    // Assert
+    for row in [from_full, from_join] {
+        assert_eq!(row.added_lines, 14);
+        assert_eq!(row.agent, "codex");
+        assert_eq!(row.base_branch, "main");
+        assert_eq!(row.created_at, 100);
+        assert_eq!(row.deleted_lines, 6);
+        assert_eq!(row.has_diff, Some(true));
+        assert_eq!(row.id, "session-a");
+        assert_eq!(row.in_progress_started_at, None);
+        assert_eq!(row.in_progress_total_seconds, 0);
+        assert_eq!(row.input_tokens, 11);
+        assert!(!row.is_draft);
+        assert_eq!(row.model, "gpt-5.6-sol");
+        assert_eq!(row.output_tokens, 29);
+        assert_eq!(row.parent_session_id.as_deref(), Some("parent-session"));
+        assert_eq!(row.permission_mode, "read_only");
+        assert_eq!(row.personality_id.as_deref(), Some("reviewer"));
+        assert_eq!(row.project_id, Some(7));
+        assert_eq!(
+            row.published_upstream_ref.as_deref(),
+            Some("origin/session-a")
+        );
+        assert_eq!(row.reasoning_level_override, None);
+        assert_eq!(row.response_style, "balanced");
+        assert_eq!(row.review_request, Some(expected_review_request_row()));
+        assert_eq!(row.role.as_deref(), Some("Orchestrator"));
+        assert_eq!(row.size, "M");
+        assert_eq!(row.speed_mode, "normal");
+        assert_eq!(row.status, "Review");
+        assert_eq!(row.title.as_deref(), Some("Review session"));
+        assert_eq!(row.updated_at, 200);
+    }
+}
+
+#[test]
+fn full_mapping_keeps_transcript_detail_separate_from_list_metadata() {
+    // Arrange
+    let joined = SessionJoinRow::fixture_for_test();
+
+    // Act
+    let full = joined.into_session_row();
+
+    // Assert
+    assert_eq!(full.prompt, "Implement feature");
+    assert_eq!(full.questions.as_deref(), Some("Question text"));
 }
 
 impl SessionJoinRow {

@@ -17,8 +17,9 @@ use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::contract::{
     BashExecutor, BashProcess, ExecutionAccess, ExecutionCommand, ExecutionError, ExecutionPolicy,
-    MainExit, OutputStream, ProcessEvent,
+    MainExit, ProcessEvent,
 };
+use super::output;
 use super::supervisor::Clock;
 use super::wire::{Launch, Notice};
 use crate::bash::BashConfig;
@@ -294,28 +295,9 @@ impl BashProcess for NativeProcess {
         if capacity == 0 {
             return Err(ExecutionError::Process);
         }
-        let mut output = [0; 4096];
-        let mut errors = [0; 4096];
         let input = self.input.as_mut().ok_or(ExecutionError::Process)?;
         tokio::select! {
-            result = async { self.stdout.as_mut().ok_or(ExecutionError::Process)?.read(&mut output[..capacity]).await.map_err(|_| ExecutionError::Process) }, if self.stdout.is_some() => {
-                let length = result?;
-                if length == 0 {
-                    self.stdout = None;
-                    return Ok(ProcessEvent::Eof(OutputStream::Stdout));
-                }
-                buffer[..length].copy_from_slice(&output[..length]);
-                Ok(ProcessEvent::Output(OutputStream::Stdout, length))
-            }
-            result = async { self.stderr.as_mut().ok_or(ExecutionError::Process)?.read(&mut errors[..capacity]).await.map_err(|_| ExecutionError::Process) }, if self.stderr.is_some() => {
-                let length = result?;
-                if length == 0 {
-                    self.stderr = None;
-                    return Ok(ProcessEvent::Eof(OutputStream::Stderr));
-                }
-                buffer[..length].copy_from_slice(&errors[..length]);
-                Ok(ProcessEvent::Output(OutputStream::Stderr, length))
-            }
+            result = output::next_event(&mut self.stdout, &mut self.stderr, buffer), if self.stdout.is_some() || self.stderr.is_some() => result,
             result = input.read_until(b'\n', &mut self.notice), if !self.finished => {
                 if result.map_err(|_| ExecutionError::Process)? == 0 || self.notice.len() > 256 {
                     return Err(ExecutionError::Process);

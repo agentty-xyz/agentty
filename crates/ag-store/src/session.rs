@@ -107,167 +107,124 @@ pub struct SessionReviewAuditRow {
     pub request: String,
 }
 
-/// Row returned when loading a session from the `session` table.
-///
-/// Includes optional normalized forge review-request linkage metadata loaded
-/// through the `session_review_request` table when the session has been
-/// published for remote review.
-pub struct SessionRow {
-    /// Persisted added-line count from the latest diff stats refresh.
-    pub added_lines: i64,
-    /// Persisted agent provider kind selected for this session.
-    pub agent: String,
-    /// Base branch used to create the session worktree.
-    pub base_branch: String,
-    /// Session creation timestamp in Unix seconds.
-    pub created_at: i64,
-    /// Persisted deleted-line count from the latest diff stats refresh.
-    pub deleted_lines: i64,
-    /// Whether the latest successful diff refresh returned content, or
-    /// `None` when diff availability is unknown.
-    pub has_diff: Option<bool>,
-    /// Stable session identifier.
-    pub id: String,
-    /// Open active-work interval start timestamp, if any.
-    pub in_progress_started_at: Option<i64>,
-    /// Completed active-work duration in whole seconds.
-    pub in_progress_total_seconds: i64,
-    /// Total input tokens accumulated for the session.
-    pub input_tokens: i64,
-    /// Whether the session is still an explicit draft.
-    pub is_draft: bool,
-    /// Persisted agent model identifier.
-    pub model: String,
-    /// Total output tokens accumulated for the session.
-    pub output_tokens: i64,
-    /// Parent session id when this is a one-level stacked draft.
-    pub parent_session_id: Option<String>,
-    /// Persisted provider permission mode for future turns.
-    pub permission_mode: String,
-    /// Workspace personality selected for future turns, when present.
-    pub personality_id: Option<String>,
-    /// Owning project identifier, when present.
-    pub project_id: Option<i64>,
-    /// Initial or staged prompt text.
-    pub prompt: String,
-    /// Published upstream branch reference, when present.
-    pub published_upstream_ref: Option<String>,
-    /// Serialized clarification-question payload, when present.
-    pub questions: Option<String>,
-    /// Persisted session-specific reasoning override, when present.
-    pub reasoning_level_override: Option<String>,
-    /// Persisted session response style.
-    pub response_style: String,
-    /// Joined forge review-request metadata, when present and complete.
-    pub review_request: Option<SessionReviewRequestRow>,
-    /// Persisted session role string, or `None` for the default worker role.
-    pub role: Option<String>,
-    /// Persisted size bucket string.
-    pub size: String,
-    /// Persisted session response-speed preference.
-    pub speed_mode: String,
-    /// Persisted lifecycle status string.
-    pub status: String,
-    /// Optional display title.
-    pub title: Option<String>,
-    /// Last update timestamp in Unix seconds.
-    pub updated_at: i64,
-}
-
-/// Lightweight row returned when loading session-list metadata.
-///
-/// Omits transcript-scale fields (`prompt` and `questions`) so
-/// list refreshes scale with visible metadata instead of the cumulative size
-/// of every saved conversation.
-pub struct SessionListRow {
-    /// Persisted added-line count from the latest diff stats refresh.
-    pub added_lines: i64,
-    /// Persisted agent provider kind for this session.
-    pub agent: String,
-    /// Base branch used to create the session worktree.
-    pub base_branch: String,
-    /// Session creation timestamp in Unix seconds.
-    pub created_at: i64,
-    /// Persisted deleted-line count from the latest diff stats refresh.
-    pub deleted_lines: i64,
-    /// Whether the latest successful diff refresh returned content, or
-    /// `None` when diff availability is unknown.
-    pub has_diff: Option<bool>,
-    /// Stable session identifier.
-    pub id: String,
-    /// Open active-work interval start timestamp, if any.
-    pub in_progress_started_at: Option<i64>,
-    /// Completed active-work duration in whole seconds.
-    pub in_progress_total_seconds: i64,
-    /// Total input tokens accumulated for the session.
-    pub input_tokens: i64,
-    /// Whether the session is still an explicit draft.
-    pub is_draft: bool,
-    /// Persisted agent model identifier.
-    pub model: String,
-    /// Total output tokens accumulated for the session.
-    pub output_tokens: i64,
-    /// Parent session id when this row is a one-level stacked draft.
-    pub parent_session_id: Option<String>,
-    /// Persisted provider permission mode for future turns.
-    pub permission_mode: String,
-    /// Workspace personality selected for future turns, when present.
-    pub personality_id: Option<String>,
-    /// Owning project identifier, when present.
-    pub project_id: Option<i64>,
-    /// Published upstream branch reference, when present.
-    pub published_upstream_ref: Option<String>,
-    /// Persisted session-specific reasoning override, when present.
-    pub reasoning_level_override: Option<String>,
-    /// Persisted session response style.
-    pub response_style: String,
-    /// Joined forge review-request metadata, when present and complete.
-    pub review_request: Option<SessionReviewRequestRow>,
-    /// Persisted session role string, or `None` for the default worker role.
-    pub role: Option<String>,
-    /// Persisted size bucket string.
-    pub size: String,
-    /// Persisted session response-speed preference.
-    pub speed_mode: String,
-    /// Persisted lifecycle status string.
-    pub status: String,
-    /// Optional display title.
-    pub title: Option<String>,
-    /// Last update timestamp in Unix seconds.
-    pub updated_at: i64,
-}
-
-impl From<SessionRow> for SessionListRow {
-    fn from(row: SessionRow) -> Self {
-        Self {
-            added_lines: row.added_lines,
-            agent: row.agent,
-            base_branch: row.base_branch,
-            created_at: row.created_at,
-            deleted_lines: row.deleted_lines,
-            has_diff: row.has_diff,
-            id: row.id,
-            in_progress_started_at: row.in_progress_started_at,
-            in_progress_total_seconds: row.in_progress_total_seconds,
-            input_tokens: row.input_tokens,
-            is_draft: row.is_draft,
-            model: row.model,
-            output_tokens: row.output_tokens,
-            parent_session_id: row.parent_session_id,
-            permission_mode: row.permission_mode,
-            personality_id: row.personality_id,
-            project_id: row.project_id,
-            published_upstream_ref: row.published_upstream_ref,
-            reasoning_level_override: row.reasoning_level_override,
-            response_style: row.response_style,
-            review_request: row.review_request,
-            role: row.role,
-            size: row.size,
-            speed_mode: row.speed_mode,
-            status: row.status,
-            title: row.title,
-            updated_at: row.updated_at,
+// Declare the shared columns once while preserving both flat public row
+// contracts. Detail fields stay out of list rows and list-query allocations.
+macro_rules! session_rows {
+    (
+        before_prompt { $( $(#[$before_doc:meta])* pub $before:ident: $before_type:ty, )* }
+        before_questions { $( $(#[$between_doc:meta])* pub $between:ident: $between_type:ty, )* }
+        remaining { $( $(#[$after_doc:meta])* pub $after:ident: $after_type:ty, )* }
+    ) => {
+        /// Row returned when loading a session from the `session` table.
+        ///
+        /// Includes normalized forge review-request metadata loaded through
+        /// `session_review_request` when published for remote review.
+        pub struct SessionRow {
+            $( $(#[$before_doc])* pub $before: $before_type, )*
+            /// Initial or staged prompt text.
+            pub prompt: String,
+            $( $(#[$between_doc])* pub $between: $between_type, )*
+            /// Serialized clarification-question payload, when present.
+            pub questions: Option<String>,
+            $( $(#[$after_doc])* pub $after: $after_type, )*
         }
+
+        /// Lightweight row returned when loading session-list metadata.
+        ///
+        /// Omits transcript-scale fields (`prompt` and `questions`) so list
+        /// refreshes scale with metadata rather than saved conversations.
+        pub struct SessionListRow {
+            $( $(#[$before_doc])* pub $before: $before_type, )*
+            $( $(#[$between_doc])* pub $between: $between_type, )*
+            $( $(#[$after_doc])* pub $after: $after_type, )*
+        }
+
+        impl SessionListRow {
+            /// Combines list metadata with separately loaded transcript detail.
+            fn into_session_row(self, detail: SessionDetailRow) -> SessionRow {
+                SessionRow {
+                    $( $before: self.$before, )*
+                    prompt: detail.prompt,
+                    $( $between: self.$between, )*
+                    questions: detail.questions,
+                    $( $after: self.$after, )*
+                }
+            }
+        }
+
+        impl From<SessionRow> for SessionListRow {
+            fn from(row: SessionRow) -> Self {
+                Self {
+                    $( $before: row.$before, )*
+                    $( $between: row.$between, )*
+                    $( $after: row.$after, )*
+                }
+            }
+        }
+    };
+}
+
+session_rows! {
+    before_prompt {
+        /// Persisted added-line count from the latest diff stats refresh.
+        pub added_lines: i64,
+        /// Persisted agent provider kind selected for this session.
+        pub agent: String,
+        /// Base branch used to create the session worktree.
+        pub base_branch: String,
+        /// Session creation timestamp in Unix seconds.
+        pub created_at: i64,
+        /// Persisted deleted-line count from the latest diff stats refresh.
+        pub deleted_lines: i64,
+        /// Whether the latest successful diff refresh returned content, or
+        /// `None` when diff availability is unknown.
+        pub has_diff: Option<bool>,
+        /// Stable session identifier.
+        pub id: String,
+        /// Open active-work interval start timestamp, if any.
+        pub in_progress_started_at: Option<i64>,
+        /// Completed active-work duration in whole seconds.
+        pub in_progress_total_seconds: i64,
+        /// Total input tokens accumulated for the session.
+        pub input_tokens: i64,
+        /// Whether the session is still an explicit draft.
+        pub is_draft: bool,
+        /// Persisted agent model identifier.
+        pub model: String,
+        /// Total output tokens accumulated for the session.
+        pub output_tokens: i64,
+        /// Parent session id when this is a one-level stacked draft.
+        pub parent_session_id: Option<String>,
+        /// Persisted provider permission mode for future turns.
+        pub permission_mode: String,
+        /// Workspace personality selected for future turns, when present.
+        pub personality_id: Option<String>,
+        /// Owning project identifier, when present.
+        pub project_id: Option<i64>,
+    }
+    before_questions {
+        /// Published upstream branch reference, when present.
+        pub published_upstream_ref: Option<String>,
+    }
+    remaining {
+        /// Persisted session-specific reasoning override, when present.
+        pub reasoning_level_override: Option<String>,
+        /// Persisted session response style.
+        pub response_style: String,
+        /// Joined forge review-request metadata, when present and complete.
+        pub review_request: Option<SessionReviewRequestRow>,
+        /// Persisted session role string, or `None` for the default worker role.
+        pub role: Option<String>,
+        /// Persisted size bucket string.
+        pub size: String,
+        /// Persisted session response-speed preference.
+        pub speed_mode: String,
+        /// Persisted lifecycle status string.
+        pub status: String,
+        /// Optional display title.
+        pub title: Option<String>,
+        /// Last update timestamp in Unix seconds.
+        pub updated_at: i64,
     }
 }
 
@@ -3123,115 +3080,6 @@ struct SessionTimestampsRow {
     updated_at: i64,
 }
 
-/// Shared columns for session metadata rows used by both session and
-/// session-list mappings.
-struct SessionRowMetadata {
-    added_lines: i64,
-    agent: String,
-    base_branch: String,
-    created_at: i64,
-    deleted_lines: i64,
-    has_diff: Option<bool>,
-    id: String,
-    in_progress_started_at: Option<i64>,
-    in_progress_total_seconds: i64,
-    input_tokens: i64,
-    is_draft: bool,
-    model: String,
-    output_tokens: i64,
-    parent_session_id: Option<String>,
-    permission_mode: String,
-    personality_id: Option<String>,
-    project_id: Option<i64>,
-    published_upstream_ref: Option<String>,
-    reasoning_level_override: Option<String>,
-    response_style: String,
-    role: Option<String>,
-    size: String,
-    speed_mode: String,
-    status: String,
-    title: Option<String>,
-    updated_at: i64,
-}
-
-impl SessionRowMetadata {
-    /// Converts shared metadata fields into a complete session row.
-    fn into_session_row(
-        self,
-        prompt: String,
-        questions: Option<String>,
-        review_request: Option<SessionReviewRequestRow>,
-    ) -> SessionRow {
-        SessionRow {
-            added_lines: self.added_lines,
-            agent: self.agent,
-            base_branch: self.base_branch,
-            created_at: self.created_at,
-            deleted_lines: self.deleted_lines,
-            has_diff: self.has_diff,
-            id: self.id,
-            in_progress_started_at: self.in_progress_started_at,
-            in_progress_total_seconds: self.in_progress_total_seconds,
-            input_tokens: self.input_tokens,
-            is_draft: self.is_draft,
-            model: self.model,
-            output_tokens: self.output_tokens,
-            parent_session_id: self.parent_session_id,
-            permission_mode: self.permission_mode,
-            personality_id: self.personality_id,
-            project_id: self.project_id,
-            prompt,
-            published_upstream_ref: self.published_upstream_ref,
-            questions,
-            reasoning_level_override: self.reasoning_level_override,
-            response_style: self.response_style,
-            review_request,
-            role: self.role,
-            size: self.size,
-            speed_mode: self.speed_mode,
-            status: self.status,
-            title: self.title,
-            updated_at: self.updated_at,
-        }
-    }
-
-    /// Converts shared metadata fields into a session-list row.
-    fn into_session_list_row(
-        self,
-        review_request: Option<SessionReviewRequestRow>,
-    ) -> SessionListRow {
-        SessionListRow {
-            added_lines: self.added_lines,
-            agent: self.agent,
-            base_branch: self.base_branch,
-            created_at: self.created_at,
-            deleted_lines: self.deleted_lines,
-            has_diff: self.has_diff,
-            id: self.id,
-            in_progress_started_at: self.in_progress_started_at,
-            in_progress_total_seconds: self.in_progress_total_seconds,
-            input_tokens: self.input_tokens,
-            is_draft: self.is_draft,
-            model: self.model,
-            output_tokens: self.output_tokens,
-            parent_session_id: self.parent_session_id,
-            permission_mode: self.permission_mode,
-            personality_id: self.personality_id,
-            project_id: self.project_id,
-            published_upstream_ref: self.published_upstream_ref,
-            reasoning_level_override: self.reasoning_level_override,
-            response_style: self.response_style,
-            review_request,
-            role: self.role,
-            size: self.size,
-            speed_mode: self.speed_mode,
-            status: self.status,
-            title: self.title,
-            updated_at: self.updated_at,
-        }
-    }
-}
-
 /// Row returned when loading one complete `session` plus aliased
 /// `session_review_request` join columns.
 #[derive(sqlx::FromRow)]
@@ -3296,28 +3144,22 @@ impl SessionJoinRow {
 
     /// Converts the query-mapped join row into a complete [`SessionRow`].
     fn into_session_row(self) -> SessionRow {
-        let (metadata, detail, review_request) = self.into_parts();
+        let (metadata, detail) = self.into_parts();
 
-        metadata.into_session_row(detail.prompt, detail.questions, review_request)
+        metadata.into_session_row(detail)
     }
 
     /// Converts placeholder-detail query rows into a lightweight
     /// [`SessionListRow`].
     fn into_session_list_row(self) -> SessionListRow {
-        let (metadata, _, review_request) = self.into_parts();
+        let (metadata, _) = self.into_parts();
 
-        metadata.into_session_list_row(review_request)
+        metadata
     }
 
     /// Splits the flat query row into shared metadata, transcript detail, and
     /// normalized review-request data.
-    fn into_parts(
-        self,
-    ) -> (
-        SessionRowMetadata,
-        SessionDetailRow,
-        Option<SessionReviewRequestRow>,
-    ) {
+    fn into_parts(self) -> (SessionListRow, SessionDetailRow) {
         let Self {
             added_lines,
             agent,
@@ -3358,7 +3200,20 @@ impl SessionJoinRow {
             updated_at,
         } = self;
 
-        let metadata = SessionRowMetadata {
+        let review_request = SessionReviewRequestJoinRow {
+            display_id: review_request_display_id,
+            forge_kind: review_request_forge_kind,
+            last_refreshed_at: review_request_last_refreshed_at,
+            source_branch: review_request_source_branch,
+            state: review_request_state,
+            status_summary: review_request_status_summary,
+            target_branch: review_request_target_branch,
+            title: review_request_title,
+            web_url: review_request_web_url,
+        }
+        .into_review_request_row();
+
+        let metadata = SessionListRow {
             added_lines,
             agent,
             base_branch,
@@ -3379,6 +3234,7 @@ impl SessionJoinRow {
             published_upstream_ref,
             reasoning_level_override,
             response_style,
+            review_request,
             role,
             size,
             speed_mode,
@@ -3387,20 +3243,8 @@ impl SessionJoinRow {
             updated_at,
         };
         let detail = SessionDetailRow { prompt, questions };
-        let review_request = SessionReviewRequestJoinRow {
-            display_id: review_request_display_id,
-            forge_kind: review_request_forge_kind,
-            last_refreshed_at: review_request_last_refreshed_at,
-            source_branch: review_request_source_branch,
-            state: review_request_state,
-            status_summary: review_request_status_summary,
-            target_branch: review_request_target_branch,
-            title: review_request_title,
-            web_url: review_request_web_url,
-        }
-        .into_review_request_row();
 
-        (metadata, detail, review_request)
+        (metadata, detail)
     }
 }
 

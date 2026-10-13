@@ -937,90 +937,13 @@ impl ModelResponse {
     }
 }
 
-/// Failure returned while completing a model request.
-#[derive(Debug, Error)]
-pub enum ModelError {
-    /// The provider request or response decoding failed.
-    #[error("model request failed: {0}")]
-    Request(#[source] Box<dyn Error + Send + Sync>),
-    /// The provider returned a successful response without assistant content.
-    #[error("model returned no response content")]
-    InvalidResponse,
-    /// The provider stopped before completing the model response.
-    #[error("model response is incomplete: {reason}")]
-    IncompleteResponse {
-        /// Provider-specific reason generation stopped.
-        reason: String,
-    },
-    /// The successful provider response body exceeds the adapter safety limit.
-    #[error("model response body exceeds the size limit")]
-    ResponseBodyTooLarge,
-    /// The provider cannot represent the requested output schema.
-    #[error("provider cannot satisfy this output schema: {reason}")]
-    UnsupportedOutputSchema {
-        /// Provider-specific reason the schema cannot be represented.
-        reason: String,
-    },
-    /// The model configuration cannot accept image input content.
-    #[error("model does not support image input: {reason}")]
-    UnsupportedImageInput {
-        /// Provider-specific reason image content cannot be translated.
-        reason: String,
-    },
-    /// The decoded provider response content exceeds the harness safety limit.
-    #[error("model response content exceeds the size limit")]
-    ResponseContentTooLarge,
-    /// The provider returned malformed JSON for a structured request.
-    #[error("model returned invalid JSON: {reason}")]
-    InvalidJson {
-        /// JSON parser diagnostic without the raw response body.
-        reason: String,
-    },
-    /// The returned JSON does not conform to the requested schema.
-    #[error("model output violates the schema at {path}: {reason}")]
-    SchemaViolation {
-        /// Bounded JSON Pointer-like path to the invalid value, or `$` for the
-        /// root.
-        path: String,
-        /// Validator diagnostic for the failed constraint.
-        reason: String,
-    },
-    /// The provider returned tool calls without any call entries.
-    #[error("model returned no tool call")]
-    MissingToolCall,
-    /// The provider tool-call identifier is blank or exceeds its byte limit.
-    #[error("model returned a blank or oversized tool call identifier")]
-    InvalidToolCallId,
-    /// The provider returned more than the single supported call.
-    #[error("model returned multiple tool calls")]
-    MultipleToolCalls,
-    /// The provider returned multiple tool calls with the same identifier.
-    #[error("model returned duplicate tool call identifier: {id}")]
-    DuplicateToolCallId {
-        /// Bounded duplicate identifier returned by the provider.
-        id: String,
-    },
-    /// A terminal response also contained native tool calls.
-    #[error("model terminal response contained tool calls")]
-    TerminalResponseWithToolCalls,
-    /// The provider returned an unsupported tool-call type.
-    #[error("model requested unsupported tool type: {kind}")]
-    UnsupportedToolType {
-        /// Provider tool type that is not a native function.
-        kind: String,
-    },
-    /// The provider returned an unsupported or unadvertised native function.
-    #[error("model requested unsupported tool: {name}")]
-    UnsupportedToolName {
-        /// Native function name that was not advertised for the request.
-        name: String,
-    },
-    /// The provider returned malformed or invalid native function arguments.
-    #[error("model returned invalid tool arguments: {reason}")]
-    InvalidToolArguments {
-        /// Bounded parser or validation diagnostic.
-        reason: String,
-    },
+ag_router::define_model_response_error! {
+    /// Failure returned while completing a model request.
+    pub enum ModelError {
+        /// The provider returned more than the single supported call.
+        #[error("model returned multiple tool calls")]
+        MultipleToolCalls,
+    }
 }
 
 impl ModelError {
