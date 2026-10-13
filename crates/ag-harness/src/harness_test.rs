@@ -1,3 +1,5 @@
+#[path = "harness_test/calibration_test.rs"]
+mod calibration;
 #[path = "harness_test/cancellation_test.rs"]
 mod cancellation;
 #[path = "harness_test/options_test.rs"]

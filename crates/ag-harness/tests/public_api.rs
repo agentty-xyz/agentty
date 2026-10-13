@@ -912,6 +912,9 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         ),
         (0, 0, 0, 0, 0, 0, 0)
     );
+    let first_request = &once.report().model_requests()[0];
+    assert!(first_request.estimated_weight() > 0);
+    assert_eq!(first_request.calibrated_weight(), None);
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
     let requests = requests

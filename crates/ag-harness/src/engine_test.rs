@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::json;
 
+use crate::calibration::ContextCalibration;
 use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
@@ -29,8 +30,10 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
     let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
+    let context_calibration = ContextCalibration::default();
     let engine = Engine {
         context_budget: unbounded_context_budget(),
+        context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator,
         effects: Effects::default(),
         file_system: &file_system,
@@ -82,8 +85,10 @@ async fn run_scripted(
     let file_system: Arc<dyn FileSystem> = Arc::new(LocalFileSystem);
     let options = TurnOptions::new(object_schema(), ToolPolicy::default());
     let lifecycle = LifecycleEmitter::default();
+    let context_calibration = ContextCalibration::default();
     let engine = Engine {
         context_budget,
+        context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator,
         effects: Effects::default(),
         file_system: &file_system,

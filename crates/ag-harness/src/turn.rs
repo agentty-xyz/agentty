@@ -238,14 +238,28 @@ impl HistoryActivity {
 /// Observable facts about one provider request in a successful turn.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ModelRequestActivity {
+    #[serde(default)]
+    calibrated_weight: Option<u64>,
     completion: Option<CompletionMetadata>,
     #[serde(default)]
     context: ContextActivity,
     duration: Duration,
+    #[serde(default)]
+    estimated_weight: u64,
     response_type: ModelResponseType,
 }
 
 impl ModelRequestActivity {
+    /// Returns the input tokens that provider usage reported for earlier
+    /// requests predicted for this request when it was fitted, or `None`
+    /// before any usage report, when requests are fitted to 90% of the
+    /// capacity left after reserved output. Compare it with the reported
+    /// input tokens in [`Self::completion`]. Reports recorded before this
+    /// field existed report `None`.
+    pub fn calibrated_weight(&self) -> Option<u64> {
+        self.calibrated_weight
+    }
+
     /// Returns sanitized provider completion metadata, when available.
     pub fn completion(&self) -> Option<&CompletionMetadata> {
         self.completion.as_ref()
@@ -262,6 +276,13 @@ impl ModelRequestActivity {
         self.duration
     }
 
+    /// Returns the uncalibrated approximate weight of the request as sent,
+    /// without reserved output, in [`crate::model::ContextBudget`] units.
+    /// Reports recorded before this field existed report zero.
+    pub fn estimated_weight(&self) -> u64 {
+        self.estimated_weight
+    }
+
     /// Returns whether the request produced output or a tool call.
     pub fn response_type(&self) -> ModelResponseType {
         self.response_type
@@ -273,15 +294,28 @@ impl ModelRequestActivity {
         response_type: ModelResponseType,
     ) -> Self {
         Self {
+            calibrated_weight: None,
             completion,
             context: ContextActivity::default(),
             duration,
+            estimated_weight: 0,
             response_type,
         }
     }
 
     pub(crate) fn with_context(mut self, context: ContextActivity) -> Self {
         self.context = context;
+
+        self
+    }
+
+    pub(crate) fn with_estimate(
+        mut self,
+        estimated_weight: u64,
+        calibrated_weight: Option<u64>,
+    ) -> Self {
+        self.calibrated_weight = calibrated_weight;
+        self.estimated_weight = estimated_weight;
 
         self
     }
@@ -613,7 +647,9 @@ pub enum TurnError {
         /// Total declared budget in approximate weight units.
         budget: u64,
         /// Approximate weight of the smallest request that could be formed,
-        /// including reserved output.
+        /// including reserved output, with the rest restated as the input
+        /// tokens provider usage calibrates it to, or scaled by 10/9 before
+        /// any usage report.
         required: u64,
     },
 }

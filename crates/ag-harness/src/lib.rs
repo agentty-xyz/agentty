@@ -87,6 +87,7 @@ mod context_budget_fixture;
 
 mod admission;
 pub mod bash;
+mod calibration;
 mod cancellation;
 #[cfg(test)]
 #[path = "../tests/support/cancellation.rs"]

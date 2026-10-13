@@ -93,6 +93,30 @@ narrower read, and as the last resort its `write` patches are replaced by their 
 outcome; only when even that fails does the turn fail typed. Each `ModelRequestActivity`
 reports the reductions its request carried.
 
+The heuristic estimate under-counts some content, so the harness calibrates it from
+provider usage, much like Codex combines the last reported usage with an estimate of
+newer items. Providers also add a fixed per-request cost the estimate never sees (live
+Muse and Qwen runs reported about 1,200–1,300 input tokens for a 581-weight first
+request), so one ratio fitted to a small request would roughly halve the usable window.
+The calibration is instead an upper envelope over the reports: a line through the first
+reported request, its ratio until a request at least 10% of the input capacity larger
+measures the slope of token growth, the slope then rising to the steepest growth
+measured and the line lifted to cover every report. The slope stays within 1–3: images
+are weighed at their encoded size and must not loosen the text budget, and one
+inconsistent report must not empty the window. Projection, admission, and fitting
+compare estimates with the largest weight whose calibrated tokens fit 95% of the input
+capacity, the margin covering denser content such as cleared-result notices, which
+under-shot the envelope by up to about 5% live; before any usage, the estimate may fill
+90%. Because the calibration only lowers the weight limit while cached message weights
+stay in estimator units, a tighter limit only advances the fitting watermarks further
+and never reshuffles an already-reduced prefix. Every built-in provider reports
+OpenAI-style `prompt_tokens`, whose cached tokens are a subset (live cache hits never
+exceeded the reported input), so prompt caching does not skew the calibration. It lives
+in memory per harness and the sessions it captures, resets on `switch_model` and
+estimator replacement, and needs no schema change. Budget failures still name the
+declared budget, with the required weight restated in calibrated tokens, and
+`ModelRequestActivity` reports each request's estimated and calibrated weight.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]

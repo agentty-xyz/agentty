@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::bash::{BashArguments, BashError};
+use crate::calibration::ContextCalibration;
 use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
@@ -28,6 +29,7 @@ pub(crate) const MAX_OUTPUT_CORRECTIONS: usize = 2;
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
     pub(crate) context_budget: context::ContextBudget,
+    pub(crate) context_calibration: &'a ContextCalibration,
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
@@ -56,14 +58,21 @@ impl Engine<'_> {
 
         loop {
             // Tool traffic grows the request between model calls; a grown
-            // request that no longer fits is sent as a reduced copy, and one
-            // that cannot be reduced enough fails typed here instead of
-            // overflowing the provider context.
-            let (fitted, context_activity) =
-                context_fit.fit(self.context_estimator, self.context_budget, &request)?;
+            // request that no longer fits the calibrated budget is sent as a
+            // reduced copy, and one that cannot be reduced enough fails
+            // typed here instead of overflowing the provider context.
+            let (budget, envelope) = self
+                .context_calibration
+                .effective_budget(self.context_budget);
+            let (fitted, context_activity) = context_fit
+                .fit(self.context_estimator, budget, &request)
+                .map_err(|error| {
+                    ContextCalibration::declared_failure(self.context_budget, envelope, error)
+                })?;
             let completed = self
                 .complete_model_request(fitted.unwrap_or(&request), model_request_index, turn_id)
                 .await;
+            let estimated_weight = context_fit.sent_weight();
             model_request_index = model_request_index.saturating_add(1);
             let (response, activity, reasoning_content) = match completed {
                 // An invalid final output is re-requested with request-only
@@ -79,7 +88,15 @@ impl Engine<'_> {
                 }
                 completed => completed?,
             };
-            model_requests.push(activity.with_context(context_activity));
+            self.context_calibration.observe(
+                self.context_budget,
+                estimated_weight,
+                activity.completion(),
+            );
+            model_requests.push(activity.with_context(context_activity).with_estimate(
+                estimated_weight,
+                envelope.map(|envelope| envelope.tokens(estimated_weight)),
+            ));
 
             match response {
                 ModelResponse::Output(output) => {
