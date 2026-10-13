@@ -234,6 +234,19 @@ whose provider is configured:
 - `qwen3.8-max`: Most capable Qwen model.
 - `qwen-plus`: Balanced Qwen model.
 
+Each request stays within an input budget below the model's context window. Because
+Agentty estimates tokens from text size, it holds back the model's output reserve plus a
+quarter of the window. Older turns that no longer fit are left out; after switching to a
+model with a smaller window, the next turn fits history to that model's budget.
+
+| Model            | Context window | Input budget |
+| ---------------- | -------------- | ------------ |
+| `muse-spark-1.3` | 1,048,576      | 655,360      |
+| `kimi-k3`        | 1,048,576      | 655,360      |
+| `kimi-k2.6`      | 262,144        | 163,840      |
+| `qwen3.8-max`    | 1,000,000      | 618,928      |
+| `qwen-plus`      | 1,000,000      | 717,232      |
+
 ### Stored Model Upgrades
 
 Model pickers show only the current models listed above. When a stored project default

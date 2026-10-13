@@ -128,9 +128,9 @@ a stopped turn keeps everything it already did.
   before execution. Write and command intents persist before their effects.
 - `host_id`/`recover` bind host-assigned request IDs to a fingerprint of the effective
   request, so matching retries return recorded outcomes instead of executing again.
-- `switch_model` selects another registration for an idle session. `compact` publishes a
-  schema-validated summary checkpoint that request projection replays ahead of the
-  remaining recent turns.
+- `switch_model` selects another registration for an idle session, whose context budget
+  bounds every later request. `compact` publishes a schema-validated summary checkpoint
+  that request projection replays ahead of the remaining recent turns.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
   by its registration: requests keep the most recent turns that fit, each whole, with
   its tool traffic replaced by notices, or as its input and final output (input and stop

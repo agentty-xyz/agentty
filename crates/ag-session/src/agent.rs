@@ -166,35 +166,35 @@ define_model_catalog! {
             id: "muse-spark-1.3",
             description: "Muse Spark model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::MUSE_SPARK_1_3),
         },
         /// Kimi model backed by `kimi-k3`.
         KimiK3 = 13 => {
             id: "kimi-k3",
             description: "Latest Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::KIMI_K3),
         },
         /// Kimi model backed by `kimi-k2.6`.
         KimiK26 = 14 => {
             id: "kimi-k2.6",
             description: "Previous Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::KIMI_K2_6),
         },
         /// Qwen model backed by `qwen3.8-max`.
         Qwen38Max = 15 => {
             id: "qwen3.8-max",
             description: "Most capable Qwen model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::QWEN3_8_MAX),
         },
         /// Qwen model backed by `qwen-plus`.
         QwenPlus = 16 => {
             id: "qwen-plus",
             description: "Balanced Qwen model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::HARNESS),
+            context: Some(ModelContextLimits::QWEN_PLUS),
         },
     }
 }
@@ -218,12 +218,38 @@ impl ModelContextLimits {
         context_window_tokens: 128_000,
         input_headroom_tokens: 8_000,
     };
-    /// Conservative window shared by harness models, whose provider catalog
-    /// declares none; the headroom matches the harness CLI's reserved output.
-    const HARNESS: Self = Self {
-        context_window_tokens: 128_000,
-        input_headroom_tokens: 16_384,
-    };
+    /// Kimi K2.6: documented and enforced 262,144-token window with a
+    /// 32,768-token default `max_tokens`.
+    const KIMI_K2_6: Self = Self::with_estimate_margin(262_144, 32_768);
+    /// Kimi K3: documented 1M (1,048,576-token) window with a 131,072-token
+    /// default `max_completion_tokens`.
+    const KIMI_K3: Self = Self::with_estimate_margin(1_048_576, 131_072);
+    /// Muse Spark 1.3: documented 1,048,576-token window and an undocumented
+    /// output limit, reserved at the 131,072 tokens the API accepts.
+    const MUSE_SPARK_1_3: Self = Self::with_estimate_margin(1_048_576, 131_072);
+    /// Qwen3.8-Max: documented 1,000,000-token window, 983,616-token thinking
+    /// input limit, and 131,072-token output limit.
+    const QWEN3_8_MAX: Self = Self::with_estimate_margin(1_000_000, 131_072);
+    /// Qwen-Plus: documented 1,000,000-token window, 995,904-token thinking
+    /// input limit, and 32,768-token output limit.
+    const QWEN_PLUS: Self = Self::with_estimate_margin(1_000_000, 32_768);
+
+    /// Returns limits for a model whose input is measured by an approximate
+    /// estimator, reserving `max_output_tokens` plus a quarter of the window.
+    ///
+    /// The native harness estimates one token per four bytes, which
+    /// under-counts real provider tokens: live probes measured up to 29% more
+    /// tokens than estimated on varied prose and 17% on repository content.
+    /// Holding back a quarter of the window keeps an input that fills the
+    /// budget beside the reserved output while real tokens exceed the
+    /// estimate by at least a third, and by more as the output share grows.
+    #[must_use]
+    pub const fn with_estimate_margin(context_window_tokens: u64, max_output_tokens: u64) -> Self {
+        Self {
+            context_window_tokens,
+            input_headroom_tokens: max_output_tokens.saturating_add(context_window_tokens / 4),
+        }
+    }
 
     /// Returns the input-token budget after reserving output and overhead.
     #[must_use]

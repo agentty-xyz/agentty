@@ -1,10 +1,11 @@
 //! Atomic switching contract shared by public integration and source coverage.
 
+use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{
-    ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest,
-    ModelResponse,
+    ContextBudget, ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry,
+    ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
 use ag_harness::store::{AcquiredTurn, ModelSwitch, NewSession, SqliteStore};
@@ -543,6 +544,75 @@ async fn switching_survives_sqlite_reopen() {
             .generation,
         0
     );
+}
+
+/// Registers a large-window `a` and a small-window `b`, each recording its
+/// requests.
+fn windowed_registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
+    let small_budget = ContextBudget::new(NonZeroU64::new(1_200).expect("window"));
+    let mut registry = ModelRegistry::new();
+    for (name, context_budget) in [("a", unbounded_context_budget()), ("b", small_budget)] {
+        registry
+            .register(
+                ExecutionIdentity::new(name, "1").expect("identity"),
+                RecordingModel {
+                    name,
+                    requests: Arc::clone(requests),
+                },
+                ModelCapabilities::new(context_budget),
+            )
+            .expect("register");
+    }
+    registry
+}
+
+#[tokio::test]
+async fn switching_to_a_smaller_window_fits_history_to_the_new_budget() {
+    // Arrange
+    for store in stores().await {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let registry = windowed_registry(&requests);
+        let harness = Harness::from_registry(&registry, "a")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness
+            .session("shrink", schema())
+            .create()
+            .await
+            .expect("session");
+        for turn in 0..3 {
+            session
+                .send(format!("turn {turn}: {}", "history ".repeat(200)))
+                .await
+                .expect("large-window turn");
+        }
+        let large = session.send("before switch").await.expect("large turn");
+
+        // Act
+        session
+            .switch_model(&registry, "b")
+            .await
+            .expect("switch to the smaller window");
+        let small = session.send("after switch").await.expect("small turn");
+        session
+            .switch_model(&registry, "a")
+            .await
+            .expect("switch back to the larger window");
+        let restored = session.send("after return").await.expect("large turn");
+
+        // Assert
+        assert_eq!(large.report().history().replayed_turns(), 3);
+        assert_eq!(large.report().history().evicted_turns(), 0);
+        assert!(small.report().history().evicted_turns() > 0);
+        assert_eq!(
+            small.report().history().replayed_turns() + small.report().history().evicted_turns(),
+            4
+        );
+        assert_eq!(restored.report().history().replayed_turns(), 5);
+        assert_eq!(restored.report().history().evicted_turns(), 0);
+        let requests = requests.lock().expect("requests");
+        assert!(requests[4].messages().len() < requests[5].messages().len());
+    }
 }
 
 #[tokio::test]
