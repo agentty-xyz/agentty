@@ -7,19 +7,22 @@
 use std::io::{self, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ag_harness::bash::{BashConfig, CommandTermination, UnsandboxedExecutor};
 use ag_harness::model::{
     ContextBudget, ContextEstimator, HeuristicContextEstimator, ModelCapabilities, ModelClient,
-    ModelMessage, ModelRegistry,
+    ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
+use ag_harness::tool::ToolCall;
+use ag_harness::turn::ToolActivity;
 use ag_harness::{
-    Harness, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy, TurnError,
-    TurnOptions,
+    Harness, Model, ModelError, OutputSchema, Repository, Session, SessionError, Tool, ToolPolicy,
+    TurnError, TurnOptions,
 };
 use serde_json::{Value, json};
 
@@ -806,6 +809,143 @@ async fn test_long_tool_loop_refit() -> Result<(), DynError> {
                 long_tool_loop(provider).await,
                 started,
             );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
+// Malformed tool arguments
+// ---------------------------------------------------------------------------
+
+/// Answers the first request with one malformed `read` call, as a model that
+/// mangled its arguments would, and forwards every later request to the live
+/// provider, which must accept the replayed call and its error result.
+struct MalformedFirstCall {
+    inner: ModelClient,
+    injected: AtomicBool,
+    raw: &'static str,
+}
+
+#[async_trait::async_trait]
+impl Model for MalformedFirstCall {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        Model::metadata(&self.inner)
+    }
+
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        self.inner.validate_schema(schema)
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        if self.injected.swap(true, Ordering::SeqCst) {
+            return self.inner.complete(request).await;
+        }
+        let call = ToolCall::from_json("malformed_read".to_string(), "read", self.raw, None)?;
+
+        Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
+            call,
+        )))
+    }
+}
+
+async fn malformed_tool_arguments(
+    provider: Provider,
+    raw: &'static str,
+) -> Result<String, DynError> {
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    std::fs::write(root.join("notes.txt"), "The code word is lantern-58.\n")?;
+    let directory = tempfile::tempdir()?;
+    let model = MalformedFirstCall {
+        inner: provider.client()?,
+        injected: AtomicBool::new(false),
+        raw,
+    };
+    let harness = Harness::new(model, unbounded_context_budget())
+        .database(directory.path().join("malformed.db"))
+        .repository(Repository::new(&root, GIT_EXECUTABLE)?)
+        .allow(Tool::Read);
+    let mut session = harness
+        .session("malformed", answer_schema()?)
+        .create()
+        .await?;
+    provider.pace().await;
+    let first = session
+        .send(
+            "Read notes.txt with the read tool and set answer to the code word it names. If a \
+             tool call is rejected, fix its arguments and call it again.",
+        )
+        .await?;
+    provider.pace().await;
+    // The second turn replays the stored malformed call and its error result.
+    let second = session
+        .send("Set answer to the code word you found in the previous turn, unchanged.")
+        .await?;
+    let report = first.report();
+    let activities = report
+        .tool_calls()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let summary = format!(
+        "malformed={} calls={activities:?} first={} second={}",
+        report.malformed_tool_calls(),
+        answer(first.output()),
+        answer(second.output())
+    );
+    if report.malformed_tool_calls() != 1
+        || !matches!(
+            report.tool_calls().first(),
+            Some(ToolActivity::MalformedArguments { .. })
+        )
+    {
+        return Err(format!("the malformed call was not answered: {summary}").into());
+    }
+    if !report
+        .tool_calls()
+        .iter()
+        .any(|activity| matches!(activity, ToolActivity::Read { path, .. } if path == "notes.txt"))
+    {
+        return Err(format!("the model never read notes.txt validly: {summary}").into());
+    }
+    if !answer(first.output()).contains("lantern-58")
+        || !answer(second.output()).contains("lantern-58")
+    {
+        return Err(format!("the code word was lost: {summary}").into());
+    }
+
+    Ok(summary)
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_malformed_tool_arguments() -> Result<(), DynError> {
+    let mut report = Report::new("malformed_tool_arguments");
+    let cases = [
+        ("not_json", r#"{"path src/": "notes.txt""#),
+        ("unknown_field", r#"{"path src/": "notes.txt"}"#),
+    ];
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            for (case, raw) in cases {
+                let started = Instant::now();
+                report.record(
+                    &format!("{}/{case}", provider.name()),
+                    round,
+                    malformed_tool_arguments(provider, raw).await,
+                    started,
+                );
+            }
         }
     }
 

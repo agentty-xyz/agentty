@@ -325,10 +325,18 @@ fn external_adapter_constructs_a_validated_write_call() -> Result<(), Box<dyn Er
         serde_json::from_str::<serde_json::Value>(&call.arguments_json()?)?,
         arguments
     );
+    let invalid = invalid?;
+    let malformed = invalid
+        .malformed_arguments()
+        .ok_or("unsafe path kept as malformed")?;
+    assert_eq!(malformed.tool(), ag_harness::Tool::Write);
+    assert_eq!(malformed.raw(), r#"{"path":"../secret","patch":"patch"}"#);
+    assert!(malformed.reason().contains("path"));
     assert!(matches!(
-        invalid,
-        Err(ModelError::InvalidToolArguments { .. })
+        invalid.arguments(),
+        ag_harness::tool::ToolCallArguments::Malformed(_)
     ));
+    assert!(invalid.write_arguments().is_none());
 
     Ok(())
 }
@@ -898,6 +906,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         ag_harness::turn::HistoryActivity::default()
     );
     assert_eq!(once.report().output_corrections(), 0);
+    assert_eq!(once.report().malformed_tool_calls(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(
@@ -909,12 +918,19 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
             context.truncated_results(),
             context.dropped_tool_calls(),
             context.shrunk_latest_write_calls(),
+            context.superseded_results(),
         ),
-        (0, 0, 0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0, 0, 0)
     );
     let first_request = &once.report().model_requests()[0];
     assert!(first_request.estimated_weight() > 0);
     assert_eq!(first_request.calibrated_weight(), None);
+    let repeated = ag_harness::turn::ToolActivity::ReadRepeated {
+        action: ag_harness::tool::ReadAction::File,
+        duration: std::time::Duration::ZERO,
+        summary: "name.txt".to_string(),
+    };
+    assert_eq!((repeated.name(), repeated.path()), ("read", "name.txt"));
     assert_eq!(options.schema(), &schema);
     assert!(options.tool_policy().allows(Tool::Read));
     let requests = requests

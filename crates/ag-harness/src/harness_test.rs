@@ -12,6 +12,8 @@ mod read;
 mod session;
 #[path = "harness_test/support_test.rs"]
 mod support;
+#[path = "harness_test/tool_loop_test.rs"]
+mod tool_loop;
 #[path = "harness_test/write_journal_test.rs"]
 mod write_journal;
 

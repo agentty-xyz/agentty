@@ -1,0 +1,431 @@
+use std::io::Cursor;
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use serde_json::{Value, json};
+
+use super::support::{model, object_schema, response_without_metadata, write_call};
+use crate::context::ContextBudget;
+use crate::context_budget_fixture::unbounded_context_budget;
+use crate::file_system::MockFileSystem;
+use crate::harness::Harness;
+use crate::model::{ModelError, ModelMessage, ModelRequest, ModelResponse};
+use crate::model_registry::{ModelCapabilities, ModelRegistry};
+use crate::recovery::ExecutionIdentity;
+use crate::repository::Repository;
+use crate::tool::{ReadAction, Tool, ToolCall};
+use crate::turn::ToolActivity;
+
+/// Scripts the model's responses in order and records every request it
+/// received.
+fn scripted(
+    responses: Vec<Result<ModelResponse, ModelError>>,
+) -> (crate::model::MockModel, Arc<Mutex<Vec<ModelRequest>>>) {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&requests);
+    let responses = Mutex::new(responses.into_iter());
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        recorded.lock().expect("requests lock").push(request);
+        responses
+            .lock()
+            .expect("responses lock")
+            .next()
+            .expect("scripted response")
+            .map(response_without_metadata)
+    });
+
+    (model, requests)
+}
+
+/// Serves `content` for every file and counts how often one was opened.
+fn counting_file_system(content: Vec<u8>, opened: &Arc<AtomicUsize>) -> MockFileSystem {
+    let opened = Arc::clone(opened);
+    let mut file_system = MockFileSystem::new();
+    file_system
+        .expect_canonicalize()
+        .returning(|path| Ok(path.to_path_buf()));
+    file_system.expect_open_beneath().returning(move |_, _| {
+        opened.fetch_add(1, Ordering::SeqCst);
+
+        Ok(Box::new(Cursor::new(content.clone())))
+    });
+
+    file_system
+}
+
+fn file_content() -> Vec<u8> {
+    (0..80)
+        .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
+        .collect()
+}
+
+fn read_of(id: &str, arguments: &Value) -> ToolCall {
+    ToolCall::from_json(id.to_string(), "read", &arguments.to_string(), None).expect("read call")
+}
+
+fn output() -> ModelResponse {
+    ModelResponse::Output(json!({"summary": "done"}))
+}
+
+/// A `read` call whose arguments are cut off mid-object.
+const MALFORMED_READ: &str = r#"{"path src/": "notes.txt""#;
+
+fn malformed(id: &str, name: &str, raw: &str) -> ToolCall {
+    ToolCall::from_json(id.to_string(), name, raw, None).expect("malformed call")
+}
+
+fn malformed_read(id: &str) -> ModelResponse {
+    ModelResponse::ToolCall(malformed(id, "read", MALFORMED_READ))
+}
+
+/// Returns the JSON content of the tool result answering `call_id`.
+fn result_for(request: &ModelRequest, call_id: &str) -> Value {
+    request
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            ModelMessage::ToolResult {
+                call_id: id,
+                content,
+                ..
+            } if id == call_id => Some(serde_json::from_str(content).expect("JSON result")),
+            _ => None,
+        })
+        .expect("tool result")
+}
+
+#[tokio::test]
+async fn identical_reads_are_answered_by_pointing_to_the_earlier_result() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_1",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(ModelResponse::ToolCalls(vec![
+            read_of("read_2", &json!({"path": "notes.txt"})),
+            read_of("read_3", &json!({"path": "other.txt"})),
+        ])),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(
+            b"line one of a longer manifest\n".repeat(20),
+            &opened,
+        ));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    assert_eq!(opened.load(Ordering::SeqCst), 2);
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(activities[0], ToolActivity::Read { .. }));
+    assert!(matches!(
+        &activities[1],
+        ToolActivity::ReadRepeated { action: ReadAction::File, summary, .. }
+            if summary == "notes.txt"
+    ));
+    assert!(matches!(activities[2], ToolActivity::ReadRepeated { .. }));
+    assert!(matches!(activities[3], ToolActivity::Read { .. }));
+    let requests = requests.lock().expect("requests lock");
+    let ModelMessage::ToolResult { content, .. } = requests[2].messages().last().expect("result")
+    else {
+        std::panic::resume_unwind(Box::new("tool result expected"));
+    };
+    let repeated: Value = serde_json::from_str(content).expect("JSON result");
+    assert_eq!(repeated["unchanged"], json!(true));
+    assert_eq!(repeated["same_as_call"], json!("read_0"));
+}
+
+#[tokio::test]
+async fn a_write_between_identical_reads_runs_the_read_again() {
+    // Arrange
+    let (model, _requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "src/lib.rs"}),
+        ))),
+        Ok(ModelResponse::ToolCall(write_call(
+            "write_1",
+            "not a unified diff",
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_2",
+            &json!({"path": "src/lib.rs"}),
+        ))),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .allow(Tool::Write)
+        .file_system(counting_file_system(
+            b"line one of a longer manifest\n".repeat(20),
+            &opened,
+        ));
+
+    // Act
+    let outcome = harness
+        .run_once("read, edit, and read again", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(activities[1], ToolActivity::WriteRejected { .. }));
+    assert!(matches!(activities[2], ToolActivity::Read { .. }));
+    assert_eq!(opened.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn superseded_reads_are_cleared_first_and_reported() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "first_lines",
+            &json!({"path": "notes.txt", "limit": 70}),
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "other",
+            &json!({"path": "other.txt", "limit": 5}),
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "all_lines",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(ModelResponse::ToolCall(read_of(
+            "latest",
+            &json!({"path": "latest.txt", "limit": 5}),
+        ))),
+        Ok(output()),
+    ]);
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("budgeted", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                context_budget: ContextBudget::new(NonZeroU64::new(1_350).expect("budget")),
+                image_input: false,
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::from_registry(&registry, "budgeted")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(file_content(), &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("turn fits by clearing the superseded read");
+
+    // Assert
+    let last = outcome
+        .report()
+        .model_requests()
+        .last()
+        .expect("final request")
+        .context();
+    assert_eq!(last.superseded_results(), 1);
+    let requests = requests.lock().expect("requests lock");
+    let ModelMessage::ToolResult { content, .. } = &requests[4].messages()[2] else {
+        std::panic::resume_unwind(Box::new("first read result expected"));
+    };
+    let notice: Value = serde_json::from_str(content).expect("notice");
+    assert_eq!(notice["superseded_by"], json!("all_lines"));
+}
+
+#[tokio::test]
+async fn malformed_calls_get_error_results_while_their_siblings_run() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(vec![
+            malformed("bad_read", "read", MALFORMED_READ),
+            read_of("good_read", &json!({"path": "notes.txt"})),
+        ])),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(b"notes\n".to_vec(), &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("the turn continues past the malformed call");
+
+    // Assert
+    assert_eq!(outcome.report().malformed_tool_calls(), 1);
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(
+        &activities[0],
+        ToolActivity::MalformedArguments { tool: Tool::Read, reason, .. }
+            if reason.contains("unknown field `path src/`")
+    ));
+    assert_eq!((activities[0].name(), activities[0].path()), ("read", ""));
+    assert!(
+        activities[0]
+            .to_string()
+            .starts_with("read (malformed arguments: ")
+    );
+    assert!(matches!(activities[1], ToolActivity::Read { .. }));
+    let requests = requests.lock().expect("requests lock");
+    let ModelMessage::AssistantToolCalls(calls) = &requests[1].messages()[1] else {
+        std::panic::resume_unwind(Box::new("batched calls expected"));
+    };
+    let bad = calls[0].malformed_arguments().expect("kept malformed");
+    assert_eq!((bad.raw(), bad.tool()), (MALFORMED_READ, Tool::Read));
+    assert_eq!(calls[0].arguments_json().expect("raw"), MALFORMED_READ);
+    let result = result_for(&requests[1], "bad_read");
+    assert_eq!(result["status"], json!("rejected"));
+    assert!(
+        result["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("failed to parse function arguments: "))
+    );
+    assert!(result["hint"].as_str().is_some_and(|hint| hint.contains(
+        "Call `read` again with valid JSON arguments using only its documented fields: `action`, \
+         `limit`, `offset`, `path`, `query`, `side`."
+    )));
+}
+
+#[tokio::test]
+async fn only_consecutive_all_malformed_responses_count_toward_the_limit() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(malformed_read("bad_0")),
+        Ok(malformed_read("bad_1")),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(malformed_read("bad_2")),
+        Ok(malformed_read("bad_3")),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(b"notes\n".to_vec(), &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("a decodable call resets the consecutive count");
+
+    // Assert
+    assert_eq!(outcome.report().malformed_tool_calls(), 4);
+    assert_eq!(outcome.report().tool_calls().len(), 5);
+    assert_eq!(requests.lock().expect("requests lock").len(), 6);
+}
+
+#[tokio::test]
+async fn consecutive_all_malformed_responses_fail_the_turn_at_the_limit() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(malformed_read("bad_0")),
+        Ok(malformed_read("bad_1")),
+        Ok(malformed_read("bad_2")),
+    ]);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(MockFileSystem::new());
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the third malformed-only response fails the turn");
+
+    // Assert
+    assert!(matches!(
+        error,
+        crate::TurnError::Model(ModelError::InvalidToolArguments { ref reason })
+            if reason.starts_with("`read`: unknown field `path src/`")
+    ));
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        result_for(&requests[2], "bad_1")["status"],
+        json!("rejected")
+    );
+}
+
+#[tokio::test]
+async fn malformed_call_results_mark_required_fields() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(malformed(
+            "bad_write",
+            "write",
+            r#"{"path": "notes.txt"}"#,
+        ))),
+        Ok(output()),
+    ]);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Write)
+        .file_system(MockFileSystem::new());
+
+    // Act
+    harness
+        .run_once("edit", object_schema())
+        .await
+        .expect("turn succeeds after the error result");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let result = result_for(&requests[1], "bad_write");
+    assert!(
+        result["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("`patch` (required), `path` (required)"))
+    );
+}
+
+#[tokio::test]
+async fn malformed_calls_to_disallowed_tools_are_denied() {
+    // Arrange
+    let (model, _requests) = scripted(vec![Ok(ModelResponse::ToolCall(malformed(
+        "bad_bash", "bash", "{",
+    )))]);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(MockFileSystem::new());
+
+    // Act
+    let error = harness
+        .run_once("run something", object_schema())
+        .await
+        .expect_err("bash is not allowed");
+
+    // Assert
+    assert!(matches!(error, crate::TurnError::ToolDenied { ref name } if name == "bash"));
+}

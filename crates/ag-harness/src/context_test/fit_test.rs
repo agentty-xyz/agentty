@@ -79,7 +79,7 @@ fn fit_elides_oldest_results_down_to_the_target_and_keeps_the_latest_round() {
     assert_eq!(activity.elided_results(), 2);
     let notice = result_json(&fitted.messages()[2]);
     assert_eq!(notice["original_bytes"], json!(1000));
-    assert_eq!(notice["read"], json!("file name.txt"));
+    assert_eq!(notice["read"], json!("file r0.txt"));
     assert!(
         notice["context_cleared"]
             .as_str()

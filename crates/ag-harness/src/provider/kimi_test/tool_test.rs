@@ -65,7 +65,7 @@ async fn rejects_missing_tool_call() {
 }
 
 #[tokio::test]
-async fn rejects_invalid_read_range() {
+async fn keeps_invalid_read_range_as_a_malformed_call() {
     // Arrange
     let server = MockServer::start().await;
     mount_tool_response(
@@ -87,16 +87,17 @@ async fn rejects_invalid_read_range() {
     let model = kimi(&server);
 
     // Act
-    let error = model
+    let completion = model
         .complete(read_request("inspect the manifest"))
         .await
-        .expect_err("zero read limit should fail");
+        .expect("a zero read limit is answered by the harness");
 
     // Assert
-    assert!(matches!(
-        error,
-        model::ModelError::InvalidToolArguments { .. }
-    ));
+    let model::ModelResponse::ToolCall(call) = completion.response() else {
+        std::panic::resume_unwind(Box::new("tool call expected"));
+    };
+    let malformed = call.malformed_arguments().expect("malformed read");
+    assert_eq!(malformed.raw(), r#"{"path":"Cargo.toml","limit":0}"#);
 }
 
 #[tokio::test]

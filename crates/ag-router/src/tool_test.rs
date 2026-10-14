@@ -34,8 +34,10 @@ fn parses_and_replays_generic_function_call() {
     // Assert
     assert_eq!(call.id(), "call-1");
     assert_eq!(call.name(), "lookup");
-    assert_eq!(call.arguments(), &json!({"id":7}));
+    assert_eq!(call.arguments(), Some(&json!({"id":7})));
+    assert_eq!(call.malformed_reason(), None);
     assert_eq!(call.arguments_json(), arguments);
+    assert_eq!(call.wire_arguments(), arguments);
     assert_eq!(call.reasoning_content(), Some("private thought"));
     assert!(!format!("{call:?}").contains("private thought"));
 }
@@ -55,14 +57,6 @@ fn rejects_invalid_function_calls_before_returning_them() {
         Err(ModelError::InvalidToolCallId)
     ));
     assert!(matches!(
-        ToolCall::from_json("id".to_string(), "lookup", "not JSON", None),
-        Err(ModelError::InvalidToolArguments { .. })
-    ));
-    assert!(matches!(
-        ToolCall::from_json("id".to_string(), "lookup", "[]", None),
-        Err(ModelError::InvalidToolArguments { .. })
-    ));
-    assert!(matches!(
         ToolCall::from_json("id".to_string(), "lookup", &oversized, None),
         Err(ModelError::ResponseContentTooLarge)
     ));
@@ -70,4 +64,31 @@ fn rejects_invalid_function_calls_before_returning_them() {
         ToolCall::from_json("id".to_string(), "lookup", "{}", Some(oversized)),
         Err(ModelError::ResponseContentTooLarge)
     ));
+}
+
+#[test]
+fn keeps_malformed_arguments_verbatim_and_wraps_them_on_the_wire() {
+    // Arrange
+    let cases = [
+        (r#"{"path src/": "a.rs""#, "EOF while parsing"),
+        ("[]", "function arguments must be a JSON object"),
+    ];
+
+    for (raw, reason) in cases {
+        // Act
+        let call =
+            ToolCall::from_json("id".to_string(), "lookup", raw, None).expect("malformed call");
+
+        // Assert
+        assert_eq!(call.arguments(), None);
+        assert!(
+            call.malformed_reason()
+                .is_some_and(|actual| actual.contains(reason))
+        );
+        assert_eq!(call.arguments_json(), raw);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&call.wire_arguments()).expect("wire JSON"),
+            json!({"malformed_arguments": raw})
+        );
+    }
 }

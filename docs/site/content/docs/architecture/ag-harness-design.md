@@ -70,28 +70,46 @@ the required `ContextBudget` bound a turn.
 
 Before every model request the engine fits the request to the budget without a model
 call. Fitting works on a copy, so canonical turn messages, the durable journal, and
-replayed history keep the original content. Once a request exceeds the budget, every
-tool result above 25% of the capacity left after reserved output is first cut to a head
-and tail excerpt of that size, and the latest round's largest results are cut to one
-common size while the round's results together exceed 50%, so one oversized output never
-pushes earlier rounds out. The request is then reduced to 70% of its capacity, in order:
-older tool results become tool-aware notices (oldest first, replayed history before the
-current turn; a `read` notice names its target), then older assistant reasoning becomes
-a non-empty placeholder (providers that replay reasoning still receive the field), then
-older `write` patches become a note on their recorded outcome, then the oldest replayed
-turns are dropped, then the current turn's oldest tool rounds are dropped whole, each
-call message with all its results, behind one bounded note that counts the removed
-calls, names the writes they applied and the commands they ran, and lists their distinct
-read targets to re-read only if still needed. Tool calls keep their identifiers, so tool
-groups stay well-formed, and the latest tool round is never reduced by these steps. Each
-step is a watermark into the append-only canonical messages that later requests replay,
-so successive requests share a stable prefix and reduce further only when the budget is
-exceeded again; each reduced message is cached, so a request between watermark advances
-only weighs and appends its new messages. If the request still does not fit, the latest
-round's largest results are cut further to a head and tail excerpt that asks for a
-narrower read, and as the last resort its `write` patches are replaced by their recorded
-outcome; only when even that fails does the turn fail typed. Each `ModelRequestActivity`
-reports the reductions its request carried.
+replayed history keep the original content. Once a request exceeds the budget, older
+tool results that a later call of the request superseded are cleared first, oldest
+first, down to 70% of the capacity left after reserved output: a `read` whose target a
+later read returned again over at least the same lines (a covering line window for
+`file` and `show`, the same or a larger limit otherwise), a `file` read or `diff`
+showing a path a later applied `write` changed, or a `bash` result whose exact command
+ran again. Their notices name the superseding call. A read answered by the repeated-read
+note below supersedes nothing. Staleness is weighed only while a request exceeds the
+budget, and a cleared result stays cleared, so the shared prefix changes only when
+fitting already changes it. Every remaining tool result above 25% of that capacity is
+then cut to a head and tail excerpt of that size, and the latest round's largest results
+are cut to one common size while the round's results together exceed 50%, so one
+oversized output never pushes earlier rounds out. The request is then reduced to 70% of
+its capacity, in order: the other older tool results become tool-aware notices (oldest
+first, replayed history before the current turn; a `read` notice names its target), then
+older assistant reasoning becomes a non-empty placeholder (providers that replay
+reasoning still receive the field), then older `write` patches become a note on their
+recorded outcome, then the oldest replayed turns are dropped, then the current turn's
+oldest tool rounds are dropped whole, each call message with all its results, behind one
+bounded note that counts the removed calls, names the writes they applied and the
+commands they ran, and lists their distinct read targets to re-read only if still
+needed. Tool calls keep their identifiers, so tool groups stay well-formed, and the
+latest tool round is never reduced by these steps. Each step is a watermark into the
+append-only canonical messages that later requests replay, so successive requests share
+a stable prefix and reduce further only when the budget is exceeded again; each reduced
+message is cached, so a request between watermark advances only weighs and appends its
+new messages. If the request still does not fit, the latest round's largest results are
+cut further to a head and tail excerpt that asks for a narrower read, and as the last
+resort its `write` patches are replaced by their recorded outcome; only when even that
+fails does the turn fail typed. Each `ModelRequestActivity` reports the reductions its
+request carried.
+
+Before running a `read`, the engine compares its canonical arguments with the reads
+already run in the turn. When an identical read ran earlier, no `write` or `bash` call
+was handled since, the last request carried that result whole (neither reduced, cut, nor
+dropped), and the result is larger than the note, the call is answered with a short
+`unchanged` result naming the earlier call instead of running. The call and that result
+are journaled like any tool exchange, because a durable record describes what the turn
+returned, and the turn report lists it as `ToolActivity::ReadRepeated`. `write` and
+`bash` always run.
 
 The heuristic estimate under-counts some content, so the harness calibrates it from
 provider usage, much like Codex combines the last reported usage with an estimate of
@@ -238,6 +256,17 @@ fitting. Neither the rejected output nor the feedback is journaled, because only
 finished, accepted exchanges belong in replayed history;
 `TurnReport::output_corrections` counts the retries, and a third rejection fails the
 turn with the original error type.
+
+A tool call whose arguments fail local decoding, such as invalid JSON, an unknown or
+misspelled field, or a wrong type beyond the numeric-string coercion, is kept as a
+`MalformedArguments` call instead of failing the response. It is journaled with its raw
+arguments and answered with a rejected tool result carrying the bounded diagnostic and
+the called tool's argument fields; the other calls of the response run normally. Chat
+Completions providers reject replayed arguments that are not a JSON object, so such text
+is replayed wrapped as `{"malformed_arguments": "<raw>"}`; arguments that are a JSON
+object replay verbatim. `TurnReport::malformed_tool_calls` counts these calls; a
+response with any decodable call resets the consecutive count, and a third consecutive
+response made only of malformed calls fails the turn with `InvalidToolArguments`.
 
 ## Input and output
 

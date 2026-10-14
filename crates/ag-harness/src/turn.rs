@@ -22,7 +22,7 @@ use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::schema_contract::OutputSchema;
-use crate::tool::ReadAction;
+use crate::tool::{ReadAction, Tool};
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -134,6 +134,8 @@ pub struct TurnReport {
     model_requests: Vec<ModelRequestActivity>,
     #[serde(default)]
     output_corrections: usize,
+    #[serde(default)]
+    malformed_tool_calls: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -167,6 +169,15 @@ impl TurnReport {
         self.output_corrections
     }
 
+    /// Returns how many tool calls had arguments their tool could not
+    /// decode, such as invalid JSON or an unknown field; each was answered
+    /// with an error result instead of running, and is also reported as
+    /// [`ToolActivity::MalformedArguments`]. Reports recorded before this
+    /// field existed report none.
+    pub fn malformed_tool_calls(&self) -> usize {
+        self.malformed_tool_calls
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -182,12 +193,18 @@ impl TurnReport {
             history: HistoryActivity::default(),
             model_requests,
             output_corrections: 0,
+            malformed_tool_calls: 0,
             tool_calls,
         }
     }
 
-    pub(crate) fn with_output_corrections(mut self, output_corrections: usize) -> Self {
+    pub(crate) fn with_corrections(
+        mut self,
+        output_corrections: usize,
+        malformed_tool_calls: usize,
+    ) -> Self {
         self.output_corrections = output_corrections;
+        self.malformed_tool_calls = malformed_tool_calls;
 
         self
     }
@@ -337,6 +354,8 @@ pub struct ContextActivity {
     elided_results: usize,
     shrunk_latest_write_calls: usize,
     shrunk_write_calls: usize,
+    #[serde(default)]
+    superseded_results: usize,
     truncated_results: usize,
 }
 
@@ -359,7 +378,8 @@ impl ContextActivity {
         self.dropped_tool_calls
     }
 
-    /// Earlier tool results replaced by a notice that they were cleared.
+    /// Earlier tool results replaced by a notice that they were cleared,
+    /// including [`Self::superseded_results`].
     pub fn elided_results(self) -> usize {
         self.elided_results
     }
@@ -373,6 +393,14 @@ impl ContextActivity {
     /// Earlier `write` calls whose patch was replaced by a short notice.
     pub fn shrunk_write_calls(self) -> usize {
         self.shrunk_write_calls
+    }
+
+    /// Elided results cleared ahead of older ones because a later call of
+    /// the request superseded them: a re-read of the same target, an applied
+    /// write to the file read, or a rerun of the same command. Reports
+    /// recorded before this field existed report none.
+    pub fn superseded_results(self) -> usize {
+        self.superseded_results
     }
 
     /// Tool results cut to a head and tail excerpt: oversized results capped
@@ -397,8 +425,15 @@ impl ContextActivity {
             elided_results,
             shrunk_latest_write_calls,
             shrunk_write_calls,
+            superseded_results: 0,
             truncated_results,
         }
+    }
+
+    pub(crate) fn with_superseded_results(mut self, superseded_results: usize) -> Self {
+        self.superseded_results = superseded_results;
+
+        self
     }
 }
 
@@ -450,6 +485,28 @@ pub enum ToolActivity {
         /// Repository-relative path that was rejected.
         path: String,
     },
+    /// A `read` identical to an earlier read of the same turn, answered
+    /// without running it by a short result naming that earlier call. Only
+    /// a read whose earlier result the request still carries whole, with no
+    /// `write` or `bash` call run since, is answered this way.
+    ReadRepeated {
+        /// Selected inspection action.
+        action: ReadAction,
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Bounded path, query, or action summary.
+        summary: String,
+    },
+    /// A call whose arguments its tool could not decode, answered with an
+    /// error result naming the problem instead of running.
+    MalformedArguments {
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Bounded decoding failure.
+        reason: String,
+        /// Tool the model called.
+        tool: Tool,
+    },
     /// A repository file write.
     Write {
         /// Number of bytes in the resulting file.
@@ -477,6 +534,8 @@ impl ToolActivity {
             | Self::ReadInspection { duration, .. }
             | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
+            | Self::ReadRepeated { duration, .. }
+            | Self::MalformedArguments { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
         }
@@ -488,23 +547,26 @@ impl ToolActivity {
             Self::Read { .. }
             | Self::ReadInspection { .. }
             | Self::ReadInspectionRejected { .. }
-            | Self::ReadRejected { .. } => "read",
+            | Self::ReadRejected { .. }
+            | Self::ReadRepeated { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
+            Self::MalformedArguments { tool, .. } => tool.name(),
         }
     }
 
-    /// Returns the repository-relative target or bounded inspection summary.
+    /// Returns the repository-relative target or bounded inspection summary;
+    /// empty for `bash` and malformed calls.
     pub fn path(&self) -> &str {
         match self {
-            Self::Bash { .. } => "",
+            Self::Bash { .. } | Self::MalformedArguments { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
             | Self::WriteRejected { path, .. } => path,
-            Self::ReadInspection { summary, .. } | Self::ReadInspectionRejected { summary, .. } => {
-                summary
-            }
+            Self::ReadInspection { summary, .. }
+            | Self::ReadInspectionRejected { summary, .. }
+            | Self::ReadRepeated { summary, .. } => summary,
         }
     }
 }
@@ -561,6 +623,28 @@ impl fmt::Display for ToolActivity {
                 formatter,
                 "read {} (rejected; {})",
                 sanitize_report_text(path),
+                format_report_duration(*duration)
+            ),
+            Self::ReadRepeated {
+                action,
+                duration,
+                summary,
+            } => write!(
+                formatter,
+                "read {} {} (repeated; {})",
+                action.as_str(),
+                sanitize_report_text(summary),
+                format_report_duration(*duration)
+            ),
+            Self::MalformedArguments {
+                duration,
+                reason,
+                tool,
+            } => write!(
+                formatter,
+                "{} (malformed arguments: {}; {})",
+                tool.name(),
+                sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
             Self::Write {

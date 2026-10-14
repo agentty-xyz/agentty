@@ -664,7 +664,7 @@ async fn long_read_loops_send_reduced_copies_within_the_budget() {
         recorded.lock().expect("requests lock").push(request);
         let call = calls.fetch_add(1, Ordering::SeqCst);
         let response = if call < 6 {
-            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
+            let arguments = serde_json::from_value(json!({"path": format!("notes_{call}.txt")}))
                 .expect("read arguments should be valid");
             ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
         } else {
@@ -741,7 +741,7 @@ async fn very_long_read_loops_drop_their_oldest_rounds_to_stay_within_the_budget
         recorded.lock().expect("requests lock").push(request);
         let call = calls.fetch_add(1, Ordering::SeqCst);
         let response = if call < rounds {
-            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
+            let arguments = serde_json::from_value(json!({"path": format!("notes_{call}.txt")}))
                 .expect("read arguments should be valid");
             ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
         } else {

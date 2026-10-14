@@ -369,7 +369,7 @@ impl ChatCompletionBackend {
             .iter()
             .map(|call| ChatCompletionOutgoingToolCall {
                 function: ChatCompletionOutgoingFunctionCall {
-                    arguments: call.arguments_json(),
+                    arguments: call.wire_arguments(),
                     name: call.name().to_string(),
                 },
                 id: call.id().to_string(),

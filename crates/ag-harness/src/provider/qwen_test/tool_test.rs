@@ -1,11 +1,12 @@
 use serde_json::json;
-use wiremock::MockServer;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{
     mount_read_response, mount_structured_response, mount_tool_response, person_schema_value, qwen,
     read_request, request,
 };
-use crate::model;
+use crate::{model, tool};
 
 #[tokio::test]
 async fn completes_terminal_response_with_null_tool_calls() {
@@ -111,23 +112,17 @@ async fn rejects_terminal_response_with_tool_calls() {
 }
 
 #[tokio::test]
-async fn rejects_malformed_and_invalid_read_arguments() {
+async fn keeps_malformed_read_arguments_and_replays_them_as_json_objects() {
     // Arrange
     let cases = [
-        ("{", "model returned invalid tool arguments:"),
-        (
-            r#"{"path":"Cargo.toml","offset":0}"#,
-            "model returned invalid tool arguments:",
-        ),
-        (
-            r#"{"path":"Cargo.toml","extra":true}"#,
-            "model returned invalid tool arguments:",
-        ),
+        "{",
+        r#"{"path":"Cargo.toml","offset":0}"#,
+        r#"{"path":"Cargo.toml","extra":true}"#,
     ];
 
     // Act
-    let mut errors = Vec::new();
-    for (index, (arguments, expected)) in cases.into_iter().enumerate() {
+    let mut calls = Vec::new();
+    for (index, arguments) in cases.into_iter().enumerate() {
         let server = MockServer::start().await;
         mount_tool_response(
             &server,
@@ -142,19 +137,66 @@ async fn rejects_malformed_and_invalid_read_arguments() {
             }),
         )
         .await;
-        let error = qwen(&server)
+        let completion = qwen(&server)
             .complete(read_request("inspect the manifest"))
             .await
-            .expect_err("invalid read arguments should fail");
-        errors.push((error.to_string(), expected));
+            .expect("malformed read arguments are kept");
+        let model::ModelResponse::ToolCall(call) = completion.response() else {
+            std::panic::resume_unwind(Box::new("tool call expected"));
+        };
+        calls.push(call.clone());
     }
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": {"content": r#"{"name":"Ada"}"#}
+            }]
+        })))
+        .mount(&server)
+        .await;
+    let mut replay = read_request("inspect the manifest");
+    replay.record_tool_calls(calls.clone());
+    for call in &calls {
+        replay.record_tool_result(call, r#"{"status":"rejected"}"#.to_string());
+    }
+    qwen(&server)
+        .complete(replay)
+        .await
+        .expect("replayed malformed calls are accepted");
+    let requests = server.received_requests().await.expect("recorded");
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON body");
 
     // Assert
-    assert!(
-        errors
-            .iter()
-            .all(|(error, expected)| error.starts_with(expected))
-    );
+    for (call, raw) in calls.iter().zip(cases) {
+        assert_eq!(
+            call.malformed_arguments()
+                .map(tool::MalformedArguments::raw),
+            Some(raw)
+        );
+    }
+    let wire = body["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|message| message["tool_calls"].is_array())
+        })
+        .expect("replayed tool calls");
+    let replayed: Vec<serde_json::Value> = wire["tool_calls"]
+        .as_array()
+        .expect("tool calls")
+        .iter()
+        .map(|call| {
+            serde_json::from_str(call["function"]["arguments"].as_str().expect("string"))
+                .expect("JSON object on the wire")
+        })
+        .collect();
+    assert_eq!(replayed[0], json!({"malformed_arguments": "{"}));
+    assert_eq!(replayed[1], json!({"path":"Cargo.toml","offset":0}));
+    assert_eq!(replayed[2], json!({"path":"Cargo.toml","extra":true}));
 }
 
 #[tokio::test]

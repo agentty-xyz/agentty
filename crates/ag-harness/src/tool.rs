@@ -45,7 +45,8 @@ const WRITE_DESCRIPTION: &str = concat!(
 const WRITE_NAME: &str = "write";
 
 /// Built-in tool that can be enabled for a harness run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Tool {
     /// Sandboxed Bash with explicit host capabilities.
     Bash,
@@ -53,6 +54,17 @@ pub enum Tool {
     Read,
     /// Repository-relative patch writes.
     Write,
+}
+
+impl Tool {
+    /// Returns the function name advertised to models.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bash => "bash",
+            Self::Read => READ_NAME,
+            Self::Write => WRITE_NAME,
+        }
+    }
 }
 
 /// Provider-neutral definition of a native model tool.
@@ -212,15 +224,18 @@ impl ToolCall {
     /// The call identifier must contain non-whitespace text and be at most
     /// 1,024 UTF-8 bytes. Accepted identifiers are preserved verbatim.
     /// Arguments and optional provider reasoning are bounded before decoding.
-    /// Structurally valid read-action mistakes, including unsafe read paths,
-    /// are retained for corrective tool feedback. The harness separately
-    /// enforces tool permissions, repository containment, batch identifiers,
-    /// and execution limits.
+    /// Arguments the tool cannot decode, such as invalid JSON, an unknown
+    /// field, an oversized read path, or an unsafe write path, are kept
+    /// verbatim as [`MalformedArguments`] so the harness answers the call
+    /// with an error result instead of running it. Structurally valid
+    /// read-action mistakes, including unsafe read paths, are retained for
+    /// corrective tool feedback. The harness separately enforces tool
+    /// permissions, repository containment, batch identifiers, and execution
+    /// limits.
     ///
     /// # Errors
     /// Returns [`crate::ModelError`] for an invalid call identifier,
-    /// unsupported tool name, oversized content, or invalid JSON arguments,
-    /// including oversized read paths and unsafe write paths.
+    /// unsupported tool name, or oversized content.
     pub fn from_json(
         id: String,
         name: &str,
@@ -236,19 +251,28 @@ impl ToolCall {
             schema_contract::ensure_content_size(reasoning_content)
                 .map_err(model::ModelError::from)?;
         }
-        let arguments = match name {
-            "bash" => serde_json::from_str(arguments).map(ToolArguments::Bash),
-            READ_NAME => serde_json::from_str(arguments).map(ToolArguments::Read),
-            WRITE_NAME => serde_json::from_str(arguments).map(ToolArguments::Write),
+        let tool = match name {
+            "bash" => Tool::Bash,
+            READ_NAME => Tool::Read,
+            WRITE_NAME => Tool::Write,
             _ => {
                 return Err(model::ModelError::UnsupportedToolName {
                     name: schema_contract::bounded_diagnostic(name),
                 });
             }
-        }
-        .map_err(|error| model::ModelError::InvalidToolArguments {
-            reason: schema_contract::bounded_diagnostic(error),
-        })?;
+        };
+        let decoded = match tool {
+            Tool::Bash => serde_json::from_str(arguments).map(ToolArguments::Bash),
+            Tool::Read => serde_json::from_str(arguments).map(ToolArguments::Read),
+            Tool::Write => serde_json::from_str(arguments).map(ToolArguments::Write),
+        };
+        let arguments = decoded.unwrap_or_else(|error| {
+            ToolArguments::Malformed(MalformedArguments {
+                raw: arguments.to_string(),
+                reason: schema_contract::bounded_diagnostic(error),
+                tool,
+            })
+        });
 
         Ok(Self {
             arguments,
@@ -263,6 +287,15 @@ impl ToolCall {
             ToolArguments::Bash(arguments) => ToolCallArguments::Bash(arguments),
             ToolArguments::Read(arguments) => ToolCallArguments::Read(arguments),
             ToolArguments::Write(arguments) => ToolCallArguments::Write(arguments),
+            ToolArguments::Malformed(arguments) => ToolCallArguments::Malformed(arguments),
+        }
+    }
+
+    /// Returns the undecodable arguments when this call is malformed.
+    pub fn malformed_arguments(&self) -> Option<&MalformedArguments> {
+        match &self.arguments {
+            ToolArguments::Malformed(arguments) => Some(arguments),
+            ToolArguments::Bash(_) | ToolArguments::Read(_) | ToolArguments::Write(_) => None,
         }
     }
 
@@ -270,14 +303,14 @@ impl ToolCall {
     pub fn read_arguments(&self) -> Option<&ReadArguments> {
         match &self.arguments {
             ToolArguments::Read(arguments) => Some(arguments),
-            ToolArguments::Write(_) | ToolArguments::Bash(_) => None,
+            ToolArguments::Write(_) | ToolArguments::Bash(_) | ToolArguments::Malformed(_) => None,
         }
     }
 
     /// Returns typed `write` arguments when this is a `write` call.
     pub fn write_arguments(&self) -> Option<&WriteArguments> {
         match &self.arguments {
-            ToolArguments::Read(_) | ToolArguments::Bash(_) => None,
+            ToolArguments::Read(_) | ToolArguments::Bash(_) | ToolArguments::Malformed(_) => None,
             ToolArguments::Write(arguments) => Some(arguments),
         }
     }
@@ -289,10 +322,11 @@ impl ToolCall {
 
     /// Returns the requested native function name.
     pub fn name(&self) -> &'static str {
-        match self.arguments {
+        match &self.arguments {
             ToolArguments::Bash(_) => "bash",
             ToolArguments::Read(_) => READ_NAME,
             ToolArguments::Write(_) => WRITE_NAME,
+            ToolArguments::Malformed(arguments) => arguments.tool.name(),
         }
     }
 
@@ -305,6 +339,7 @@ impl ToolCall {
             ToolArguments::Bash(arguments) => serde_json::to_string(arguments),
             ToolArguments::Read(arguments) => serde_json::to_string(arguments),
             ToolArguments::Write(arguments) => serde_json::to_string(arguments),
+            ToolArguments::Malformed(arguments) => Ok(arguments.raw.clone()),
         }
     }
 
@@ -359,6 +394,36 @@ enum ToolArguments {
     Bash(BashArguments),
     Read(ReadArguments),
     Write(WriteArguments),
+    Malformed(MalformedArguments),
+}
+
+/// Arguments of a built-in tool call that the tool could not decode.
+///
+/// The raw text is kept verbatim, so the call is journaled and replayed as
+/// the model sent it, and is answered with an error result naming
+/// [`Self::reason`] instead of running.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MalformedArguments {
+    raw: String,
+    reason: String,
+    tool: Tool,
+}
+
+impl MalformedArguments {
+    /// Returns the arguments text exactly as the model sent it.
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    /// Returns the bounded decoding failure.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// Returns the tool the model called.
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
 }
 
 /// Borrowed typed arguments for one native tool call.
@@ -370,6 +435,8 @@ pub enum ToolCallArguments<'a> {
     Read(&'a ReadArguments),
     /// Arguments for a repository patch write.
     Write(&'a WriteArguments),
+    /// Arguments the called tool could not decode; the call never runs.
+    Malformed(&'a MalformedArguments),
 }
 
 /// Structurally validated arguments for one native read-only repository action.
