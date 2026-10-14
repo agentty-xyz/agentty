@@ -96,6 +96,7 @@ fn test_parse_model_rejects_non_preview_gemini_31_pro() {
 fn test_current_gemini_models_have_current_descriptions() {
     // Arrange
     let models = [
+        AgentModel::Gemini4Argon,
         AgentModel::Gemini31Pro,
         AgentModel::Gemini38Flash,
         AgentModel::Gemini35FlashLite,
@@ -108,6 +109,7 @@ fn test_current_gemini_models_have_current_descriptions() {
     assert_eq!(
         descriptions,
         [
+            "Gemini 4 Argon model.",
             "Higher-quality Gemini model for deeper reasoning.",
             "Fast Gemini model for agentic and multimodal tasks.",
             "Lightweight Gemini model for fast, cost-conscious workloads.",
@@ -225,6 +227,7 @@ fn test_claude_models_are_supported_by_claude() {
 fn test_gemini_models_are_supported_by_gemini_and_antigravity() {
     // Arrange
     let models = [
+        AgentModel::Gemini4Argon,
         AgentModel::Gemini31Pro,
         AgentModel::Gemini38Flash,
         AgentModel::Gemini35FlashLite,
@@ -236,9 +239,9 @@ fn test_gemini_models_are_supported_by_gemini_and_antigravity() {
     let codex_supported = models.map(|model| AgentKind::Codex.supports_model(model));
 
     // Assert
-    assert_eq!(antigravity_supported, [true; 3]);
-    assert_eq!(gemini_supported, [true; 3]);
-    assert_eq!(codex_supported, [false; 3]);
+    assert_eq!(antigravity_supported, [true; 4]);
+    assert_eq!(gemini_supported, [true; 4]);
+    assert_eq!(codex_supported, [false; 4]);
 }
 
 #[test]

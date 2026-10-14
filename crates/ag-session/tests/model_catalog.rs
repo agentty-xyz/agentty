@@ -11,6 +11,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
         (
             AgentKind::Gemini,
             vec![
+                "gemini-4-argon",
                 "gemini-3.1-pro-preview",
                 "gemini-3.8-flash",
                 "gemini-3.5-flash-lite",
@@ -20,6 +21,7 @@ fn provider_catalog_preserves_wire_ids_order_and_defaults() {
         (
             AgentKind::Antigravity,
             vec![
+                "gemini-4-argon",
                 "gemini-3.1-pro-preview",
                 "gemini-3.8-flash",
                 "gemini-3.5-flash-lite",
@@ -89,6 +91,8 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
     for model in models {
         assert_eq!(model.as_str().parse::<AgentModel>(), Ok(*model));
         assert_eq!(model.name(), model.as_str());
+        assert_eq!(model.provider_model_str(), model.as_str());
+        assert_eq!(AgentModel::parse_persisted(model.as_str()), Ok(*model));
         assert_ne!(model.description(), "");
         assert!(
             AgentKind::ALL

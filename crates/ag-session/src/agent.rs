@@ -71,6 +71,13 @@ macro_rules! define_model_catalog {
 
 define_model_catalog! {
     Gemini {
+        /// Gemini Argon model backed by `gemini-4-argon`.
+        Gemini4Argon = 17 => {
+            id: "gemini-4-argon",
+            description: "Gemini 4 Argon model.",
+            fast: false,
+            context: None,
+        },
         /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
         Gemini31Pro = 6 => {
             id: "gemini-3.1-pro-preview",

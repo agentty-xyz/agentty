@@ -36,7 +36,7 @@ fn test_antigravity_build_command_uses_stream_input_mode_with_sandbox() {
     // Arrange
     let temp_directory = visible_tempdir();
     let backend = supported_backend();
-    let requested_model = AgentModel::Gemini31Pro.provider_model_str();
+    let requested_model = AgentModel::Gemini4Argon.provider_model_str();
 
     // Act
     let command = AgentBackend::build_command(

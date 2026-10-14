@@ -386,9 +386,9 @@ async fn session_speed_mode_selection() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("/model Agent", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini-3.1-pro-preview", 3000)
+                    .wait_for_text("gemini-4-argon", 3000)
                     .press_key("Enter")
-                    .wait_for_text("gemini/gemini-3.1-pro-preview [high]", 5000)
+                    .wait_for_text("gemini/gemini-4-argon [high]", 5000)
                     .capture_labeled(
                         "incompatible_model_normalizes_speed",
                         "Switching to Gemini drops fast mode and its speed display",
@@ -419,11 +419,7 @@ async fn session_speed_mode_selection() -> E2eResult {
                     // Gemini keeps response style in the composer while
                     // dropping the unsupported speed status.
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "gemini/gemini-3.1-pro-preview [high]",
-                        &full,
-                    );
+                    assertion::assert_text_in_region(frame, "gemini/gemini-4-argon [high]", &full);
                     assertion::assert_not_visible(frame, "· Fast");
                 })
             },
