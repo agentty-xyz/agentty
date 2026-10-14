@@ -8,6 +8,7 @@ mod chat_completion;
 mod input;
 mod model;
 mod provider;
+mod response_error;
 mod schema;
 mod tool;
 

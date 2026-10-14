@@ -3,6 +3,7 @@ mod contract;
 mod landlock;
 mod launcher;
 mod native;
+mod output;
 #[cfg(any(target_os = "linux", test))]
 mod seccomp;
 mod supervisor;

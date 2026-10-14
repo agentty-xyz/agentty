@@ -156,3 +156,95 @@ fn preserves_request_sources_with_and_without_response_metadata() {
         "model returned no response content"
     );
 }
+
+#[test]
+fn shared_response_errors_preserve_their_messages() {
+    // Arrange
+    let cases = [
+        (
+            ModelError::Request(Box::new(io::Error::other("offline"))),
+            "model request failed: offline",
+        ),
+        (
+            ModelError::InvalidResponse,
+            "model returned no response content",
+        ),
+        (
+            ModelError::IncompleteResponse {
+                reason: "length".into(),
+            },
+            "model response is incomplete: length",
+        ),
+        (
+            ModelError::ResponseBodyTooLarge,
+            "model response body exceeds the size limit",
+        ),
+        (
+            ModelError::UnsupportedOutputSchema {
+                reason: "schema".into(),
+            },
+            "provider cannot satisfy this output schema: schema",
+        ),
+        (
+            ModelError::UnsupportedImageInput {
+                reason: "image".into(),
+            },
+            "model does not support image input: image",
+        ),
+        (
+            ModelError::ResponseContentTooLarge,
+            "model response content exceeds the size limit",
+        ),
+        (
+            ModelError::InvalidJson {
+                reason: "syntax".into(),
+            },
+            "model returned invalid JSON: syntax",
+        ),
+        (
+            ModelError::SchemaViolation {
+                path: "/name".into(),
+                reason: "type".into(),
+            },
+            "model output violates the schema at /name: type",
+        ),
+        (ModelError::MissingToolCall, "model returned no tool call"),
+        (
+            ModelError::InvalidToolCallId,
+            "model returned a blank or oversized tool call identifier",
+        ),
+        (
+            ModelError::DuplicateToolCallId {
+                id: "call-1".into(),
+            },
+            "model returned duplicate tool call identifier: call-1",
+        ),
+        (
+            ModelError::TerminalResponseWithToolCalls,
+            "model terminal response contained tool calls",
+        ),
+        (
+            ModelError::UnsupportedToolType {
+                kind: "custom".into(),
+            },
+            "model requested unsupported tool type: custom",
+        ),
+        (
+            ModelError::UnsupportedToolName {
+                name: "unknown".into(),
+            },
+            "model requested unsupported tool: unknown",
+        ),
+        (
+            ModelError::InvalidToolArguments {
+                reason: "arguments".into(),
+            },
+            "model returned invalid tool arguments: arguments",
+        ),
+    ];
+
+    // Act / Assert
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}

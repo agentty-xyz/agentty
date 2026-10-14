@@ -5,13 +5,13 @@ use std::process::Stdio;
 
 use async_trait::async_trait;
 use rustix::process::{Pid, Signal, kill_process_group};
-use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::contract::{
     BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, MainExit,
-    OutputStream, ProcessEvent,
+    ProcessEvent,
 };
+use super::output;
 use crate::command_journal::CommandCleanupScope;
 
 /// Bash executor that runs commands with no isolation of its own, for hosts
@@ -115,27 +115,8 @@ impl BashProcess for UnsandboxedProcess {
 
             return Ok(ProcessEvent::Quiescent);
         }
-        let mut output = [0; 4096];
-        let mut errors = [0; 4096];
         tokio::select! {
-            result = async { self.stdout.as_mut().ok_or(ExecutionError::Process)?.read(&mut output[..capacity]).await.map_err(|_| ExecutionError::Process) }, if self.stdout.is_some() => {
-                let length = result?;
-                if length == 0 {
-                    self.stdout = None;
-                    return Ok(ProcessEvent::Eof(OutputStream::Stdout));
-                }
-                buffer[..length].copy_from_slice(&output[..length]);
-                Ok(ProcessEvent::Output(OutputStream::Stdout, length))
-            }
-            result = async { self.stderr.as_mut().ok_or(ExecutionError::Process)?.read(&mut errors[..capacity]).await.map_err(|_| ExecutionError::Process) }, if self.stderr.is_some() => {
-                let length = result?;
-                if length == 0 {
-                    self.stderr = None;
-                    return Ok(ProcessEvent::Eof(OutputStream::Stderr));
-                }
-                buffer[..length].copy_from_slice(&errors[..length]);
-                Ok(ProcessEvent::Output(OutputStream::Stderr, length))
-            }
+            result = output::next_event(&mut self.stdout, &mut self.stderr, buffer), if self.stdout.is_some() || self.stderr.is_some() => result,
             status = async { self.child.as_mut().ok_or(ExecutionError::Process)?.wait().await.map_err(|_| ExecutionError::Process) }, if self.child.is_some() && !self.exit_delivered => {
                 self.exit_delivered = true;
                 Ok(ProcessEvent::MainExit(main_exit(status?)))
