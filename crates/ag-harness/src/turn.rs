@@ -22,7 +22,7 @@ use crate::model::{CompletionMetadata, ModelError};
 use crate::policy::ToolPolicy;
 use crate::read::ReadError;
 use crate::schema_contract::OutputSchema;
-use crate::tool::ReadAction;
+use crate::tool::{ReadAction, Tool};
 use crate::write::WriteError;
 
 /// Fully resolved configuration, fixed for the lifetime of one engine run.
@@ -135,7 +135,7 @@ pub struct TurnReport {
     #[serde(default)]
     output_corrections: usize,
     #[serde(default)]
-    tool_argument_corrections: usize,
+    malformed_tool_calls: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -169,12 +169,13 @@ impl TurnReport {
         self.output_corrections
     }
 
-    /// Returns how many tool-call responses were rejected for invalid tool
-    /// arguments, such as an unknown or misspelled field, and re-requested
-    /// with corrective feedback; none of a rejected response's calls ran.
-    /// Reports recorded before this field existed report none.
-    pub fn tool_argument_corrections(&self) -> usize {
-        self.tool_argument_corrections
+    /// Returns how many tool calls had arguments their tool could not
+    /// decode, such as invalid JSON or an unknown field; each was answered
+    /// with an error result instead of running, and is also reported as
+    /// [`ToolActivity::MalformedArguments`]. Reports recorded before this
+    /// field existed report none.
+    pub fn malformed_tool_calls(&self) -> usize {
+        self.malformed_tool_calls
     }
 
     /// Returns successful repository tool activity without file contents.
@@ -192,7 +193,7 @@ impl TurnReport {
             history: HistoryActivity::default(),
             model_requests,
             output_corrections: 0,
-            tool_argument_corrections: 0,
+            malformed_tool_calls: 0,
             tool_calls,
         }
     }
@@ -200,10 +201,10 @@ impl TurnReport {
     pub(crate) fn with_corrections(
         mut self,
         output_corrections: usize,
-        tool_argument_corrections: usize,
+        malformed_tool_calls: usize,
     ) -> Self {
         self.output_corrections = output_corrections;
-        self.tool_argument_corrections = tool_argument_corrections;
+        self.malformed_tool_calls = malformed_tool_calls;
 
         self
     }
@@ -496,6 +497,16 @@ pub enum ToolActivity {
         /// Bounded path, query, or action summary.
         summary: String,
     },
+    /// A call whose arguments its tool could not decode, answered with an
+    /// error result naming the problem instead of running.
+    MalformedArguments {
+        /// Elapsed tool-handling time.
+        duration: Duration,
+        /// Bounded decoding failure.
+        reason: String,
+        /// Tool the model called.
+        tool: Tool,
+    },
     /// A repository file write.
     Write {
         /// Number of bytes in the resulting file.
@@ -524,6 +535,7 @@ impl ToolActivity {
             | Self::ReadInspectionRejected { duration, .. }
             | Self::ReadRejected { duration, .. }
             | Self::ReadRepeated { duration, .. }
+            | Self::MalformedArguments { duration, .. }
             | Self::Write { duration, .. }
             | Self::WriteRejected { duration, .. } => *duration,
         }
@@ -539,13 +551,15 @@ impl ToolActivity {
             | Self::ReadRepeated { .. } => "read",
             Self::Write { .. } | Self::WriteRejected { .. } => "write",
             Self::Bash { .. } => "bash",
+            Self::MalformedArguments { tool, .. } => tool.name(),
         }
     }
 
-    /// Returns the repository-relative target or bounded inspection summary.
+    /// Returns the repository-relative target or bounded inspection summary;
+    /// empty for `bash` and malformed calls.
     pub fn path(&self) -> &str {
         match self {
-            Self::Bash { .. } => "",
+            Self::Bash { .. } | Self::MalformedArguments { .. } => "",
             Self::Read { path, .. }
             | Self::ReadRejected { path, .. }
             | Self::Write { path, .. }
@@ -620,6 +634,17 @@ impl fmt::Display for ToolActivity {
                 "read {} {} (repeated; {})",
                 action.as_str(),
                 sanitize_report_text(summary),
+                format_report_duration(*duration)
+            ),
+            Self::MalformedArguments {
+                duration,
+                reason,
+                tool,
+            } => write!(
+                formatter,
+                "{} (malformed arguments: {}; {})",
+                tool.name(),
+                sanitize_report_text(reason),
                 format_report_duration(*duration)
             ),
             Self::Write {

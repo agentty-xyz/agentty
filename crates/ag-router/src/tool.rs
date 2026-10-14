@@ -41,13 +41,31 @@ impl ToolDefinition {
     }
 }
 
+/// Key of the JSON object that carries malformed arguments on the wire.
+///
+/// Chat Completions providers reject a replayed assistant tool call whose
+/// arguments are not a JSON object, so malformed text is sent wrapped in an
+/// object under this key instead of verbatim.
+const MALFORMED_ARGUMENTS_KEY: &str = "malformed_arguments";
+
 /// One model-requested function call. Execution belongs to the caller.
+///
+/// A call whose arguments are not a JSON object is kept with its raw text and
+/// decoding failure, so the caller can answer it with an error result and
+/// replay it in later requests.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ToolCall {
-    arguments: Value,
+    arguments: Arguments,
+    arguments_json: String,
     id: String,
     name: String,
     reasoning_content: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Arguments {
+    Object(Value),
+    Malformed { reason: String },
 }
 
 impl fmt::Debug for ToolCall {
@@ -55,6 +73,7 @@ impl fmt::Debug for ToolCall {
         formatter
             .debug_struct("ToolCall")
             .field("arguments", &self.arguments)
+            .field("arguments_json", &self.arguments_json)
             .field("id", &self.id)
             .field("name", &self.name)
             .field(
@@ -68,8 +87,12 @@ impl fmt::Debug for ToolCall {
 impl ToolCall {
     /// Validates and decodes one function call.
     ///
+    /// Arguments that are not a JSON object are kept verbatim as malformed
+    /// rather than rejected; see [`Self::malformed_reason`].
+    ///
     /// # Errors
-    /// Returns a typed error for an invalid call identifier or arguments.
+    /// Returns a typed error for an invalid call identifier or oversized
+    /// arguments or reasoning.
     pub fn from_json(
         id: String,
         name: &str,
@@ -83,27 +106,42 @@ impl ToolCall {
         if let Some(reasoning_content) = &reasoning_content {
             schema::ensure_content_size(reasoning_content).map_err(ModelError::from)?;
         }
-        let arguments: Value =
-            serde_json::from_str(arguments).map_err(|error| ModelError::InvalidToolArguments {
-                reason: schema::bounded_diagnostic(error),
-            })?;
-        if !arguments.is_object() {
-            return Err(ModelError::InvalidToolArguments {
+        let arguments_json = arguments.to_string();
+        let arguments = match serde_json::from_str::<Value>(arguments) {
+            Ok(value) if value.is_object() => Arguments::Object(value),
+            Ok(_) => Arguments::Malformed {
                 reason: "function arguments must be a JSON object".to_string(),
-            });
-        }
+            },
+            Err(error) => Arguments::Malformed {
+                reason: schema::bounded_diagnostic(error),
+            },
+        };
 
         Ok(Self {
             arguments,
+            arguments_json,
             id,
             name: name.to_string(),
             reasoning_content,
         })
     }
 
-    /// Returns parsed function arguments.
-    pub fn arguments(&self) -> &Value {
-        &self.arguments
+    /// Returns the parsed arguments object, or `None` when the arguments
+    /// were malformed.
+    pub fn arguments(&self) -> Option<&Value> {
+        match &self.arguments {
+            Arguments::Object(value) => Some(value),
+            Arguments::Malformed { .. } => None,
+        }
+    }
+
+    /// Returns why the arguments are not a JSON object, or `None` when they
+    /// parsed.
+    pub fn malformed_reason(&self) -> Option<&str> {
+        match &self.arguments {
+            Arguments::Object(_) => None,
+            Arguments::Malformed { reason, .. } => Some(reason),
+        }
     }
 
     /// Returns the provider's call identifier.
@@ -116,9 +154,21 @@ impl ToolCall {
         &self.name
     }
 
-    /// Returns arguments serialized for provider history replay.
+    /// Returns the arguments text exactly as the model sent it.
     pub fn arguments_json(&self) -> String {
-        self.arguments.to_string()
+        self.arguments_json.clone()
+    }
+
+    /// Returns the arguments sent when replaying this call to a provider:
+    /// the original text when it is a JSON object, otherwise that text
+    /// wrapped under [`MALFORMED_ARGUMENTS_KEY`].
+    pub(crate) fn wire_arguments(&self) -> String {
+        match &self.arguments {
+            Arguments::Object(_) => self.arguments_json.clone(),
+            Arguments::Malformed { .. } => {
+                serde_json::json!({ MALFORMED_ARGUMENTS_KEY: self.arguments_json }).to_string()
+            }
+        }
     }
 
     /// Returns provider-specific reasoning content for history replay.

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::{
     MAX_PATCH_BYTES, MAX_PATH_BYTES, MAX_QUERY_BYTES, MAX_TOOL_CALL_ID_BYTES, READ_DESCRIPTION,
-    ReadAction, ReadArguments, ReadSide, ToolCall, ToolCallArguments, ToolDefinition,
+    ReadAction, ReadArguments, ReadSide, Tool, ToolCall, ToolCallArguments, ToolDefinition,
     WriteArguments,
 };
 use crate::{ComparisonBase, model, schema_contract};
@@ -89,7 +89,7 @@ fn tool_call_from_json_preserves_read_and_write_payloads() {
 }
 
 #[test]
-fn tool_call_from_json_rejects_unsupported_names_and_invalid_arguments() {
+fn tool_call_from_json_rejects_unsupported_names_and_keeps_malformed_arguments() {
     // Arrange
     let inputs = [
         ("unknown-tool", "{}"),
@@ -112,11 +112,14 @@ fn tool_call_from_json_rejects_unsupported_names_and_invalid_arguments() {
         results[0],
         Err(model::ModelError::UnsupportedToolName { .. })
     ));
-    assert!(
-        results[1..]
-            .iter()
-            .all(|result| matches!(result, Err(model::ModelError::InvalidToolArguments { .. })))
-    );
+    for (result, (name, raw)) in results[1..].iter().zip(&inputs[1..]) {
+        let call = result.as_ref().expect("malformed call is kept");
+        let malformed = call.malformed_arguments().expect("malformed arguments");
+        assert_eq!((call.name(), malformed.raw()), (*name, *raw));
+        assert_eq!(malformed.tool().name(), *name);
+        assert_eq!(call.arguments_json().expect("raw"), *raw);
+        assert!(call.read_arguments().is_none() && call.write_arguments().is_none());
+    }
 }
 
 #[test]
@@ -741,18 +744,17 @@ fn read_capabilities_and_description_follow_the_selected_base() {
 }
 
 #[test]
-fn invalid_tool_arguments_name_the_tool_and_the_problem() {
+fn malformed_arguments_keep_the_decoding_failure() {
     // Arrange
     let arguments = r#"{"path src/":"lib.rs"}"#;
 
     // Act
-    let error = ToolCall::from_json("call-id".to_string(), "read", arguments, None)
-        .expect_err("unknown field");
+    let call = ToolCall::from_json("call-id".to_string(), "read", arguments, None)
+        .expect("kept as malformed");
 
     // Assert
-    assert!(matches!(
-        error,
-        model::ModelError::InvalidToolArguments { reason }
-            if reason.starts_with("`read`: unknown field `path src/`")
-    ));
+    let malformed = call.malformed_arguments().expect("malformed");
+    assert_eq!(malformed.tool(), Tool::Read);
+    assert!(malformed.reason().starts_with("unknown field `path src/`"));
+    assert!(matches!(call.arguments(), ToolCallArguments::Malformed(found) if found == malformed));
 }

@@ -257,14 +257,16 @@ finished, accepted exchanges belong in replayed history;
 `TurnReport::output_corrections` counts the retries, and a third rejection fails the
 turn with the original error type.
 
-A tool-call response whose arguments fail local decoding, such as an unknown or
-misspelled field or a wrong type beyond the numeric-string coercion, is handled the same
-way: none of its calls runs, and the engine appends request-only feedback carrying the
-bounded diagnostic and every advertised tool's argument fields. The rejected response
-and the feedback are not journaled, so stored tool calls always decode and replay.
-`TurnReport::tool_argument_corrections` counts the retries; an accepted tool-call
-response resets the consecutive count, and a third consecutive rejection fails the turn
-with the original error type.
+A tool call whose arguments fail local decoding, such as invalid JSON, an unknown or
+misspelled field, or a wrong type beyond the numeric-string coercion, is kept as a
+`MalformedArguments` call instead of failing the response. It is journaled with its raw
+arguments and answered with a rejected tool result carrying the bounded diagnostic and
+the called tool's argument fields; the other calls of the response run normally. Chat
+Completions providers reject replayed arguments that are not a JSON object, so such text
+is replayed wrapped as `{"malformed_arguments": "<raw>"}`; arguments that are a JSON
+object replay verbatim. `TurnReport::malformed_tool_calls` counts these calls; a
+response with any decodable call resets the consecutive count, and a third consecutive
+response made only of malformed calls fails the turn with `InvalidToolArguments`.
 
 ## Input and output
 

@@ -124,8 +124,8 @@ fn corrections_and_superseded_results_default_in_legacy_reports() {
 
     // Assert
     assert_eq!(report.output_corrections(), 2);
-    assert_eq!(report.tool_argument_corrections(), 3);
-    assert_eq!(decoded_report.tool_argument_corrections(), 0);
+    assert_eq!(report.malformed_tool_calls(), 3);
+    assert_eq!(decoded_report.malformed_tool_calls(), 0);
     assert_eq!(decoded_context.elided_results(), 4);
     assert_eq!(decoded_context.superseded_results(), 0);
     assert_eq!(context.superseded_results(), 2);

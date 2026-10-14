@@ -1769,6 +1769,9 @@ struct StoredAssistantReasoningOwned {
     reasoning_content: String,
 }
 
+/// One durable tool call. Decoded arguments are stored as their JSON object;
+/// malformed arguments are stored as a JSON string holding the model's raw
+/// text, so replay keeps them verbatim.
 #[derive(Deserialize, Serialize)]
 struct StoredToolCall {
     arguments: Value,
@@ -1779,20 +1782,37 @@ struct StoredToolCall {
 
 impl StoredToolCall {
     fn from_call(call: &ToolCall) -> Result<Self, SessionError> {
+        if let Some(malformed) = call.malformed_arguments() {
+            return Ok(Self::with_arguments(
+                call,
+                Value::String(malformed.raw().to_string()),
+            ));
+        }
         let arguments = call
             .arguments_json()
             .map_err(|error| invalid_json(&error))?;
         let arguments = serde_json::from_str(&arguments).map_err(|error| invalid_json(&error))?;
 
-        Ok(Self {
+        Ok(Self::with_arguments(call, arguments))
+    }
+
+    fn with_arguments(call: &ToolCall, arguments: Value) -> Self {
+        Self {
             arguments,
             id: call.id().to_string(),
             name: call.name().to_string(),
             reasoning_content: call.reasoning_content().map(str::to_string),
-        })
+        }
     }
 
     fn into_call(self) -> Result<ToolCall, SessionError> {
+        if let Value::String(raw) = &self.arguments {
+            return ToolCall::from_json(self.id, &self.name, raw, self.reasoning_content).map_err(
+                |error| SessionError::InvalidData {
+                    reason: error.to_string(),
+                },
+            );
+        }
         match self.name.as_str() {
             "bash" => ToolCall::from_json(
                 self.id,
@@ -1802,6 +1822,14 @@ impl StoredToolCall {
             )
             .map_err(|error| SessionError::InvalidData {
                 reason: error.to_string(),
+            })
+            .and_then(|call| match call.malformed_arguments() {
+                // Decoded calls are stored as objects; one that no longer
+                // decodes is corrupt rather than a malformed model call.
+                Some(malformed) => Err(SessionError::InvalidData {
+                    reason: format!("invalid persistent bash arguments: {}", malformed.reason()),
+                }),
+                None => Ok(call),
             }),
             "read" => serde_json::from_value::<ReadArguments>(self.arguments)
                 .map(|arguments| ToolCall::read(self.id, arguments, self.reasoning_content))

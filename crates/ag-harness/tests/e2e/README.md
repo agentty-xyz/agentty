@@ -44,6 +44,20 @@ cargo test --locked -p ag-harness --test e2e qwen::test_qwen -- --exact --ignore
 The feature checks in `features.rs` run with `qwen-plus` unless `QWEN_MODEL` names
 another Qwen model.
 
+## Malformed tool arguments
+
+`features::test_malformed_tool_arguments` answers the first request with a malformed
+`read` call, then lets the live model continue. The provider must accept the replayed
+call and its error result, the model must re-issue a valid read, and a second durable
+turn must replay the stored malformed call. Like the other feature checks, it runs Git
+from `/opt/homebrew/bin/git` and uses the provider variables above; `AG_LIVE_PROVIDERS`
+selects providers:
+
+```sh
+AG_LIVE_PROVIDERS=muse,qwen \
+cargo test --locked -p ag-harness --test e2e features::test_malformed_tool_arguments -- --exact --ignored --nocapture
+```
+
 ## Images
 
 The `image` checks send ordered PNG and JPEG blocks through one-shot and durable turns

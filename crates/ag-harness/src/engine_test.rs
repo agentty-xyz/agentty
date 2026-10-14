@@ -7,9 +7,7 @@ use crate::calibration::ContextCalibration;
 use crate::context::{ContextBudget, ContextEstimator, ContextFit, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
-use crate::engine::{
-    Engine, MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS, MAX_OUTPUT_CORRECTIONS, RepeatedReads,
-};
+use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::lifecycle::LifecycleEmitter;
 use crate::model::{
@@ -190,54 +188,6 @@ async fn feedback_that_overflows_a_tool_free_request_fails_the_turn_typed() {
     assert_eq!(requests.len(), 1);
 }
 
-fn invalid_arguments() -> ModelError {
-    ModelError::InvalidToolArguments {
-        reason: "`read`: unknown field `path src/`, expected one of `action`, `path`".to_string(),
-    }
-}
-
-#[tokio::test]
-async fn invalid_tool_arguments_are_re_requested_with_bounded_feedback() {
-    // Arrange
-    let responses = vec![
-        Err(invalid_arguments()),
-        Ok(ModelResponse::Output(json!({"answer": "ok"}))),
-    ];
-
-    // Act
-    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
-
-    // Assert
-    let outcome = outcome.expect("the corrected response should be accepted");
-    assert_eq!(outcome.report().tool_argument_corrections(), 1);
-    assert_eq!(outcome.report().output_corrections(), 0);
-    assert_eq!(requests.len(), 2);
-    let Some(ModelMessage::User(feedback)) = requests[1].messages().last() else {
-        std::panic::resume_unwind(Box::new("feedback expected"));
-    };
-    assert!(feedback.starts_with("[harness] Your previous response was rejected"));
-    assert!(feedback.contains("unknown field `path src/`"));
-    assert!(feedback.contains("None of its tool calls ran"));
-}
-
-#[tokio::test]
-async fn consecutive_invalid_tool_arguments_fail_the_turn_at_the_limit() {
-    // Arrange
-    let responses = (0..MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS)
-        .map(|_| Err(invalid_arguments()))
-        .collect();
-
-    // Act
-    let (outcome, requests) = run_scripted(unbounded_context_budget(), responses).await;
-
-    // Assert
-    assert!(matches!(
-        outcome,
-        Err(TurnError::Model(ModelError::InvalidToolArguments { .. }))
-    ));
-    assert_eq!(requests.len(), MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS);
-}
-
 fn tool_call(id: &str, name: &str, arguments: &serde_json::Value) -> ToolCall {
     ToolCall::from_json(id.to_string(), name, &arguments.to_string(), None).expect("tool call")
 }
@@ -318,10 +268,15 @@ fn repeated_reads_run_again_after_a_write_or_command() {
     reads.record(&effects[0], 4, 10, false);
     reads.record(&read_of("r2", &json!({"path": "a.txt"})), 6, 5000, false);
     let read_again = reads.repeat_of(&read, &fit);
+    let malformed = ToolCall::from_json("m1".to_string(), "write", r#"{"path":"#, None)
+        .expect("malformed write");
+    reads.record(&malformed, 8, 10, false);
+    let after_malformed = reads.repeat_of(&read, &fit);
 
     // Assert
     assert_eq!(after_effect, [None, None]);
     assert_eq!(read_again.as_deref(), Some("r2"));
+    assert_eq!(after_malformed.as_deref(), Some("r2"));
 }
 
 #[test]

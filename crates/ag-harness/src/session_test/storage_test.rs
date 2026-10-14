@@ -511,6 +511,10 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
     let invalid_read =
         r#"{"arguments":{"bogus":true},"id":"call","name":"read","reasoning_content":null}"#;
     let unknown_tool = r#"{"arguments":{},"id":"call","name":"bash","reasoning_content":null}"#;
+    let malformed_unknown_tool =
+        r#"{"arguments":"{","id":"call","name":"grep","reasoning_content":null}"#;
+    let blank_bash_id =
+        r#"{"arguments":{"command":"ls"},"id":" ","name":"bash","reasoning_content":null}"#;
 
     // Act
     let malformed = EncodedMessage::into_message("user", invalid_json);
@@ -525,7 +529,47 @@ fn message_decoder_rejects_invalid_json_arguments_and_unknown_tools() {
         Err(SessionError::InvalidData { .. })
     ));
     assert!(matches!(unknown, Err(SessionError::InvalidData { .. })));
+    for payload in [malformed_unknown_tool, blank_bash_id] {
+        assert!(matches!(
+            EncodedMessage::into_message("assistant_tool_call", payload),
+            Err(SessionError::InvalidData { .. })
+        ));
+    }
     assert!(matches!(system, Err(SessionError::InvalidData { .. })));
+}
+
+#[test]
+fn persisted_malformed_calls_keep_their_raw_arguments() {
+    // Arrange
+    let calls = [
+        ("read", r#"{"path src/": "lib.rs""#),
+        ("write", r#"{ "path": "lib.rs" }"#),
+        ("bash", "[]"),
+    ]
+    .map(|(name, raw)| {
+        ToolCall::from_json(format!("{name}-call"), name, raw, Some("why".into()))
+            .expect("malformed call")
+    });
+
+    for call in calls {
+        // Act
+        let message = ModelMessage::AssistantToolCalls(vec![call.clone()]);
+        let encoded = EncodedMessage::from_message(&message).expect("encode");
+        let decoded = EncodedMessage::into_message(encoded.kind, &encoded.payload).expect("decode");
+
+        // Assert
+        assert_eq!(decoded, message);
+        let ModelMessage::AssistantToolCalls(decoded) = decoded else {
+            std::panic::resume_unwind(Box::new("tool calls expected"));
+        };
+        assert_eq!(
+            decoded[0]
+                .malformed_arguments()
+                .map(crate::tool::MalformedArguments::raw),
+            call.malformed_arguments()
+                .map(crate::tool::MalformedArguments::raw)
+        );
+    }
 }
 
 #[test]

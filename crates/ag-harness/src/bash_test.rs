@@ -128,7 +128,9 @@ fn validates_arguments_and_exposes_bounded_tool_contract_without_debug_content()
             r#"{"command":"true","cwd":"/"}"#,
             None
         )
-        .is_err()
+        .expect("kept as malformed")
+        .malformed_arguments()
+        .is_some()
     );
     assert_eq!(definition.parameters()["additionalProperties"], false);
 }

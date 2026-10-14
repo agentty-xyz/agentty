@@ -200,7 +200,79 @@ async fn returns_generic_tool_calls_for_caller_execution() -> Result<(), Box<dyn
     assert!(matches!(result, Completion::ToolCalls { calls, .. }
         if calls.len() == 1
         && calls[0].name() == "lookup"
-        && calls[0].arguments() == &json!({"id":7})));
+        && calls[0].arguments() == Some(&json!({"id":7}))));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn returns_malformed_tool_calls_and_replays_them_as_json_objects()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let server = MockServer::start().await;
+    let raw = r#"{"path src/": "a.rs""#;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {"content": null, "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": raw}
+                }]}
+            }]
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let lookup = ToolDefinition::new("lookup", "Look up a record", json!({"type":"object"}));
+    let mut request = request("muse/muse-spark-1.3")?;
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.tools.push(lookup);
+    }
+    let router = router(Provider::Muse, &server)?;
+
+    // Act
+    let result = router.execute(request.clone()).await?;
+    let Completion::ToolCalls { calls, .. } = result else {
+        return Err("expected tool calls".into());
+    };
+    if let ag_router::Task::Chat(chat) = &mut request.task {
+        chat.messages
+            .push(ModelMessage::AssistantToolCalls(calls.clone()));
+        chat.messages.push(ModelMessage::ToolResult {
+            call_id: "call-1".to_string(),
+            content: "malformed".to_string(),
+            name: "lookup".to_string(),
+        });
+    }
+    router.execute(request).await?;
+    let requests = server
+        .received_requests()
+        .await
+        .ok_or("request recording disabled")?;
+    let body: Value = serde_json::from_slice(&requests[1].body)?;
+    let replayed = body["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|message| message["tool_calls"].is_array())
+        })
+        .ok_or("replayed tool call missing")?;
+
+    // Assert
+    assert_eq!(calls[0].arguments(), None);
+    assert_eq!(calls[0].arguments_json(), raw);
+    assert!(calls[0].malformed_reason().is_some());
+    let wire = replayed["tool_calls"][0]["function"]["arguments"]
+        .as_str()
+        .ok_or("arguments must be a string")?;
+    assert_eq!(
+        serde_json::from_str::<Value>(wire)?,
+        json!({"malformed_arguments": raw})
+    );
 
     Ok(())
 }

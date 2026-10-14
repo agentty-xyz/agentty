@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use serde_json::json;
+
 use crate::bash::{BashArguments, BashError};
 use crate::calibration::ContextCalibration;
 use crate::effect::Effects;
@@ -16,7 +18,8 @@ use crate::read::{self, ReadError, ReadTool};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::tool::{
-    ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition, WriteArguments,
+    MalformedArguments, ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments,
+    ToolDefinition, WriteArguments,
 };
 use crate::turn::{
     ModelRequestActivity, ToolActivity, TurnError, TurnOptions, TurnOutcome, TurnReport,
@@ -29,12 +32,13 @@ use crate::{context, schema_contract};
 /// violation and re-requested with corrective feedback before failing.
 pub(crate) const MAX_OUTPUT_CORRECTIONS: usize = 2;
 
-/// Consecutive tool-call responses with invalid tool arguments that fail a
-/// turn; each earlier one is re-requested with corrective feedback. A
-/// response whose calls are accepted resets the count, so a model that
-/// keeps correcting itself is never cut off, while one that cannot form a
-/// valid call stops after a bounded number of wasted requests.
-pub(crate) const MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS: usize = 3;
+/// Consecutive tool-call responses in which every call has malformed
+/// arguments that fail a turn; each earlier one is journaled and its calls
+/// are answered with error results. A response with any decodable call
+/// resets the count, so a model that keeps correcting itself is never cut
+/// off, while one that cannot form a valid call stops after a bounded number
+/// of wasted requests.
+pub(crate) const MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES: usize = 3;
 
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
@@ -64,8 +68,8 @@ impl Engine<'_> {
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut output_corrections = 0;
-        let mut consecutive_invalid_arguments = 0;
-        let mut tool_argument_corrections = 0;
+        let mut consecutive_malformed_responses = 0;
+        let mut malformed_tool_calls = 0;
         let mut reads = RepeatedReads::default();
         let mut tool_calls = Vec::new();
 
@@ -95,21 +99,7 @@ impl Engine<'_> {
                     error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
                 ) if output_corrections < MAX_OUTPUT_CORRECTIONS => {
                     output_corrections += 1;
-                    request.record_feedback(output_feedback(&error));
-
-                    continue;
-                }
-                // A tool-call response with invalid arguments is rejected
-                // whole, before any of its calls runs, and handled like an
-                // invalid final output: re-requested with request-only
-                // feedback that names the problem and each tool's fields.
-                Err(error @ ModelError::InvalidToolArguments { .. })
-                    if consecutive_invalid_arguments + 1
-                        < MAX_CONSECUTIVE_INVALID_TOOL_ARGUMENTS =>
-                {
-                    consecutive_invalid_arguments += 1;
-                    tool_argument_corrections += 1;
-                    request.record_feedback(tool_arguments_feedback(&error, request.tools()));
+                    request.record_output_feedback(output_feedback(&error));
 
                     continue;
                 }
@@ -125,32 +115,52 @@ impl Engine<'_> {
                 envelope.map(|envelope| envelope.tokens(estimated_weight)),
             ));
 
-            let calls = match response {
+            let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
-                        .with_corrections(output_corrections, tool_argument_corrections);
+                        .with_corrections(output_corrections, malformed_tool_calls);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
-                ModelResponse::ToolCall(call) => {
-                    Self::persist(recorder.as_ref(), request.record_tool_call(call.clone()))
-                        .await?;
-
-                    vec![call]
-                }
+                ModelResponse::ToolCall(call) => (vec![call], false),
                 ModelResponse::ToolCalls(calls) => {
                     if calls.is_empty() {
                         return Err(ModelError::MissingToolCall.into());
                     }
                     ensure_unique_tool_call_ids(&calls)?;
-                    Self::persist(recorder.as_ref(), request.record_tool_calls(calls.clone()))
-                        .await?;
 
-                    calls
+                    (calls, true)
                 }
             };
-            consecutive_invalid_arguments = 0;
+            // A malformed call is journaled and answered with an error result
+            // like any other call; only a model that sends nothing else for
+            // several responses in a row fails the turn, unjournaled.
+            let malformed = calls
+                .iter()
+                .filter_map(ToolCall::malformed_arguments)
+                .collect::<Vec<_>>();
+            if malformed.len() < calls.len() {
+                consecutive_malformed_responses = 0;
+            } else {
+                consecutive_malformed_responses += 1;
+                if consecutive_malformed_responses == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
+                    return Err(ModelError::InvalidToolArguments {
+                        reason: schema_contract::bounded_diagnostic(format!(
+                            "`{}`: {}",
+                            malformed[0].tool().name(),
+                            malformed[0].reason()
+                        )),
+                    }
+                    .into());
+                }
+            }
+            malformed_tool_calls += malformed.len();
+            let call_message = match (batched, calls.as_slice()) {
+                (false, [call]) => request.record_tool_call(call.clone()),
+                _ => request.record_tool_calls(calls.clone()),
+            };
+            Self::persist(recorder.as_ref(), call_message).await?;
             for call in &calls {
                 let repeated = reads.repeat_of(call, &context_fit);
                 let (result, activity) = self
@@ -332,6 +342,9 @@ impl Engine<'_> {
                 .write
                 .as_ref()
                 .map(|tool| ToolExecution::Write(tool, arguments)),
+            ToolCallArguments::Malformed(arguments) => tools
+                .allows(arguments.tool())
+                .then_some(ToolExecution::Malformed(arguments, self.options)),
         };
         let Some(execution) = execution else {
             if let Some(tool_lifecycle) = tool_lifecycle {
@@ -363,7 +376,8 @@ impl Engine<'_> {
                 if let Some(tool_lifecycle) = tool_lifecycle {
                     if matches!(
                         &result.1,
-                        ToolActivity::ReadInspectionRejected { .. }
+                        ToolActivity::MalformedArguments { .. }
+                            | ToolActivity::ReadInspectionRejected { .. }
                             | ToolActivity::ReadRejected { .. }
                             | ToolActivity::WriteRejected { .. }
                     ) {
@@ -414,7 +428,8 @@ impl RepeatedReads {
     /// Remembers a handled call whose result of `result_bytes` is the
     /// request message at `result_index`: an executed `read` as the latest
     /// for its arguments, and any `write` or `bash` call as a possible
-    /// change. A `read` answered as a repeat changes nothing.
+    /// change. A `read` answered as a repeat and a malformed call change
+    /// nothing.
     fn record(
         &mut self,
         call: &ToolCall,
@@ -435,7 +450,8 @@ impl RepeatedReads {
                     },
                 );
             }
-            None => self.effects += 1,
+            None if call.malformed_arguments().is_none() => self.effects += 1,
+            None => {}
         }
     }
 
@@ -463,9 +479,23 @@ struct Tools {
     write: Option<WriteTool>,
 }
 
+impl Tools {
+    /// Whether the turn's tool policy enabled `tool`.
+    fn allows(&self, tool: Tool) -> bool {
+        match tool {
+            Tool::Bash => self.bash.is_some(),
+            Tool::Read => self.read.is_some(),
+            Tool::Write => self.write.is_some(),
+        }
+    }
+}
+
 enum ToolExecution<'a> {
     Bash(&'a BashTool, &'a BashArguments),
     Read(&'a ReadTool, &'a ReadArguments),
+    /// A call whose arguments its tool could not decode, answered with an
+    /// error result that lists the tool's argument fields.
+    Malformed(&'a MalformedArguments, &'a TurnOptions),
     /// A `read` repeating the named earlier call, answered without running.
     RepeatedRead(&'a ReadArguments, &'a str),
     Write(&'a WriteTool, &'a WriteArguments),
@@ -492,6 +522,14 @@ async fn execute_tool(
         ToolExecution::Read(read_tool, arguments) => {
             execute_read_tool(read_tool, arguments, started_at).await
         }
+        ToolExecution::Malformed(arguments, options) => Ok((
+            malformed_arguments_result(arguments, options),
+            ToolActivity::MalformedArguments {
+                duration: started_at.elapsed(),
+                reason: sanitize_report_text(arguments.reason()),
+                tool: arguments.tool(),
+            },
+        )),
         ToolExecution::RepeatedRead(arguments, earlier) => Ok((
             context::repeated_read_result(earlier),
             ToolActivity::ReadRepeated {
@@ -680,46 +718,54 @@ fn output_feedback(error: &ModelError) -> String {
     )
 }
 
-/// Renders the bounded feedback that re-requests a tool-call response
-/// rejected for invalid tool arguments, naming every advertised tool's
-/// argument fields.
-fn tool_arguments_feedback(error: &ModelError, tools: &[ToolDefinition]) -> String {
-    let fields: Vec<String> = tools
-        .iter()
-        .map(|tool| {
-            let parameters = tool.parameters();
-            let required = parameters["required"]
-                .as_array()
-                .map_or(&[][..], Vec::as_slice);
-            let mut names: Vec<&String> = parameters["properties"]
-                .as_object()
-                .into_iter()
-                .flat_map(|properties| properties.keys())
-                .collect();
-            // Sorted so the feedback does not depend on map ordering.
-            names.sort();
-            let fields: Vec<String> = names
-                .into_iter()
-                .map(|field| {
-                    if required.iter().any(|name| name == field.as_str()) {
-                        format!("`{field}` (required)")
-                    } else {
-                        format!("`{field}`")
-                    }
-                })
-                .collect();
+/// Renders the error result that answers a call with malformed arguments,
+/// naming the decoding failure and every argument field of the called tool.
+fn malformed_arguments_result(arguments: &MalformedArguments, options: &TurnOptions) -> String {
+    let name = arguments.tool().name();
+    let fields = context::advertised_tools(options)
+        .into_iter()
+        .find(|tool| tool.name() == name)
+        .map_or_else(String::new, |tool| argument_fields(&tool));
 
-            format!("`{}` takes {}", tool.name(), fields.join(", "))
-        })
+    json!({
+        "error": schema_contract::bounded_diagnostic(format!(
+            "failed to parse function arguments: {}",
+            arguments.reason()
+        )),
+        "hint": format!(
+            "This call did not run. Call `{name}` again with valid JSON arguments using only its \
+             documented fields: {fields}."
+        ),
+        "status": "rejected",
+    })
+    .to_string()
+}
+
+/// Lists a tool's argument fields, marking the required ones.
+fn argument_fields(tool: &ToolDefinition) -> String {
+    let parameters = tool.parameters();
+    let required = parameters["required"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let mut names: Vec<&String> = parameters["properties"]
+        .as_object()
+        .into_iter()
+        .flat_map(|properties| properties.keys())
         .collect();
+    // Sorted so the result does not depend on map ordering.
+    names.sort();
 
-    format!(
-        "[harness] Your previous response was rejected because a tool call had invalid arguments \
-         ({}). None of its tool calls ran. Call the tools again using only their documented \
-         argument names and types: {}.",
-        schema_contract::bounded_diagnostic(error),
-        fields.join("; ")
-    )
+    names
+        .into_iter()
+        .map(|field| {
+            if required.iter().any(|name| name == field.as_str()) {
+                format!("`{field}` (required)")
+            } else {
+                format!("`{field}`")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

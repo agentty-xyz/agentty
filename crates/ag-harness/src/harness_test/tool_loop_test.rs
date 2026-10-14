@@ -69,10 +69,31 @@ fn output() -> ModelResponse {
     ModelResponse::Output(json!({"summary": "done"}))
 }
 
-fn invalid_arguments() -> Result<ModelResponse, ModelError> {
-    Err(ModelError::InvalidToolArguments {
-        reason: "`read`: unknown field `path src/`".to_string(),
-    })
+/// A `read` call whose arguments are cut off mid-object.
+const MALFORMED_READ: &str = r#"{"path src/": "notes.txt""#;
+
+fn malformed(id: &str, name: &str, raw: &str) -> ToolCall {
+    ToolCall::from_json(id.to_string(), name, raw, None).expect("malformed call")
+}
+
+fn malformed_read(id: &str) -> ModelResponse {
+    ModelResponse::ToolCall(malformed(id, "read", MALFORMED_READ))
+}
+
+/// Returns the JSON content of the tool result answering `call_id`.
+fn result_for(request: &ModelRequest, call_id: &str) -> Value {
+    request
+        .messages()
+        .iter()
+        .find_map(|message| match message {
+            ModelMessage::ToolResult {
+                call_id: id,
+                content,
+                ..
+            } if id == call_id => Some(serde_json::from_str(content).expect("JSON result")),
+            _ => None,
+        })
+        .expect("tool result")
 }
 
 #[tokio::test]
@@ -234,17 +255,13 @@ async fn superseded_reads_are_cleared_first_and_reported() {
 }
 
 #[tokio::test]
-async fn invalid_tool_arguments_are_corrected_and_the_limit_counts_consecutive_responses() {
+async fn malformed_calls_get_error_results_while_their_siblings_run() {
     // Arrange
     let (model, requests) = scripted(vec![
-        invalid_arguments(),
-        invalid_arguments(),
-        Ok(ModelResponse::ToolCall(read_of(
-            "read_0",
-            &json!({"path": "notes.txt"}),
-        ))),
-        invalid_arguments(),
-        invalid_arguments(),
+        Ok(ModelResponse::ToolCalls(vec![
+            malformed("bad_read", "read", MALFORMED_READ),
+            read_of("good_read", &json!({"path": "notes.txt"})),
+        ])),
         Ok(output()),
     ]);
     let opened = Arc::new(AtomicUsize::new(0));
@@ -257,26 +274,120 @@ async fn invalid_tool_arguments_are_corrected_and_the_limit_counts_consecutive_r
     let outcome = harness
         .run_once("read the notes", object_schema())
         .await
-        .expect("each correction stays below the consecutive limit");
+        .expect("the turn continues past the malformed call");
 
     // Assert
-    assert_eq!(outcome.report().tool_argument_corrections(), 4);
-    assert_eq!(outcome.report().tool_calls().len(), 1);
-    assert_eq!(outcome.report().model_requests().len(), 2);
+    assert_eq!(outcome.report().malformed_tool_calls(), 1);
+    assert_eq!(opened.load(Ordering::SeqCst), 1);
+    let activities = outcome.report().tool_calls();
+    assert!(matches!(
+        &activities[0],
+        ToolActivity::MalformedArguments { tool: Tool::Read, reason, .. }
+            if reason.contains("unknown field `path src/`")
+    ));
+    assert_eq!((activities[0].name(), activities[0].path()), ("read", ""));
+    assert!(
+        activities[0]
+            .to_string()
+            .starts_with("read (malformed arguments: ")
+    );
+    assert!(matches!(activities[1], ToolActivity::Read { .. }));
     let requests = requests.lock().expect("requests lock");
-    assert_eq!(requests.len(), 6);
-    let ModelMessage::User(feedback) = requests[1].messages().last().expect("feedback") else {
-        std::panic::resume_unwind(Box::new("feedback expected"));
+    let ModelMessage::AssistantToolCalls(calls) = &requests[1].messages()[1] else {
+        std::panic::resume_unwind(Box::new("batched calls expected"));
     };
-    assert!(feedback.contains("`read`: unknown field `path src/`"));
-    assert!(feedback.contains("`read` takes `action`, `limit`, `offset`, `path`, `query`, `side`"));
-    assert_eq!(requests[2].messages().len(), 3);
+    let bad = calls[0].malformed_arguments().expect("kept malformed");
+    assert_eq!((bad.raw(), bad.tool()), (MALFORMED_READ, Tool::Read));
+    assert_eq!(calls[0].arguments_json().expect("raw"), MALFORMED_READ);
+    let result = result_for(&requests[1], "bad_read");
+    assert_eq!(result["status"], json!("rejected"));
+    assert!(
+        result["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with("failed to parse function arguments: "))
+    );
+    assert!(result["hint"].as_str().is_some_and(|hint| hint.contains(
+        "Call `read` again with valid JSON arguments using only its documented fields: `action`, \
+         `limit`, `offset`, `path`, `query`, `side`."
+    )));
 }
 
 #[tokio::test]
-async fn invalid_tool_argument_feedback_marks_required_fields() {
+async fn only_consecutive_all_malformed_responses_count_toward_the_limit() {
     // Arrange
-    let (model, requests) = scripted(vec![invalid_arguments(), Ok(output())]);
+    let (model, requests) = scripted(vec![
+        Ok(malformed_read("bad_0")),
+        Ok(malformed_read("bad_1")),
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Ok(malformed_read("bad_2")),
+        Ok(malformed_read("bad_3")),
+        Ok(output()),
+    ]);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(b"notes\n".to_vec(), &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("a decodable call resets the consecutive count");
+
+    // Assert
+    assert_eq!(outcome.report().malformed_tool_calls(), 4);
+    assert_eq!(outcome.report().tool_calls().len(), 5);
+    assert_eq!(requests.lock().expect("requests lock").len(), 6);
+}
+
+#[tokio::test]
+async fn consecutive_all_malformed_responses_fail_the_turn_at_the_limit() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(malformed_read("bad_0")),
+        Ok(malformed_read("bad_1")),
+        Ok(malformed_read("bad_2")),
+    ]);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(MockFileSystem::new());
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the third malformed-only response fails the turn");
+
+    // Assert
+    assert!(matches!(
+        error,
+        crate::TurnError::Model(ModelError::InvalidToolArguments { ref reason })
+            if reason.starts_with("`read`: unknown field `path src/`")
+    ));
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        result_for(&requests[2], "bad_1")["status"],
+        json!("rejected")
+    );
+}
+
+#[tokio::test]
+async fn malformed_call_results_mark_required_fields() {
+    // Arrange
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(malformed(
+            "bad_write",
+            "write",
+            r#"{"path": "notes.txt"}"#,
+        ))),
+        Ok(output()),
+    ]);
     let harness = Harness::new(model, unbounded_context_budget())
         .repository(Repository::fixture("repo"))
         .allow(Tool::Write)
@@ -286,12 +397,35 @@ async fn invalid_tool_argument_feedback_marks_required_fields() {
     harness
         .run_once("edit", object_schema())
         .await
-        .expect("turn succeeds after the correction");
+        .expect("turn succeeds after the error result");
 
     // Assert
     let requests = requests.lock().expect("requests lock");
-    let ModelMessage::User(feedback) = requests[1].messages().last().expect("feedback") else {
-        std::panic::resume_unwind(Box::new("feedback expected"));
-    };
-    assert!(feedback.contains("`write` takes `patch` (required), `path` (required)"));
+    let result = result_for(&requests[1], "bad_write");
+    assert!(
+        result["hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("`patch` (required), `path` (required)"))
+    );
+}
+
+#[tokio::test]
+async fn malformed_calls_to_disallowed_tools_are_denied() {
+    // Arrange
+    let (model, _requests) = scripted(vec![Ok(ModelResponse::ToolCall(malformed(
+        "bad_bash", "bash", "{",
+    )))]);
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(MockFileSystem::new());
+
+    // Act
+    let error = harness
+        .run_once("run something", object_schema())
+        .await
+        .expect_err("bash is not allowed");
+
+    // Assert
+    assert!(matches!(error, crate::TurnError::ToolDenied { ref name } if name == "bash"));
 }

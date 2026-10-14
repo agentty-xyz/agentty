@@ -134,11 +134,13 @@ let outcome = session
   or violates the schema is re-requested with short, request-only feedback up to twice
   per turn; `TurnReport::output_corrections` counts these retries, and a third rejection
   fails the turn.
-- **Invalid tool arguments are corrected.** A tool-call response whose arguments do not
-  decode, such as a misspelled field, is rejected before any of its calls runs and
-  re-requested with request-only feedback naming the problem and each tool's fields;
-  `TurnReport::tool_argument_corrections` counts these retries. A third consecutive
-  rejection fails the turn; an accepted tool call resets the count.
+- **Malformed tool calls get error results.** A call whose arguments its tool cannot
+  decode, such as invalid JSON or a misspelled field, is journaled with its raw
+  arguments and answered with an error result naming the problem and the tool's fields,
+  while the other calls of the same response still run.
+  `TurnReport::malformed_tool_calls` counts them and each is listed as
+  `ToolActivity::MalformedArguments`. A third consecutive response made only of
+  malformed calls fails the turn; any decodable call resets the count.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.

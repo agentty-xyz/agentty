@@ -1402,7 +1402,7 @@ impl DroppedRounds {
                 {
                     self.writes.push(arguments.path().to_string());
                 }
-                ToolCallArguments::Write(_) => {}
+                ToolCallArguments::Write(_) | ToolCallArguments::Malformed(_) => {}
             }
         }
     }

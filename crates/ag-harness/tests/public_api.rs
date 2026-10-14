@@ -325,10 +325,18 @@ fn external_adapter_constructs_a_validated_write_call() -> Result<(), Box<dyn Er
         serde_json::from_str::<serde_json::Value>(&call.arguments_json()?)?,
         arguments
     );
+    let invalid = invalid?;
+    let malformed = invalid
+        .malformed_arguments()
+        .ok_or("unsafe path kept as malformed")?;
+    assert_eq!(malformed.tool(), ag_harness::Tool::Write);
+    assert_eq!(malformed.raw(), r#"{"path":"../secret","patch":"patch"}"#);
+    assert!(malformed.reason().contains("path"));
     assert!(matches!(
-        invalid,
-        Err(ModelError::InvalidToolArguments { .. })
+        invalid.arguments(),
+        ag_harness::tool::ToolCallArguments::Malformed(_)
     ));
+    assert!(invalid.write_arguments().is_none());
 
     Ok(())
 }
@@ -898,7 +906,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         ag_harness::turn::HistoryActivity::default()
     );
     assert_eq!(once.report().output_corrections(), 0);
-    assert_eq!(once.report().tool_argument_corrections(), 0);
+    assert_eq!(once.report().malformed_tool_calls(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(
