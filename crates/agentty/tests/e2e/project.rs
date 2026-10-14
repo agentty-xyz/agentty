@@ -616,8 +616,10 @@ async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error:
                     let invitation = common::frame_from_capture(capture);
                     assertion::assert_text_in_region(&invitation, "macOS folder-access", &full);
                     assertion::assert_text_in_region(&invitation, "prompts.", &full);
-                    assertion::assert_text_in_region(&invitation, "Skip", &full);
-                    assertion::assert_text_in_region(&invitation, "Enter: confirm", &full);
+                    assertion::assert_text_in_region(&invitation, "Yes", &full);
+                    assertion::assert_text_in_region(&invitation, "No", &full);
+                    assertion::assert_not_visible(&invitation, "Enter: confirm");
+                    assertion::assert_not_visible(&invitation, "n/Esc: skip");
                     let title = invitation.find_text("Discover repositories?")[0].rect;
                     let border = invitation.row_text(title.row);
                     let left = border
@@ -630,9 +632,29 @@ async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error:
                         .expect("right border");
                     assert_eq!(right - left + 1, 70);
                     assert_eq!(left, 25);
-                    let help = invitation.find_text("Enter: confirm")[0].rect;
-                    assert_eq!(invitation.cell_text(help.row + 2, 25), "╰");
-                    assert!(help.row + 3 - title.row < 20, "popup fits its content");
+                    let question = invitation.find_text("Discover Git repositories")[0].rect;
+                    assert_eq!(question.row, title.row + 3, "two blank rows above content");
+                    for row in title.row + 1..question.row {
+                        assert!((26..94).all(|column| invitation.cell_text(row, column) == " "));
+                    }
+                    let path_row = question.row + 1;
+                    assert!(
+                        invitation
+                            .cell_style(path_row, 28)
+                            .expect("path style")
+                            .bold()
+                    );
+                    assert_eq!(
+                        invitation.fg_color(path_row, 28),
+                        invitation.fg_color(title.row, title.col)
+                    );
+                    let no = invitation
+                        .find_text("No")
+                        .into_iter()
+                        .find(|choice| choice.style.bold())
+                        .expect("selected No choice");
+                    assert_eq!(invitation.cell_text(no.rect.row + 2, 25), "╰");
+                    assert!(no.rect.row + 3 - title.row < 20, "popup fits its content");
                 })
             },
         )
@@ -670,12 +692,12 @@ async fn test_project_discovery_startup_short_viewport() -> Result<(), Box<dyn s
                         .expect("short invitation capture");
                     let invitation = common::frame_from_capture(capture);
                     let full = Region::full(invitation.cols(), invitation.rows());
-                    for expected in ["Discover", "Skip", "Enter: confirm", "n/Esc: skip"] {
+                    for expected in ["Yes", "No"] {
                         assertion::assert_text_in_region(&invitation, expected, &full);
                     }
                     assert!(
                         invitation
-                            .find_text("Skip")
+                            .find_text("No")
                             .iter()
                             .any(|choice| choice.style.bold())
                     );

@@ -50,10 +50,10 @@ saved as repository subdirectories remain selectable in **Projects** and retain 
 existing sessions and settings.
 
 A compact, content-sized startup popup offers once to discover repositories in your home
-directory. **Skip** is selected by default. Accepting permits one scan; Agentty
-remembers either choice and never scans automatically on later launches. Scanning may
-trigger operating-system folder-access prompts. On short terminals, the explanation is
-clipped to keep the choices and keyboard help visible.
+directory, with the home path highlighted and **Yes**/**No** choices. **No** is selected
+by default. Accepting permits one scan; Agentty remembers either choice and never scans
+automatically on later launches. Scanning may trigger operating-system folder-access
+prompts. On short terminals, the explanation is clipped to keep the choices visible.
 
 In **Projects**, press `a` to add a repository root by path, or `d` to discover within a
 folder you choose. Paths can be absolute, relative to the current project, or start with

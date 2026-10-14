@@ -20,18 +20,27 @@ pub(crate) struct ProjectCatalogOverlay<'a> {
 }
 
 impl ProjectCatalogOverlay<'_> {
-    /// Paints the scope explanation and the explicit Discover/Skip choices.
+    /// Paints the scope explanation, highlighted home path, and Yes/No choices.
     fn render_suggestion(f: &mut Frame, area: Rect, root: &Path, selected: usize) {
-        let message = format!(
-            "Discover Git repositories in your home directory?\n{}\n\nThis scans subfolders and \
-             may trigger macOS folder-access prompts. Nothing is scanned if you skip. You can \
-             discover in a chosen folder from Projects later.",
-            root.display()
-        );
         let width = area.width.min(70);
         let content_width = overlay::overlay_content_width(width);
-        let lines = wrap_lines(&message, content_width);
-        let labels = [" Discover ", " Skip "]
+        let mut lines = wrap_lines(
+            "Discover Git repositories in your home directory?",
+            content_width,
+        );
+        lines.push(Line::styled(
+            root.display().to_string(),
+            Style::default()
+                .fg(palette::accent())
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::default());
+        lines.extend(wrap_lines(
+            "This scans subfolders and may trigger macOS folder-access prompts. Nothing is \
+             scanned if you skip. You can discover in a chosen folder from Projects later.",
+            content_width,
+        ));
+        let labels = [" Yes ", " No "]
             .into_iter()
             .enumerate()
             .map(|(index, label)| {
@@ -46,15 +55,10 @@ impl ProjectCatalogOverlay<'_> {
                 Span::styled(label, style)
             })
             .collect::<Vec<_>>();
-        let help = wrap_lines(
-            "y: discover | n/Esc: skip | Left/Right: choose | Enter: confirm",
-            content_width,
-        );
         let line_count = lines
             .iter()
             .map(|line| line.width().div_ceil(content_width).max(1))
             .sum::<usize>()
-            + help.len()
             + 3;
         let popup = overlay::centered_popup_area(
             area,
@@ -65,16 +69,12 @@ impl ProjectCatalogOverlay<'_> {
         );
         let block = overlay::overlay_block("Discover repositories?", palette::accent());
         let inner = block.inner(popup);
-        let help_height = u16::try_from(help.len())
-            .unwrap_or(u16::MAX)
-            .min(inner.height.saturating_sub(1));
-        let gap = u16::from(inner.height > help_height.saturating_add(3));
-        let [message_area, _, choices_area, _, help_area] = Layout::vertical([
+        let gap = u16::from(inner.height > 3);
+        let [_, message_area, _, choices_area] = Layout::vertical([
+            Constraint::Length(gap),
             Constraint::Min(0),
             Constraint::Length(gap),
             Constraint::Length(1),
-            Constraint::Length(gap),
-            Constraint::Length(help_height),
         ])
         .areas(inner);
         overlay::clear_popup_area(f, popup);
@@ -86,10 +86,6 @@ impl ProjectCatalogOverlay<'_> {
         f.render_widget(
             Paragraph::new(Line::from(labels)).alignment(Alignment::Center),
             choices_area,
-        );
-        f.render_widget(
-            Paragraph::new(help).style(Style::default().fg(palette::text_muted())),
-            help_area,
         );
     }
 

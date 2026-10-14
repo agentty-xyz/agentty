@@ -93,8 +93,8 @@ to move, `Enter` to switch the active project without leaving the Sessions view,
 Project sync follows the same rules as in the Sessions list. In project path popups,
 `Enter` submits and `Esc` cancels. In discovery results, `j` / `k` navigate, `Space`
 selects a repository, `Enter` saves selected repositories, and `Esc` discards results.
-The startup discovery suggestion defaults to **Skip**; `y` starts the home scan and `n`
-/ `Esc` skips it. See
+The startup discovery suggestion defaults to **No**; `y` starts the home scan and `n` /
+`Esc` skips it. See
 [Projects and Discovery](@/docs/usage/workflow.md#projects-and-discovery).
 
 <a id="usage-project-list-active-highlight"></a> The currently active project is
