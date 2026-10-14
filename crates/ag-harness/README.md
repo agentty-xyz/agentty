@@ -100,22 +100,26 @@ let outcome = session
   writes, and command cleanup have finished. A failure names its `SettlementPhase`;
   `retry_settlement()` retries persistence and command cleanup.
 - **Turns have no tool-call limit.** Cancellation and the `ContextBudget` bound a turn.
-  Once tool traffic grows a request past the budget, the request is sent as a reduced
-  copy without an extra model call. First, older tool results that a later call
-  superseded (a re-read of the same target, an applied write to the file read, or a
-  rerun of the same command) become notices naming that call. Then any tool result above
-  25% of the input budget is cut to a head and tail excerpt, and the latest round's
-  largest results are cut to one common size while together they exceed 50%; an excerpt
-  stays the same in later requests. Then the other older tool results become notices
-  (`read` notices name the target and may be re-read; `bash`/`write` notices keep the
-  outcome and say not to repeat), then older reasoning and `write` patches are cleared,
-  then the oldest replayed turns are dropped, then the current turn's oldest tool rounds
-  are dropped whole behind one note naming the writes they applied, the commands they
-  ran, and the reads to redo only if still needed, down to 70% of the budget so later
-  requests share a stable prefix. Only as a last resort are the latest tool round's
-  results cut further and its `write` patches replaced by their recorded outcome. Stored
-  messages are never changed; `ModelRequestActivity::context` reports each reduction. A
-  request that still cannot fit fails with `TurnError::ContextBudgetExceeded`.
+  Each tool result is cut once, when it is recorded, to at most 10,000 weight units or
+  25% of the input budget, whichever is smaller: its largest text fields keep their head
+  and tail around a marker, and an `output_truncated` field gives the original size and
+  the lines to request again. The cut form is what the request, the journal, and
+  replayed history carry; `TurnReport::truncated_tool_results` counts these cuts. Once
+  tool traffic grows a request past the budget, the request is sent as a reduced copy
+  without an extra model call. First, older tool results that a later call superseded (a
+  re-read of the same target, an applied write to the file read, or a rerun of the same
+  command) become notices naming that call. Then the other older tool results become
+  notices (`read` notices name the target and may be re-read; `bash`/`write` notices
+  keep the outcome and say not to repeat), then older reasoning and `write` patches are
+  cleared, then the oldest replayed turns are dropped, then the current turn's oldest
+  tool rounds are dropped whole behind one note naming the writes they applied, the
+  commands they ran, and the reads to redo only if still needed, down to 70% of the
+  budget so later requests share a stable prefix. Only as a last resort does the latest
+  tool round keep its results whole in call order while they fit, leaving each one that
+  does not out behind a notice to request it again, and are its `write` patches replaced
+  by their recorded outcome. Fitting never changes stored messages;
+  `ModelRequestActivity::context` reports each reduction. A request that still cannot
+  fit fails with `TurnError::ContextBudgetExceeded`.
 - **Provider usage calibrates the estimate.** Each response's reported input tokens
   calibrate later requests: a line through the first reported request, sloped by the
   steepest token growth since and lifted over every report, so providers' fixed

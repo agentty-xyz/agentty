@@ -15,6 +15,7 @@ pub(super) struct Activity {
     output_corrections: usize,
     output_tokens: Option<u64>,
     tool_calls: usize,
+    truncated_tool_results: usize,
 }
 
 impl Activity {
@@ -45,6 +46,7 @@ impl Activity {
             output_corrections: report.output_corrections(),
             output_tokens,
             tool_calls: report.tool_calls().len(),
+            truncated_tool_results: report.truncated_tool_results(),
         }
     }
 
@@ -55,6 +57,10 @@ impl Activity {
         line.insert("duplicate_reads".into(), json!(self.duplicate_reads));
         line.insert("input_tokens".into(), json!(self.input_tokens));
         line.insert("output_tokens".into(), json!(self.output_tokens));
+        line.insert(
+            "truncated_tool_results".into(),
+            json!(self.truncated_tool_results),
+        );
         for (name, count) in self.context {
             line.insert(name.into(), json!(count));
         }
@@ -108,13 +114,14 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 6] = [
+const ACTIVITY_FIELDS: [&str; 7] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
     "duplicate_reads",
     "input_tokens",
     "output_tokens",
+    "truncated_tool_results",
 ];
 const CONTEXT_FIELDS: [&str; 7] = [
     "elided_results",

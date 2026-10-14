@@ -1,6 +1,5 @@
 //! Model-aware projection of bounded session history into provider requests.
 
-use std::cmp::Reverse;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::num::NonZeroU64;
@@ -20,22 +19,6 @@ use crate::turn::{ContextActivity, TurnError, TurnOptions};
 /// leaves room for the following tool rounds, so successive requests of a
 /// turn reuse one reduced prefix instead of each clearing one more result.
 pub(crate) const FIT_TARGET_PERCENT: u64 = 70;
-
-/// Share, in percent, of the request capacity left after reserved output
-/// that one tool result may keep once a request exceeds the budget; a
-/// larger result is cut to a head and tail excerpt of this size before any
-/// other reduction except clearing superseded results. A quarter still holds a
-/// large file excerpt, while two capped results stay within
-/// [`FIT_TARGET_PERCENT`] beside instructions and elided older rounds, so one
-/// oversized output never forces earlier rounds out of the request.
-pub(crate) const RESULT_CAP_PERCENT: u64 = 25;
-
-/// Share, in percent, of the request capacity left after reserved output
-/// that the latest round's results may keep together once a request exceeds
-/// the budget; beyond it, its largest results are cut to one common size.
-/// Half leaves a fifth of the capacity below [`FIT_TARGET_PERCENT`] for
-/// instructions and the older rounds' elided notices.
-pub(crate) const LATEST_ROUND_CAP_PERCENT: u64 = 50;
 
 /// Placeholder that replaces cleared provider reasoning. Providers that
 /// require reasoning on replayed assistant tool calls still receive a
@@ -463,8 +446,6 @@ pub(crate) fn admit_mandatory_content(
 /// reduced request.
 #[derive(Debug, Default)]
 pub(crate) struct ContextFit {
-    capped_results: usize,
-    capped_results_before: usize,
     cleared_reasoning_before: usize,
     dropped_history_turns: usize,
     dropped_rounds: DroppedRounds,
@@ -492,24 +473,23 @@ impl ContextFit {
     /// canonical request fits and no earlier request was reduced, with the
     /// reductions the copy carries.
     ///
-    /// A request that exceeds the budget first clears older tool results
-    /// that a later call of the request superseded, oldest first, until it
-    /// weighs at most [`FIT_TARGET_PERCENT`] of its capacity (see
-    /// [`Self::elide_superseded`]). It then caps every remaining tool result
-    /// above [`RESULT_CAP_PERCENT`] of its capacity, and the latest round's
-    /// largest results while together they exceed
-    /// [`LATEST_ROUND_CAP_PERCENT`], to a head and tail excerpt, and is
-    /// reduced to [`FIT_TARGET_PERCENT`] of its capacity, in order: the other
-    /// older tool results (oldest first, replayed history before the current
+    /// Tool results arrive already cut to the per-result limit when they
+    /// were recorded. A request that exceeds the budget first clears older
+    /// tool results that a later call of the request superseded, oldest
+    /// first, until it weighs at most [`FIT_TARGET_PERCENT`] of its capacity
+    /// (see [`Self::elide_superseded`]). It is then reduced to
+    /// [`FIT_TARGET_PERCENT`] of its capacity, in order: the other older tool
+    /// results (oldest first, replayed history before the current
     /// turn), then assistant reasoning, then
     /// `write` patches, then whole projected history turns, oldest first,
     /// then whole earlier tool rounds of the current turn, oldest first,
     /// replaced by one note naming what they did and read. The latest
     /// tool-call round is never reduced by these steps. Only when the request
-    /// still exceeds the budget are the latest round's results, largest
-    /// first, cut further, and as the last resort its `write` patches
-    /// replaced by a note on their recorded outcome. Tool calls keep their
-    /// identifiers so groups stay well-formed.
+    /// still exceeds the budget are the latest round's results kept whole in
+    /// call order while they fit and each one that does not replaced by a
+    /// notice that it was left out, and as the last resort its `write`
+    /// patches replaced by a note on their recorded outcome. Tool calls keep
+    /// their identifiers so groups stay well-formed.
     ///
     /// # Errors
     /// Returns [`TurnError::ContextBudgetExceeded`] when even the fully
@@ -541,8 +521,7 @@ impl ContextFit {
             });
         let budget_weight = budget.max_request_weight().get();
         let previous = self.fitted.take();
-        let unreduced = self.capped_results_before == 0
-            && self.cleared_reasoning_before == 0
+        let unreduced = self.cleared_reasoning_before == 0
             && self.dropped_history_turns == 0
             && self.dropped_rounds.rounds == 0
             && self.elided_results_before == 0
@@ -572,10 +551,10 @@ impl ContextFit {
             }
         };
         let mut required = base.saturating_add(self.required);
-        let mut truncated_results = 0;
+        let mut omitted_results = 0;
         let mut shrunk_latest_write_calls = 0;
         if required > budget_weight {
-            truncated_results = self.truncate_latest_round(
+            omitted_results = self.omit_latest_results(
                 estimator,
                 request,
                 &mut fitted,
@@ -605,7 +584,7 @@ impl ContextFit {
             self.reduced_counts[Reduction::ElideResult.slot()],
             shrunk_latest_write_calls,
             self.reduced_counts[Reduction::ShrinkWrite.slot()],
-            self.capped_results + truncated_results,
+            omitted_results,
         )
         .with_superseded_results(self.superseded_results);
         self.sent_weight = required - budget.reserved_output_weight();
@@ -614,7 +593,7 @@ impl ContextFit {
     }
 
     /// Returns whether the last request sent the current turn's canonical
-    /// message at `index` whole: neither reduced, cut, nor left out. A
+    /// message at `index` whole: neither reduced nor left out. A
     /// message appended after that request is still whole.
     pub(crate) fn sends_whole(&self, index: usize) -> bool {
         index >= self.dropped_rounds.end
@@ -625,8 +604,8 @@ impl ContextFit {
             && !self.truncated_latest.contains(&index)
     }
 
-    /// Elides superseded older results, caps oversized tool results, then
-    /// reduces messages past the watermarks, tier by tier, until the request
+    /// Elides superseded older results, then reduces messages past the
+    /// watermarks, tier by tier, until the request
     /// weighs at most [`FIT_TARGET_PERCENT`] of its capacity, advances the
     /// watermarks past what it reduced, and returns whether any sent
     /// message changed.
@@ -650,11 +629,7 @@ impl ContextFit {
             messages: request.messages(),
             target,
         };
-        // Superseded results go first, so none is kept as a capped excerpt.
         self.elide_superseded(&mut tier, latest_round);
-        if self.cap_results(estimator, request, latest_round, capacity) {
-            *tier.changed = true;
-        }
         self.elided_results_before = self.reduce(
             &mut tier,
             Reduction::ElideResult,
@@ -680,122 +655,6 @@ impl ContextFit {
         }
 
         changed
-    }
-
-    /// Cuts each tool result not yet considered whose weight exceeds
-    /// [`RESULT_CAP_PERCENT`] of `capacity` to a head and tail excerpt of
-    /// that weight, and the latest round's results to one common weight
-    /// that keeps them together within [`LATEST_ROUND_CAP_PERCENT`]; caches
-    /// each excerpt so later requests carry it unchanged, and returns whether
-    /// any result was cut.
-    fn cap_results(
-        &mut self,
-        estimator: &dyn ContextEstimator,
-        request: &ModelRequest,
-        latest_round: usize,
-        capacity: u64,
-    ) -> bool {
-        let messages = request.messages();
-        let result_cap = capacity.saturating_mul(RESULT_CAP_PERCENT) / 100;
-        let latest_weights = (latest_round..messages.len())
-            .filter(|index| matches!(messages[*index], ModelMessage::ToolResult { .. }))
-            .map(|index| self.messages[index].weight.min(result_cap))
-            .collect();
-        let round_cap = Self::common_cap(
-            latest_weights,
-            capacity.saturating_mul(LATEST_ROUND_CAP_PERCENT) / 100,
-        )
-        .min(result_cap);
-        let mut changed = false;
-        // Older results were considered before any later tier could reduce
-        // or drop them, so every result past the watermark is still whole.
-        for (index, message) in messages.iter().enumerate().skip(self.capped_results_before) {
-            let ModelMessage::ToolResult {
-                call_id,
-                content,
-                name,
-            } = message
-            else {
-                continue;
-            };
-            let cap = if index > latest_round {
-                round_cap
-            } else {
-                result_cap
-            };
-            let current = self.messages[index].weight;
-            if current <= cap {
-                continue;
-            }
-            let excerpt = Self::excerpt_within(estimator, (call_id, content, name), cap);
-            let weight = estimator.message_weight(&excerpt);
-            if weight < current {
-                self.required -= current - weight;
-                self.capped_results += 1;
-                let entry = &mut self.messages[index];
-                entry.changes |= CAPPED_FLAG;
-                entry.reduced = Some(excerpt);
-                entry.weight = weight;
-                changed = true;
-            }
-        }
-        self.capped_results_before = messages.len();
-
-        changed
-    }
-
-    /// Returns the largest weight that, applied as a cap to each of
-    /// `weights`, keeps their sum within `share`; `u64::MAX` when they
-    /// already fit.
-    fn common_cap(mut weights: Vec<u64>, share: u64) -> u64 {
-        let mut rest = weights
-            .iter()
-            .fold(0_u64, |sum, weight| sum.saturating_add(*weight));
-        if rest <= share {
-            return u64::MAX;
-        }
-        weights.sort_unstable_by_key(|weight| Reverse(*weight));
-
-        weights
-            .iter()
-            .enumerate()
-            .find_map(|(position, weight)| {
-                rest -= weight;
-                let capped = u64::try_from(position + 1).unwrap_or(u64::MAX);
-                let cap = share.saturating_sub(rest) / capped;
-
-                weights
-                    .get(position + 1)
-                    .is_none_or(|next| cap >= *next)
-                    .then_some(cap)
-            })
-            .unwrap_or(0)
-    }
-
-    /// Returns the tool result `(call_id, content, name)` cut to the longest
-    /// head and tail excerpt that weighs at most `allowed`, or to the bare
-    /// notice when none does.
-    fn excerpt_within(
-        estimator: &dyn ContextEstimator,
-        (call_id, content, name): (&str, &str, &str),
-        allowed: u64,
-    ) -> ModelMessage {
-        let excerpt = |kept_bytes| ModelMessage::ToolResult {
-            call_id: call_id.to_string(),
-            content: truncated_result(content, kept_bytes),
-            name: name.to_string(),
-        };
-        let (mut low, mut high) = (0, content.len());
-        while low < high {
-            let middle = low + (high - low).div_ceil(2);
-            if estimator.message_weight(&excerpt(middle)) <= allowed {
-                low = middle;
-            } else {
-                high = middle - 1;
-            }
-        }
-
-        excerpt(low)
     }
 
     /// Elides the tool results past the elision watermark, before the
@@ -844,13 +703,7 @@ impl ContextFit {
             if entry.changes & reduction.flag() != 0 {
                 continue;
             }
-            // A notice describes the original result, not its capped excerpt.
-            let current = match reduction {
-                Reduction::ElideResult => &tier.messages[index],
-                Reduction::ClearReasoning | Reduction::ShrinkWrite => {
-                    entry.reduced.as_ref().unwrap_or(&tier.messages[index])
-                }
-            };
+            let current = entry.reduced.as_ref().unwrap_or(&tier.messages[index]);
             if let Some(reduced) = reduction.apply(current, &self.records) {
                 self.replace(tier, index, reduced, reduction);
             }
@@ -877,10 +730,6 @@ impl ContextFit {
         // at most once.
         self.required -= entry.weight - weight;
         self.reduced_counts[reduction.slot()] += 1;
-        if entry.changes & CAPPED_FLAG != 0 {
-            entry.changes &= !CAPPED_FLAG;
-            self.capped_results -= 1;
-        }
         entry.changes |= reduction.flag();
         entry.reduced = Some(reduced);
         entry.weight = weight;
@@ -954,9 +803,6 @@ impl ContextFit {
     fn leave_out(&mut self, range: Range<usize>) {
         for entry in &self.messages[range] {
             self.required = self.required.saturating_sub(entry.weight);
-            if entry.changes & CAPPED_FLAG != 0 {
-                self.capped_results -= 1;
-            }
             if entry.changes & SUPERSEDED_FLAG != 0 {
                 self.superseded_results -= 1;
             }
@@ -1008,11 +854,11 @@ impl ContextFit {
         request.with_fitted_messages(messages)
     }
 
-    /// Cuts the latest round's tool results in `fitted`, largest first, to
-    /// the longest head and tail excerpt that brings the request within the
-    /// budget, records how to restore them, and returns how many results not
-    /// already capped it cut.
-    fn truncate_latest_round(
+    /// Keeps the latest round's tool results in `fitted` whole, in call
+    /// order, while they fit the budget and replaces each one that does not
+    /// with a notice that it was left out, records how to restore them, and
+    /// returns how many it left out.
+    fn omit_latest_results(
         &mut self,
         estimator: &dyn ContextEstimator,
         request: &ModelRequest,
@@ -1021,45 +867,53 @@ impl ContextFit {
         (required, budget_weight): (&mut u64, u64),
     ) -> usize {
         let shift = request.messages().len() - fitted.messages().len();
-        let mut results: Vec<(usize, &str, &str, &str)> = request.messages()[latest_round..]
+        let notices: Vec<(usize, ModelMessage, u64)> = request.messages()[latest_round..]
             .iter()
             .enumerate()
-            .filter_map(|(offset, message)| match message {
-                ModelMessage::ToolResult {
+            .filter_map(|(offset, message)| {
+                let ModelMessage::ToolResult {
                     call_id,
                     content,
                     name,
-                } => Some((
-                    latest_round + offset,
-                    call_id.as_str(),
-                    content.as_str(),
-                    name.as_str(),
-                )),
-                _ => None,
+                } = message
+                else {
+                    return None;
+                };
+                let index = latest_round + offset;
+                let notice = ModelMessage::ToolResult {
+                    call_id: call_id.clone(),
+                    content: result_notice(
+                        Notice::Omitted,
+                        name,
+                        content,
+                        self.records.read_targets.get(call_id).map(String::as_str),
+                    ),
+                    name: name.clone(),
+                };
+                let saved = self.messages[index]
+                    .weight
+                    .saturating_sub(estimator.message_weight(&notice));
+
+                Some((index, notice, saved))
             })
             .collect();
-        results.sort_by_key(|(index, ..)| Reverse(self.messages[*index].weight));
-        let mut truncated = 0;
-        for (index, call_id, content, name) in results {
-            if *required <= budget_weight {
-                break;
-            }
-            let current = self.messages[index].weight;
-            let allowed = current.saturating_sub(*required - budget_weight);
-            let excerpt = Self::excerpt_within(estimator, (call_id, content, name), allowed);
-            let weight = estimator.message_weight(&excerpt);
-            if weight < current {
-                *required -= current - weight;
-                self.replace_temporarily(fitted, index - shift, excerpt);
+        // Start from every result left out, then restore them in call order.
+        *required = notices
+            .iter()
+            .fold(*required, |weight, (_, _, saved)| weight - saved);
+        let mut omitted = 0;
+        for (index, notice, saved) in notices {
+            // A result no larger than its notice stays whole.
+            if saved == 0 || *required + saved <= budget_weight {
+                *required += saved;
+            } else {
+                self.replace_temporarily(fitted, index - shift, notice);
                 self.truncated_latest.push(index);
-                // A capped result is already counted.
-                if self.messages[index].changes & CAPPED_FLAG == 0 {
-                    truncated += 1;
-                }
+                omitted += 1;
             }
         }
 
-        truncated
+        omitted
     }
 
     /// Replaces the patches of the latest round's `write` calls in `fitted`
@@ -1242,13 +1096,9 @@ impl Reduction {
     }
 }
 
-/// Change flag recorded for a tool result capped to an excerpt, beside the
-/// [`Reduction`] flags.
-const CAPPED_FLAG: u8 = 1 << 3;
-
 /// Change flag recorded, beside [`Reduction::ElideResult`]'s, for a tool
 /// result elided because a later call superseded it.
-const SUPERSEDED_FLAG: u8 = 1 << 4;
+const SUPERSEDED_FLAG: u8 = 1 << 3;
 
 /// What the calls of one request recorded, by call identifier: each `read`
 /// call's target and each `write` result's `status`.
@@ -1755,11 +1605,11 @@ fn elided_result(
     if content.starts_with(CLEARED_RESULT_PREFIX) {
         return None;
     }
-    let notice = cleared_result_notice(
+    let notice = result_notice(
+        superseded.map_or(Notice::Cleared, Notice::Superseded),
         name,
         content,
         records.read_targets.get(call_id).map(String::as_str),
-        superseded,
     );
 
     (notice.len() < content.len()).then(|| ModelMessage::ToolResult {
@@ -1769,41 +1619,67 @@ fn elided_result(
     })
 }
 
-/// Renders the notice that stands in for one cleared tool result. A `read`
-/// may be repeated to recover its content, so its notice names the target
-/// when `read_target` is known; any other call already ran, so its notice
-/// keeps the recorded outcome fields and warns against repeating it. A
-/// superseded result's notice says why and names the superseding call.
-fn cleared_result_notice(
+/// Why a notice stands in for a tool result.
+#[derive(Clone, Copy)]
+enum Notice<'a> {
+    /// An earlier result cleared to fit the context window.
+    Cleared,
+    /// An earlier result cleared because a later call superseded it.
+    Superseded(&'a Supersession<'a>),
+    /// A latest-round result that did not fit beside the round's others.
+    Omitted,
+}
+
+/// Renders the notice that stands in for one cleared or omitted tool
+/// result. A `read` may be repeated to recover its content, so its notice
+/// names the target when `read_target` is known; any other call already ran,
+/// so its notice keeps the recorded outcome fields and warns against
+/// repeating it. A superseded result's notice says why and names the
+/// superseding call.
+fn result_notice(
+    notice: Notice<'_>,
     name: &str,
     content: &str,
     read_target: Option<&str>,
-    superseded: Option<&Supersession<'_>>,
 ) -> String {
     let is_read = name == "read";
-    let text = match superseded {
-        Some(supersession) => supersession.cause.notice(),
-        None if is_read => {
-            "This earlier read result was cleared to fit the context window. If you still need it, \
-             read it again, narrowed with offset/limit."
-        }
-        None => {
+    let (key, text) = match notice {
+        Notice::Superseded(supersession) => ("context_cleared", supersession.cause.notice()),
+        Notice::Cleared if is_read => (
+            "context_cleared",
+            "This earlier read result was cleared to fit the context window. If you still need \
+             it, read it again, narrowed with offset/limit.",
+        ),
+        Notice::Cleared => (
+            "context_cleared",
             "This earlier tool result was cleared to fit the context window. The call already ran \
-             with the outcome recorded here; do NOT repeat it to recover its output."
-        }
+             with the outcome recorded here; do NOT repeat it to recover its output.",
+        ),
+        Notice::Omitted if is_read => (
+            "context_omitted",
+            "This read result did not fit the context window beside the other results of its \
+             round, so it was left out. Use the results you have first, then read it again on its \
+             own, narrowed with offset/limit if needed.",
+        ),
+        Notice::Omitted => (
+            "context_omitted",
+            "This tool result did not fit the context window beside the other results of its \
+             round, so it was left out. The call already ran with the outcome recorded here; do \
+             NOT repeat it to recover its output.",
+        ),
     };
-    let mut notice = Map::new();
-    notice.insert("context_cleared".to_string(), text.into());
-    notice.insert("original_bytes".to_string(), content.len().into());
-    if let Some(supersession) = superseded {
-        notice.insert("superseded_by".to_string(), supersession.by.into());
+    let mut fields = Map::new();
+    fields.insert(key.to_string(), text.into());
+    fields.insert("original_bytes".to_string(), content.len().into());
+    if let Notice::Superseded(supersession) = notice {
+        fields.insert("superseded_by".to_string(), supersession.by.into());
     }
     if is_read {
         if let Some(target) = read_target {
-            notice.insert("read".to_string(), target.into());
+            fields.insert("read".to_string(), target.into());
         }
 
-        return Value::Object(notice).to_string();
+        return Value::Object(fields).to_string();
     }
     if let Ok(Value::Object(result)) = serde_json::from_str::<Value>(content) {
         for key in OUTCOME_KEYS {
@@ -1816,12 +1692,12 @@ fn cleared_result_notice(
                 Value::Array(_) | Value::Null | Value::Object(_) => false,
             };
             if short_scalar {
-                notice.insert(key.to_string(), value.clone());
+                fields.insert(key.to_string(), value.clone());
             }
         }
     }
 
-    Value::Object(notice).to_string()
+    Value::Object(fields).to_string()
 }
 
 /// Renders the short result that answers a `read` repeating the earlier
@@ -1839,25 +1715,6 @@ pub(crate) fn repeated_read_result(same_as_call: &str) -> String {
         Value::from(same_as_call),
         Value::from(note)
     )
-}
-
-/// Renders a tool result cut to its first and last `kept_bytes`, split
-/// evenly, as JSON that tells the model how to request the rest.
-fn truncated_result(content: &str, kept_bytes: usize) -> String {
-    let head_end = content.floor_char_boundary(kept_bytes / 2);
-    let tail_start = content
-        .ceil_char_boundary(content.len() - (kept_bytes - kept_bytes / 2))
-        .max(head_end);
-
-    json!({
-        "context_truncated": "This tool result was cut to its head and tail to fit the context \
-                              window. Request a narrower result (offset/limit, a narrower path or \
-                              search) if you need the omitted middle.",
-        "head": &content[..head_end],
-        "omitted_bytes": tail_start - head_end,
-        "tail": &content[tail_start..],
-    })
-    .to_string()
 }
 
 fn weigh_messages(estimator: &dyn ContextEstimator, messages: &[ModelMessage]) -> u64 {

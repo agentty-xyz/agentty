@@ -87,16 +87,18 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 
 - `success` means every check passed; `correctness` is the passed fraction. Both are
   derived from the final output and worktree, never from the answer text alone.
-- `model_calls`, `output_corrections`, and `tool_calls` come from the turn report.
+- `model_calls`, `output_corrections`, `tool_calls`, and `truncated_tool_results` come
+  from the turn report; the last counts tool results cut to the per-result limit when
+  recorded.
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
-  `dropped_tool_calls`, `truncated_results`, and `shrunk_latest_write_calls` sum
-  `ContextActivity` over every accepted request. A reduction carried into later requests
-  is counted once per request, so these measure sustained pressure rather than distinct
-  items.
+  `dropped_tool_calls`, `truncated_results` (latest-round results left out behind a
+  notice), and `shrunk_latest_write_calls` sum `ContextActivity` over every accepted
+  request. A reduction carried into later requests is counted once per request, so these
+  measure sustained pressure rather than distinct items.
 - `revision`, `model`, `window`, and `reserved_output` identify the configuration.
   Activity fields are `null` for failed turns because the public report exists only
   after a turn finishes; `detail` holds the error or failed checks.

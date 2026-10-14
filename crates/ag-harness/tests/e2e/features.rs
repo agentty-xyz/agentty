@@ -720,9 +720,9 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
         )?;
     }
     // The large file's code word opens its only line, which alone outweighs
-    // the budget. Reads return whole lines, so any result naming the code
-    // word must be cut to a head and tail excerpt, whatever offset, limit,
-    // or search the model chooses.
+    // the per-result limit. Reads return whole lines, so any result naming
+    // the code word is recorded cut to a head and tail excerpt, whatever
+    // offset, limit, or search the model chooses.
     let large = format!(
         "The code word of the large file is ivory-97. {}\n",
         filler(3, 36_000)
@@ -773,16 +773,18 @@ async fn long_tool_loop(provider: Provider) -> Result<String, DynError> {
     let reasoning = peak(|context| context.cleared_reasoning());
     let writes = peak(|context| context.shrunk_write_calls());
     let dropped = peak(|context| context.dropped_history_turns());
-    let truncated = peak(|context| context.truncated_results());
+    let omitted = peak(|context| context.truncated_results());
+    let truncated = outcome.report().truncated_tool_results();
     let rounds = peak(|context| context.dropped_tool_calls());
     let latest_writes = peak(|context| context.shrunk_latest_write_calls());
     let summary = format!(
         "requests={} elided={elided} reasoning={reasoning} writes={writes} dropped={dropped} \
-         truncated={truncated} dropped_calls={rounds} latest_writes={latest_writes}",
+         truncated={truncated} omitted={omitted} dropped_calls={rounds} \
+         latest_writes={latest_writes}",
         requests.len()
     );
     // Eight parts outweigh the budget, so reading them forces elision; the
-    // large file's code word only arrives in a truncated result.
+    // large file's code word only arrives in a result cut when recorded.
     if elided == 0 {
         return Err(format!("older results were never elided: {summary}").into());
     }

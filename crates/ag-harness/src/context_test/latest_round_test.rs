@@ -3,15 +3,16 @@ use std::num::NonZeroU64;
 use serde_json::json;
 
 use super::support::{
-    ByteEstimator, bash_command_call, budget, read_call, record_read_round, request, result_json,
+    ByteEstimator, bash_call, budget, read_call, record_read_round, request, result_json,
     tool_result, write_call,
 };
 use crate::context::{
-    ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT, HeuristicContextEstimator,
-    LATEST_ROUND_CAP_PERCENT, RESULT_CAP_PERCENT, cleared_result_notice, read_target,
+    ContextBudget, ContextEstimator, ContextFit, HeuristicContextEstimator, Notice, read_target,
+    result_notice,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
+use crate::truncation::{tool_output_limit, truncate_tool_output};
 use crate::turn::ContextActivity;
 
 fn weigh(estimator: &dyn ContextEstimator, messages: &[ModelMessage]) -> u64 {
@@ -46,57 +47,70 @@ fn dropped_note(fitted: &ModelRequest) -> &str {
 }
 
 #[test]
-fn fit_caps_the_latest_round_to_half_the_budget_at_one_common_size() {
+fn fit_keeps_latest_results_whole_in_call_order_and_omits_the_rest() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "inspect");
-    record_read_round(&mut request, "older0", 950);
-    record_read_round(&mut request, "older1", 950);
-    let calls = vec![
-        read_call("big0"),
-        read_call("big1"),
-        read_call("mid"),
-        read_call("small"),
-    ];
+    let calls: Vec<ToolCall> = (0..6)
+        .map(|index| {
+            read_of(
+                &format!("r{index}"),
+                &json!({"path": format!("src/f{index}.rs")}),
+            )
+        })
+        .collect();
     request.record_tool_calls(calls.clone());
-    for (call, bytes) in calls.iter().zip([900, 900, 300, 100]) {
-        request.record_tool_result(call, "x".repeat(bytes));
+    for call in &calls {
+        request.record_tool_result(call, "x".repeat(600));
     }
-    let budget_weight = 4000;
+    let budget_weight = 2500;
 
     // Act
     let (fitted, activity) = ContextFit::default()
         .fit(&ByteEstimator, budget(budget_weight), &request)
         .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("fits after capping");
+        .expect("fits after omitting results");
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    let latest = &fitted.messages()[fitted.messages().len() - 4..];
-    assert!(weigh(&ByteEstimator, latest) <= budget_weight * LATEST_ROUND_CAP_PERCENT / 100);
-    assert!(weigh(&ByteEstimator, &latest[..2]) > 2 * 700);
-    assert!(result_json(&latest[0]).get("context_truncated").is_some());
-    assert!(result_json(&latest[1]).get("context_truncated").is_some());
-    assert_eq!(
-        latest[2..],
-        request.messages()[request.messages().len() - 2..]
-    );
-    assert_eq!(activity.truncated_results(), 2);
+    assert!(weigh(&ByteEstimator, fitted.messages()) <= budget_weight);
+    let results = &fitted.messages()[2..];
+    let kept = results
+        .iter()
+        .take_while(|message| {
+            !matches!(message, ModelMessage::ToolResult { content, .. } if content.contains("context_omitted"))
+        })
+        .count();
+    assert!(kept >= 2);
+    assert_eq!(results[..kept], request.messages()[2..2 + kept]);
+    for (index, message) in results.iter().enumerate().skip(kept) {
+        let notice = result_json(message);
+        assert!(
+            notice["context_omitted"]
+                .as_str()
+                .expect("notice")
+                .contains("read it again on its own")
+        );
+        assert_eq!(notice["read"], json!(format!("file src/f{index}.rs")));
+        assert_eq!(notice["original_bytes"], json!(600));
+    }
+    assert_eq!(activity.truncated_results(), 6 - kept);
     assert_eq!(activity.dropped_tool_calls(), 0);
-    assert!(weigh(&ByteEstimator, fitted.messages()) <= budget_weight * FIT_TARGET_PERCENT / 100);
 }
 
 #[test]
-fn capped_results_stay_capped_identically_and_are_later_elided_from_the_original() {
+fn omitted_results_stay_out_of_the_cached_prefix_and_are_later_elided() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "inspect");
-    record_read_round(&mut request, "large", 5000);
-    let budget_weight = 4000;
+    let calls = vec![read_call("large"), read_call("small")];
+    request.record_tool_calls(calls.clone());
+    request.record_tool_result(&calls[0], "x".repeat(3000));
+    request.record_tool_result(&calls[1], "y".repeat(100));
+    let budget_weight = 2000;
     let mut fit = ContextFit::default();
-    let (first, _) = fit
+    let (first, first_activity) = fit
         .fit(&ByteEstimator, budget(budget_weight), &request)
         .map(|(fitted, activity)| (fitted.cloned(), activity))
         .expect("first fit");
-    let first = first.expect("capped copy");
 
     // Act
     record_read_round(&mut request, "next", 10);
@@ -104,69 +118,57 @@ fn capped_results_stay_capped_identically_and_are_later_elided_from_the_original
         .fit(&ByteEstimator, budget(budget_weight), &request)
         .map(|(fitted, activity)| (fitted.cloned(), activity))
         .expect("second fit");
-    for index in 0..4 {
-        record_read_round(&mut request, &format!("more{index}"), 900);
-    }
-    let (third, third_activity) = fit
-        .fit(&ByteEstimator, budget(budget_weight), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("third fit");
 
     // Assert
-    let second = second.expect("second copy");
-    assert_eq!(
-        second.messages()[..first.messages().len()],
-        *first.messages()
-    );
-    assert_eq!(second_activity.truncated_results(), 1);
-    let third = third.expect("third copy");
-    let notice = result_json(&third.messages()[2]);
-    assert_eq!(notice["original_bytes"], json!(5000));
-    assert_eq!(notice["read"], json!("file large.txt"));
-    assert_eq!(third_activity.truncated_results(), 0);
-    assert!(third_activity.elided_results() >= 1);
-    assert_eq!(third_activity.dropped_tool_calls(), 0);
-}
-
-#[test]
-fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
-    // Arrange
-    let mut capped = request(Vec::new(), Vec::new(), &"i".repeat(1400));
-    let calls = vec![read_call("large"), read_call("small")];
-    capped.record_tool_calls(calls.clone());
-    capped.record_tool_result(&calls[0], "x".repeat(5000));
-    capped.record_tool_result(&calls[1], "y".repeat(100));
-    let mut whole = request(Vec::new(), Vec::new(), &"i".repeat(1700));
-    record_read_round(&mut whole, "medium", 400);
-
-    // Act
-    let (capped_fit, capped_activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(2000), &capped)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("fits after cutting the capped result further");
-    let (whole_fit, whole_activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(2000), &whole)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("fits after cutting the uncapped result");
-
-    // Assert
-    let capped_fit = capped_fit.expect("reduced copy");
-    assert!(weigh(&ByteEstimator, capped_fit.messages()) <= 2000);
-    assert_eq!(capped_activity.truncated_results(), 1);
-    assert!(ByteEstimator.message_weight(&capped_fit.messages()[2]) < 500);
-    assert_eq!(capped_fit.messages()[3], capped.messages()[3]);
-    let whole_fit = whole_fit.expect("reduced copy");
-    assert!(weigh(&ByteEstimator, whole_fit.messages()) <= 2000);
-    assert_eq!(whole_activity.truncated_results(), 1);
+    let first = first.expect("first copy");
     assert!(
-        result_json(&whole_fit.messages()[2])
-            .get("context_truncated")
+        result_json(&first.messages()[2])
+            .get("context_omitted")
             .is_some()
     );
+    assert_eq!(first.messages()[3], request.messages()[3]);
+    assert_eq!(first_activity.truncated_results(), 1);
+    let second = second.expect("second copy");
+    let notice = result_json(&second.messages()[2]);
+    assert!(notice.get("context_cleared").is_some());
+    assert_eq!(notice["original_bytes"], json!(3000));
+    assert_eq!(second_activity.truncated_results(), 0);
+    assert!(second_activity.elided_results() >= 1);
 }
 
 #[test]
-fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
+fn an_omitted_command_result_keeps_its_outcome_and_warns_against_repeating_it() {
+    // Arrange
+    let mut request = request(Vec::new(), Vec::new(), &"i".repeat(1000));
+    let bash = bash_call("b0");
+    request.record_tool_call(bash.clone());
+    request.record_tool_result(
+        &bash,
+        json!({"exit_code": 0, "stdout": "y".repeat(2000), "termination": "completed"}).to_string(),
+    );
+
+    // Act
+    let (fitted, activity) = ContextFit::default()
+        .fit(&ByteEstimator, budget(1500), &request)
+        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .expect("fits after omitting the result");
+
+    // Assert
+    let fitted = fitted.expect("reduced copy");
+    let notice = result_json(&fitted.messages()[2]);
+    assert!(
+        notice["context_omitted"]
+            .as_str()
+            .expect("notice")
+            .contains("do NOT repeat")
+    );
+    assert_eq!(notice["exit_code"], json!(0));
+    assert_eq!(notice["termination"], json!("completed"));
+    assert_eq!(activity.truncated_results(), 1);
+}
+
+#[test]
+fn a_recorded_result_cut_to_its_limit_fits_without_dropping_earlier_rounds() {
     // Arrange
     let estimator = HeuristicContextEstimator;
     let budget = ContextBudget::new(NonZeroU64::new(7_000).expect("nonzero"))
@@ -216,15 +218,22 @@ fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
         "The code word of the large file is ivory-97. {}",
         "x".repeat(36_000)
     );
-    request.record_tool_result(&large, json!({"content": content}).to_string());
+    let (content, cut) = truncate_tool_output(
+        &estimator,
+        &large,
+        json!({"content": content}).to_string(),
+        tool_output_limit(budget),
+    );
+    request.record_tool_result(&large, content);
 
     // Act
     let (fitted, activity) = fit
         .fit(&estimator, budget, &request)
         .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("fits after capping the large result");
+        .expect("fits after eliding older results");
 
     // Assert
+    assert!(cut);
     let fitted = fitted.expect("reduced copy");
     assert!(
         activities
@@ -233,57 +242,18 @@ fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
     );
     assert_eq!(activity.dropped_tool_calls(), 0);
     assert_eq!(activity.dropped_history_turns(), 0);
-    assert_eq!(activity.truncated_results(), 1);
+    assert_eq!(activity.truncated_results(), 0);
     assert!(activity.elided_results() >= 1);
     assert_eq!(calls_in(fitted.messages()).len(), 10);
-    let excerpt = result_json(fitted.messages().last().expect("large result"));
-    assert!(excerpt["head"].as_str().expect("head").contains("ivory-97"));
+    let latest = fitted.messages().last().expect("large result");
+    assert_eq!(latest, request.messages().last().expect("recorded result"));
     assert!(
-        estimator.message_weight(fitted.messages().last().expect("large result"))
-            <= 6500 * RESULT_CAP_PERCENT / 100
+        result_json(latest)["content"]
+            .as_str()
+            .expect("content")
+            .starts_with("The code word of the large file is ivory-97.")
     );
     assert_ne!(activity, ContextActivity::default());
-}
-
-#[test]
-fn dropping_a_round_releases_its_capped_result() {
-    // Arrange
-    let mut request = request(Vec::new(), Vec::new(), "loop");
-    let outcome = "o".repeat(250);
-    for index in 0..4 {
-        let bash = bash_command_call(&format!("b{index}"), &format!("cargo test {index}"));
-        request.record_tool_call(bash.clone());
-        request.record_tool_result(
-            &bash,
-            json!({
-                "execution_failure": outcome,
-                "path": outcome,
-                "signal": outcome,
-                "status": outcome,
-                "stdout": "y".repeat(1800),
-                "termination": outcome,
-            })
-            .to_string(),
-        );
-    }
-    record_read_round(&mut request, "latest", 10);
-
-    // Act
-    let (fitted, activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(4000), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
-        .expect("fits after dropping rounds");
-
-    // Assert
-    let fitted = fitted.expect("reduced copy");
-    assert_eq!(activity.elided_results(), 0);
-    assert!(activity.dropped_tool_calls() >= 1);
-    assert_eq!(
-        activity.truncated_results(),
-        4 - activity.dropped_tool_calls()
-    );
-    assert!(dropped_note(&fitted).contains("Commands run: `cargo test 0`"));
-    assert!(!dropped_note(&fitted).contains("Reads whose results"));
 }
 
 #[test]
@@ -354,7 +324,7 @@ fn read_notice_without_a_known_target_omits_the_target() {
     let content = r#"{"content":"fn main() {}","path":"src/main.rs"}"#;
 
     // Act
-    let notice = cleared_result_notice("read", content, None, None);
+    let notice = result_notice(Notice::Cleared, "read", content, None);
 
     // Assert
     let notice: serde_json::Value = serde_json::from_str(&notice).expect("notice json");

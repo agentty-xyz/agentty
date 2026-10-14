@@ -324,7 +324,7 @@ fn fit_drops_the_oldest_history_turns_and_keeps_doing_so() {
 }
 
 #[test]
-fn fit_caps_each_oversized_latest_result_to_a_quarter_of_the_budget() {
+fn fit_omits_every_latest_result_that_cannot_fit_whole() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "inspect");
     let calls = vec![read_call("large"), read_call("medium")];
@@ -333,36 +333,23 @@ fn fit_caps_each_oversized_latest_result_to_a_quarter_of_the_budget() {
     request.record_tool_result(&calls[1], "é".repeat(1500));
 
     // Act
-    let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(2000), &request)
-        .expect("fits after truncation");
+    let (fitted, activity) =
+        fit_owned(&mut ContextFit::default(), budget(2000), &request).expect("fits after omission");
 
     // Assert
     let fitted = fitted.expect("reduced copy");
-    assert!(weigh(&fitted) <= target(2000));
+    assert!(weigh(&fitted) <= 2000);
     assert_eq!(activity.truncated_results(), 2);
     assert_eq!(activity.elided_results(), 0);
-    for message in &fitted.messages()[2..] {
-        assert!(ByteEstimator.message_weight(message) <= 500);
-    }
     let large = result_json(&fitted.messages()[2]);
     assert!(
-        large["context_truncated"]
+        large["context_omitted"]
             .as_str()
             .expect("notice")
-            .contains("narrower")
+            .contains("narrowed with offset/limit")
     );
-    assert_ne!(large["head"].as_str().expect("head"), "");
-    assert!(large["omitted_bytes"].as_u64().expect("omitted") < 5000);
-    let medium = result_json(&fitted.messages()[3]);
-    let head = medium["head"].as_str().expect("head");
-    let tail = medium["tail"].as_str().expect("tail");
-    assert!(!head.is_empty() && !tail.is_empty());
-    assert_eq!(
-        head.len()
-            + tail.len()
-            + usize::try_from(medium["omitted_bytes"].as_u64().expect("omitted")).expect("usize"),
-        3000
-    );
+    assert_eq!(large["original_bytes"], 5000);
+    assert_eq!(result_json(&fitted.messages()[3])["original_bytes"], 3000);
     assert_eq!(
         request.messages()[2],
         tool_result("large", "read", &"x".repeat(5000))
@@ -388,7 +375,7 @@ fn fit_fails_typed_when_mandatory_content_cannot_fit() {
 }
 
 #[test]
-fn fit_truncates_only_as_many_latest_results_as_needed() {
+fn fit_omits_only_the_latest_results_that_do_not_fit() {
     // Arrange
     let mut request = request(Vec::new(), Vec::new(), "inspect");
     let calls = vec![read_call("large"), read_call("small")];
@@ -398,14 +385,14 @@ fn fit_truncates_only_as_many_latest_results_as_needed() {
 
     // Act
     let (fitted, activity) = fit_owned(&mut ContextFit::default(), budget(3000), &request)
-        .expect("fits after truncating one result");
+        .expect("fits after omitting one result");
 
     // Assert
     let fitted = fitted.expect("reduced copy");
     assert_eq!(activity.truncated_results(), 1);
     assert!(
         result_json(&fitted.messages()[2])
-            .get("context_truncated")
+            .get("context_omitted")
             .is_some()
     );
     assert_eq!(fitted.messages()[3], request.messages()[3]);

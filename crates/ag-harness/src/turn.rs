@@ -137,6 +137,8 @@ pub struct TurnReport {
     #[serde(default)]
     malformed_tool_calls: usize,
     tool_calls: Vec<ToolActivity>,
+    #[serde(default)]
+    truncated_tool_results: usize,
 }
 
 impl TurnReport {
@@ -183,6 +185,13 @@ impl TurnReport {
         &self.tool_calls
     }
 
+    /// Returns how many tool results were cut to their head and tail when
+    /// recorded because they outweighed the per-result limit. Reports
+    /// recorded before this field existed report none.
+    pub fn truncated_tool_results(&self) -> usize {
+        self.truncated_tool_results
+    }
+
     pub(crate) fn new(
         duration: Duration,
         model_requests: Vec<ModelRequestActivity>,
@@ -195,6 +204,7 @@ impl TurnReport {
             output_corrections: 0,
             malformed_tool_calls: 0,
             tool_calls,
+            truncated_tool_results: 0,
         }
     }
 
@@ -205,6 +215,12 @@ impl TurnReport {
     ) -> Self {
         self.output_corrections = output_corrections;
         self.malformed_tool_calls = malformed_tool_calls;
+
+        self
+    }
+
+    pub(crate) fn with_truncated_tool_results(mut self, truncated_tool_results: usize) -> Self {
+        self.truncated_tool_results = truncated_tool_results;
 
         self
     }
@@ -403,8 +419,10 @@ impl ContextActivity {
         self.superseded_results
     }
 
-    /// Tool results cut to a head and tail excerpt: oversized results capped
-    /// before other reductions, and latest-round results cut further.
+    /// Latest-round tool results left out of the request behind a notice
+    /// because the round did not fit whole; the round keeps its results whole
+    /// in call order while they fit. Results cut to the per-result limit when
+    /// recorded are counted by [`TurnReport::truncated_tool_results`].
     pub fn truncated_results(self) -> usize {
         self.truncated_results
     }

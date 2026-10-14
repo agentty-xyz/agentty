@@ -49,8 +49,9 @@ use ag_harness::lifecycle::{
     LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
 };
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
-    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ContextEstimator as _,
+    HeuristicContextEstimator, ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata,
+    ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
@@ -937,6 +938,87 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
         .lock()
         .map_err(|_| io::Error::other("requests lock poisoned"))?;
     assert!(requests.last().expect("last request").iter().any(|message| matches!(message, ModelMessage::ToolResult { content, .. } if content.contains("Ada"))));
+
+    Ok(())
+}
+
+/// Reads `large.txt`, then answers with the result the model received.
+struct LargeReadModel {
+    requests: Arc<Mutex<Vec<Vec<ModelMessage>>>>,
+}
+
+#[async_trait]
+impl Model for LargeReadModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        self.requests
+            .lock()
+            .map_err(|_| ModelError::request(io::Error::other("request recorder poisoned")))?
+            .push(request.messages().to_vec());
+        let response = match request.messages().last() {
+            Some(ModelMessage::ToolResult { content, .. }) => {
+                ModelResponse::Output(serde_json::from_str(content).map_err(ModelError::request)?)
+            }
+            _ => ModelResponse::ToolCall(ToolCall::from_json(
+                "read-large".to_string(),
+                "read",
+                r#"{"path":"large.txt"}"#,
+                None,
+            )?),
+        };
+
+        Ok(ModelCompletion::from_response(response))
+    }
+}
+
+#[tokio::test]
+async fn oversized_tool_results_are_recorded_cut_to_the_per_result_limit()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?;
+    let lines: Vec<String> = (1..=1000)
+        .map(|line| format!("line {line:04} of a large generated file"))
+        .collect();
+    std::fs::write(root.join("large.txt"), lines.join("\n"))?;
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let budget = ContextBudget::new(NonZeroU64::new(32_000).ok_or("budget")?)
+        .with_reserved_output(16_000)?;
+    let harness = Harness::new(
+        LargeReadModel {
+            requests: Arc::clone(&requests),
+        },
+        budget,
+    )
+    .repository(repository_fixture::repository_with_host_git(&root))
+    .allow(Tool::Read);
+    let schema = OutputSchema::new(json!({"type": "object"}))?;
+
+    // Act
+    let outcome = harness.run_once("Read large.txt", schema).await?;
+
+    // Assert
+    assert_eq!(outcome.report().truncated_tool_results(), 1);
+    let received = outcome.output();
+    assert_eq!(received["path"], "large.txt");
+    let content = received["content"].as_str().ok_or("content")?;
+    assert!(content.starts_with("line 0001 "));
+    assert!(content.ends_with("line 1000 of a large generated file"));
+    assert!(content.contains(" lines ("));
+    let warning = received["output_truncated"].as_str().ok_or("warning")?;
+    assert!(warning.contains("`content` (1000 lines) was cut: lines "));
+    let recorded = requests
+        .lock()
+        .map_err(|_| io::Error::other("requests lock poisoned"))?;
+    let sent = recorded
+        .last()
+        .ok_or("final request")?
+        .last()
+        .ok_or("result")?;
+    assert!(HeuristicContextEstimator.message_weight(sent) <= 4_000);
+    assert_eq!(
+        outcome.report().model_requests()[1].context(),
+        ag_harness::turn::ContextActivity::default()
+    );
 
     Ok(())
 }

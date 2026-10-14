@@ -26,7 +26,7 @@ use crate::turn::{
     sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
-use crate::{context, schema_contract};
+use crate::{context, schema_contract, truncation};
 
 /// Final outputs a turn may have rejected for invalid JSON or a schema
 /// violation and re-requested with corrective feedback before failing.
@@ -72,6 +72,8 @@ impl Engine<'_> {
         let mut malformed_tool_calls = 0;
         let mut reads = RepeatedReads::default();
         let mut tool_calls = Vec::new();
+        let output_limit = truncation::tool_output_limit(self.context_budget);
+        let mut truncated_tool_results = 0;
 
         loop {
             // Tool traffic grows the request between model calls; a grown
@@ -119,7 +121,8 @@ impl Engine<'_> {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
-                        .with_corrections(output_corrections, malformed_tool_calls);
+                        .with_corrections(output_corrections, malformed_tool_calls)
+                        .with_truncated_tool_results(truncated_tool_results);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
@@ -136,26 +139,7 @@ impl Engine<'_> {
             // A malformed call is journaled and answered with an error result
             // like any other call; only a model that sends nothing else for
             // several responses in a row fails the turn, unjournaled.
-            let malformed = calls
-                .iter()
-                .filter_map(ToolCall::malformed_arguments)
-                .collect::<Vec<_>>();
-            if malformed.len() < calls.len() {
-                consecutive_malformed_responses = 0;
-            } else {
-                consecutive_malformed_responses += 1;
-                if consecutive_malformed_responses == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
-                    return Err(ModelError::InvalidToolArguments {
-                        reason: schema_contract::bounded_diagnostic(format!(
-                            "`{}`: {}",
-                            malformed[0].tool().name(),
-                            malformed[0].reason()
-                        )),
-                    }
-                    .into());
-                }
-            }
-            malformed_tool_calls += malformed.len();
+            malformed_tool_calls += count_malformed(&calls, &mut consecutive_malformed_responses)?;
             let call_message = match (batched, calls.as_slice()) {
                 (false, [call]) => request.record_tool_call(call.clone()),
                 _ => request.record_tool_calls(calls.clone()),
@@ -166,6 +150,7 @@ impl Engine<'_> {
                 let (result, activity) = self
                     .execute_tool_call(call, &tools, turn_id, repeated.as_deref())
                     .await?;
+                let result = self.truncate(call, result, output_limit, &mut truncated_tool_results);
                 let result_bytes = result.len();
                 Self::persist(recorder.as_ref(), request.record_tool_result(call, result)).await?;
                 let result_index = request.messages().len() - 1;
@@ -173,6 +158,23 @@ impl Engine<'_> {
                 tool_calls.push(activity);
             }
         }
+    }
+
+    /// Cuts one tool result to `limit` before it is recorded, so the
+    /// request, the journal, and replayed history all carry the same cut
+    /// form, and counts the cut in `truncated`.
+    fn truncate(
+        &self,
+        call: &ToolCall,
+        result: String,
+        limit: u64,
+        truncated: &mut usize,
+    ) -> String {
+        let (result, cut) =
+            truncation::truncate_tool_output(self.context_estimator, call, result, limit);
+        *truncated += usize::from(cut);
+
+        result
     }
 
     /// Appends one finished model response or tool result to a durable
@@ -398,6 +400,38 @@ impl Engine<'_> {
             }
         }
     }
+}
+
+/// Returns how many calls of one response have malformed arguments, and
+/// tracks in `consecutive` the responses in a row whose calls were all
+/// malformed.
+///
+/// # Errors
+/// Returns [`ModelError::InvalidToolArguments`] once
+/// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`] such responses arrive in a
+/// row.
+fn count_malformed(calls: &[ToolCall], consecutive: &mut usize) -> Result<usize, TurnError> {
+    let malformed = calls
+        .iter()
+        .filter_map(ToolCall::malformed_arguments)
+        .collect::<Vec<_>>();
+    if malformed.len() < calls.len() {
+        *consecutive = 0;
+    } else {
+        *consecutive += 1;
+        if *consecutive == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
+            return Err(ModelError::InvalidToolArguments {
+                reason: schema_contract::bounded_diagnostic(format!(
+                    "`{}`: {}",
+                    malformed[0].tool().name(),
+                    malformed[0].reason()
+                )),
+            }
+            .into());
+        }
+    }
+
+    Ok(malformed.len())
 }
 
 /// Executed `read` calls of the current turn, keyed by their canonical

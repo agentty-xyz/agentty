@@ -68,7 +68,10 @@ impl Model for InflatingModel {
         self.weights.lock().expect("weights lock").push(weight);
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         let response = if call % (READS + 1) < READS {
-            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
+            // Each round starts one line later, so no read repeats an
+            // earlier one and every result grows the request.
+            let offset = call % (READS + 1) + 1;
+            let arguments = serde_json::from_value(json!({"path": "notes.txt", "offset": offset}))
                 .expect("read arguments should be valid");
             ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
         } else {

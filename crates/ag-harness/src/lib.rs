@@ -130,6 +130,7 @@ pub mod store;
 mod telemetry;
 pub mod tool;
 mod trace;
+mod truncation;
 pub mod turn;
 mod turn_options_snapshot;
 mod write;

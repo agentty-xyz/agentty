@@ -201,7 +201,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "other",
-            &json!({"path": "other.txt", "limit": 5}),
+            &json!({"path": "other.txt"}),
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "all_lines",
@@ -209,7 +209,7 @@ async fn superseded_reads_are_cleared_first_and_reported() {
         ))),
         Ok(ModelResponse::ToolCall(read_of(
             "latest",
-            &json!({"path": "latest.txt", "limit": 5}),
+            &json!({"path": "latest.txt"}),
         ))),
         Ok(output()),
     ]);
