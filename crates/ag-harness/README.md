@@ -114,6 +114,15 @@ let outcome = session
   patches replaced by their recorded outcome. Stored messages are never changed;
   `ModelRequestActivity::context` reports each reduction. A request that still cannot
   fit fails with `TurnError::ContextBudgetExceeded`.
+- **Provider usage calibrates the estimate.** Each response's reported input tokens
+  calibrate later requests: a line through the first reported request, sloped by the
+  steepest token growth since and lifted over every report, so providers' fixed
+  per-request cost does not inflate large requests. Projection, admission, and fitting
+  keep calibrated requests within 95% of the input budget, and use 90% of the estimate
+  until a provider reports usage. The calibration lives in memory, is shared by a
+  harness and its sessions, and resets when a session switches model or the estimator is
+  replaced. `ModelRequestActivity::estimated_weight` and `calibrated_weight` report what
+  each request was fitted as.
 - **Invalid final output gets two corrections.** A final answer that is not valid JSON
   or violates the schema is re-requested with short, request-only feedback up to twice
   per turn; `TurnReport::output_corrections` counts these retries, and a third rejection

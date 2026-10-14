@@ -80,7 +80,9 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// tool rounds behind one note, and finally cutting the latest results further
 /// and the latest write patches to their outcome.
 /// The stored byte-based replay budget still bounds how much history is
-/// loaded.
+/// loaded. Provider-reported input tokens calibrate the weights against this
+/// budget in memory; until a provider reports usage, requests use 90% of the
+/// capacity left after reserved output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ContextBudget {
     max_request_weight: NonZeroU64,
@@ -125,6 +127,17 @@ impl ContextBudget {
     /// Returns the approximate weight reserved for the model's response.
     pub fn reserved_output_weight(self) -> u64 {
         self.reserved_output_weight
+    }
+
+    /// Returns this budget with `capacity` left after reserved output, at
+    /// least one unit, and the same output reservation.
+    pub(crate) fn with_capacity(self, capacity: u64) -> Self {
+        let max_request_weight = self.reserved_output_weight.saturating_add(capacity.max(1));
+
+        Self {
+            max_request_weight: NonZeroU64::new(max_request_weight).unwrap_or(NonZeroU64::MAX),
+            reserved_output_weight: self.reserved_output_weight,
+        }
     }
 }
 
@@ -456,10 +469,17 @@ pub(crate) struct ContextFit {
     reduced_counts: [usize; 3],
     required: u64,
     restore: Vec<(usize, ModelMessage)>,
+    sent_weight: u64,
     shrunk_writes_before: usize,
 }
 
 impl ContextFit {
+    /// Returns the approximate weight of the request the last
+    /// [`Self::fit`] returned, as sent and without reserved output.
+    pub(crate) fn sent_weight(&self) -> u64 {
+        self.sent_weight
+    }
+
     /// Returns the copy of `request` to send in its place, or `None` when the
     /// canonical request fits and no earlier request was reduced, with the
     /// reductions the copy carries.
@@ -514,6 +534,8 @@ impl ContextFit {
             && self.elided_results_before == 0
             && self.shrunk_writes_before == 0;
         if previous.is_none() && unreduced && base.saturating_add(self.required) <= budget_weight {
+            self.sent_weight = base.saturating_add(self.required) - budget.reserved_output_weight();
+
             return Ok((None, ContextActivity::default()));
         }
         let layout = Layout::new(request);
@@ -571,6 +593,7 @@ impl ContextFit {
             self.reduced_counts[Reduction::ShrinkWrite.slot()],
             self.capped_results + truncated_results,
         );
+        self.sent_weight = required - budget.reserved_output_weight();
 
         Ok((Some(&*self.fitted.insert(fitted)), activity))
     }

@@ -69,12 +69,12 @@ fn budget(max_request_weight: u64, reserved_output_weight: u64) -> ContextBudget
 fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
     let mut registry = ModelRegistry::new();
     let registrations: [(&'static str, ContextBudget); 6] = [
-        ("small", budget(35, 5)),
+        ("small", budget(39, 5)),
         ("mid", budget(41, 0)),
         ("huge", budget(101, 0)),
         ("tiny", budget(5, 0)),
         ("tiny-default", budget(4, 0)),
-        ("vision", budget(60, 0)),
+        ("vision", budget(65, 0)),
     ];
     for (name, context_budget) in registrations {
         registry
@@ -158,8 +158,9 @@ async fn projection_bounds_requests_on_every_handle() {
             .expect("record");
         let requests = requests.lock().expect("requests");
         assert_eq!(requests.len(), 3);
-        // A budget of 35 minus reserved 5 and the 10-weight input message
-        // keeps one 20-weight turn.
+        // A budget of 39 minus reserved 5 leaves 34, cut to 30 before any
+        // usage calibrates the estimate; minus the 10-weight input message,
+        // it keeps one 20-weight turn.
         assert_eq!(user_texts(&requests[0]), ["one"]);
         assert_eq!(user_texts(&requests[1]), ["one", "two"]);
         assert_eq!(user_texts(&requests[2]), ["two", "three"]);
@@ -204,7 +205,7 @@ async fn oversized_mandatory_content_fails_before_acquisition() {
             rejected,
             Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
                 budget: 5,
-                required: 20,
+                required: 23,
             }))
         ));
         assert!(
@@ -228,12 +229,14 @@ async fn one_shot_turns_admit_input_with_the_default_estimator() {
     let rejected = harness.run_once("0123456789abcdef", schema()).await;
 
     // Assert
-    // Sixteen bytes weigh ceil(16 / 4) + 4 = 8 against a budget of 4.
+    // Sixteen bytes weigh ceil(16 / 4) + 4 = 8 against the 3 of a budget of
+    // 4 left before any usage calibrates the estimate, reported in declared
+    // units as ceil(8 * 10 / 9) = 9.
     assert!(matches!(
         rejected,
         Err(TurnError::ContextBudgetExceeded {
             budget: 4,
-            required: 8,
+            required: 9,
         })
     ));
     assert_eq!(requests.lock().expect("requests").len(), 0);
@@ -391,8 +394,9 @@ async fn image_history_projects_at_its_encoded_weight() {
         ));
         let requests = requests.lock().expect("requests");
         assert_eq!(requests.len(), 3);
-        // The 57-weight image turn exceeds the 55 weights left after the
-        // current input, so replay drops it.
+        // The 57-weight image turn exceeds the 53 weights left of the 58
+        // usable before any usage calibrates the estimate after the current
+        // input, so replay drops it.
         assert!(
             !requests[1]
                 .messages()
@@ -406,7 +410,7 @@ async fn image_history_projects_at_its_encoded_weight() {
         assert!(matches!(
             oversized,
             Err(SessionError::Turn(TurnError::ContextBudgetExceeded {
-                budget: 60,
+                budget: 65,
                 ..
             }))
         ));

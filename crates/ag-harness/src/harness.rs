@@ -9,6 +9,7 @@ use std::time::Instant;
 use serde_json::json;
 use tokio::sync::OnceCell;
 
+use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::compaction::{self, SessionCheckpoint};
 use crate::context::{
@@ -55,7 +56,8 @@ pub struct Session {
 impl Session {
     /// Selects a registered model for subsequent turns of an idle session.
     ///
-    /// Adopts the registration's context budget and fences older handles,
+    /// Adopts the registration's context budget, discards the in-memory
+    /// calibration of the previous model's estimates, and fences older handles,
     /// including when switching back to a previous registration. Historical
     /// provider reasoning is not portable and causes an explicit rejection.
     /// Ordinary completed messages and tool groups remain intact. Recovery
@@ -85,6 +87,7 @@ impl Session {
         .await?;
         self.harness.model = registration.model();
         self.harness.context_budget = registration.capabilities().context_budget;
+        self.harness.context_calibration = ContextCalibration::default();
         if self.harness.execution_identity.is_none()
             || self
                 .harness
@@ -216,9 +219,7 @@ impl Session {
         loop {
             let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
             let input = TurnInput::text(source);
-            match context::admit_mandatory_content(
-                self.harness.context_estimator.as_ref(),
-                self.harness.context_budget,
+            match self.harness.admit_mandatory_content(
                 Some(compaction::GENERATION_INSTRUCTIONS),
                 &input,
                 options,
@@ -441,14 +442,10 @@ impl Session {
             return record.into_outcome();
         }
         self.harness.check_input_capability(&input)?;
-        let available_history_weight = context::admit_mandatory_content(
-            self.harness.context_estimator.as_ref(),
-            self.harness.context_budget,
-            self.system_prompt.as_deref(),
-            &input,
-            options,
-        )
-        .map_err(SessionError::from)?;
+        let available_history_weight = self
+            .harness
+            .admit_mandatory_content(self.system_prompt.as_deref(), &input, options)
+            .map_err(SessionError::from)?;
         self.check_image_history_budget(&input)?;
         let effects = control.map_or_else(Effects::default, |control| control.effects.clone());
         let _effects = effects.retain();
@@ -862,6 +859,7 @@ impl<'a> IntoFuture for OneShotTurn<'a> {
 /// reconfiguration affects only newly obtained handles.
 pub struct Harness {
     context_budget: ContextBudget,
+    context_calibration: ContextCalibration,
     context_estimator: Arc<dyn ContextEstimator>,
     database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
@@ -1013,10 +1011,13 @@ impl Harness {
     /// Requests keep the most recent complete turns that fit the effective
     /// [`ContextBudget`], and mandatory content that cannot fit fails with
     /// [`TurnError::ContextBudgetExceeded`] before acquisition. Estimates are
-    /// deterministic approximations, never exact provider token counts.
+    /// deterministic approximations, never exact provider token counts;
+    /// provider-reported input tokens calibrate them in memory, and replacing
+    /// the estimator discards that calibration.
     #[must_use]
     pub fn context_estimator(mut self, estimator: impl ContextEstimator + 'static) -> Self {
         self.context_estimator = Arc::new(estimator);
+        self.context_calibration = ContextCalibration::default();
 
         self
     }
@@ -1097,6 +1098,7 @@ impl Harness {
     fn from_shared_model(model: Arc<dyn Model>, context_budget: ContextBudget) -> Self {
         Self {
             context_budget,
+            context_calibration: ContextCalibration::default(),
             context_estimator: Arc::new(HeuristicContextEstimator),
             database: Arc::new(OnceCell::new()),
             database_path: None,
@@ -1120,13 +1122,7 @@ impl Harness {
         effects: Effects,
     ) -> Result<TurnOutcome, TurnError> {
         self.check_input_capability(&input)?;
-        context::admit_mandatory_content(
-            self.context_estimator.as_ref(),
-            self.context_budget,
-            None,
-            &input,
-            &options,
-        )?;
+        self.admit_mandatory_content(None, &input, &options)?;
         let _effects = effects.retain();
         let request = ModelRequest::new(input, options.schema().clone());
         let turn = self.lifecycle.start_turn();
@@ -1143,6 +1139,29 @@ impl Harness {
         }
 
         result.map(|(outcome, _)| outcome)
+    }
+
+    /// Admits mandatory content against the context budget scaled by the
+    /// provider-reported calibration shared with this harness's sessions,
+    /// and returns the calibrated weight left for history.
+    fn admit_mandatory_content(
+        &self,
+        system_prompt: Option<&str>,
+        input: &TurnInput,
+        options: &TurnOptions,
+    ) -> Result<u64, TurnError> {
+        let (budget, envelope) = self
+            .context_calibration
+            .effective_budget(self.context_budget);
+
+        context::admit_mandatory_content(
+            self.context_estimator.as_ref(),
+            budget,
+            system_prompt,
+            input,
+            options,
+        )
+        .map_err(|error| ContextCalibration::declared_failure(self.context_budget, envelope, error))
     }
 
     /// Runs one bounded, tool-free summarization turn for checkpoint
@@ -1176,6 +1195,7 @@ impl Harness {
     fn snapshot(&self) -> Self {
         Self {
             context_budget: self.context_budget,
+            context_calibration: self.context_calibration.clone(),
             context_estimator: Arc::clone(&self.context_estimator),
             database: Arc::clone(&self.database),
             database_path: self.database_path.clone(),
@@ -1269,6 +1289,7 @@ impl Harness {
     fn engine<'a>(&'a self, options: &'a TurnOptions) -> Engine<'a> {
         Engine {
             context_budget: self.context_budget,
+            context_calibration: &self.context_calibration,
             context_estimator: self.context_estimator.as_ref(),
             effects: Effects::default(),
             file_system: &self.file_system,

@@ -627,14 +627,15 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
 
     // Assert
     // Admission passes with the 7-weight input message + tool definition 2
-    // of 15, but the recorded call and result grow the request to three
-    // 7-weight messages plus the 2-weight definition before the second
-    // model call.
+    // within the 13 of 15 usable before any usage calibrates the estimate,
+    // but the recorded call and result grow the request to three 7-weight
+    // messages plus the 2-weight definition, 23, before the second model
+    // call, reported in declared units as ceil(23 * 10 / 9) = 26.
     assert!(matches!(
         rejected,
         Err(TurnError::ContextBudgetExceeded {
             budget: 15,
-            required: 23,
+            required: 26,
         })
     ));
 }
