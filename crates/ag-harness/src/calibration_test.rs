@@ -54,6 +54,7 @@ fn tokens(calibration: &ContextCalibration, weight: u64) -> u64 {
     calibration
         .effective_budget(budget())
         .1
+        .envelope()
         .expect("calibrated")
         .tokens(weight)
 }
@@ -67,7 +68,7 @@ fn uncalibrated_budget_keeps_ninety_percent_of_the_capacity() {
     let (_, envelope) = calibration.effective_budget(budget());
 
     // Assert
-    assert_eq!(envelope, None);
+    assert_eq!(envelope.envelope(), None);
     assert_eq!(capacity(&calibration), 900);
 }
 
@@ -181,7 +182,7 @@ fn responses_without_reported_input_tokens_leave_the_estimate_uncalibrated() {
     calibration.observe(budget(), 0, Some(&completion(Some(250))));
 
     // Assert
-    assert_eq!(calibration.effective_budget(budget()).1, None);
+    assert_eq!(calibration.effective_budget(budget()).1.envelope(), None);
 }
 
 #[test]
@@ -332,6 +333,74 @@ fn restated_failures_exceed_the_declared_budget_exactly_when_the_effective_one_i
                 required > budget,
                 weight > effective_capacity,
                 "{envelope:?} weight {weight} restated as {required} of {budget}"
+            );
+        }
+    }
+}
+
+#[test]
+fn overflows_cap_capacity_below_the_rejected_weight() {
+    // Arrange
+    let uncalibrated = ContextCalibration::default();
+    let calibrated = calibrated(&[(400, 500)]);
+
+    // Act
+    uncalibrated.observe_overflow(800);
+    calibrated.observe_overflow(300);
+
+    // Assert
+    assert_eq!(capacity(&uncalibrated), 600);
+    assert_eq!(capacity(&calibrated), 225);
+}
+
+#[test]
+fn overflow_ceilings_only_fall() {
+    // Arrange
+    let calibration = ContextCalibration::default();
+    calibration.observe_overflow(400);
+
+    // Act
+    calibration.observe_overflow(800);
+    let after_larger = capacity(&calibration);
+    calibration.observe_overflow(200);
+
+    // Assert
+    assert_eq!(after_larger, 300);
+    assert_eq!(capacity(&calibration), 150);
+}
+
+#[test]
+fn restated_failures_exceed_the_declared_budget_exactly_when_an_overflow_ceiling_rejects_them() {
+    // Arrange
+    let calibrations = [ContextCalibration::default(), calibrated(&[(400, 500)])];
+    for (calibration, rejected) in calibrations.iter().zip([600, 260]) {
+        calibration.observe_overflow(rejected);
+    }
+    let floor = ContextCalibration::default();
+    floor.observe_overflow(1);
+
+    for calibration in calibrations.iter().chain([&floor]) {
+        let (effective, state) = calibration.effective_budget(budget());
+        let effective_capacity = effective.max_request_weight().get() - 100;
+        for weight in effective_capacity.saturating_sub(50)..effective_capacity + 50 {
+            // Act
+            let restated = ContextCalibration::declared_failure(
+                budget(),
+                state,
+                TurnError::ContextBudgetExceeded {
+                    budget: effective.max_request_weight().get(),
+                    required: weight + 100,
+                },
+            );
+
+            // Assert
+            let TurnError::ContextBudgetExceeded { budget, required } = restated else {
+                unreachable!("budget failures stay budget failures");
+            };
+            assert_eq!(
+                required > budget,
+                weight > effective_capacity,
+                "{state:?} weight {weight} restated as {required} of {budget}"
             );
         }
     }

@@ -129,6 +129,9 @@ impl TraceState {
                 )),
                 Vec::new(),
             ),
+            LifecycleEventKind::ContextOverflowRetried {
+                attempt, turn_id, ..
+            } => self.record_overflow_retry(*turn_id, *attempt),
             LifecycleEventKind::ModelRequestCancelled { model_call_id, .. } => finish_span(
                 self.model_spans.remove(model_call_id),
                 Some(telemetry::ERROR_CANCELLED.to_string()),
@@ -177,6 +180,19 @@ impl TraceState {
                 tool_name,
                 turn_id,
             } => self.record_repetition(*turn_id, tool_name, *repeats, *stopped),
+        }
+    }
+
+    /// Adds a context-overflow retry event to the turn's span.
+    fn record_overflow_retry(&self, turn_id: Option<LifecycleId>, attempt: u64) {
+        if let Some(turn) = turn_id.and_then(|turn_id| self.turn_spans.get(&turn_id)) {
+            turn.span().add_event(
+                telemetry::EVENT_CONTEXT_OVERFLOW_RETRY,
+                vec![KeyValue::new(
+                    telemetry::ATTRIBUTE_CONTEXT_OVERFLOW_ATTEMPT,
+                    i64::try_from(attempt).unwrap_or(i64::MAX),
+                )],
+            );
         }
     }
 

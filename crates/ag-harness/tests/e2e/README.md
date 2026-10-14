@@ -71,6 +71,19 @@ AG_LIVE_ROUNDS=1 \
 cargo test --locked -p ag-harness --test e2e features::test_context_overflow_classification -- --exact --ignored --nocapture
 ```
 
+`features::test_context_overflow_recovery` declares a window twice the real one and
+scripts one `read` per part file of random words until the request exceeds the real
+window by about a third. The provider's rejection must lower the calibrated ceiling, and
+the turn must re-send a reduced request and answer with the last part's code word. A
+Kimi run sends one rejected request and a retry of about 220,000 input tokens; Qwen and
+Muse retries approach a million tokens and can exceed the three-minute request timeout,
+so run them deliberately:
+
+```sh
+AG_LIVE_PROVIDERS=kimi AG_LIVE_ROUNDS=1 \
+cargo test --locked -p ag-harness --test e2e features::test_context_overflow_recovery -- --exact --ignored --nocapture
+```
+
 ## Repeated tool calls
 
 `features::test_repeated_tool_calls` injects three identical `read` calls before the

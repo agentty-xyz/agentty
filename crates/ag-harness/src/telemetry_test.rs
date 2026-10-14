@@ -45,6 +45,7 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
         .start_model_request(None, 0, Some(successful_turn_id))
         .expect("observer should start a model request")
         .completed(None, ModelResponseType::Output);
+    lifecycle.context_overflow_retried(1, 900, 600, Some(successful_turn_id));
     successful_turn.completed();
 
     let denied_turn = lifecycle

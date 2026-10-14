@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 
 use super::support::{model, object_schema, response_without_metadata, write_call};
-use crate::context::ContextBudget;
+use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -15,8 +15,10 @@ use crate::model::{ModelError, ModelMessage, ModelRequest, ModelResponse};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
+use crate::session::SessionError;
+use crate::store::MemoryStore;
 use crate::tool::{ReadAction, Tool, ToolCall};
-use crate::turn::ToolActivity;
+use crate::turn::{ToolActivity, TurnError};
 
 /// Scripts the model's responses in order and records every request it
 /// received.
@@ -595,4 +597,172 @@ async fn a_differing_write_restarts_the_repetition_count() {
             .iter()
             .all(|request| harness_feedback(request).is_empty())
     );
+}
+
+/// A provider rejection of a request whose input exceeds the context window.
+fn overflow() -> ModelError {
+    ModelError::context_overflow(std::io::Error::other("exceeded model token limit"))
+}
+
+/// Returns the heuristic weight of `request` without reserved output, as
+/// the engine estimates a sent request.
+fn sent_weight(request: &ModelRequest) -> u64 {
+    let estimator = HeuristicContextEstimator;
+    let messages: u64 = request
+        .messages()
+        .iter()
+        .map(|message| estimator.message_weight(message))
+        .sum();
+    let tools: u64 = request
+        .tools()
+        .iter()
+        .map(|tool| estimator.tool_definition_weight(tool))
+        .sum();
+
+    messages + tools
+}
+
+/// Reads `notes.txt` with distinct windows so no read repeats another.
+fn reads(count: usize) -> Vec<Result<ModelResponse, ModelError>> {
+    (0..count)
+        .map(|index| {
+            Ok(ModelResponse::ToolCall(read_of(
+                &format!("read_{index}"),
+                &json!({"path": "notes.txt", "offset": index + 1, "limit": 70}),
+            )))
+        })
+        .collect()
+}
+
+fn overflow_harness(model: crate::model::MockModel, budget: u64) -> Harness {
+    Harness::new(
+        model,
+        ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
+    )
+    .repository(Repository::fixture("repo"))
+    .allow(Tool::Read)
+    .file_system(counting_file_system(
+        file_content(),
+        &Arc::new(AtomicUsize::new(0)),
+    ))
+}
+
+#[tokio::test]
+async fn an_overflowed_request_is_resent_reduced_and_the_turn_finishes() {
+    // Arrange
+    let mut responses = reads(3);
+    responses.extend([Err(overflow()), Ok(output())]);
+    let (model, requests) = scripted(responses);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&events);
+    let harness =
+        overflow_harness(model, 20_000).with_lifecycle_observer(move |event: LifecycleEvent| {
+            observed.lock().expect("events lock").push(event);
+        });
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("the reduced request fits the provider window");
+
+    // Assert
+    assert_eq!(outcome.report().context_overflow_recoveries(), 1);
+    assert_eq!(outcome.report().model_requests().len(), 4);
+    let requests = requests.lock().expect("requests lock");
+    let rejected = sent_weight(&requests[3]);
+    let retried = sent_weight(&requests[4]);
+    assert!(retried <= rejected * 3 / 4, "{retried} of {rejected}");
+    let overflow_retries = events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ContextOverflowRetried {
+                attempt,
+                rejected_weight,
+                retry_weight,
+                ..
+            } => Some((*attempt, *rejected_weight, *retry_weight)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(overflow_retries, [(1, rejected, retried)]);
+}
+
+#[tokio::test]
+async fn overflow_recoveries_are_bounded_per_turn() {
+    // Arrange
+    let mut responses = reads(6);
+    responses.extend([Err(overflow()), Err(overflow()), Err(overflow())]);
+    let (model, requests) = scripted(responses);
+    let harness = overflow_harness(model, 40_000);
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the third rejection exceeds the recoveries");
+
+    // Assert
+    assert!(matches!(error, TurnError::Model(ref error) if error.is_context_overflow()));
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(requests.len(), 9);
+    assert!(sent_weight(&requests[8]) < sent_weight(&requests[7]));
+    assert!(sent_weight(&requests[7]) < sent_weight(&requests[6]));
+}
+
+#[tokio::test]
+async fn an_overflow_the_refit_cannot_shrink_fails_with_the_provider_rejection() {
+    // Arrange
+    let (model, requests) = scripted(vec![Err(overflow())]);
+    let harness = overflow_harness(model, 20_000);
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("mandatory content cannot shrink below the ceiling");
+
+    // Assert
+    assert!(matches!(error, TurnError::Model(ref error) if error.is_context_overflow()));
+    assert_eq!(requests.lock().expect("requests lock").len(), 1);
+}
+
+#[tokio::test]
+async fn an_overflow_on_the_first_request_of_a_turn_drops_history_and_lowers_later_turns() {
+    // Arrange
+    let mut responses = reads(4);
+    responses.extend([Ok(output()), Err(overflow()), Ok(output()), Ok(output())]);
+    let (model, requests) = scripted(responses);
+    let harness = overflow_harness(model, 20_000).store(Arc::new(MemoryStore::new()));
+    let mut session = harness
+        .session("overflowing", object_schema())
+        .create()
+        .await
+        .expect("session");
+    session.send("read the notes").await.expect("first turn");
+
+    // Act
+    let recovered = session
+        .send("summarize them")
+        .await
+        .expect("history is reduced below the ceiling");
+    let later = session.send("anything else?").await.expect("third turn");
+    let oversized = session
+        .send("x".repeat(40_000).as_str())
+        .await
+        .expect_err("mandatory content above the ceiling fails typed");
+
+    // Assert
+    assert_eq!(recovered.report().context_overflow_recoveries(), 1);
+    let requests = requests.lock().expect("requests lock");
+    let rejected = sent_weight(&requests[5]);
+    assert!(sent_weight(&requests[6]) <= rejected * 3 / 4);
+    assert!(later.report().model_requests()[0].estimated_weight() <= rejected * 3 / 4);
+    assert!(matches!(
+        oversized,
+        SessionError::Turn(TurnError::ContextBudgetExceeded { budget, required })
+            if budget == 20_000 && required > budget
+    ));
 }

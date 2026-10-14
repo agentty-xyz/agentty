@@ -32,6 +32,14 @@ pub(crate) const MIN_SLOPE_PERMILLE: u64 = 1_000;
 /// shrink the usable window below a third.
 pub(crate) const MAX_SLOPE_PERMILLE: u64 = 3_000;
 
+/// Share, in percent, of a request's estimated weight that later requests
+/// are capped to after the provider rejected that request as exceeding its
+/// context window. The rejection proves only that the request was too
+/// large, not by how much, so each one shrinks the usable weight by a
+/// quarter, as Roo Code retries an overflow at 75%; two rejections reach
+/// about 56%.
+pub(crate) const OVERFLOW_SHRINK_PERCENT: u64 = 75;
+
 const PERMILLE: u64 = 1_000;
 
 /// Provider-reported calibration of estimated request weight to input
@@ -46,53 +54,93 @@ const PERMILLE: u64 = 1_000;
 /// observation lies on or below it. Slope and lift only rise, since an
 /// under-estimate overflows the provider window and fails the turn while an
 /// over-estimate only reduces context earlier.
+///
+/// A provider that rejects a request as exceeding its context window
+/// reports no usage, so the rejection instead caps the usable weight below
+/// the rejected request (see [`Self::observe_overflow`]); the cap only
+/// falls, like the envelope only rises.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ContextCalibration {
-    envelope: Arc<Mutex<Option<Envelope>>>,
+    state: Arc<Mutex<Calibration>>,
+}
+
+/// One consistent reading of a [`ContextCalibration`]: the usage envelope,
+/// if any provider usage calibrated the estimate, and the weight cap left by
+/// provider context-window rejections, if any.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Calibration {
+    envelope: Option<Envelope>,
+    overflow_ceiling: Option<u64>,
+}
+
+impl Calibration {
+    /// Returns the usage envelope, or `None` while no provider usage
+    /// calibrated the estimate.
+    pub(crate) fn envelope(self) -> Option<Envelope> {
+        self.envelope
+    }
 }
 
 impl ContextCalibration {
     /// Returns `budget` with its request capacity reduced to the largest
     /// estimated weight whose calibrated tokens fit
-    /// [`CALIBRATED_CAPACITY_PERCENT`] of it, never above the declared
-    /// capacity, and the calibration applied, or `None` when no usage
-    /// calibrated the estimate yet and the capacity is cut to
-    /// [`UNCALIBRATED_CAPACITY_PERCENT`].
-    pub(crate) fn effective_budget(
-        &self,
-        budget: ContextBudget,
-    ) -> (ContextBudget, Option<Envelope>) {
+    /// [`CALIBRATED_CAPACITY_PERCENT`] of it, or to
+    /// [`UNCALIBRATED_CAPACITY_PERCENT`] of it before any usage calibrated
+    /// the estimate, and further to the overflow ceiling once a provider
+    /// rejected a request as exceeding its context window; never above the
+    /// declared capacity. Returns the calibration applied with it.
+    pub(crate) fn effective_budget(&self, budget: ContextBudget) -> (ContextBudget, Calibration) {
         let capacity = budget.max_request_weight().get() - budget.reserved_output_weight();
-        let envelope = *self.envelope.lock().unwrap_or_else(PoisonError::into_inner);
-        let limit = capacity.saturating_mul(Self::capacity_percent(envelope)) / 100;
-        let weight = envelope.map_or(limit, |envelope| envelope.weight_within(limit));
+        let calibration = *self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let limit = capacity.saturating_mul(Self::capacity_percent(calibration.envelope)) / 100;
+        let weight = calibration
+            .envelope
+            .map_or(limit, |envelope| envelope.weight_within(limit));
+        let weight = calibration
+            .overflow_ceiling
+            .map_or(weight, |ceiling| weight.min(ceiling));
 
-        (budget.with_capacity(weight.min(capacity)), envelope)
+        (budget.with_capacity(weight.min(capacity)), calibration)
     }
 
     /// Restates a [`TurnError::ContextBudgetExceeded`] measured against the
-    /// effective budget derived from `budget` and `envelope` in the units of
-    /// the declared `budget`: the budget as declared, and the calibrated
+    /// effective budget derived from `budget` and `calibration` in the units
+    /// of the declared `budget`: the budget as declared, and the calibrated
     /// tokens of the required weight grown by the margin the capacity keeps,
-    /// or the weight itself when larger. Returns any other error unchanged.
+    /// or the weight itself when larger. A weight above the overflow ceiling
+    /// is also scaled by how far the ceiling cut the declared capacity, so
+    /// the restated requirement exceeds the declared budget whenever the
+    /// ceiling rejected it. Returns any other error unchanged.
     pub(crate) fn declared_failure(
         budget: ContextBudget,
-        envelope: Option<Envelope>,
+        calibration: Calibration,
         error: TurnError,
     ) -> TurnError {
         let TurnError::ContextBudgetExceeded { required, .. } = error else {
             return error;
         };
         let reserved = budget.reserved_output_weight();
+        let capacity = budget.max_request_weight().get() - reserved;
         let weight = required.saturating_sub(reserved);
-        let tokens = envelope.map_or(weight, |envelope| envelope.tokens(weight));
+        let tokens = calibration
+            .envelope
+            .map_or(weight, |envelope| envelope.tokens(weight));
         let tokens = tokens
             .saturating_mul(100)
-            .div_ceil(Self::capacity_percent(envelope));
+            .div_ceil(Self::capacity_percent(calibration.envelope));
+        let ceiling_scaled = calibration
+            .overflow_ceiling
+            .filter(|ceiling| weight > *ceiling)
+            .map_or(0, |ceiling| {
+                let scaled = (u128::from(weight) * u128::from(capacity))
+                    .div_ceil(u128::from(ceiling.max(1)));
+
+                u64::try_from(scaled).unwrap_or(u64::MAX)
+            });
 
         TurnError::ContextBudgetExceeded {
             budget: budget.max_request_weight().get(),
-            required: reserved.saturating_add(tokens.max(weight)),
+            required: reserved.saturating_add(tokens.max(weight).max(ceiling_scaled)),
         }
     }
 
@@ -116,12 +164,31 @@ impl ContextCalibration {
         }
         let capacity = budget.max_request_weight().get() - budget.reserved_output_weight();
         let min_growth = (capacity.saturating_mul(SLOPE_MIN_GROWTH_PERCENT) / 100).max(1);
-        let mut envelope = self.envelope.lock().unwrap_or_else(PoisonError::into_inner);
-        let updated = match *envelope {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let updated = match state.envelope {
             Some(current) => current.observe(estimated_weight, tokens, min_growth),
             None => Envelope::first(estimated_weight, tokens),
         };
-        *envelope = Some(updated);
+        state.envelope = Some(updated);
+    }
+
+    /// Records that the provider rejected a sent request of
+    /// `rejected_weight`, without reserved output, as exceeding its context
+    /// window: later requests are capped to [`OVERFLOW_SHRINK_PERCENT`] of
+    /// that weight, or to a lower cap an earlier rejection left. For any
+    /// rejected request heavier than one weight unit the cap lies strictly
+    /// below it, so a request refitted under it is smaller or fails typed,
+    /// and the cap lasts until the
+    /// model or estimator changes, since a declared window the provider
+    /// rejected stays wrong for later turns.
+    pub(crate) fn observe_overflow(&self, rejected_weight: u64) {
+        let ceiling = rejected_weight.saturating_mul(OVERFLOW_SHRINK_PERCENT) / 100;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.overflow_ceiling = Some(
+            state
+                .overflow_ceiling
+                .map_or(ceiling, |current| current.min(ceiling)),
+        );
     }
 
     /// Share of the capacity a request may fill under `envelope`.

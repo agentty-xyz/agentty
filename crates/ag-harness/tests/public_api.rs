@@ -972,6 +972,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     assert_eq!(once.report().output_corrections(), 0);
     assert_eq!(once.report().malformed_tool_calls(), 0);
     assert_eq!(once.report().repetition_nudges(), 0);
+    assert_eq!(once.report().context_overflow_recoveries(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(

@@ -125,6 +125,13 @@ let outcome = session
   harness and its sessions, and resets when a session switches model or the estimator is
   replaced. `ModelRequestActivity::estimated_weight` and `calibrated_weight` report what
   each request was fitted as.
+- **A provider context-window rejection is recovered in the turn.** A request the
+  provider rejects with `ModelErrorType::ContextOverflow` caps later requests at 75% of
+  its estimated weight, and the turn refits and re-sends it, up to twice per turn. A
+  refit that cannot shrink below the cap, or a third rejection, fails the turn with the
+  provider's error. The cap is part of the calibration, so later turns stay below it
+  until the model or estimator changes. `TurnReport::context_overflow_recoveries` counts
+  the re-sends, and `LifecycleEventKind::ContextOverflowRetried` reports each one.
 - **Identical reads are answered from the earlier result.** A `read` whose arguments
   match an earlier read of the same turn returns a short note naming that call instead
   of running again, while the last request still carried the earlier result whole, no
