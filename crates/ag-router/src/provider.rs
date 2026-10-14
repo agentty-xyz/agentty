@@ -149,9 +149,24 @@ impl Router {
     }
 }
 
+/// Kimi's `400` message for input over the window, as in "Your request
+/// exceeded model token limit: 262144 (requested: 422274)".
+const KIMI_CONTEXT_OVERFLOW: &str = "exceeded model token limit";
+
+/// The Meta Model API's whole `400` message for input over the window. It
+/// names no limit, but every other request validation failure observed live
+/// names the offending parameter instead, so only an overflow carries it.
+const MUSE_CONTEXT_OVERFLOW: &str = "the request contains invalid parameters. check the request \
+                                     body for any errors or inconsistencies.";
+
+/// `DashScope`'s `400` message for input over the window, as in "Range of
+/// input length should be [1, 983616]".
+const QWEN_CONTEXT_OVERFLOW: &str = "range of input length";
+
 fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
     match provider {
         Provider::Kimi => ChatCompletionProviderPolicy {
+            context_overflow_markers: &[KIMI_CONTEXT_OVERFLOW],
             display_name: "Kimi",
             image_input: matches!(
                 model,
@@ -181,6 +196,7 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
                                         schema",
         },
         Provider::Muse => ChatCompletionProviderPolicy {
+            context_overflow_markers: &[MUSE_CONTEXT_OVERFLOW],
             display_name: "Meta Model API",
             image_input: matches!(model, "muse-spark-1.3" | "muse-spark-1.3-contributor"),
             reasoning_format: ReasoningFormat::Effort(muse_effort),
@@ -192,6 +208,7 @@ fn policy(provider: Provider, model: &str) -> ChatCompletionProviderPolicy {
         Provider::Qwen => {
             let preserves_reasoning = model.starts_with("qwen3.8-");
             ChatCompletionProviderPolicy {
+                context_overflow_markers: &[QWEN_CONTEXT_OVERFLOW],
                 display_name: "Qwen",
                 image_input: model.starts_with("qwen-vl-")
                     || model.starts_with("qwen3-vl-")

@@ -58,6 +58,19 @@ AG_LIVE_PROVIDERS=muse,qwen \
 cargo test --locked -p ag-harness --test e2e features::test_malformed_tool_arguments -- --exact --ignored --nocapture
 ```
 
+## Context overflow
+
+`features::test_context_overflow_classification` sends one turn of random words beyond
+the model's window under an unbounded `ContextBudget`, so the provider rather than the
+harness rejects it, and requires `ModelErrorType::ContextOverflow`. Kimi's input stays
+below its two-million tokens-per-minute limit, which a larger input meets as a `429`
+first:
+
+```sh
+AG_LIVE_ROUNDS=1 \
+cargo test --locked -p ag-harness --test e2e features::test_context_overflow_classification -- --exact --ignored --nocapture
+```
+
 ## Images
 
 The `image` checks send ordered PNG and JPEG blocks through one-shot and durable turns

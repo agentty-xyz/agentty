@@ -229,7 +229,10 @@ let harness = Harness::from_registry(&models, "review-model")?;
 
 Built-in clients accept JSON wrapped in Markdown fences or prose when the embedded
 object parses; anything else fails with `ModelError::InvalidJson`. Requests time out
-after three minutes, and a `429` `Retry-After` is honored up to sixty seconds.
+after three minutes, and a `429` `Retry-After` is honored up to sixty seconds. A
+provider rejection of input beyond the model's window reports
+`ModelErrorType::ContextOverflow` (`ModelError::is_context_overflow`); custom models
+report it with `ModelError::context_overflow`.
 
 ## Stores
 

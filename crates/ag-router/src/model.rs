@@ -359,8 +359,12 @@ impl ModelError {
         match self {
             Self::WithMetadata { source, .. } => source.error_class(),
             Self::Request(source) => {
-                if source.downcast_ref::<ProviderRequestError>().is_some() {
-                    ErrorClass::Provider
+                if let Some(error) = source.downcast_ref::<ProviderRequestError>() {
+                    if error.context_overflow {
+                        ErrorClass::ContextOverflow
+                    } else {
+                        ErrorClass::Provider
+                    }
                 } else {
                     source
                         .downcast_ref::<ClassifiedRequestError>()
@@ -387,6 +391,12 @@ impl ModelError {
             | Self::InvalidProviderConfig
             | Self::InvalidResponseFormatName => ErrorClass::Request,
         }
+    }
+
+    /// Returns whether the provider rejected the request because its input
+    /// exceeds the model's context window, so a smaller request may succeed.
+    pub fn is_context_overflow(&self) -> bool {
+        self.error_class() == ErrorClass::ContextOverflow
     }
 
     /// Returns the provider HTTP status when the request reached a provider.
@@ -447,10 +457,12 @@ impl ModelError {
         body: String,
         source: reqwest::Error,
         status: reqwest::StatusCode,
+        context_overflow: bool,
     ) -> Self {
         Self::Request(Box::new(ProviderRequestError {
             provider,
             body,
+            context_overflow,
             source,
             status,
         }))
@@ -482,6 +494,9 @@ pub enum ErrorClass {
     Transport,
     /// Provider returned an unsuccessful HTTP response.
     Provider,
+    /// Provider rejected the request because its input exceeds the model's
+    /// context window.
+    ContextOverflow,
     /// Provider response envelope was malformed.
     InvalidProviderResponse,
     /// Provider returned an unusable successful response.
@@ -510,6 +525,7 @@ pub(crate) enum ModelErrorType {
 struct ProviderRequestError {
     provider: &'static str,
     body: String,
+    context_overflow: bool,
     #[source]
     source: reqwest::Error,
     status: reqwest::StatusCode,

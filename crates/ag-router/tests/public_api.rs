@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use ag_router::{
-    Completion, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
+    Completion, ErrorClass, ImageContent, ImageMediaType, InputBlock, JsonSchemaFormat, ModelError,
     ModelMessage, ModelRequest, OutputSchema, Provider, ProviderConfig, Router, ToolCall,
     ToolDefinition, TurnInput,
 };
@@ -372,6 +372,110 @@ async fn replays_image_and_batched_function_history_for_kimi()
     assert_eq!(body["thinking"]["type"], "enabled");
     let low_body: Value = serde_json::from_slice(&requests[1].body)?;
     assert_eq!(low_body["thinking"]["type"], "disabled");
+
+    Ok(())
+}
+
+/// Returns the router error for one request answered with `status` and
+/// `body`.
+async fn failure(
+    provider: Provider,
+    model: &str,
+    status: u16,
+    body: &str,
+) -> Result<ModelError, Box<dyn std::error::Error>> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(status).set_body_raw(body.to_string(), "application/json"),
+        )
+        .mount(&server)
+        .await;
+
+    match router(provider, &server)?.execute(request(model)?).await {
+        Ok(_) => Err("unsuccessful response must fail".into()),
+        Err(error) => Ok(error),
+    }
+}
+
+#[tokio::test]
+async fn classifies_live_context_overflow_bodies_per_provider()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let cases = [
+        (
+            Provider::Kimi,
+            "kimi/kimi-k2.6",
+            include_str!("fixtures/context_overflow/kimi-k2.6.json"),
+        ),
+        (
+            Provider::Muse,
+            "muse/muse-spark-1.3",
+            include_str!("fixtures/context_overflow/muse-spark-1.3.json"),
+        ),
+        (
+            Provider::Qwen,
+            "qwen/qwen3.8-max",
+            include_str!("fixtures/context_overflow/qwen3.8-max.json"),
+        ),
+        (
+            Provider::Qwen,
+            "qwen/qwen-plus",
+            include_str!("fixtures/context_overflow/qwen-plus.json"),
+        ),
+    ];
+
+    for (provider, model, body) in cases {
+        // Act
+        let error = failure(provider, model, 400, body).await?;
+
+        // Assert
+        assert_eq!(error.error_class(), ErrorClass::ContextOverflow, "{model}");
+        assert!(error.is_context_overflow(), "{model}");
+        assert_eq!(error.http_status(), Some(400), "{model}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn classifies_payload_too_large_and_shared_markers_as_context_overflow()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let openai_overflow = r#"{"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens."}}"#;
+
+    // Act
+    let too_large = failure(Provider::Muse, "muse/muse-spark-1.3", 413, "<html>").await?;
+    let shared_marker = failure(Provider::Qwen, "qwen/qwen-plus", 422, openai_overflow).await?;
+
+    // Assert
+    assert!(too_large.is_context_overflow());
+    assert_eq!(too_large.http_status(), Some(413));
+    assert!(shared_marker.is_context_overflow());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn keeps_other_provider_failures_out_of_context_overflow()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let kimi_overflow = include_str!("fixtures/context_overflow/kimi-k2.6.json");
+    let muse_validation = r#"{"error":{"code":null,"message":"unknown parameter `frobnicate`","param":"frobnicate","type":"invalid_request_error"}}"#;
+
+    // Act
+    let failures = [
+        failure(Provider::Muse, "muse/muse-spark-1.3", 400, muse_validation).await?,
+        failure(Provider::Muse, "muse/muse-spark-1.3", 400, kimi_overflow).await?,
+        failure(Provider::Kimi, "kimi/kimi-k2.6", 500, kimi_overflow).await?,
+    ];
+
+    // Assert
+    for error in failures {
+        assert_eq!(error.error_class(), ErrorClass::Provider, "{error}");
+        assert!(!error.is_context_overflow(), "{error}");
+    }
 
     Ok(())
 }

@@ -953,6 +953,80 @@ async fn test_malformed_tool_arguments() -> Result<(), DynError> {
 }
 
 // ---------------------------------------------------------------------------
+// Context overflow classification
+// ---------------------------------------------------------------------------
+
+impl Provider {
+    /// Input size whose random words exceed the model's window: Kimi's
+    /// 262,144 tokens stay below its two-million tokens-per-minute limit,
+    /// which a larger input meets as `429` before the window check, while
+    /// Muse and Qwen need over a million tokens.
+    fn overflow_input_bytes(self) -> usize {
+        match self {
+            Self::Kimi => 1024 * 1024,
+            Self::Muse | Self::Qwen => 6 * 1024 * 1024,
+        }
+    }
+}
+
+/// Returns `bytes` of pseudo-random lowercase words. Random letters cost
+/// more tokens per byte than prose and never repeat, so providers neither
+/// compress nor stall on the input.
+fn incompressible_text(bytes: usize) -> String {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut text = String::with_capacity(bytes + 16);
+    while text.len() < bytes {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        for shift in 0..3 + state % 7 {
+            let letter = u8::try_from((state >> (shift * 5)) % 26).unwrap_or(0);
+            text.push(char::from(b'a' + letter));
+        }
+        text.push(' ');
+    }
+
+    text
+}
+
+async fn context_overflow(provider: Provider) -> Result<String, DynError> {
+    let harness = Harness::new(provider.client()?, unbounded_context_budget());
+    let input = format!(
+        "Set answer to OK.\n{}",
+        incompressible_text(provider.overflow_input_bytes())
+    );
+    provider.pace().await;
+    match harness.run_once(input, answer_schema()?).await {
+        Err(TurnError::Model(error)) if error.is_context_overflow() => Ok(format!(
+            "type={} status={:?}",
+            error.error_type().as_str(),
+            error.http_status()
+        )),
+        Err(error) => Err(format!("expected a context overflow, got: {error}").into()),
+        Ok(_) => Err("the oversized request was accepted".into()),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_context_overflow_classification() -> Result<(), DynError> {
+    let mut report = Report::new("context_overflow_classification");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                provider.name(),
+                round,
+                context_overflow(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
 // Sandboxed Bash (#662), executor contract (#674, #675)
 // ---------------------------------------------------------------------------
 
