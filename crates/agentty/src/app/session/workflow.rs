@@ -9,7 +9,7 @@ pub(super) use super::core::{
 };
 
 pub(super) mod access;
-mod activity;
+pub(super) mod activity;
 mod commit_context;
 pub(super) mod draft;
 pub(super) mod isolation;

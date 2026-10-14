@@ -61,12 +61,19 @@ dispatched. The foreground loop also reconciles restored modes before rendering.
 composer state and its image attachments are discarded on this transition.
 
 Activity snapshots follow the same worker/runtime event path as progress. The session
-host reduces them by attempt and operation identity, then stores a display-only usage
-message immediately after the final answer or failure notice. These messages participate
-in render-cache invalidation and saved history, but are excluded from provider replay.
-Commit and rebase assistance collect utility activity concurrently and save the same
-usage footer immediately after their displayed answer or attempt failure notice, before
-propagating failures to the overall workflow.
+host reduces them by attempt and operation identity in first-seen order and publishes
+one replaceable snapshot with at most one unread `AppEvent` notification per turn. The
+foreground formats the latest snapshot when consuming that notification and replaces a
+transient plain-text block with compact status and command/argument rows, preserving all
+invocations when events are batched. Only failed calls show output, capped at two lines;
+the renderer clips live rows to the pane width. Provider output deltas update the
+matching call. After the final answer or failure notice, a durable usage message
+replaces the live rows. These messages participate in render-cache invalidation and
+saved history, but are excluded from provider replay. Commit and rebase assistance
+collect utility activity concurrently and save the same usage footer immediately after
+their displayed answer or attempt failure notice, before propagating failures to the
+overall workflow. Existing session rebase-assistance turns clear their live rows before
+returning success, failure, or cancellation.
 
 ## Project Access
 

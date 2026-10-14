@@ -15,9 +15,11 @@ tests establish policy delivery; actual provider enforcement still depends on th
 installed harness and its supported controls.
 
 Activity tests inject provider JSON and worker events to cover lifecycle deduplication,
-retry identity, utility forwarding, and transcript persistence without live providers. A
-`FeatureTest` PTY scenario covers saved usage footers. Live backend event availability
-still depends on the installed CLI version.
+retry identity, bounded input/output previews, utility forwarding, and transcript
+persistence without live providers. Transport fixtures cover Gemini and Antigravity
+activity forwarding. A `FeatureTest` PTY scenario covers live command/results and saved
+usage footers. Live backend event availability still depends on the installed CLI
+version.
 
 <!-- more -->
 

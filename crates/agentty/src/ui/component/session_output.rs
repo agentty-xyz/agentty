@@ -994,6 +994,19 @@ impl Component for SessionOutput<'_> {
     }
 }
 
+/// Keeps live activity to one terminal row per call or failure-preview line.
+pub(crate) fn live_activity_lines(activity: &str, width: usize) -> Vec<Line<'static>> {
+    activity
+        .lines()
+        .map(|line| {
+            Line::styled(
+                text_util::truncate_with_ellipsis(line, width),
+                ratatui::style::Style::default().fg(style::palette::text_muted()),
+            )
+        })
+        .collect()
+}
+
 /// Wraps usage as plain text, clipping identities wider than the viewport.
 pub(crate) fn activity_summary_lines(summary: &str, width: usize) -> Vec<Line<'static>> {
     summary

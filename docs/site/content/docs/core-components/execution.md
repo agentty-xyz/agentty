@@ -134,12 +134,17 @@ See [Module Map](@/docs/architecture/module-map.md) for ownership and
 `TurnEvent::Activity` carries tool and explicit skill lifecycle snapshots through the
 existing worker stream. Call identity combines an attempt ID with the provider operation
 ID, so retries and protocol repairs remain distinct. Snapshots include category, bounded
-name, optional parent ID, observation time, status, and reported exit code. Unfinished
-calls settle as interrupted when their attempt ends; this does not imply tool rollback.
+name, optional parent ID, observation time, status, reported exit code, and optional
+input/output previews. Unfinished calls settle as interrupted when their attempt ends;
+this does not imply tool rollback.
 
-Codex app-server and Claude CLI adapters publish activity independently of telemetry.
-Only explicit Claude `Skill` calls identify skill usage. Raw arguments and output are
-excluded. Each attempt retains at most 512 operations; the host footer retains at most
-2048 calls per turn. These are bounded observations, not an exhaustive audit log.
-Utility callers may supply `OneShotRequest::activity_tx` through `RunClient::submit` to
-receive the same events, including repairs. Hosts own persistence and rendering.
+Codex, Claude, Gemini ACP, and Antigravity adapters publish activity independently of
+telemetry. Only explicit Claude `Skill` calls identify skill usage. Input and output
+previews strip terminal control characters and retain at most 4096 characters plus a
+truncation marker each. Output updates replace previews; Codex output deltas accumulate
+within that bound. Previews are transient display data, excluded from provider replay
+and telemetry export. Each attempt retains at most 512 operations; the host footer
+retains at most 2048 calls per turn. These are bounded observations, not an exhaustive
+audit log. Utility callers may supply `OneShotRequest::activity_tx` through
+`RunClient::submit` to receive the same events, including repairs. Hosts own persistence
+and rendering.

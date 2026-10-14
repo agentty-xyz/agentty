@@ -7,6 +7,8 @@ use rustc_hash::FxHasher;
 /// Stable identity for one replaceable session-output message.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TransientMessageSlot {
+    /// Ordered tool and skill invocations from the current provider turn.
+    Activity,
     /// Durable workspace setup projected into inline session output.
     WorkspacePreparation,
     /// Focused review loading, result, or failure output.

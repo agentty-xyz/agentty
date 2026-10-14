@@ -226,10 +226,11 @@ async fn turn_writes_user_event_and_returns_step_usage() {
             },
         })
         .to_string(),
+        serde_json::json!({"event":"step_update","step_update":{"conversation_id":"conversation-1","step_index":1,"step_type":"tool","state":"DONE","tool_info":{"name":"run_command","parameters":{"CommandLine":"pwd"},"output":"project"}}}).to_string(),
         serde_json::json!({"event": "init"}).to_string(),
         "not-json".to_string(),
     ]));
-    transport.expect_next_stdout().times(4).returning(move || {
+    transport.expect_next_stdout().times(5).returning(move || {
         let line = lines.lock().expect("line lock").pop();
 
         Box::pin(async move { Ok(line) })
@@ -272,6 +273,7 @@ async fn turn_writes_user_event_and_returns_step_usage() {
         .expect("prompt payload should be written");
     assert_eq!(payload["event"], "user");
     assert_eq!(payload["message"]["content"], "Inspect the architecture");
+    assert_command_activity(stream_rx.try_recv().expect("tool activity"));
     assert_eq!(
         stream_rx.try_recv().expect("assistant delta should stream"),
         AppServerStreamEvent::AssistantMessage {
@@ -280,6 +282,18 @@ async fn turn_writes_user_event_and_returns_step_usage() {
             phase: None,
         }
     );
+}
+
+/// Checks the rich activity emitted through the runtime boundary.
+fn assert_command_activity(event: AppServerStreamEvent) {
+    let activity = match event {
+        AppServerStreamEvent::Activity(activity) => Some(activity),
+        _ => None,
+    }
+    .expect("expected tool activity");
+    assert_eq!(activity.input.as_deref(), Some("pwd"));
+    assert_eq!(activity.output.as_deref(), Some("project"));
+    assert_eq!(activity.status, ag_contracts::ActivityStatus::Completed);
 }
 
 #[tokio::test]

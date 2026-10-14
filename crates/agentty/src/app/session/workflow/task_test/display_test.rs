@@ -84,9 +84,11 @@ fn emit_assist_activity(sender: &mpsc::UnboundedSender<ActivityEvent>) {
         attempt_id: "initial".into(),
         exit_code: None,
         id: "read".into(),
+        input: None,
         kind: ActivityKind::Tool,
         name: "Read".into(),
         observed_at: std::time::SystemTime::UNIX_EPOCH,
+        output: None,
         parent_id: None,
         status: ActivityStatus::Running,
     };

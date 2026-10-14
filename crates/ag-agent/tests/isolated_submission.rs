@@ -43,6 +43,8 @@ impl AppServerClient for RestartOnlyServer {
                 attempt_id: if malformed { "initial" } else { "final" }.into(),
                 exit_code: None,
                 id: "call".into(),
+                input: None,
+                output: None,
                 kind: ActivityKind::Tool,
                 name: "lookup".into(),
                 observed_at: std::time::SystemTime::UNIX_EPOCH,

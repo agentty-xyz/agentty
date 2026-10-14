@@ -651,7 +651,8 @@ impl SessionWorkerRebaseAssistClient {
         let turn_result = self
             .run_turn_with_cancellation(turn_cancel_token, req, event_tx)
             .await;
-        let _ = consumer.await;
+        let activity = consumer.await.unwrap_or_default();
+        activity.clear_live(&self.app_event_tx, &self.session_id);
         let turn_result = turn_result.map_err(turn::session_error_from_agent_error)?;
 
         self.append_assist_answer(&turn_result.assistant_message)

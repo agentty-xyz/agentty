@@ -4,6 +4,7 @@
 //! command builders, parsers, and transport policy descriptors private.
 
 pub(crate) mod activity;
+mod activity_content;
 mod antigravity;
 pub(crate) mod app_server;
 mod availability;

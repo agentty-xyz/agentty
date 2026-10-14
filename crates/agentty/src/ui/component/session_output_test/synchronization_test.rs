@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
-use super::super::{SessionOutputLayoutCache, SessionOutputLineContext};
+use super::super::{SessionOutputLayoutCache, SessionOutputLineContext, live_activity_lines};
 use super::support::{line_context, output_lines, session_fixture, set_conversation_transcript};
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
@@ -142,4 +142,81 @@ fn test_output_lines_orders_post_sync_statuses_chronologically() {
     assert!(commit_index < sync_index);
     assert!(sync_index < auto_push_index);
     assert!(auto_push_index < review_index);
+}
+
+#[test]
+fn test_live_activity_invalidates_cached_output_without_transcript_changes() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::InProgress;
+    set_conversation_transcript(
+        &mut session,
+        vec![(SessionMessageKind::UserPrompt, "inspect")],
+    );
+    let cache = SessionOutputLayoutCache::default();
+    let area = Rect::new(0, 0, 80, 20);
+    let mut texts = Vec::new();
+
+    // Act
+    for status in ["…", "✓", "✗", "!"] {
+        session.transient_messages.upsert(TransientMessage {
+            anchor: TransientMessageAnchor::AfterActiveTurn,
+            body: TransientMessageBody::Plain(format!("{status} **Read**\n… skill review")),
+            lifecycle: TransientMessageLifecycle::ClearOnNewTurn,
+            slot: TransientMessageSlot::Activity,
+            turn_position: Some(0),
+        });
+        let layout = cache.layout(&session, area, line_context(), None);
+        texts.push(
+            layout
+                .lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+    }
+    session
+        .transient_messages
+        .retract(TransientMessageSlot::Activity);
+    let cleared = cache.layout(&session, area, line_context(), None);
+    let cleared_text = cleared
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Assert
+    for (text, status) in texts.iter().zip(["…", "✓", "✗", "!"]) {
+        assert!(text.contains(&format!("{status} **Read**")));
+        assert!(text.contains("… skill review"));
+        assert!(text.find("inspect") < text.find("**Read**"));
+        assert_eq!(text.matches("**Read**").count(), 1);
+    }
+    assert!(!cleared_text.contains("**Read**"));
+    assert!(cleared_text.contains("inspect"));
+}
+
+#[test]
+fn compact_activity_clips_to_terminal_width_without_wrapping_or_markdown() {
+    // Arrange
+    let activity = "✗ shell (exit 1) · rg '**literal**' 界界界界\n  first error with many \
+                    details\n  second error …";
+
+    // Act, Assert
+    for width in [0, 1, 12, 100] {
+        let lines = live_activity_lines(activity, width);
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|line| line.width() <= width));
+        if width == 100 {
+            assert_eq!(lines[0].to_string(), activity.lines().next().expect("row"));
+        } else if width == 12 {
+            assert!(lines[0].to_string().ends_with("..."));
+        }
+    }
+    assert_eq!(
+        live_activity_lines("", 80),
+        Vec::<ratatui::text::Line<'_>>::new()
+    );
 }

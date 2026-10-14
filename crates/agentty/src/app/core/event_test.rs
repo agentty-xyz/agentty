@@ -17,6 +17,7 @@ use crate::app::sync::ProjectSyncContext;
 use crate::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
 };
+use crate::domain::transient_message::TransientMessageSlot;
 use crate::infra::db::DbError;
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
@@ -476,6 +477,20 @@ fn collect_runtime_event_rejects_top_level_event() {
     // Act
     let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
         event_batch.collect_runtime_event(AppEvent::RefreshSessions);
+    }));
+
+    // Assert
+    assert!(panic_result.is_err());
+}
+
+#[test]
+fn collect_activity_event_rejects_non_activity_event() {
+    // Arrange
+    let mut event_batch = AppEventBatch::default();
+
+    // Act
+    let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        event_batch.collect_activity_event(AppEvent::RefreshSessions);
     }));
 
     // Assert
@@ -1532,5 +1547,53 @@ async fn seed_current_review_checkpoint(app: &mut App, id: &SessionId, request_i
             review_agent: app.review_agent(),
             progress: None,
         },
+    );
+}
+
+#[tokio::test]
+async fn live_activity_events_update_foreground_output_and_request_redraw() {
+    // Arrange
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("live")
+            .build(),
+    );
+    let event = AppEvent::SessionActivityUpdated {
+        activity: Some("Tool: Read [running]".into()),
+        session_id: "live".into(),
+    };
+    let mut batch = AppEventBatch::default();
+    batch.collect_event(event.clone());
+
+    // Act
+    let plan = batch.drain_reduction_plan();
+    app.apply_app_events(event).await;
+
+    // Assert
+    assert!(plan.changes_observable_state);
+    assert_eq!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Activity)
+            .expect("activity")
+            .body
+            .text(),
+        "Tool: Read [running]"
+    );
+
+    // Act
+    app.apply_app_events(AppEvent::SessionActivityUpdated {
+        activity: None,
+        session_id: "live".into(),
+    })
+    .await;
+
+    // Assert
+    assert!(
+        app.sessions.sessions()[0]
+            .transient_messages
+            .get(TransientMessageSlot::Activity)
+            .is_none()
     );
 }

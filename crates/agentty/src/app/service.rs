@@ -462,6 +462,8 @@ impl AppServices {
             AppEvent::SessionReviewCommentSnapshotLoaded { .. } => {
                 "SessionReviewCommentSnapshotLoaded"
             }
+            AppEvent::SessionActivityReady { .. } => "SessionActivityReady",
+            AppEvent::SessionActivityUpdated { .. } => "SessionActivityUpdated",
             AppEvent::SessionProgressUpdated { .. } => "SessionProgressUpdated",
             AppEvent::SyncMainCompleted { .. } => "SyncMainCompleted",
             AppEvent::SyncMainConflictResolutionStarted { .. } => {

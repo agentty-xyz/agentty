@@ -432,9 +432,11 @@ async fn session_worker_forwards_structured_activity_unchanged() {
         attempt_id: "attempt".into(),
         exit_code: None,
         id: "call".into(),
+        input: Some("review README.md".into()),
         kind: ActivityKind::Skill,
         name: "review".into(),
         observed_at: std::time::SystemTime::UNIX_EPOCH,
+        output: Some("review finished".into()),
         parent_id: Some("parent".into()),
         status: ActivityStatus::Completed,
     };

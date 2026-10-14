@@ -27,8 +27,9 @@ one focused terminal workflow.
 
 ______________________________________________________________________
 
-Codex and Claude session answers include saved tool-usage counts; explicit Claude skill
-invocations appear alongside them.
+Codex, Claude, Gemini, and Antigravity sessions show compact tool status and command
+previews, with output previews for failed calls. Explicit Claude skill invocations
+appear alongside them, and answers retain saved usage counts.
 
 ## Installation
 

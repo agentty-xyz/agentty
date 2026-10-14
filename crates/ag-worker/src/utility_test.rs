@@ -839,9 +839,11 @@ async fn utility_forwards_activity_sink_to_runtime() {
         attempt_id: "attempt".into(),
         exit_code: None,
         id: "call".into(),
+        input: None,
         kind: ag_contracts::ActivityKind::Tool,
         name: "Read".into(),
         observed_at: std::time::SystemTime::UNIX_EPOCH,
+        output: None,
         parent_id: None,
         status: ag_contracts::ActivityStatus::Completed,
     };
