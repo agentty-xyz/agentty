@@ -25,7 +25,7 @@ pub(crate) enum Repetition {
     /// The call repeats no earlier call often enough to act on.
     None,
     /// The call reached [`REPETITION_NUDGE_AT`] identical calls for the first
-    /// time since the window last reset.
+    /// time since the window last reset or it last left the window.
     Nudge { repeats: usize, tool: &'static str },
     /// The call reached [`REPETITION_STOP_AT`] identical calls.
     Stop { repeats: usize, tool: &'static str },
@@ -58,8 +58,12 @@ impl RepeatedCalls {
             self.window.clear();
             self.nudged.clear();
         }
-        if self.window.len() == REPETITION_WINDOW {
-            self.window.pop_front();
+        if self.window.len() == REPETITION_WINDOW
+            && let Some(expired) = self.window.pop_front()
+            && !self.window.contains(&expired)
+        {
+            // A call gone from the window may loop again and earn a new nudge.
+            self.nudged.remove(&expired);
         }
         self.window.push_back(key);
         let repeats = self.window.iter().filter(|seen| **seen == key).count();

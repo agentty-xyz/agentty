@@ -158,6 +158,32 @@ fn calls_older_than_the_window_stop_counting() {
 }
 
 #[test]
+fn a_call_that_left_the_window_is_nudged_again_when_it_loops_again() {
+    // Arrange
+    let mut calls = RepeatedCalls::default();
+    let call = read("src/lib.rs");
+    record_times(&mut calls, &call, "same", REPETITION_NUDGE_AT);
+    for index in 0..REPETITION_WINDOW {
+        calls.record(
+            &read(&format!("src/other_{index}.rs")),
+            result_digest("other"),
+        );
+    }
+
+    // Act
+    let outcomes = record_times(&mut calls, &call, "same", REPETITION_NUDGE_AT);
+
+    // Assert
+    assert_eq!(
+        outcomes.last(),
+        Some(&Repetition::Nudge {
+            repeats: REPETITION_NUDGE_AT,
+            tool: "read",
+        })
+    );
+}
+
+#[test]
 fn malformed_calls_are_not_counted() {
     // Arrange
     let mut calls = RepeatedCalls::default();
