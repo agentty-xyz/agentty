@@ -10,71 +10,17 @@ use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument::WithSubscriber;
 
 use super::super::worker::TurnMetadata;
 use super::{
-    PostTurnContext, TURN_ERROR_NOTICE_MAX_CHARS, TurnFinalizerContext, archive_research_diff,
-    finalize_channel_turn, prepare_review_comment_resolutions, run_auto_commit,
-    start_published_branch_auto_push, truncate_turn_error_notice, validate_review_comment_outcomes,
+    PostTurnContext, TURN_ERROR_NOTICE_MAX_CHARS, prepare_review_comment_resolutions,
+    run_auto_commit, start_published_branch_auto_push, truncate_turn_error_notice,
+    validate_review_comment_outcomes,
 };
 use crate::app::session::SessionError;
-use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
-use crate::domain::session::Status;
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session_message::SessionTranscript;
-use crate::infra::db::{AppRepositories, PersistedSessionCreation};
-
-async fn insert_research_session(database: &AppRepositories, session_id: &str) {
-    let project_id = database
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    database
-        .sessions()
-        .insert_session_with_agent(PersistedSessionCreation {
-            agent: "codex",
-            base_branch: "main",
-            id: session_id,
-            is_draft: false,
-            model: AgentKind::Codex.default_model().as_str(),
-            orchestration_task_id: None,
-            parent_session_id: None,
-            permission_mode: ag_contracts::PermissionMode::AutoEdit,
-            personality_id: None,
-            project_id,
-            reasoning_level: ReasoningLevel::default(),
-            response_style: ag_contracts::ResponseStyle::default(),
-            role: Some("OrchestrationResearcher"),
-            speed_mode: SpeedMode::Normal,
-            status: "InProgress",
-        })
-        .await
-        .expect("failed to insert research session");
-}
-
-fn research_finalizer_context(
-    db: AppRepositories,
-    folder: PathBuf,
-    fs_client: crate::infra::fs::MockFsClient,
-    git_client: MockGitClient,
-    session_id: &str,
-) -> (TurnFinalizerContext, Arc<Mutex<Status>>) {
-    let status = Arc::new(Mutex::new(Status::InProgress));
-    let context = TurnFinalizerContext {
-        app_event_tx: mpsc::unbounded_channel().0,
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db,
-        folder,
-        fs_client: Arc::new(fs_client),
-        git_client: Arc::new(git_client),
-        session_update_versions: Arc::default(),
-        session_id: session_id.into(),
-        status: Arc::clone(&status),
-    };
-
-    (context, status)
-}
+use crate::infra::db::AppRepositories;
 
 /// Builds the narrow post-turn context used by review-operation tests.
 fn review_operation_test_context(
@@ -243,7 +189,7 @@ fn test_review_comment_outcomes_normalize_complete_allowlisted_response() {
 async fn review_comment_operations_preserve_complete_outcomes() {
     // Arrange
     let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_research_session(&db, "session-id").await;
+    insert_review_session(&db, "session-id").await;
     link_review_operation_test_request(&db).await;
     let context = review_operation_test_context(db, MockGitClient::new());
     let thread_ids = vec!["thread-fixed".to_string(), "thread-other".to_string()];
@@ -281,7 +227,7 @@ async fn review_comment_operations_preserve_complete_outcomes() {
 async fn review_comment_operations_require_a_linked_review_request() {
     // Arrange
     let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_research_session(&db, "session-id").await;
+    insert_review_session(&db, "session-id").await;
     let context = review_operation_test_context(db, MockGitClient::new());
     let outcomes = vec![ReviewCommentOutcome {
         reply: "Applied the fix.".to_string(),
@@ -318,7 +264,7 @@ async fn review_comment_operations_report_link_lookup_failures() {
     let (db, pool) = AppRepositories::in_memory_with_pool()
         .await
         .expect("db should open");
-    insert_research_session(&db, "session-id").await;
+    insert_review_session(&db, "session-id").await;
     let context = review_operation_test_context(db, MockGitClient::new());
     let outcomes = vec![ReviewCommentOutcome {
         reply: "Applied the fix.".to_string(),
@@ -350,7 +296,7 @@ async fn review_comment_operations_report_link_lookup_failures() {
 async fn ordinary_commit_failures_do_not_emit_review_comment_warnings() {
     // Arrange
     let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_research_session(&db, "session-id").await;
+    insert_review_session(&db, "session-id").await;
     let mut git_client = MockGitClient::new();
     git_client
         .expect_is_worktree_clean()
@@ -415,197 +361,6 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         should_skip_auto_push,
         "operation-query failures must suppress post-turn auto-push"
     );
-}
-
-#[tokio::test]
-async fn finalization_tolerates_managed_child_evidence_persistence_failure() {
-    // Arrange
-    let (db, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    pool.close().await;
-    let status = Arc::new(Mutex::new(Status::InProgress));
-    let context = TurnFinalizerContext {
-        app_event_tx: mpsc::unbounded_channel().0,
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db,
-        folder: PathBuf::new(),
-        fs_client: Arc::new(crate::infra::fs::MockFsClient::new()),
-        git_client: Arc::new(MockGitClient::new()),
-        session_update_versions: Arc::default(),
-        session_id: "session-id".into(),
-        status: Arc::clone(&status),
-    };
-    let result = Err(SessionError::StoppedByUser("stopped".to_string()));
-
-    // Act
-    finalize_channel_turn(&context, &result).await;
-
-    // Assert
-    assert_eq!(
-        *status.lock().expect("status lock should remain usable"),
-        Status::InProgress
-    );
-}
-
-#[tokio::test]
-async fn finalization_archives_research_diff_before_status_transition() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_research_session(&db, "research-session").await;
-    let mut fs_client = crate::infra::fs::MockFsClient::new();
-    fs_client.expect_is_dir().times(1).return_const(false);
-    let mut git_client = MockGitClient::new();
-    git_client.expect_diff().times(1).returning(|folder, base| {
-        assert_eq!(folder, PathBuf::from("/tmp/research-session"));
-        assert_eq!(base, "main");
-
-        Box::pin(async {
-            Ok("diff --git a/violation.txt b/violation.txt\n+unexpected\n".to_string())
-        })
-    });
-    let (context, status) = research_finalizer_context(
-        db.clone(),
-        PathBuf::from("/tmp/research-session"),
-        fs_client,
-        git_client,
-        "research-session",
-    );
-
-    // Act
-    finalize_channel_turn(&context, &Ok(Status::Review)).await;
-    let archived_diff = db
-        .sessions()
-        .load_session_archived_diff("research-session")
-        .await
-        .expect("failed to load archived diff");
-
-    // Assert
-    assert_eq!(
-        archived_diff.as_deref(),
-        Some("diff --git a/violation.txt b/violation.txt\n+unexpected\n")
-    );
-    assert_eq!(
-        *status.lock().expect("status lock should remain usable"),
-        Status::Review
-    );
-}
-
-#[tokio::test]
-async fn research_diff_archival_returns_when_base_branch_is_missing() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    let (context, _status) = research_finalizer_context(
-        db.clone(),
-        PathBuf::from("/tmp/missing-research"),
-        crate::infra::fs::MockFsClient::new(),
-        MockGitClient::new(),
-        "missing-research",
-    );
-
-    // Act
-    archive_research_diff(&context).await;
-    let archived_diff = db
-        .sessions()
-        .load_session_archived_diff("missing-research")
-        .await
-        .expect("archive lookup should succeed");
-
-    // Assert
-    assert_eq!(archived_diff, None);
-}
-
-#[tokio::test]
-async fn research_diff_archival_tolerates_base_branch_lookup_failure() {
-    // Arrange
-    let (db, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    pool.close().await;
-    let (context, _status) = research_finalizer_context(
-        db,
-        PathBuf::from("/tmp/research-session"),
-        crate::infra::fs::MockFsClient::new(),
-        MockGitClient::new(),
-        "research-session",
-    );
-
-    // Act
-    archive_research_diff(&context)
-        .with_subscriber(crate::test_support::TestSubscriber)
-        .await;
-
-    // Assert
-    assert!(pool.is_closed());
-}
-
-#[tokio::test]
-async fn research_diff_archival_tolerates_git_failure() {
-    // Arrange
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_research_session(&db, "research-session").await;
-    let mut git_client = MockGitClient::new();
-    git_client.expect_diff().times(1).returning(|_, _| {
-        Box::pin(async { Err(GitError::OutputParse("diff failed".to_string())) })
-    });
-    let (context, _status) = research_finalizer_context(
-        db.clone(),
-        PathBuf::from("/tmp/research-session"),
-        crate::infra::fs::MockFsClient::new(),
-        git_client,
-        "research-session",
-    );
-
-    // Act
-    archive_research_diff(&context)
-        .with_subscriber(crate::test_support::TestSubscriber)
-        .await;
-    let archived_diff = db
-        .sessions()
-        .load_session_archived_diff("research-session")
-        .await
-        .expect("archive lookup should succeed");
-
-    // Assert
-    assert_eq!(archived_diff, None);
-}
-
-#[tokio::test]
-async fn research_diff_archival_tolerates_persistence_failure() {
-    // Arrange
-    let (db, pool) = AppRepositories::in_memory_with_pool()
-        .await
-        .expect("db should open");
-    insert_research_session(&db, "research-session").await;
-    let mut git_client = MockGitClient::new();
-    git_client.expect_diff().times(1).returning({
-        let pool = pool.clone();
-
-        move |_, _| {
-            let pool = pool.clone();
-
-            Box::pin(async move {
-                pool.close().await;
-
-                Ok("diff --git a/policy.txt b/policy.txt\n+write\n".to_string())
-            })
-        }
-    });
-    let (context, _status) = research_finalizer_context(
-        db,
-        PathBuf::from("/tmp/research-session"),
-        crate::infra::fs::MockFsClient::new(),
-        git_client,
-        "research-session",
-    );
-
-    // Act
-    archive_research_diff(&context)
-        .with_subscriber(crate::test_support::TestSubscriber)
-        .await;
-
-    // Assert
-    assert!(pool.is_closed());
 }
 
 #[tokio::test]
@@ -691,7 +446,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
 async fn revalidated_identical_reply_keeps_its_posting_token_but_changed_reply_gets_a_new_one() {
     // Arrange
     let db = AppRepositories::in_memory().await.expect("database");
-    insert_research_session(&db, "session-id").await;
+    insert_review_session(&db, "session-id").await;
     link_review_operation_test_request(&db).await;
     let context = review_operation_test_context(db.clone(), MockGitClient::new());
     let targets = vec!["thread-fixed".to_string()];
@@ -795,4 +550,17 @@ async fn stopped_review_does_not_wait_for_publish_lock() {
     assert!(matches!(result, Err(SessionError::StoppedByUser(_))));
     assert!(context.branch_operation_lock.try_lock().is_err());
     drop(guard);
+}
+
+/// Seeds an ordinary session for review-operation persistence tests.
+async fn insert_review_session(db: &AppRepositories, session_id: &str) {
+    let project_id = db
+        .projects()
+        .upsert_project("project", Some("main".to_string()))
+        .await
+        .expect("project");
+    db.sessions()
+        .insert_session(session_id, "gpt-5.6-sol", "main", "Review", project_id)
+        .await
+        .expect("session");
 }

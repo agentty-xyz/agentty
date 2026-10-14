@@ -8,9 +8,8 @@ use super::super::{
     append_session_to_selected_stack, content_area_for_terminal,
     handle_cancel_session_confirmation, handle_confirmation_decision,
     handle_launch_configuration_selector_key, handle_merge_confirmation,
-    handle_open_managed_worktree_confirmation, handle_pre_commit_hook_warning_key,
-    handle_regenerate_review_confirmation, handle_stack_append_parent_key,
-    handle_view_info_popup_key, next_launch_configuration_index,
+    handle_pre_commit_hook_warning_key, handle_regenerate_review_confirmation,
+    handle_stack_append_parent_key, handle_view_info_popup_key, next_launch_configuration_index,
     previous_launch_configuration_index, stack_append_parent_session_ids,
     update_stack_append_parent_selection,
 };
@@ -20,27 +19,6 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
-
-#[tokio::test]
-async fn integration_choice_without_session_returns_to_restore_target() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-        confirmation_message: "Choose integration".to_string(),
-        confirmation_title: "Integration Approach".to_string(),
-        restore_view: None,
-        session_id: None,
-        selected_confirmation_index: 0,
-    };
-
-    // Act
-    let event_result = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
-
-    // Assert
-    assert!(matches!(event_result, Ok(EventResult::Continue)));
-    assert!(matches!(app.mode, AppMode::List));
-}
 
 #[tokio::test]
 async fn test_handle_launch_configuration_selector_key_escape_restores_view_mode() {
@@ -264,52 +242,6 @@ async fn test_handle_view_info_popup_key_restores_view_mode() {
 }
 
 #[tokio::test]
-async fn detach_confirmation_restores_view_with_or_without_a_session_target() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::DetachManagedSession,
-        confirmation_message: "Detach?".to_string(),
-        confirmation_title: "Confirm Detach".to_string(),
-        restore_view: Some(ConfirmationViewMode {
-            scroll_offset: Some(3),
-            session_id: SessionId::from("worker"),
-        }),
-        session_id: None,
-        selected_confirmation_index: 0,
-    };
-
-    // Act
-    let without_target =
-        handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
-
-    // Assert
-    assert!(matches!(without_target, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            scroll_offset: Some(3),
-            ref session_id,
-        } if session_id == "worker"
-    ));
-
-    // Arrange
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::DetachManagedSession,
-        confirmation_message: "Detach?".to_string(),
-        confirmation_title: "Confirm Detach".to_string(),
-        restore_view: None,
-        session_id: Some(SessionId::from("missing-worker")),
-        selected_confirmation_index: 0,
-    };
-    let with_target = handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
-
-    // Assert
-    assert!(matches!(with_target, Ok(EventResult::Continue)));
-    assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
 async fn test_pre_commit_warning_escape_returns_to_session_list() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
@@ -508,7 +440,6 @@ async fn test_session_confirmation_handlers_accept_no_selected_session() {
     // Act
     let cancel_result = handle_cancel_session_confirmation(&mut app, None).await;
     let merge_result = handle_merge_confirmation(&mut app, None, None).await;
-    let open_result = handle_open_managed_worktree_confirmation(&mut app, None, None).await;
     let regenerate_result = handle_regenerate_review_confirmation(&mut app, None, None);
     let missing_regenerate_result = handle_regenerate_review_confirmation(
         &mut app,
@@ -522,7 +453,6 @@ async fn test_session_confirmation_handlers_accept_no_selected_session() {
     // Assert
     assert!(matches!(cancel_result, Ok(EventResult::Continue)));
     assert!(matches!(merge_result, Ok(EventResult::Continue)));
-    assert!(matches!(open_result, Ok(EventResult::Continue)));
     assert!(matches!(regenerate_result, EventResult::Continue));
     assert!(matches!(missing_regenerate_result, EventResult::Continue));
     assert!(matches!(
@@ -544,53 +474,6 @@ fn test_content_area_for_terminal_excludes_global_bars() {
 
     // Assert
     assert_eq!(content_area, Rect::new(0, 1, 120, 28));
-}
-
-#[tokio::test]
-async fn managed_worktree_confirmation_validates_target_then_opens_selector() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-    let session_id = app
-        .create_session()
-        .await
-        .expect("failed to create session");
-    app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
-    let restore_view = ConfirmationViewMode {
-        scroll_offset: Some(3),
-        session_id: session_id.clone().into(),
-    };
-
-    // Act
-    let mismatched_result = handle_open_managed_worktree_confirmation(
-        &mut app,
-        Some(SessionId::from("other-session")),
-        Some(restore_view.clone()),
-    )
-    .await;
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
-        confirmation_message: "Open?".to_string(),
-        confirmation_title: "Open Managed Worktree".to_string(),
-        restore_view: Some(restore_view),
-        session_id: Some(session_id.clone().into()),
-        selected_confirmation_index: 0,
-    };
-    let confirmed_result =
-        handle_confirmation_decision(&mut app, ConfirmationDecision::Confirm).await;
-
-    // Assert
-    assert!(matches!(mismatched_result, Ok(EventResult::Continue)));
-    assert!(matches!(confirmed_result, Ok(EventResult::Continue)));
-    assert!(matches!(
-        app.mode,
-        AppMode::LaunchConfigurationSelector {
-            ref commands,
-            ref restore_view,
-            selected_command_index: 0,
-        } if commands == &["cargo test".to_string(), "npm run dev".to_string()]
-            && restore_view.session_id == session_id
-            && restore_view.scroll_offset == Some(3)
-    ));
 }
 
 #[tokio::test]

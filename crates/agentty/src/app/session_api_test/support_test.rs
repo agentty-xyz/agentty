@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use ag_contracts::{AgentRequestKind, PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionMode, CreateSessionRequest,
-    QuestionAnswer, ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
-    SessionStatus, test_support as model_fixture,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, QuestionAnswer,
+    ReviewRequest, SessionError as ApiSessionError, SessionId, SessionMessageKind,
+    test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
 use crate::app::App;
-use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskKind};
-use crate::infra::db::{PersistedOrchestrationTask, SessionReviewRequestRow, SessionRow};
+use crate::infra::db::{SessionReviewRequestRow, SessionRow};
 
 pub(super) async fn request_session_creation(
     app: &mut App,
@@ -44,18 +43,16 @@ pub(super) async fn request_message(
         .await
 }
 
-pub(super) async fn request_coordinator_message(
+pub(super) async fn request_durable_message(
     app: &mut App,
     session_id: SessionId,
-    request: CoordinatorMessageRequest,
+    request: DurableMessageRequest,
 ) -> Result<(), ApiSessionError> {
     let service = app.session_service();
 
-    app.drive_session_request(async move {
-        service
-            .submit_coordinator_message(&session_id, request)
-            .await
-    })
+    app.drive_session_request(
+        async move { service.submit_durable_message(&session_id, request).await },
+    )
     .await
 }
 
@@ -98,139 +95,6 @@ pub(super) async fn request_review_request(
 
     app.drive_session_request(async move { service.create_review_request(&session_id).await })
         .await
-}
-
-pub(super) struct ActiveOrchestrationFixture {
-    pub(super) child: SessionId,
-    pub(super) controller: SessionId,
-    pub(super) orchestration: i64,
-    pub(super) task: i64,
-}
-
-pub(super) async fn set_orchestration_fixture_review_statuses(
-    app: &mut App,
-    session_ids: [&SessionId; 2],
-) {
-    for session_id in session_ids {
-        crate::test_support::set_session_status_for_test(app, session_id, SessionStatus::Review);
-        app.services
-            .db()
-            .sessions()
-            .update_session_status_with_timing_at(session_id, "Review", 0)
-            .await
-            .expect("orchestration fixture status should persist");
-    }
-}
-
-pub(super) async fn seed_active_orchestration_child(
-    app: &mut App,
-    link_child: bool,
-) -> ActiveOrchestrationFixture {
-    seed_active_orchestration_session(app, link_child, OrchestrationTaskKind::Implementation).await
-}
-
-pub(super) async fn seed_active_orchestration_session(
-    app: &mut App,
-    link_child: bool,
-    task_kind: OrchestrationTaskKind,
-) -> ActiveOrchestrationFixture {
-    let project_id = app.active_project_id();
-    let controller_session_id = request_session_creation(
-        app,
-        CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Orchestrator,
-            project_id,
-        },
-    )
-    .await
-    .expect("orchestrator should be created");
-    let orchestration_id = app
-        .services
-        .db()
-        .orchestrations()
-        .insert_orchestration(
-            &controller_session_id,
-            &OrchestrationStatus::Running.to_string(),
-            2,
-        )
-        .await
-        .expect("orchestration should persist");
-    let task_id = app
-        .services
-        .db()
-        .orchestrations()
-        .upsert_orchestration_task(PersistedOrchestrationTask {
-            acceptance_criteria: r#"["Worker task is implemented"]"#.to_string(),
-            kind: task_kind.to_string(),
-            merge_position: 0,
-            prompt: "Implement the worker task".to_string(),
-            session_orchestration_id: orchestration_id,
-            task_key: "worker-task".to_string(),
-            title: "Worker task".to_string(),
-            touched_areas: r#"["crates/worker/"]"#.to_string(),
-        })
-        .await
-        .expect("orchestration task should persist");
-    app.services
-        .db()
-        .orchestrations()
-        .upsert_orchestration_task(PersistedOrchestrationTask {
-            acceptance_criteria: r#"["Unlinked task is implemented"]"#.to_string(),
-            kind: "Implementation".to_string(),
-            merge_position: 1,
-            prompt: "Implement the unlinked task".to_string(),
-            session_orchestration_id: orchestration_id,
-            task_key: "unlinked-task".to_string(),
-            title: "Unlinked task".to_string(),
-            touched_areas: r#"["crates/unlinked/"]"#.to_string(),
-        })
-        .await
-        .expect("unlinked orchestration task should persist");
-    let claimed = app
-        .services
-        .db()
-        .orchestrations()
-        .claim_orchestration_task(task_id)
-        .await
-        .expect("orchestration task should be claimed");
-    assert!(claimed);
-    let child_session_id = request_session_creation(
-        app,
-        CreateSessionRequest {
-            inherit_from_session_id: Some(controller_session_id.clone()),
-            mode: match task_kind {
-                OrchestrationTaskKind::Implementation => {
-                    CreateSessionMode::OrchestrationChild { task_id }
-                }
-                OrchestrationTaskKind::Research => {
-                    CreateSessionMode::OrchestrationResearch { task_id }
-                }
-            },
-            project_id,
-        },
-    )
-    .await
-    .expect("orchestration child should be created");
-    if link_child {
-        let linked = app
-            .services
-            .db()
-            .orchestrations()
-            .link_orchestration_task_child(task_id, &child_session_id)
-            .await
-            .expect("orchestration child should link");
-        assert!(linked);
-    }
-    set_orchestration_fixture_review_statuses(app, [&controller_session_id, &child_session_id])
-        .await;
-
-    ActiveOrchestrationFixture {
-        child: child_session_id,
-        controller: controller_session_id,
-        orchestration: orchestration_id,
-        task: task_id,
-    }
 }
 
 pub(super) fn question_transition_app_server(
@@ -322,6 +186,7 @@ pub(super) fn session_row() -> SessionRow {
         base_branch: "main".to_string(),
         created_at: 10,
         deleted_lines: 4,
+        has_archived_diff: false,
         has_diff: Some(true),
         id: "session-1".to_string(),
         in_progress_started_at: None,
@@ -350,7 +215,6 @@ pub(super) fn session_row() -> SessionRow {
             title: "Build feature".to_string(),
             web_url: "https://example.test/pull/42".to_string(),
         }),
-        role: None,
         size: "S".to_string(),
         speed_mode: "normal".to_string(),
         status: "Draft".to_string(),

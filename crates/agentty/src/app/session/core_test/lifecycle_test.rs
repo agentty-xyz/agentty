@@ -10,7 +10,7 @@ use ag_session::{AgentSelectionMetadata, session_branch, test_support as model_f
 use tempfile::tempdir;
 use tokio::sync::Notify;
 
-use super::super::{SessionCreationKind, SessionDefaults, SessionManager, session_folder};
+use super::super::{SessionDefaults, SessionManager, session_folder};
 use super::support::{
     add_manual_session, allow_detect_git_info, create_and_start_session, install_mock_git_client,
     new_test_app, new_test_app_with_db, new_test_app_with_git, new_test_app_with_git_and_db,
@@ -23,7 +23,7 @@ use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::selection::SelectionState;
-use crate::domain::session::{SESSION_DATA_DIR, SessionHandles, SessionId, SessionRole, Status};
+use crate::domain::session::{SESSION_DATA_DIR, SessionHandles, SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -1262,20 +1262,6 @@ async fn test_create_draft_session() {
         .await
         .expect("failed to load");
     assert!(db_sessions[0].is_draft);
-}
-
-#[test]
-fn orchestration_research_creation_uses_managed_read_only_role_and_task_link() {
-    // Arrange
-    let creation_kind = SessionCreationKind::OrchestrationResearch { task_id: 42 };
-
-    // Act
-    let role = creation_kind.role();
-    let task_id = creation_kind.orchestration_task_id();
-
-    // Assert
-    assert_eq!(role, SessionRole::OrchestrationResearcher);
-    assert_eq!(task_id, Some(42));
 }
 
 #[tokio::test]

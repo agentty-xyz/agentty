@@ -66,15 +66,6 @@ const COMMANDS_MENU_ACTION: HelpAction =
 /// Encodes which shortcut family is available for the viewed session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewSessionState {
-    /// Coordinator-owned worker is available for transcript and diff
-    /// inspection only.
-    Managed,
-    /// Temporary research child exposes transcript and discarded-diff
-    /// evidence but no ownership-transfer or worktree-open actions.
-    ManagedResearch,
-    /// Campaign controller keeps chat plus deterministic plan and integration
-    /// board actions while owning no branch changes.
-    Orchestrator,
     /// Session is completed; a seeded continuation prompt can be opened.
     Done,
     /// Session was canceled locally; view mode stays read-only.
@@ -185,8 +176,7 @@ impl ViewActionSet {
         let can_open_worktree = state.can_open_worktree.is_enabled()
             && matches!(
                 state.session_state,
-                ViewSessionState::Managed
-                    | ViewSessionState::Interactive
+                ViewSessionState::Interactive
                     | ViewSessionState::NewSession
                     | ViewSessionState::StackedDraft
                     | ViewSessionState::Review
@@ -210,9 +200,7 @@ impl ViewActionSet {
             && (can_show_review
                 || matches!(
                     state.session_state,
-                    ViewSessionState::Merged
-                        | ViewSessionState::Managed
-                        | ViewSessionState::ManagedResearch
+                    ViewSessionState::Merged | ViewSessionState::Done | ViewSessionState::Canceled
                 ));
 
         Self {
@@ -240,24 +228,6 @@ impl ViewActionSet {
 /// Maps one session snapshot into the shared view-mode shortcut state used by
 /// both runtime handlers and footer rendering.
 pub(crate) fn session_view_state(session: &Session) -> ViewSessionState {
-    if session.role == crate::domain::session::SessionRole::OrchestrationResearcher {
-        return ViewSessionState::ManagedResearch;
-    }
-    if session.is_managed() {
-        return ViewSessionState::Managed;
-    }
-    if session.role == crate::domain::session::SessionRole::Orchestrator {
-        return ViewSessionState::Orchestrator;
-    }
-    if !session.owns_branch_changes()
-        && !matches!(
-            session.status,
-            Status::InProgress | Status::Done | Status::Canceled
-        )
-    {
-        return ViewSessionState::Interactive;
-    }
-
     match session.status {
         Status::Done => ViewSessionState::Done,
         Status::Canceled => ViewSessionState::Canceled,
@@ -435,8 +405,6 @@ pub(crate) fn view_actions(state: ViewHelpState) -> Vec<HelpAction> {
         actions.push(HelpAction::new("diff", "d", "Show diff"));
     }
 
-    append_orchestration_actions(&mut actions, state.session_state);
-
     append_view_review_actions(&mut actions, state, action_set);
 
     if action_set.merge_session.is_enabled() {
@@ -492,7 +460,6 @@ pub(crate) fn view_footer_actions(state: ViewHelpState) -> Vec<HelpAction> {
     );
     append_view_stop_action(&mut actions, action_set);
     append_view_open_action(&mut actions, action_set);
-    append_orchestration_actions(&mut actions, state.session_state);
     append_view_review_actions(&mut actions, state, action_set);
     append_view_continue_action(&mut actions, action_set);
     actions.extend(VIEW_FOOTER_TRAILING_ACTIONS);
@@ -541,19 +508,6 @@ fn append_view_stop_action(actions: &mut Vec<HelpAction>, action_set: ViewAction
 fn append_view_open_action(actions: &mut Vec<HelpAction>, action_set: ViewActionSet) {
     if action_set.open_worktree.is_enabled() {
         actions.push(HelpAction::new("open", "o", "Open worktree"));
-    }
-}
-
-/// Appends deterministic campaign and ownership-transfer actions.
-fn append_orchestration_actions(actions: &mut Vec<HelpAction>, session_state: ViewSessionState) {
-    match session_state {
-        ViewSessionState::Managed => {
-            actions.push(HelpAction::new("detach", "D", "Detach managed worker"));
-        }
-        ViewSessionState::Orchestrator => {
-            actions.push(HelpAction::new("approve", "a", "Approve campaign step"));
-        }
-        _ => {}
     }
 }
 
@@ -606,7 +560,6 @@ fn can_open_view_prompt(
             session_state,
             ViewSessionState::Rebasing
                 | ViewSessionState::Interactive
-                | ViewSessionState::Orchestrator
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         )
@@ -630,7 +583,6 @@ fn can_open_view_command(
         && matches!(
             session_state,
             ViewSessionState::Interactive
-                | ViewSessionState::Orchestrator
                 | ViewSessionState::Review
                 | ViewSessionState::AgentReview
         )

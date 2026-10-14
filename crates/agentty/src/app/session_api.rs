@@ -4,32 +4,24 @@ use std::future::Future;
 use std::sync::Arc;
 
 use ag_contracts::{ReasoningLevel, ResponseStyle, SpeedMode};
-use ag_orchestration::{OrchestrationApprovalOutcome, child_session_is_stopped};
 use ag_protocol::QuestionItem;
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, QuestionAnswer, ReviewRequest, ReviewRequestState,
-    SessionBackend, SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind,
-    SessionRole, SessionService, SessionSettings, SessionStatus,
-    parse_persisted_session_agent_model,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, QuestionAnswer, ReviewRequest, ReviewRequestState, SessionBackend,
+    SessionError as ApiSessionError, SessionId, SessionMessage, SessionMessageKind, SessionService,
+    SessionSettings, SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use crate::app::branch_publish::{branch_publish_loading_label, review_request_queued_label};
-use crate::app::session::{
-    SessionCreationKind, SessionCreationSettings, migrate_session_off_retired_model,
-};
+use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::{
-    App, AppError, AppEvent, SessionError, SessionRuntimeAccess, SessionRuntimeCommand,
-    SessionRuntimeHandle,
+    App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
 };
 use crate::domain::agent::{AgentKind, AgentSelection};
-use crate::domain::orchestration::{
-    IntegrationApproach, OrchestrationStatus, OrchestrationTaskStatus,
-};
-use crate::domain::session::{PublishBranchAction, Session};
+use crate::domain::session::PublishBranchAction;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
@@ -57,12 +49,12 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::send_message(self, session_id, message).await
     }
 
-    async fn submit_coordinator_message(
+    async fn submit_durable_message(
         &self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), ApiSessionError> {
-        SessionRuntimeHandle::submit_coordinator_message(self, session_id, request).await
+        SessionRuntimeHandle::submit_durable_message(self, session_id, request).await
     }
 
     async fn answer_questions(
@@ -93,44 +85,6 @@ impl App {
     /// Returns a cloneable frontend-neutral session capability.
     pub fn session_service(&self) -> SessionService {
         SessionService::new(Arc::new(self.sessions.handle()))
-    }
-
-    /// Returns the capability reserved for orchestration coordinators.
-    pub(crate) fn coordinator_session_service(&self) -> SessionService {
-        SessionService::new(Arc::new(self.sessions.coordinator_handle()))
-    }
-
-    /// Approves the current plan or advances integration with a selected
-    /// destination.
-    pub(crate) async fn approve_orchestration(
-        &self,
-        controller_session_id: &str,
-        integration_approach: Option<IntegrationApproach>,
-    ) -> OrchestrationApprovalOutcome {
-        let outcome = ag_orchestration::approve_orchestration(
-            self.services.db().orchestrations(),
-            controller_session_id,
-            integration_approach,
-        )
-        .await
-        .unwrap_or(OrchestrationApprovalOutcome::Unavailable);
-        if outcome == OrchestrationApprovalOutcome::Approved {
-            self.services.emit_app_event(AppEvent::RefreshSessions);
-        }
-
-        outcome
-    }
-
-    /// Detaches one managed child and schedules a session-list refresh.
-    pub(crate) async fn detach_managed_child(&self, child_session_id: &str) -> bool {
-        let detached = ag_orchestration::detach_managed_child(self.services.db(), child_session_id)
-            .await
-            .unwrap_or(false);
-        if detached {
-            self.services.emit_app_event(AppEvent::RefreshSessions);
-        }
-
-        detached
     }
 
     /// Drives one local API request while processing the actor commands ahead
@@ -192,56 +146,46 @@ impl App {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
             SessionRuntimeCommand::SendMessage {
-                access,
                 message,
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(self.send_api_message(&session_id, message, access).await);
+                let _ = response_tx.send(self.send_api_message(&session_id, message).await);
             }
-            SessionRuntimeCommand::SubmitCoordinatorMessage {
+            SessionRuntimeCommand::SubmitDurableMessage {
                 request,
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(
-                    self.submit_api_coordinator_message(&session_id, request)
-                        .await,
-                );
+                let _ =
+                    response_tx.send(self.submit_api_durable_message(&session_id, request).await);
             }
             SessionRuntimeCommand::AnswerQuestions {
-                access,
                 request,
                 response_tx,
                 session_id,
             } => {
-                let _ = response_tx.send(
-                    self.answer_api_questions(&session_id, request, access)
-                        .await,
-                );
+                let _ = response_tx.send(self.answer_api_questions(&session_id, request).await);
             }
             SessionRuntimeCommand::Cancel {
-                access,
                 response_tx,
                 session_id,
             } => {
-                let result = self.cancel_api_session(&session_id, access).await;
+                let result = self.cancel_api_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::Merge {
-                access,
                 response_tx,
                 session_id,
             } => {
-                let result = self.merge_api_session(&session_id, access).await;
+                let result = self.merge_api_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
             SessionRuntimeCommand::CreateReviewRequest {
-                access,
                 response_tx,
                 session_id,
             } => {
-                self.start_api_review_request_publish(session_id, access, response_tx)
+                self.start_api_review_request_publish(session_id, response_tx)
                     .await;
             }
         }
@@ -253,26 +197,13 @@ impl App {
     async fn start_api_review_request_publish(
         &mut self,
         session_id: SessionId,
-        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<ReviewRequest, ApiSessionError>>,
     ) {
-        let Some(session) = self.sessions.session_for_id(&session_id) else {
+        let Some(_) = self.sessions.session_for_id(&session_id) else {
             let _ = response_tx.send(Err(ApiSessionError::NotFound));
 
             return;
         };
-        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
-            let _ = response_tx.send(Err(managed_session_error(&session_id, "publish")));
-
-            return;
-        }
-        if !session.owns_branch_changes() {
-            let _ = response_tx.send(Err(ApiSessionError::Operation(
-                "Orchestrator sessions cannot publish review requests".to_string(),
-            )));
-
-            return;
-        }
         let Some(branch_publish_context) = self.branch_publish_task_context(&session_id) else {
             let _ = response_tx.send(Err(ApiSessionError::NotFound));
 
@@ -334,7 +265,7 @@ impl App {
                 (Some(inherited.base_branch), Some(inherited.settings))
             });
         let runs_on_harness = request.mode == CreateSessionMode::Harness;
-        let creation_kind = match request.mode {
+        match request.mode {
             CreateSessionMode::Draft => {
                 let project = self.api_project_creation_context(base_branch_override)?;
                 let session_id = self
@@ -368,15 +299,8 @@ impl App {
 
                 return Ok(PreparedSessionCreation::Persisted(session_id));
             }
-            CreateSessionMode::Regular | CreateSessionMode::Harness => SessionCreationKind::Worker,
-            CreateSessionMode::Orchestrator => SessionCreationKind::Orchestrator,
-            CreateSessionMode::OrchestrationChild { task_id } => {
-                SessionCreationKind::OrchestrationChild { task_id }
-            }
-            CreateSessionMode::OrchestrationResearch { task_id } => {
-                SessionCreationKind::OrchestrationResearch { task_id }
-            }
-        };
+            CreateSessionMode::Regular | CreateSessionMode::Harness => {}
+        }
         let project = self.api_project_creation_context(base_branch_override)?;
         let settings = self
             .sessions
@@ -402,7 +326,6 @@ impl App {
 
         Ok(PreparedSessionCreation::Materialized {
             base_branch: project.base_branch,
-            creation_kind,
             project_id: request.project_id,
             settings,
         })
@@ -508,7 +431,6 @@ impl App {
         &mut self,
         session_id: &SessionId,
         message: String,
-        access: SessionRuntimeAccess,
     ) -> Result<(), ApiSessionError> {
         if message.trim().is_empty() {
             return Err(ApiSessionError::Operation(
@@ -520,9 +442,6 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
-        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
-            return Err(managed_session_error(session_id, "send messages"));
-        }
         let is_draft = session.is_draft_session();
         let status = session.status;
         let prompt = TurnPrompt::from_text(message);
@@ -559,21 +478,21 @@ impl App {
         )))
     }
 
-    /// Submits a coordinator-owned turn only when it can bypass the lossy
+    /// Submits a durable turn only when it can bypass the lossy
     /// in-memory chat queue and enter the serialized session worker directly.
-    async fn submit_api_coordinator_message(
+    async fn submit_api_durable_message(
         &mut self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), ApiSessionError> {
         if request.message.trim().is_empty() {
             return Err(ApiSessionError::Operation(
-                "Cannot submit an empty coordinator message".to_string(),
+                "Cannot submit an empty durable message".to_string(),
             ));
         }
         if request.operation_id.trim().is_empty() {
             return Err(ApiSessionError::Operation(
-                "Cannot submit a coordinator message without an operation id".to_string(),
+                "Cannot submit a durable message without an operation id".to_string(),
             ));
         }
 
@@ -587,17 +506,17 @@ impl App {
             SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question
         ) {
             return Err(ApiSessionError::Operation(format!(
-                "Session `{session_id}` cannot accept a coordinator message in status `{status}`"
+                "Session `{session_id}` cannot accept a durable message in status `{status}`"
             )));
         }
 
         if self
             .sessions
-            .reply_to_coordinator_message(
+            .reply_to_durable_message(
                 &self.services,
                 session_id,
                 request.operation_id,
-                request.visibility == CoordinatorMessageVisibility::Visible,
+                request.visibility == DurableMessageVisibility::Visible,
                 TurnPrompt::from_agent_data(request.message),
             )
             .await
@@ -606,139 +525,15 @@ impl App {
         }
 
         Err(ApiSessionError::Operation(format!(
-            "Session `{session_id}` could not enqueue the coordinator message"
+            "Session `{session_id}` could not enqueue the durable message"
         )))
     }
 
-    /// Cascades orchestrator cancellation to every active child before
-    /// canceling the controller itself.
-    ///
-    /// A child cancellation failure aborts the cascade and leaves the
-    /// orchestration active so the controller never reports a false terminal
-    /// cancellation while a worker may still be running.
-    async fn cancel_api_session(
-        &mut self,
-        session_id: &SessionId,
-        access: SessionRuntimeAccess,
-    ) -> Result<(), ApiSessionError> {
-        if self
-            .sessions
-            .session_for_id(session_id)
-            .is_some_and(Session::is_managed)
-            && access != SessionRuntimeAccess::Coordinator
-        {
-            return Err(managed_session_error(session_id, "cancel"));
-        }
-        let is_orchestrator = self
-            .sessions
-            .session_for_id(session_id)
-            .is_some_and(|session| session.role == SessionRole::Orchestrator);
-        if is_orchestrator {
-            self.cancel_api_orchestration(session_id).await?;
-        }
-
-        if access == SessionRuntimeAccess::Coordinator
-            && self
-                .sessions
-                .session_for_id(session_id)
-                .is_some_and(Session::is_managed)
-        {
-            return self
-                .sessions
-                .cancel_managed_session(&self.services, session_id)
-                .await
-                .map_err(api_error_from_session);
-        }
-
+    /// Cancels a session through the ordinary lifecycle workflow.
+    async fn cancel_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
         self.cancel_session(session_id)
             .await
             .map_err(api_error_from_app)
-    }
-
-    async fn cancel_api_orchestration(
-        &mut self,
-        session_id: &SessionId,
-    ) -> Result<(), ApiSessionError> {
-        let Some(orchestration) = self
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_for_controller(session_id)
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-        else {
-            return Ok(());
-        };
-        let cancellation_started = self
-            .services
-            .db()
-            .orchestrations()
-            .begin_orchestration_cancellation(orchestration.id)
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        if !cancellation_started {
-            return Ok(());
-        }
-        let tasks = self
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_tasks(orchestration.id)
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        for task in tasks.into_iter().filter(|task| {
-            task.status
-                .parse::<OrchestrationTaskStatus>()
-                .is_ok_and(|status| !status.is_settled())
-        }) {
-            let child_session_id = if task.child_session_id.is_some() {
-                task.child_session_id
-            } else {
-                self.services
-                    .db()
-                    .orchestrations()
-                    .load_child_session_id_for_task(task.id)
-                    .await
-                    .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-            };
-            if let Some(child_session_id) = child_session_id.as_deref()
-                && !child_session_is_stopped(task.child_status.as_deref())
-            {
-                self.sessions
-                    .cancel_managed_session(&self.services, child_session_id)
-                    .await
-                    .map_err(api_error_from_session)?;
-            }
-            self.services
-                .db()
-                .orchestrations()
-                .update_orchestration_task_status(
-                    task.id,
-                    &OrchestrationTaskStatus::Canceled.to_string(),
-                    None,
-                )
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        }
-        self.services
-            .db()
-            .orchestrations()
-            .update_orchestration_status(
-                orchestration.id,
-                &OrchestrationStatus::Canceled.to_string(),
-            )
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        self.sessions
-            .update_orchestration_progress(session_id, None);
-
-        Ok(())
-    }
-
-    /// Returns the active child count displayed in orchestration cancellation
-    /// confirmation.
-    pub(crate) async fn orchestration_running_child_count(&self, session_id: &str) -> usize {
-        ag_orchestration::running_child_count(self.services.db(), session_id).await
     }
 
     /// Claims structured question answers against the current persisted
@@ -747,152 +542,62 @@ impl App {
         &mut self,
         session_id: &SessionId,
         request: AnswerQuestionsRequest,
-        access: SessionRuntimeAccess,
     ) -> Result<(), ApiSessionError> {
-        if self
-            .sessions
-            .session_for_id(session_id)
-            .is_some_and(Session::is_managed)
-            && access != SessionRuntimeAccess::Coordinator
-        {
-            return Err(managed_session_error(session_id, "answer questions"));
-        }
-        let session_role = self
-            .sessions
-            .session_for_id(session_id)
-            .ok_or(ApiSessionError::NotFound)?
-            .role;
-        let question_relay = if session_role == SessionRole::Orchestrator {
-            self.orchestration_question_target(session_id).await?
-        } else {
-            None
-        };
-        let target_session_id = question_relay
-            .as_ref()
-            .map_or(session_id, |(_, target_session_id)| target_session_id);
         let row = self
             .services
             .db()
             .sessions()
-            .load_session(target_session_id)
+            .load_session(session_id)
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?
             .ok_or(ApiSessionError::NotFound)?;
         let persisted_questions = row.questions.unwrap_or_default();
-        let questions = api_questions_from_json(Some(&persisted_questions), target_session_id)?;
+        let questions = api_questions_from_json(Some(&persisted_questions), session_id)?;
         validate_question_answers(&questions, &request.answers)?;
         let message = question_answer_message(&request.answers);
         let status = self
             .sessions
-            .session_for_id(target_session_id)
+            .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?
             .status;
 
         self.services
             .db()
             .sessions()
-            .update_session_questions(target_session_id, "")
+            .update_session_questions(session_id, "")
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
         let send_result = if self
             .sessions
-            .reply_to_question_answers(&self.services, target_session_id, message)
+            .reply_to_question_answers(&self.services, session_id, message)
             .await
         {
             Ok(())
         } else {
             Err(ApiSessionError::Operation(format!(
-                "Session `{target_session_id}` cannot accept question answers in status `{status}`"
+                "Session `{session_id}` cannot accept question answers in status `{status}`"
             )))
         };
         if let Err(send_error) = send_result {
             self.services
                 .db()
                 .sessions()
-                .update_session_questions(target_session_id, &persisted_questions)
+                .update_session_questions(session_id, &persisted_questions)
                 .await
                 .map_err(|restore_error| question_restore_error(&send_error, &restore_error))?;
 
             return Err(send_error);
         }
-        self.clear_diff_comment_progress(target_session_id);
-        if let Some((session_orchestration_id, _)) = question_relay {
-            self.services
-                .db()
-                .orchestrations()
-                .clear_orchestration_questions(session_orchestration_id)
-                .await
-                .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-        }
+        self.clear_diff_comment_progress(session_id);
         self.services.emit_app_event(AppEvent::RefreshSessions);
 
         Ok(())
     }
 
-    /// Resolves the exact managed task claimed by the controller's question
-    /// inbox.
-    async fn orchestration_question_target(
-        &self,
-        controller_session_id: &SessionId,
-    ) -> Result<Option<(i64, SessionId)>, ApiSessionError> {
-        let Some(orchestration) = self
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_for_controller(controller_session_id)
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
-        else {
-            return Ok(None);
-        };
-        let Some(relayed_question_task_id) = orchestration.relayed_question_task_id else {
-            return Ok(None);
-        };
-        let tasks = self
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_tasks(orchestration.id)
-            .await
-            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
-
-        let target_session_id = tasks
-            .into_iter()
-            .find(|task| task.id == relayed_question_task_id)
-            .and_then(|task| task.child_session_id)
-            .map(SessionId::from)
-            .ok_or_else(|| {
-                ApiSessionError::Operation(format!(
-                    "Orchestration question relay references unavailable task \
-                     `{relayed_question_task_id}`"
-                ))
-            })?;
-
-        Ok(Some((orchestration.id, target_session_id)))
-    }
-
-    /// Returns whether the controller's visible questions are a child relay.
-    pub(crate) async fn has_orchestration_question_proxy(
-        &self,
-        controller_session_id: &str,
-    ) -> bool {
-        self.orchestration_question_target(&SessionId::from(controller_session_id))
-            .await
-            .is_ok_and(|relay| relay.is_some())
-    }
-
-    async fn merge_api_session(
-        &mut self,
-        session_id: &SessionId,
-        access: SessionRuntimeAccess,
-    ) -> Result<(), ApiSessionError> {
-        let session = self
-            .sessions
+    async fn merge_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+        self.sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
-        if session.is_managed() && access != SessionRuntimeAccess::Coordinator {
-            return Err(managed_session_error(session_id, "merge"));
-        }
 
         self.merge_session(session_id)
             .await
@@ -933,7 +638,6 @@ impl App {
                 personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
                 response_style: source.settings.response_style,
-                role: SessionRole::Worker,
                 speed_mode: source.settings.speed_mode,
             },
         }))
@@ -1077,13 +781,6 @@ fn build_api_session(
         .permission_mode
         .parse::<ag_contracts::PermissionMode>()
         .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?;
-    let role = row
-        .role
-        .as_deref()
-        .map(str::parse::<SessionRole>)
-        .transpose()
-        .map_err(|error| ApiSessionError::InvalidData(format!("session `{}`: {error}", row.id)))?
-        .unwrap_or_default();
     let speed_mode = row.speed_mode.parse::<SpeedMode>().unwrap_or_default();
     let response_style = row
         .response_style
@@ -1119,7 +816,6 @@ fn build_api_session(
             project_id,
             reasoning_level,
             response_style,
-            role,
             speed_mode,
         },
         status,
@@ -1204,15 +900,6 @@ fn api_error_from_session(error: SessionError) -> ApiSessionError {
         SessionError::NotFound => ApiSessionError::NotFound,
         other => ApiSessionError::Operation(other.to_string()),
     }
-}
-
-/// Builds the stable capability error returned for direct managed-worker
-/// mutations.
-fn managed_session_error(session_id: &SessionId, action: &str) -> ApiSessionError {
-    ApiSessionError::Operation(format!(
-        "Session `{session_id}` is managed by an orchestration campaign and cannot {action} \
-         directly"
-    ))
 }
 
 #[cfg(test)]

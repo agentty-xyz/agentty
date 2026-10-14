@@ -20,7 +20,7 @@ fn read_only_chat_prompt_redirects_write_access_requests_to_mode_shortcut() {
 }
 
 #[tokio::test]
-async fn persisted_research_role_selects_read_only_permission_mode() {
+async fn persisted_permission_mode_controls_read_only_execution() {
     // Arrange
     let repositories = AppRepositories::in_memory().await.expect("db should open");
     let project_id = repositories
@@ -63,14 +63,12 @@ async fn persisted_research_role_selects_read_only_permission_mode() {
             id: "researcher",
             is_draft: false,
             model: model_fixture::CODEX_MODEL_ID,
-            orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: PermissionMode::AutoEdit,
+            permission_mode: PermissionMode::ReadOnly,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_contracts::ResponseStyle::default(),
-            role: Some("OrchestrationResearcher"),
             speed_mode: crate::domain::agent::SpeedMode::Normal,
             status: "InProgress",
         })
@@ -180,26 +178,11 @@ async fn permission_mode_load_rejects_invalid_persisted_values() {
 
     // Act
     let permission_result = load_session_permission_mode(&repositories, "worker").await;
-    sqlx::query(
-        "UPDATE session SET permission_mode = 'auto_edit', role = 'invalid' WHERE id = 'worker'",
-    )
-    .execute(&pool)
-    .await
-    .expect("failed to corrupt session role");
-    let role_result = load_session_permission_mode(&repositories, "worker").await;
-
     // Assert
     assert!(matches!(
         permission_result,
         Err(SessionError::Db(DbError::InvalidData {
             entity: "session permission mode",
-            ..
-        }))
-    ));
-    assert!(matches!(
-        role_result,
-        Err(SessionError::Db(DbError::InvalidData {
-            entity: "session role",
             ..
         }))
     ));

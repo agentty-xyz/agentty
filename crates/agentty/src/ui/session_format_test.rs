@@ -10,8 +10,7 @@ use super::{
 use crate::domain::agent::{AgentModel, ReasoningLevel, ResponseStyle};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, SessionId,
-    SessionRole, Status,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, Status,
 };
 use crate::presentation::frame_time::FrameTime;
 use crate::test_support::SessionFixtureBuilder;
@@ -177,25 +176,6 @@ fn test_session_metadata_text_omits_review_request_url() {
     // Assert
     assert!(metadata_text.contains("Tokens: 0/0"));
     assert!(!metadata_text.contains("https://example.test/pull/42"));
-}
-
-#[test]
-fn managed_session_header_identifies_its_controller() {
-    // Arrange
-    let mut session = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationWorker)
-        .build();
-    session.controller_session_id = Some(SessionId::from("campaign-controller"));
-
-    // Act
-    let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0, false);
-
-    // Assert
-    assert!(
-        header_lines[1]
-            .to_string()
-            .contains("Managed by campaign-controller — actions restricted")
-    );
 }
 
 #[test]

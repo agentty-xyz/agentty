@@ -1,25 +1,22 @@
 use std::time::Duration;
 
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, QuestionAnswer, SessionError as ApiSessionError,
-    SessionId, SessionMessageKind, SessionRole, SessionStatus,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, QuestionAnswer, SessionError as ApiSessionError, SessionId,
+    SessionMessageKind, SessionStatus,
 };
-use tokio::sync::oneshot;
 
 use super::super::{api_error_from_app, api_error_from_session};
 use super::support::{
-    request_cancellation, request_coordinator_message, request_merge, request_message,
+    request_cancellation, request_durable_message, request_merge, request_message,
     request_question_answers, request_review_request, request_session, request_session_creation,
-    seed_active_orchestration_child,
 };
-use crate::app::{AppError, SessionError, SessionRuntimeAccess};
-use crate::domain::orchestration::{OrchestrationStatus, OrchestrationTaskStatus};
+use crate::app::{AppError, SessionError};
 use crate::domain::session::Status;
 use crate::presentation::app_mode::{DiffCommentTarget, DiffLineComments};
 
 #[tokio::test]
-async fn runtime_backend_coordinator_turn_clears_diff_comments() {
+async fn runtime_backend_durable_turn_clears_diff_comments() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     let project_id = app.active_project_id();
@@ -27,12 +24,12 @@ async fn runtime_backend_coordinator_turn_clears_diff_comments() {
         &mut app,
         CreateSessionRequest {
             inherit_from_session_id: None,
-            mode: CreateSessionMode::Orchestrator,
+            mode: CreateSessionMode::Regular,
             project_id,
         },
     )
     .await
-    .expect("orchestrator should be created");
+    .expect("session should be created");
     crate::test_support::set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
     let mut line_comments = DiffLineComments::default();
     line_comments.start_editing_target(DiffCommentTarget::file("src/main.rs"));
@@ -44,20 +41,17 @@ async fn runtime_backend_coordinator_turn_clears_diff_comments() {
     app.save_diff_comment_progress(session_id.clone(), line_comments);
 
     // Act
-    let review_request_error = request_review_request(&mut app, session_id.clone())
-        .await
-        .expect_err("orchestrator review request should fail");
-    request_coordinator_message(
+    request_durable_message(
         &mut app,
         session_id.clone(),
-        CoordinatorMessageRequest {
+        DurableMessageRequest {
             message: "Summarize the worker results".to_string(),
-            operation_id: "orchestration-rollup-42".to_string(),
-            visibility: CoordinatorMessageVisibility::Hidden,
+            operation_id: "background-summary-42".to_string(),
+            visibility: DurableMessageVisibility::Hidden,
         },
     )
     .await
-    .expect("coordinator turn should be accepted");
+    .expect("durable turn should be accepted");
     tokio::time::timeout(Duration::from_secs(1), async {
         while app.diff_comment_progress.contains_key(&session_id) {
             app.process_pending_app_events().await;
@@ -65,173 +59,21 @@ async fn runtime_backend_coordinator_turn_clears_diff_comments() {
         }
     })
     .await
-    .expect("coordinator turn should clear saved diff comments when it starts");
+    .expect("durable turn should clear saved diff comments when it starts");
     let messages = app
         .services
         .db()
         .sessions()
         .load_session_messages(&session_id)
         .await
-        .expect("coordinator transcript should load");
+        .expect("durable transcript should load");
 
     // Assert
-    assert_eq!(
-        review_request_error,
-        ApiSessionError::Operation(
-            "Orchestrator sessions cannot publish review requests".to_string()
-        )
-    );
     assert!(!app.diff_comment_progress.contains_key(&session_id));
     assert!(messages.iter().all(|message| {
         message.kind != SessionMessageKind::UserPrompt.to_string()
             || message.content != "Summarize the worker results"
     }));
-}
-
-#[tokio::test]
-async fn runtime_backend_cascade_cancels_orchestrator_children_and_tasks() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let fixture = seed_active_orchestration_child(&mut app, true).await;
-    app.sessions.update_orchestration_progress(
-        &fixture.controller,
-        Some("Working... child: running".to_string()),
-    );
-
-    // Act
-    request_cancellation(&mut app, fixture.controller.clone())
-        .await
-        .expect("orchestrator cancellation should cascade");
-    let controller = request_session(&mut app, fixture.controller.clone())
-        .await
-        .expect("controller should load")
-        .expect("controller should exist");
-    let child = request_session(&mut app, fixture.child)
-        .await
-        .expect("child should load")
-        .expect("child should exist");
-    let orchestration = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_for_controller(&fixture.controller)
-        .await
-        .expect("orchestration should load")
-        .expect("orchestration should exist");
-    let tasks = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_tasks(fixture.orchestration)
-        .await
-        .expect("orchestration tasks should load");
-
-    // Assert
-    assert_eq!(controller.status, SessionStatus::Canceled);
-    assert_eq!(child.status, SessionStatus::Canceled);
-    assert_eq!(
-        orchestration.status,
-        OrchestrationStatus::Canceled.to_string()
-    );
-    assert_eq!(
-        tasks[0].status,
-        OrchestrationTaskStatus::Canceled.to_string()
-    );
-    assert!(
-        app.sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == fixture.controller)
-            .and_then(|session| {
-                session
-                    .transient_messages
-                    .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
-            })
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn runtime_backend_preserves_orchestration_when_child_cancellation_fails() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let fixture = seed_active_orchestration_child(&mut app, true).await;
-    crate::test_support::set_session_status_for_test(&mut app, &fixture.child, SessionStatus::Done);
-    let controller_before = request_session(&mut app, fixture.controller.clone())
-        .await
-        .expect("controller should load before cancellation")
-        .expect("controller should exist before cancellation");
-
-    // Act
-    let cancel_error = request_cancellation(&mut app, fixture.controller.clone())
-        .await
-        .expect_err("terminal child should prevent false cascade success");
-    let controller = request_session(&mut app, fixture.controller.clone())
-        .await
-        .expect("controller should load")
-        .expect("controller should exist");
-    let orchestration = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_for_controller(&fixture.controller)
-        .await
-        .expect("orchestration should load")
-        .expect("orchestration should exist");
-    let tasks = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_tasks(fixture.orchestration)
-        .await
-        .expect("orchestration tasks should load");
-
-    // Assert
-    assert!(
-        cancel_error
-            .to_string()
-            .contains("not cancelable in its current state")
-    );
-    assert_eq!(controller.status, controller_before.status);
-    assert_eq!(
-        orchestration.status,
-        OrchestrationStatus::Canceling.to_string()
-    );
-    assert_eq!(
-        tasks[0].status,
-        OrchestrationTaskStatus::Running.to_string()
-    );
-}
-
-#[tokio::test]
-async fn runtime_backend_cancels_reverse_linked_orchestration_child() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let fixture = seed_active_orchestration_child(&mut app, false).await;
-
-    // Act
-    request_cancellation(&mut app, fixture.controller.clone())
-        .await
-        .expect("reverse-linked child cancellation should cascade");
-    let child = request_session(&mut app, fixture.child)
-        .await
-        .expect("child should load")
-        .expect("child should exist");
-    let tasks = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_tasks(fixture.orchestration)
-        .await
-        .expect("orchestration tasks should load");
-
-    // Assert
-    assert_eq!(child.status, SessionStatus::Canceled);
-    assert_eq!(
-        tasks[0].status,
-        OrchestrationTaskStatus::Canceled.to_string()
-    );
-    assert!(tasks[0].child_session_id.is_none());
 }
 
 #[tokio::test]
@@ -415,117 +257,6 @@ async fn runtime_backend_reports_session_read_failures() {
     assert!(matches!(message_query_error, ApiSessionError::Operation(_)));
 }
 
-#[tokio::test]
-async fn user_capability_rejects_every_managed_child_mutation() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let session_id = SessionId::from("session-id");
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .role(SessionRole::OrchestrationWorker)
-            .status(Status::Review)
-            .build(),
-    );
-    let (publish_tx, publish_rx) = oneshot::channel();
-
-    // Act
-    let send_error = app
-        .send_api_message(
-            &session_id,
-            "Direct edit".to_string(),
-            SessionRuntimeAccess::User,
-        )
-        .await
-        .expect_err("managed child message should fail");
-    let answer_error = app
-        .answer_api_questions(
-            &session_id,
-            AnswerQuestionsRequest {
-                answers: Vec::new(),
-            },
-            SessionRuntimeAccess::User,
-        )
-        .await
-        .expect_err("managed child answers should fail");
-    let cancel_error = app
-        .cancel_api_session(&session_id, SessionRuntimeAccess::User)
-        .await
-        .expect_err("managed child cancellation should fail");
-    let merge_error = app
-        .merge_api_session(&session_id, SessionRuntimeAccess::User)
-        .await
-        .expect_err("managed child merge should fail");
-    app.start_api_review_request_publish(
-        session_id.clone(),
-        SessionRuntimeAccess::User,
-        publish_tx,
-    )
-    .await;
-    let publish_error = publish_rx
-        .await
-        .expect("publish result should be returned")
-        .expect_err("managed child publish should fail");
-
-    // Assert
-    for error in [
-        send_error,
-        answer_error,
-        cancel_error,
-        merge_error,
-        publish_error,
-    ] {
-        assert!(matches!(
-            error,
-            ApiSessionError::Operation(message)
-                if message.contains("managed by an orchestration campaign")
-        ));
-    }
-}
-
-#[tokio::test]
-async fn cancel_api_orchestration_ignores_missing_orchestration() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let session_id = SessionId::from("missing-orchestration");
-
-    // Act
-    let result = app.cancel_api_orchestration(&session_id).await;
-
-    // Assert
-    assert_eq!(result, Ok(()));
-}
-
-#[tokio::test]
-async fn cancel_api_orchestration_ignores_settled_orchestration() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let fixture = seed_active_orchestration_child(&mut app, true).await;
-    app.services
-        .db()
-        .orchestrations()
-        .update_orchestration_status(
-            fixture.orchestration,
-            &OrchestrationStatus::Done.to_string(),
-        )
-        .await
-        .expect("orchestration should settle");
-
-    // Act
-    let result = app.cancel_api_orchestration(&fixture.controller).await;
-    let orchestration = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_for_controller(&fixture.controller)
-        .await
-        .expect("orchestration should load")
-        .expect("orchestration should exist");
-
-    // Assert
-    assert_eq!(result, Ok(()));
-    assert_eq!(orchestration.status, OrchestrationStatus::Done.to_string());
-}
-
 #[test]
 fn api_error_translation_preserves_not_found() {
     // Arrange / Act
@@ -543,54 +274,7 @@ fn api_error_translation_preserves_not_found() {
 }
 
 #[tokio::test]
-async fn coordinator_capability_cancels_managed_workers_and_regular_sessions_still_cancel() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-    let fixture = seed_active_orchestration_child(&mut app, true).await;
-    let coordinator_service = app.coordinator_session_service();
-    let managed_child = fixture.child.clone();
-    let project_id = app.active_project_id();
-    let regular_session = request_session_creation(
-        &mut app,
-        CreateSessionRequest {
-            inherit_from_session_id: None,
-            mode: CreateSessionMode::Regular,
-            project_id,
-        },
-    )
-    .await
-    .expect("regular session should be created");
-    crate::test_support::set_session_status_for_test(
-        &mut app,
-        &regular_session,
-        SessionStatus::Review,
-    );
-
-    // Act
-    let managed_result = app
-        .drive_session_request(
-            async move { coordinator_service.cancel_session(&managed_child).await },
-        )
-        .await;
-    let regular_result = request_cancellation(&mut app, regular_session.clone()).await;
-    let managed = request_session(&mut app, fixture.child)
-        .await
-        .expect("managed worker should load")
-        .expect("managed worker should exist");
-    let regular = request_session(&mut app, regular_session)
-        .await
-        .expect("regular session should load")
-        .expect("regular session should exist");
-
-    // Assert
-    assert_eq!(managed_result, Ok(()));
-    assert_eq!(regular_result, Ok(()));
-    assert_eq!(managed.status, SessionStatus::Canceled);
-    assert_eq!(regular.status, SessionStatus::Canceled);
-}
-
-#[tokio::test]
-async fn coordinator_messages_require_content_and_operation_id() {
+async fn durable_messages_require_content_and_operation_id() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
     let session_id = SessionId::from("missing");
@@ -610,72 +294,72 @@ async fn coordinator_messages_require_content_and_operation_id() {
 
     // Act
     let empty_message_error = app
-        .submit_api_coordinator_message(
+        .submit_api_durable_message(
             &session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: " ".to_string(),
                 operation_id: "rollup-1".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await
-        .expect_err("empty coordinator message should fail");
+        .expect_err("empty durable message should fail");
     let empty_operation_error = app
-        .submit_api_coordinator_message(
+        .submit_api_durable_message(
             &session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: "Roll up".to_string(),
                 operation_id: " ".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await
-        .expect_err("empty coordinator operation id should fail");
+        .expect_err("empty durable operation id should fail");
     let busy_error = busy_app
-        .submit_api_coordinator_message(
+        .submit_api_durable_message(
             &existing_session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: "Roll up".to_string(),
                 operation_id: "rollup-busy".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await
-        .expect_err("busy coordinator should reject a roll-up");
+        .expect_err("busy durable should reject a roll-up");
     let enqueue_error = unbound_app
-        .submit_api_coordinator_message(
+        .submit_api_durable_message(
             &existing_session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: "Roll up".to_string(),
                 operation_id: "rollup-unbound".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await
-        .expect_err("coordinator without a worker should reject a roll-up");
+        .expect_err("durable without a worker should reject a roll-up");
 
     // Assert
     assert_eq!(
         empty_message_error,
-        ApiSessionError::Operation("Cannot submit an empty coordinator message".to_string())
+        ApiSessionError::Operation("Cannot submit an empty durable message".to_string())
     );
     assert_eq!(
         empty_operation_error,
         ApiSessionError::Operation(
-            "Cannot submit a coordinator message without an operation id".to_string()
+            "Cannot submit a durable message without an operation id".to_string()
         )
     );
     assert_eq!(
         busy_error,
         ApiSessionError::Operation(
-            "Session `session-id` cannot accept a coordinator message in status `InProgress`"
+            "Session `session-id` cannot accept a durable message in status `InProgress`"
                 .to_string()
         )
     );
     assert_eq!(
         enqueue_error,
         ApiSessionError::Operation(
-            "Session `session-id` could not enqueue the coordinator message".to_string()
+            "Session `session-id` could not enqueue the durable message".to_string()
         )
     );
 }

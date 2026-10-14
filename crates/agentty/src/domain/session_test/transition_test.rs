@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use ag_contracts::{SessionDiffState, SessionStats, SpeedMode};
 use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status, activity_day_key_with_offset,
 };
 
@@ -27,13 +27,11 @@ fn test_in_progress_duration_seconds_accumulates_closed_and_open_intervals() {
         draft_attachments: Vec::new(),
         folder: PathBuf::new(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: "session-id".into(),
         in_progress_started_at: Some(200),
         in_progress_total_seconds: 90,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
@@ -252,13 +250,11 @@ fn test_has_in_progress_timer_returns_true_for_open_interval() {
         draft_attachments: Vec::new(),
         folder: PathBuf::new(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: "session-id".into(),
         in_progress_started_at: Some(120),
         in_progress_total_seconds: 0,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,

@@ -14,7 +14,6 @@ workspace = true
 ag-contracts.workspace = true
 ag-forge.workspace = true
 ag-protocol.workspace = true
-ag-scheduler.workspace = true
 async-trait.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true

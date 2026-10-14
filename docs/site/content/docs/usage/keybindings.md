@@ -67,7 +67,7 @@ the archive window.
 missing. `Enter` continues past that warning; `Esc` / `q` cancels. New-session setup
 runs in the background; `s` retries failed setup from session view.
 
-For draft, stacked, and orchestrator eligibility, see
+For draft and stacked eligibility, see
 [Session Types](@/docs/usage/workflow.md#session-types). Project sync leaves navigation
 available; see [Project Sync](@/docs/usage/workflow.md#project-sync).
 
@@ -153,13 +153,6 @@ State-specific differences:
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer. Stacked
   drafts require a review-ready parent and idle stack.
 - **Question**: Answer through the question panel; `r` is hidden.
-- **Orchestrator**: `a` approves plans or opens integration choices. Branch actions are
-  hidden; cancel with `c` from the list.
-- **Managed worker**: Inspect chat or `d`; `D` permanently detaches an implementation
-  worker. In `tmux`, a review-ready worker offers `o`, with a warning that edits can
-  invalidate verification. Other mutation actions and `Ctrl+C` are disabled.
-- **Research child**: Inspect chat and `d`, including archived evidence after cleanup;
-  no detach or worktree-open action.
 - **Stacked child**: No `F`. Idle review-ready parents retain reply, slash, merge, and
   sync actions.
 - **Linked review request**: `c` opens comments; local `m` is unavailable.

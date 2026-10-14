@@ -18,19 +18,6 @@ pub enum CreateSessionMode {
     /// Creates a regular root session that runs on the in-process
     /// [`crate::AgentKind::Harness`] with its default model.
     Harness,
-    /// Creates a controller session that plans and supervises worker sessions.
-    Orchestrator,
-    /// Creates one worker owned by a persisted orchestration task.
-    OrchestrationChild {
-        /// Durable task row used to re-link the child after restart.
-        task_id: i64,
-    },
-    /// Creates one temporary read-only researcher owned by an orchestration
-    /// task.
-    OrchestrationResearch {
-        /// Durable task row used to re-link the child after restart.
-        task_id: i64,
-    },
     /// Creates a draft stacked on an existing parent session.
     Stacked {
         /// Review-ready parent session whose branch becomes the stack base.
@@ -67,30 +54,30 @@ pub struct AnswerQuestionsRequest {
     pub answers: Vec<QuestionAnswer>,
 }
 
-/// Durable coordinator-owned turn submitted to one controller session.
+/// Idempotent turn submitted to one session.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CoordinatorMessageRequest {
-    /// Agent-facing roll-up or supervision prompt.
+pub struct DurableMessageRequest {
+    /// Agent-facing prompt.
     pub message: String,
     /// Stable operation identifier reused when delivery is retried.
     pub operation_id: String,
     /// Whether the machine-authored prompt is shown in the human transcript.
-    pub visibility: CoordinatorMessageVisibility,
+    pub visibility: DurableMessageVisibility,
 }
 
-/// Transcript treatment for one coordinator-owned prompt.
+/// Transcript treatment for one durable prompt.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CoordinatorMessageVisibility {
-    /// Deliver agent context without duplicating board data in chat.
+pub enum DurableMessageVisibility {
+    /// Deliver generated context without displaying it as user chat.
     #[default]
     Hidden,
-    /// Preserve a worker continuation instruction in its inspectable history.
+    /// Display the submitted instruction in session history.
     Visible,
 }
 
 /// Host implementation boundary for session persistence and workflows.
 ///
-/// The trait is object-safe so agent loops and future orchestrators can hold a
+/// The trait is object-safe so agent loops and background workflows can hold a
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
@@ -110,12 +97,12 @@ pub trait SessionBackend: Send + Sync {
         message: String,
     ) -> Result<(), SessionError>;
 
-    /// Submits a coordinator-owned turn without entering the lossy live-chat
+    /// Submits a durable turn without entering the lossy live-chat
     /// queue used while an ordinary user turn is active.
-    async fn submit_coordinator_message(
+    async fn submit_durable_message(
         &self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), SessionError>;
 
     /// Answers the complete current clarification-question set.
@@ -185,17 +172,17 @@ impl SessionService {
         self.backend.send_message(session_id, message.into()).await
     }
 
-    /// Submits one coordinator-owned turn directly to the serialized worker.
+    /// Submits one durable turn directly to the serialized worker.
     ///
     /// # Errors
     /// Returns an error when the session is busy or cannot accept the turn.
-    pub async fn submit_coordinator_message(
+    pub async fn submit_durable_message(
         &self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), SessionError> {
         self.backend
-            .submit_coordinator_message(session_id, request)
+            .submit_durable_message(session_id, request)
             .await
     }
 

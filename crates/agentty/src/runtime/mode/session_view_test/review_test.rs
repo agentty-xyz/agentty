@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ag_session::test_support as model_fixture;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -16,8 +14,7 @@ use super::support::{
 use crate::app::ReviewCacheEntry;
 use crate::app::test_support::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
 use crate::domain::agent::AgentModel;
-use crate::domain::session::{PublishBranchAction, SessionRole, Status};
-use crate::infra::tmux::MockTmuxClient;
+use crate::domain::session::{PublishBranchAction, Status};
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, DiffSidebarFocus,
 };
@@ -38,12 +35,9 @@ async fn test_handle_view_key_ignores_diff_for_non_review_status() {
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
     let view_session_snapshot = ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Disabled,
         inspect_diff: ViewActionState::Disabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -95,12 +89,9 @@ async fn test_handle_view_key_uppercase_f_does_not_start_review_when_fork_unavai
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
     let view_session_snapshot = ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Disabled,
         inspect_diff: ViewActionState::Enabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -150,12 +141,9 @@ async fn test_handle_view_key_p_opens_review_request_publish_input() {
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
     let view_session_snapshot = ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         inspect_diff: ViewActionState::Enabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -205,12 +193,9 @@ async fn test_handle_view_key_shift_p_opens_review_request_publish_input() {
     let view_context = view_context(&mut app).expect("expected view context");
     let mut pending_update = ViewPendingUpdate::from_context(&view_context);
     let view_session_snapshot = ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         inspect_diff: ViewActionState::Enabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -526,55 +511,6 @@ async fn test_open_or_regenerate_shows_confirmation_when_review_output_exists() 
     ));
     // Cache is preserved until user confirms
     assert!(app.review_cache.contains_key(session_id.as_str()));
-}
-
-#[tokio::test]
-async fn managed_review_session_snapshot_allows_open_but_hides_review_comments() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    let session = &mut app.sessions.sessions_mut()[0];
-    attach_open_review_request(session);
-    session.role = SessionRole::OrchestrationWorker;
-    session.status = Status::Review;
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("expected view context");
-
-    // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
-
-    // Assert
-    assert!(snapshot.can_open_worktree());
-    assert!(!snapshot.can_open_review_comments());
-}
-
-#[tokio::test]
-async fn managed_review_session_snapshot_hides_open_outside_tmux() {
-    // Arrange
-    let clients = crate::test_support::test_app_clients_with_mock_app_server()
-        .with_tmux_client(Arc::new(MockTmuxClient::new()))
-        .with_tmux_session(false);
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
-    let session_id = app
-        .create_session()
-        .await
-        .expect("failed to create session");
-    let session = &mut app.sessions.sessions_mut()[0];
-    session.role = SessionRole::OrchestrationWorker;
-    session.status = Status::Review;
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("expected view context");
-
-    // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
-
-    // Assert
-    assert!(!snapshot.can_open_worktree());
 }
 
 #[tokio::test]

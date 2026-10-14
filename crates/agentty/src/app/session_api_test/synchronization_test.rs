@@ -22,7 +22,7 @@ async fn runtime_backend_rejects_session_creation_during_project_sync() {
         &mut app,
         CreateSessionRequest {
             inherit_from_session_id: None,
-            mode: CreateSessionMode::Orchestrator,
+            mode: CreateSessionMode::Regular,
             project_id,
         },
     )

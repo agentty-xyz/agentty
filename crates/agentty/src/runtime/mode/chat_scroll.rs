@@ -12,11 +12,11 @@ use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 
 use crate::app::App;
-use crate::domain::session::{SessionId, SessionRole};
+use crate::domain::session::SessionId;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::runtime::mode::session_output_metric;
 use crate::ui::page::session_chat::{self, SessionChatLayoutInput};
-use crate::ui::{RenderCacheStore, input_layout, layout, page, session_format};
+use crate::ui::{RenderCacheStore, input_layout, layout, session_format};
 
 /// Bottom-panel height of a chat page that only reserves a footer row.
 const FOOTER_ONLY_BOTTOM_HEIGHT: u16 = 1;
@@ -143,17 +143,7 @@ impl ChatScrollMetrics {
     ) -> Self {
         let page_area = layout::app_frame_areas(terminal_size).content_area;
         let session = app.sessions.session_at(session_index);
-        let chat_area = session.map_or(page_area, |session| {
-            if session.role != SessionRole::Orchestrator {
-                return page_area;
-            }
-
-            page::orchestration::campaign_page_areas(
-                page_area,
-                session.orchestration_progress.as_deref(),
-            )[1]
-        });
-        let output_width = chat_area.width.saturating_sub(2);
+        let output_width = page_area.width.saturating_sub(2);
         let (_, review_text) = app.review_view_state(session_id);
         let has_merge_conflict = app
             .sessions
@@ -163,10 +153,10 @@ impl ChatScrollMetrics {
             .and_then(|status| status.has_merge_conflict)
             .unwrap_or(false);
         let view_height = session.map_or_else(
-            || Self::footer_only_view_height(chat_area),
+            || Self::footer_only_view_height(page_area),
             |session| {
                 session_chat::transcript_view_height(SessionChatLayoutInput {
-                    area: chat_area,
+                    area: page_area,
                     default_reasoning_level: app.settings.default_smart_reasoning_level,
                     has_merge_conflict,
                     mode: &app.mode,

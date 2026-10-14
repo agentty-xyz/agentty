@@ -35,12 +35,9 @@ async fn test_handle_view_key_ignores_status_gated_actions() {
     ] {
         let mut pending_update = ViewPendingUpdate::from_context(&view_context);
         let view_session_snapshot = ViewSessionSnapshot {
-            branch_actions: ViewActionState::Enabled,
             continue_terminal_session: ViewActionState::Disabled,
             fork_session: ViewActionState::Disabled,
             inspect_diff: ViewActionState::Disabled,
-            is_managed: false,
-            is_orchestrator: false,
             merge_session_branch: ViewActionState::Enabled,
             mutate_session_branch: ViewActionState::Enabled,
             rebase_session_branch: ViewActionState::Enabled,

@@ -1128,16 +1128,7 @@ async fn session_creation_opens_prompt_mode() -> E2eResult {
                     let selector_full = Region::full(selector_frame.cols(), selector_frame.rows());
                     assertion::assert_text_in_region(&selector_frame, "Regular", &selector_full);
                     assertion::assert_text_in_region(&selector_frame, "Draft", &selector_full);
-                    assertion::assert_text_in_region(
-                        &selector_frame,
-                        "Orchestrator",
-                        &selector_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &selector_frame,
-                        "[Preview] Plan workers",
-                        &selector_full,
-                    );
+                    assertion::assert_not_visible(&selector_frame, "Orchestrator");
                     assertion::assert_text_in_region(&selector_frame, "Stacked", &selector_full);
                     assertion::assert_text_in_region(
                         &selector_frame,

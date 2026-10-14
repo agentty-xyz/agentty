@@ -148,8 +148,6 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
             answer: "Implemented the change.".to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
         },
         context_reset: false,
         input_tokens: 0,

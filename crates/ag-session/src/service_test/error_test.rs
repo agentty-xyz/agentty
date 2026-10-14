@@ -5,8 +5,8 @@ use super::support::{FakeBackend, FakeBackendState};
 use crate::error::SessionError;
 use crate::model::SessionId;
 use crate::service::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, SessionService,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, SessionService,
 };
 
 #[tokio::test]
@@ -58,12 +58,12 @@ async fn fake_backend_requires_explicit_results() {
         .await
         .expect_err("send should require a result");
     let coordinator_error = service
-        .submit_coordinator_message(
+        .submit_durable_message(
             &session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: "roll up".to_string(),
                 operation_id: "rollup-1".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await

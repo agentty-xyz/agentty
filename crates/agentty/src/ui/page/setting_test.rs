@@ -19,15 +19,12 @@ use crate::ui::{Page, style};
 #[test]
 fn test_settings_selection_highlight_and_columns_across_sections_and_themes() {
     for theme in ColorTheme::ALL {
-        for selected_row_index in [None, Some(0), Some(1), Some(2), Some(3)] {
+        for selected_row_index in [None, Some(0), Some(1), Some(2)] {
             // Arrange
             let _theme_scope = style::scoped_active_theme(theme);
             let snapshot = SettingsScreenSnapshot {
                 footer_hint: "",
-                global_rows: vec![
-                    ("Theme", theme.label().to_string()),
-                    ("Orchestrator Parallelism", "3".to_string()),
-                ],
+                global_rows: vec![("Theme", theme.label().to_string())],
                 launch_configuration_list_editor: None,
                 project_rows: vec![
                     (

@@ -672,3 +672,338 @@ END
     .await
     .expect("failed to recreate legacy update trigger");
 }
+
+/// Retires campaigns without losing session history or granting researchers
+/// write access, and prevents pending coordinator work from being replayed.
+#[tokio::test]
+async fn retirement_preserves_sessions_and_archives_campaign_results() {
+    // Arrange
+    let pool = legacy_campaign_database().await;
+
+    // Act
+    rerun_embedded_migration(&pool, 90).await;
+    let sessions = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+        "SELECT id, status, permission_mode, questions FROM session ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("retained sessions");
+    let messages = sqlx::query_as::<_, (String, String)>(
+        "SELECT kind, content FROM session_message WHERE session_id = 'controller' ORDER BY \
+         position",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("retained history");
+    let operations = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, status FROM session_operation ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("operation states");
+    let violations = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&pool)
+        .await
+        .expect("foreign keys");
+    let columns = sqlx::query_scalar::<_, String>("SELECT name FROM pragma_table_info('session')")
+        .fetch_all(&pool)
+        .await
+        .expect("session columns");
+    let tables = sqlx::query_scalar::<_, String>(
+        "SELECT name FROM sqlite_master WHERE name LIKE 'session_orchestration%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("retired tables");
+    let settings = sqlx::query_scalar::<_, String>("SELECT name FROM setting")
+        .fetch_all(&pool)
+        .await
+        .expect("settings");
+
+    // Assert
+    assert_eq!(sessions.len(), 4);
+    assert_eq!(
+        sessions[0],
+        (
+            "controller".into(),
+            "Review".into(),
+            "read_only".into(),
+            None
+        )
+    );
+    assert_eq!(
+        sessions[1],
+        (
+            "ordinary".into(),
+            "Question".into(),
+            "auto_edit".into(),
+            Some("[\"Question?\"]".into())
+        )
+    );
+    assert_eq!(sessions[2].1, "Canceled");
+    assert_eq!(sessions[2].2, "read_only");
+    assert_eq!(sessions[3].1, "Review");
+    assert_eq!(sessions[3].2, "auto_edit");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(
+        messages[0],
+        ("user_prompt".into(), "Original objective".into())
+    );
+    assert_eq!(messages[1].0, "workflow_notice");
+    assert!(messages[1].1.contains("Retained findings"));
+    assert!(messages[1].1.contains("Inspect code"));
+    assert_eq!(
+        operations,
+        [
+            ("old-run".into(), "failed".into()),
+            ("user-run".into(), "queued".into())
+        ]
+    );
+    assert!(violations.is_empty());
+    assert_eq!(tables, [] as [String; 0]);
+    assert!(
+        !columns
+            .iter()
+            .any(|column| matches!(column.as_str(), "role" | "orchestration_task_id"))
+    );
+    assert_eq!(settings, ["Theme"]);
+}
+
+/// Builds a pre-retirement database containing a linked campaign and user work.
+async fn legacy_campaign_database() -> SqlitePool {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("legacy database");
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await
+        .expect("foreign keys");
+    let migrations = sqlx::migrate!("./migrations");
+    for migration in migrations.iter().filter(|migration| migration.version < 90) {
+        sqlx::raw_sql(migration.sql.clone())
+            .execute(&pool)
+            .await
+            .expect("legacy migration");
+    }
+    sqlx::raw_sql(
+        "INSERT INTO project (id, path) VALUES (1, 'project');
+         INSERT INTO session (id, model, base_branch, status, project_id, role, is_draft, \
+         permission_mode)
+         VALUES ('controller', 'gpt-5.6-sol', 'main', 'Question', 1, 'Orchestrator', 0, \
+         'auto_edit'),
+                ('worker', 'gpt-5.6-sol', 'main', 'InProgress', 1, 'OrchestrationWorker', 0, \
+         'auto_edit'),
+                ('researcher', 'gpt-5.6-sol', 'main', 'Canceled', 1, 'OrchestrationResearcher', 0, \
+         'auto_edit'),
+                ('ordinary', 'gpt-5.6-sol', 'main', 'Question', 1, NULL, 0, 'auto_edit');
+         UPDATE session SET questions = '[\"Question?\"]';
+         INSERT INTO session_message (session_id, position, kind, content)
+         VALUES ('controller', 0, 'user_prompt', 'Original objective');
+         INSERT INTO session_orchestration (id, controller_session_id, status, max_parallelism, \
+         goal_statement)
+         VALUES (1, 'controller', 'Running', 3, 'Original objective');
+         INSERT INTO session_orchestration_task
+         (id, session_orchestration_id, task_key, child_session_id, title, prompt, status, \
+         research_report)
+         VALUES (1, 1, 'research', 'researcher', 'Research', 'Inspect code', 'Reported', 'Retained \
+         findings');
+         UPDATE session SET orchestration_task_id = 1 WHERE id = 'researcher';
+         UPDATE session_orchestration SET relayed_question_task_id = 1;
+         INSERT INTO session_operation (id, session_id, kind, status, queued_at)
+         VALUES ('old-run', 'worker', 'reply', 'running', 1),
+                ('user-run', 'ordinary', 'reply', 'queued', 1);
+         INSERT INTO setting (name, value) VALUES ('OrchestrationParallelism', '3'), ('Theme', \
+         'green');",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy campaign fixtures");
+
+    pool
+}
+
+/// Saved campaign prompts become history while ordinary preparation stays
+/// resumable.
+#[tokio::test]
+async fn retirement_stops_saved_campaign_prompts_without_discarding_them() {
+    // Arrange
+    let pool = legacy_campaign_database().await;
+    sqlx::raw_sql(
+        "INSERT INTO session_preparation (session_id, state, start_ref, prompt)
+        VALUES ('controller', 'preparing', 'main', 'Legacy planning prompt'),
+               ('worker', 'ready', 'main', 'Legacy implementation prompt'),
+               ('ordinary', 'ready', 'main', 'User prompt');",
+    )
+    .execute(&pool)
+    .await
+    .expect("saved prompts");
+
+    // Act
+    rerun_embedded_migration(&pool, 90).await;
+    let preparations = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT session_id, state, prompt FROM session_preparation ORDER BY session_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("preparations");
+    let archived_prompts = sqlx::query_scalar::<_, String>(
+        "SELECT content FROM session_message WHERE content LIKE '%Unstarted prompt preserved:%' \
+         ORDER BY session_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("archived prompts");
+
+    // Assert
+    assert_eq!(
+        preparations,
+        [
+            ("controller".into(), "failed".into(), None),
+            (
+                "ordinary".into(),
+                "ready".into(),
+                Some("User prompt".into())
+            ),
+            ("worker".into(), "ready".into(), None),
+        ]
+    );
+    assert_eq!(archived_prompts.len(), 2);
+    assert!(archived_prompts[0].ends_with("Legacy planning prompt"));
+    assert!(archived_prompts[1].ends_with("Legacy implementation prompt"));
+}
+
+/// Undispatched follow-ups remain inert history even when remediation was
+/// claimed.
+#[tokio::test]
+async fn retirement_archives_pending_continuation_and_remediation_prompts() {
+    // Arrange
+    let pool = legacy_campaign_database().await;
+    sqlx::raw_sql(
+        "INSERT INTO session_orchestration_task
+         (session_orchestration_id, task_key, child_session_id, title, prompt, status, \
+         continuation_prompt)
+         VALUES (1, 'follow-up', 'worker', 'Follow up', 'Original implementation',
+                 'ContinuationPending', 'Undispatched follow-up instruction'),
+                (1, 'remediation', NULL, 'Remediation', 'Original review',
+                 'ReviewApplying', 'Claimed remediation instruction');",
+    )
+    .execute(&pool)
+    .await
+    .expect("pending instructions");
+
+    // Act
+    rerun_embedded_migration(&pool, 90).await;
+    let history = sqlx::query_scalar::<_, String>(
+        "SELECT content FROM session_message WHERE session_id = 'controller' AND kind = \
+         'workflow_notice'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("campaign archive");
+    let archive = history
+        .split_once("Campaign history: ")
+        .expect("archive prefix")
+        .1;
+    let tasks = sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT json_extract(value, '$.key'), json_extract(value, '$.status'),
+                json_extract(value, '$.prompt'), json_extract(value, '$.continuation_prompt')
+         FROM json_each(?, '$[0].tasks')
+         WHERE json_extract(value, '$.continuation_prompt') IS NOT NULL ORDER BY 1",
+    )
+    .bind(archive)
+    .fetch_all(&pool)
+    .await
+    .expect("archived instructions");
+
+    // Assert
+    assert_eq!(
+        tasks,
+        [
+            (
+                "follow-up".into(),
+                "ContinuationPending".into(),
+                "Original implementation".into(),
+                "Undispatched follow-up instruction".into()
+            ),
+            (
+                "remediation".into(),
+                "ReviewApplying".into(),
+                "Original review".into(),
+                "Claimed remediation instruction".into()
+            ),
+        ]
+    );
+    let child_messages = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM session_message WHERE session_id = 'worker'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("child history");
+    assert_eq!(child_messages, 0);
+}
+
+/// Retirement closes open timers, including stale intervals, without charging
+/// negative time or altering ordinary sessions.
+#[tokio::test]
+async fn retirement_closes_active_work_timers() {
+    // Arrange
+    let pool = legacy_campaign_database().await;
+    let before: i64 = sqlx::query_scalar("SELECT unixepoch()")
+        .fetch_one(&pool)
+        .await
+        .expect("retirement clock");
+    sqlx::query(
+        "UPDATE session SET in_progress_total_seconds = 17, in_progress_started_at = ? WHERE id \
+         IN ('worker', 'ordinary')",
+    )
+    .bind(before - 30)
+    .execute(&pool)
+    .await
+    .expect("open timers");
+    sqlx::query(
+        "UPDATE session SET in_progress_total_seconds = 7, in_progress_started_at = ? WHERE id = \
+         'researcher'",
+    )
+    .bind(before + 86400)
+    .execute(&pool)
+    .await
+    .expect("future timer");
+
+    // Act
+    rerun_embedded_migration(&pool, 90).await;
+    let after: i64 = sqlx::query_scalar("SELECT unixepoch()")
+        .fetch_one(&pool)
+        .await
+        .expect("retirement clock");
+    let sessions = sqlx::query_as::<_, (String, String, i64, Option<i64>)>(
+        "SELECT id, status, in_progress_total_seconds, in_progress_started_at FROM session ORDER \
+         BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("retired timers");
+    let operation = sqlx::query_as::<_, (String, i64)>(
+        "SELECT status, finished_at FROM session_operation WHERE id = 'old-run'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("retired operation");
+
+    // Assert
+    assert_eq!(sessions[0], ("controller".into(), "Review".into(), 0, None));
+    assert_eq!(
+        sessions[1],
+        ("ordinary".into(), "Question".into(), 17, Some(before - 30))
+    );
+    assert_eq!(
+        sessions[2],
+        ("researcher".into(), "Canceled".into(), 7, None)
+    );
+    assert_eq!(sessions[3].1, "Review");
+    assert!((47..=47 + after - before).contains(&sessions[3].2));
+    assert_eq!(sessions[3].3, None);
+    assert_eq!(operation.0, "failed");
+    assert!((before..=after).contains(&operation.1));
+}

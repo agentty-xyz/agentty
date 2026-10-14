@@ -5,8 +5,8 @@ use ratatui::widgets::{Paragraph, TableState};
 
 use super::{
     DiffSurfaceInput, FrameResources, RouteSharedContext, SessionSurfaceMode, Surface, SurfaceKind,
-    render_confirmation_overlay, render_diff_surface, render_list_background, render_mode_overlay,
-    render_session_surface, render_surface, surface_for_help_context, surface_for_mode,
+    render_diff_surface, render_list_background, render_mode_overlay, render_session_surface,
+    render_surface, surface_for_help_context, surface_for_mode,
 };
 use crate::app::Tab;
 use crate::app::session_state::SessionGitStatus;
@@ -837,63 +837,6 @@ fn render_session_surface_renders_view_session_content() {
 }
 
 #[test]
-fn render_session_surface_uses_campaign_page_for_orchestrators() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(120, 30);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let session_id = "campaign-1234";
-    let mut session = session_fixture(session_id);
-    session.role = crate::domain::session::SessionRole::Orchestrator;
-    session.orchestration_progress = Some("Phase: AwaitingApproval".to_string());
-    let sessions = [session];
-    let mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: None,
-    };
-    let cache = markdown::MarkdownRenderCache::default();
-    let diff_layout_cache = page::diff::DiffLayoutCache::default();
-    let output_layout_cache = component::session_output::SessionOutputLayoutCache::default();
-
-    // Act
-    terminal
-        .draw(|frame| {
-            render_session_surface(
-                frame,
-                frame.area(),
-                SessionSurfaceMode::Interactive(&mode),
-                None,
-                session_id,
-                &sessions,
-                FrameResources {
-                    active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
-                    diff_layout_cache: &diff_layout_cache,
-                    is_tmux_session: true,
-                    markdown_render_cache: &cache,
-                    output_layout_cache: &output_layout_cache,
-                    review_snapshot: None,
-                    session_git_statuses: &HashMap::new(),
-                    session_cpu_temperatures: &HashMap::new(),
-                    session_resources: &HashMap::new(),
-                    session_progress_messages: &HashMap::new(),
-                    session_update_versions: &HashMap::new(),
-                    session_worktree_availability: &HashMap::from([(
-                        session_id.to_string().into(),
-                        true,
-                    )]),
-                    frame_time: FrameTime::new(0, 0, 0),
-                },
-            );
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("Campaign: Router Session"));
-    assert!(text.contains("Phase: AwaitingApproval"));
-}
-
-#[test]
 fn render_session_surface_keeps_background_when_session_is_missing() {
     // Arrange
     let backend = ratatui::backend::TestBackend::new(80, 20);
@@ -1125,35 +1068,6 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
     let text = buffer_text(terminal.backend().buffer());
     assert!(text.contains("Comment — Router Session"));
     assert!(text.contains("Loading review comments..."));
-}
-
-#[test]
-fn render_confirmation_overlay_renders_integration_choices() {
-    // Arrange
-    let backend = ratatui::backend::TestBackend::new(120, 30);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-        confirmation_message: "How should the campaign integrate?".to_string(),
-        confirmation_title: "Integration Approach".to_string(),
-        restore_view: None,
-        selected_confirmation_index: 0,
-        session_id: Some("session-controller".into()),
-    };
-
-    // Act
-    terminal
-        .draw(|frame| {
-            render_confirmation_overlay(frame, frame.area(), &mode);
-        })
-        .expect("failed to draw");
-
-    // Assert
-    let text = buffer_text(terminal.backend().buffer());
-    assert!(text.contains("Integration Approach"));
-    assert!(text.contains("How should the campaign integrate?"));
-    assert!(text.contains("Local merges"));
-    assert!(text.contains("Review requests"));
 }
 
 #[test]

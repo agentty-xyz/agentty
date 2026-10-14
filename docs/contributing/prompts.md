@@ -15,8 +15,6 @@ authority.
   must cover durable policy; test legacy state, changed contracts, and lost context.
 - `crates/agentty/src/app/template/`: utility and workflow tasks. Request only fields
   the consumer needs, and distinguish requested work from observed changes and checks.
-- `crates/ag-orchestration/src/template/`: controller and child tasks. Instructions must
-  match the tools and permissions actually supplied. Treat child reports as evidence.
 - `crates/ag-session/src/template/`: review application instructions.
 - `AGENTS.md` and `skills/`: durable contributor rules and focused workflows. Avoid
   duplicated inventories, forced findings, or unconditional documentation fetches when

@@ -1,9 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::model::{
-    SessionId, SessionRole, SessionStatus, activity_day_key_with_offset, session_branch,
-};
+use crate::model::{SessionId, SessionStatus, activity_day_key_with_offset, session_branch};
 
 #[test]
 fn test_session_branch_uses_first_8_chars() {
@@ -71,61 +69,6 @@ fn session_status_round_trips_persisted_values() {
         SessionStatus::InProgress
     );
     assert!("Unknown".parse::<SessionStatus>().is_err());
-}
-
-#[test]
-fn session_role_round_trips_persisted_values() {
-    // Arrange
-    let roles = [
-        SessionRole::Worker,
-        SessionRole::OrchestrationWorker,
-        SessionRole::OrchestrationResearcher,
-        SessionRole::Orchestrator,
-    ];
-
-    // Act
-    let round_tripped = roles.map(|role| {
-        role.to_string()
-            .parse::<SessionRole>()
-            .expect("role should parse")
-    });
-
-    // Assert
-    assert_eq!(round_tripped, roles);
-    assert_eq!(SessionRole::default(), SessionRole::Worker);
-    assert!("Unknown".parse::<SessionRole>().is_err());
-}
-
-#[test]
-fn branch_ownership_and_tracking_follow_session_role() {
-    // Arrange
-    let roles = [
-        SessionRole::Worker,
-        SessionRole::OrchestrationWorker,
-        SessionRole::OrchestrationResearcher,
-        SessionRole::Orchestrator,
-    ];
-
-    // Act
-    let permissions = roles.map(|role| {
-        (
-            role.owns_branch_changes(),
-            role.tracks_worktree_changes(),
-            role.accepts_user_turns(),
-            role.is_managed(),
-        )
-    });
-
-    // Assert
-    assert_eq!(
-        permissions,
-        [
-            (true, true, true, false),
-            (true, true, false, true),
-            (false, true, false, true),
-            (false, false, true, false),
-        ]
-    );
 }
 
 #[test]

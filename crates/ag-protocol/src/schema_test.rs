@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::model::{questions_field_description, subtasks_field_description};
+use crate::model::questions_field_description;
 use crate::schema::{
     SchemaRequiredPolicy, agent_response_json_schema, agent_response_json_schema_json,
     agent_response_output_schema, agent_response_output_schema_json,
@@ -38,15 +38,11 @@ fn test_agent_response_output_schema_contains_required_fields() {
             .iter()
             .any(|value| value.as_str() == Some("review_comment_outcomes"))
     );
-    assert!(
-        required_fields
-            .iter()
-            .any(|value| value.as_str() == Some("subtasks"))
-    );
+    assert_eq!(required_fields.len(), 3);
+    assert_eq!(properties.len(), 3);
     assert!(properties.contains_key("answer"));
     assert!(properties.contains_key("questions"));
     assert!(properties.contains_key("review_comment_outcomes"));
-    assert!(properties.contains_key("subtasks"));
 }
 
 #[test]
@@ -72,33 +68,6 @@ fn test_inject_dynamic_schema_guidance_skips_absent_properties() {
             }
         })
     );
-}
-
-#[test]
-/// Routes the `subtasks` schema description through the shared template
-/// helper so the prompt-visible cap cannot drift from the parser cap.
-fn test_agent_response_json_schema_injects_subtasks_description() {
-    // Arrange / Act
-    let schema = agent_response_json_schema();
-    let response_properties = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("response properties should exist");
-    let subtask_properties = schema_definition_properties(&schema, "SubtaskItem");
-
-    // Assert
-    assert_eq!(
-        response_properties
-            .get("subtasks")
-            .and_then(|value| value.get("description"))
-            .and_then(Value::as_str),
-        Some(subtasks_field_description().as_str())
-    );
-    assert!(subtask_properties.contains_key("prompt"));
-    assert!(subtask_properties.contains_key("kind"));
-    assert!(subtask_properties.contains_key("task_key"));
-    assert!(subtask_properties.contains_key("title"));
-    assert!(subtask_properties.contains_key("touched_areas"));
 }
 
 #[test]

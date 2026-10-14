@@ -314,10 +314,7 @@ fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
                 ConfirmationIntent::ContinueSession
                 | ConfirmationIntent::ForkSession
                 | ConfirmationIntent::MergeSession
-                | ConfirmationIntent::RegenerateReview
-                | ConfirmationIntent::DetachManagedSession
-                | ConfirmationIntent::OpenManagedWorktree
-                | ConfirmationIntent::ChooseIntegrationApproach,
+                | ConfirmationIntent::RegenerateReview,
             restore_view: Some(restore_view),
             ..
         }
@@ -657,7 +654,6 @@ fn render_stack_append_parent_overlay(
 /// Renders the confirmation overlay after its classified base surface.
 fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
     let AppMode::Confirmation {
-        confirmation_intent,
         confirmation_message,
         confirmation_title,
         selected_confirmation_index,
@@ -672,13 +668,7 @@ fn render_confirmation_overlay(f: &mut Frame, area: Rect, mode: &AppMode) {
         confirmation_message,
     )
     .selected_first(*selected_confirmation_index == 0);
-    if *confirmation_intent == ConfirmationIntent::ChooseIntegrationApproach {
-        overlay
-            .option_labels("Local merges", "Review requests")
-            .render(f, area);
-    } else {
-        overlay.render(f, area);
-    }
+    overlay.render(f, area);
 }
 
 /// Renders a session surface in either interactive or restored-view mode.
@@ -829,15 +819,10 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         && *session_worktree_availability
             .get(session_id)
             .unwrap_or(&false);
-    if sessions[session_index].role == crate::domain::session::SessionRole::Orchestrator {
-        page::orchestration::OrchestrationPage::new(page_input)
-            .can_open_worktree(can_open_worktree)
-            .render(f, area);
-    } else {
-        page::session_chat::SessionChatPage::new(page_input)
-            .can_open_worktree(can_open_worktree)
-            .render(f, area);
-    }
+
+    page::session_chat::SessionChatPage::new(page_input)
+        .can_open_worktree(can_open_worktree)
+        .render(f, area);
 }
 
 /// Renders base list tabs and the currently selected list tab content.

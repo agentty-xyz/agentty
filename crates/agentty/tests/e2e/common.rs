@@ -1364,12 +1364,6 @@ const SESSION_VIEW_FOOTER_MARKER: &str = "q: back";
 /// the back-to-list transition has completed.
 const SESSION_LIST_FOOTER_MARKER: &str = "new session";
 
-/// Wait budget for a session view plus scenario-specific content.
-///
-/// Content-heavy views receive a longer deadline than ordinary view
-/// transitions while still failing with the final structured frame context.
-const SESSION_CONTENT_TRANSITION_TIMEOUT: Duration = Duration::from_secs(10);
-
 /// Wait budget for predicate-driven session-view transitions.
 ///
 /// Five seconds covers slow CI workers without masking real regressions: a
@@ -1418,40 +1412,6 @@ fn eventually_footer_text_visible(marker: &'static str) -> Step {
     )
 }
 
-/// Build an `eventually` step that requires the session footer and every
-/// scenario-specific marker in the same live frame.
-fn eventually_session_view_texts_visible(expected_texts: Vec<String>) -> Step {
-    Step::eventually(
-        SESSION_CONTENT_TRANSITION_TIMEOUT,
-        SESSION_TRANSITION_POLL,
-        move |frame| match_session_view_texts(frame, &expected_texts),
-    )
-}
-
-/// Matches one fully rendered session view and retains structured frame
-/// diagnostics for the first missing marker.
-fn match_session_view_texts(
-    frame: &TerminalFrame,
-    expected_texts: &[String],
-) -> assertion::MatchResult {
-    let rows = frame.rows();
-    let footer_height = SESSION_TRANSITION_FOOTER_ROWS.min(rows);
-    let footer_region = Region::new(
-        0,
-        rows.saturating_sub(footer_height),
-        frame.cols(),
-        footer_height,
-    );
-    assertion::match_text_in_region(frame, SESSION_VIEW_FOOTER_MARKER, &footer_region)?;
-
-    let full = Region::full(frame.cols(), rows);
-    for expected_text in expected_texts {
-        assertion::match_text_in_region(frame, expected_text, &full)?;
-    }
-
-    Ok(())
-}
-
 /// Wait until the currently selected session has opened into chat view.
 pub(crate) fn wait_for_session_view_footer() -> Step {
     eventually_footer_text_visible(SESSION_VIEW_FOOTER_MARKER)
@@ -1468,20 +1428,6 @@ pub(crate) fn open_selected_session_view() -> Journey {
         .with_description("Press Enter and wait for the session view footer")
         .step(Step::press_key("Enter"))
         .step(wait_for_session_view_footer())
-}
-
-/// Press `Enter` and wait for a fully rendered session view containing every
-/// expected marker.
-pub(crate) fn open_selected_session_view_with_texts(expected_texts: &[&str]) -> Journey {
-    let expected_texts = expected_texts
-        .iter()
-        .map(|text| (*text).to_string())
-        .collect();
-
-    Journey::new("open_selected_session_view_with_texts")
-        .with_description("Press Enter and wait for the expected session view content")
-        .step(Step::press_key("Enter"))
-        .step(eventually_session_view_texts_visible(expected_texts))
 }
 
 /// Press `q` and wait for the Sessions list to render.

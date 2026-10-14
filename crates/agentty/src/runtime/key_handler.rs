@@ -8,7 +8,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use tracing::warn;
 
 use crate::app::App;
-use crate::domain::orchestration::IntegrationApproach;
 use crate::domain::session::{SessionId, can_append_session_to_stack};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::presentation::app_mode::{
@@ -274,10 +273,10 @@ fn select_next_session_creation_option(app: &mut App) {
 /// offers only the Harness row.
 fn session_creation_option_is_enabled(app: &App, option_index: usize) -> bool {
     match option_index {
-        0..=4 if !app.services.has_agent_cli() => false,
-        0..=2 => true,
-        3 => selected_stacked_parent_session_id(app).is_some(),
-        4 => selected_stack_append_session_id(app).is_some(),
+        0..=3 if !app.services.has_agent_cli() => false,
+        0..=1 => true,
+        2 => selected_stacked_parent_session_id(app).is_some(),
+        3 => selected_stack_append_session_id(app).is_some(),
         HARNESS_OPTION_INDEX => app.services.harness_availability().is_available(),
         _ => false,
     }
@@ -292,16 +291,15 @@ async fn create_selected_session(app: &mut App) -> io::Result<()> {
     let mode = match selected_option_index {
         0 => CreateSessionMode::Regular,
         1 => CreateSessionMode::Draft,
-        2 => CreateSessionMode::Orchestrator,
         HARNESS_OPTION_INDEX => CreateSessionMode::Harness,
-        3 => {
+        2 => {
             let Some(parent_session_id) = selected_stacked_parent_session_id(app) else {
                 return Ok(());
             };
 
             CreateSessionMode::Stacked { parent_session_id }
         }
-        4 => {
+        3 => {
             let Some(session_id) = selected_stack_append_session_id(app) else {
                 return Ok(());
             };
@@ -382,7 +380,7 @@ async fn handle_stack_append_parent_key(app: &mut App, key: KeyEvent) -> io::Res
     match key.code {
         KeyCode::Esc => {
             app.mode = AppMode::SessionCreation {
-                selected_option_index: 4,
+                selected_option_index: 3,
             };
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'q') => {
@@ -790,8 +788,7 @@ async fn handle_confirmation_decision(
 ) -> io::Result<EventResult> {
     match decision {
         ConfirmationDecision::Confirm => handle_confirmation_confirm(app).await,
-        ConfirmationDecision::Reject => handle_confirmation_reject(app).await,
-        ConfirmationDecision::Cancel => {
+        ConfirmationDecision::Reject | ConfirmationDecision::Cancel => {
             app.mode = confirmation_cancel_mode(&app.mode);
 
             Ok(EventResult::Continue)
@@ -807,10 +804,7 @@ fn confirmation_cancel_mode(mode: &AppMode) -> AppMode {
             ConfirmationIntent::ContinueSession
             | ConfirmationIntent::ForkSession
             | ConfirmationIntent::MergeSession
-            | ConfirmationIntent::RegenerateReview
-            | ConfirmationIntent::DetachManagedSession
-            | ConfirmationIntent::OpenManagedWorktree
-            | ConfirmationIntent::ChooseIntegrationApproach,
+            | ConfirmationIntent::RegenerateReview,
         restore_view: Some(restore_view),
         ..
     } = mode
@@ -861,108 +855,7 @@ async fn handle_confirmation_confirm(app: &mut App) -> io::Result<EventResult> {
             confirmation_session_id,
             restore_view,
         )),
-        ConfirmationIntent::DetachManagedSession => {
-            handle_detach_managed_session_confirmation(app, confirmation_session_id, restore_view)
-                .await
-        }
-        ConfirmationIntent::OpenManagedWorktree => {
-            handle_open_managed_worktree_confirmation(app, confirmation_session_id, restore_view)
-                .await
-        }
-        ConfirmationIntent::ChooseIntegrationApproach => {
-            handle_integration_approach_confirmation(
-                app,
-                confirmation_session_id,
-                restore_view,
-                IntegrationApproach::LocalMerge,
-            )
-            .await
-        }
     }
-}
-
-/// Opens a managed worker worktree after the user acknowledges write access.
-async fn handle_open_managed_worktree_confirmation(
-    app: &mut App,
-    confirmation_session_id: Option<SessionId>,
-    restore_view: Option<ConfirmationViewMode>,
-) -> io::Result<EventResult> {
-    let Some(restore_view) = restore_view else {
-        app.mode = AppMode::List;
-
-        return Ok(EventResult::Continue);
-    };
-    if confirmation_session_id.as_ref() != Some(&restore_view.session_id) {
-        app.mode = restore_view.into_view_mode();
-
-        return Ok(EventResult::Continue);
-    }
-
-    mode::session_view::open_worktree_for_view_session(app, restore_view).await;
-
-    Ok(EventResult::Continue)
-}
-
-/// Resolves the second binary choice, which only has distinct semantics for
-/// orchestration integration; ordinary confirmations treat it as dismissal.
-async fn handle_confirmation_reject(app: &mut App) -> io::Result<EventResult> {
-    let AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-        restore_view,
-        session_id,
-        ..
-    } = &app.mode
-    else {
-        app.mode = confirmation_cancel_mode(&app.mode);
-
-        return Ok(EventResult::Continue);
-    };
-    let confirmation_session_id = session_id.clone();
-    let restore_view = restore_view.clone();
-
-    handle_integration_approach_confirmation(
-        app,
-        confirmation_session_id,
-        restore_view,
-        IntegrationApproach::ReviewRequest,
-    )
-    .await
-}
-
-/// Advances one verified campaign using the selected integration destination.
-async fn handle_integration_approach_confirmation(
-    app: &mut App,
-    confirmation_session_id: Option<SessionId>,
-    restore_view: Option<ConfirmationViewMode>,
-    integration_approach: IntegrationApproach,
-) -> io::Result<EventResult> {
-    let Some(session_id) = confirmation_session_id else {
-        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
-
-        return Ok(EventResult::Continue);
-    };
-    app.approve_orchestration(&session_id, Some(integration_approach))
-        .await;
-    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
-
-    Ok(EventResult::Continue)
-}
-
-/// Transfers one confirmed managed worker to ordinary user ownership.
-async fn handle_detach_managed_session_confirmation(
-    app: &mut App,
-    confirmation_session_id: Option<SessionId>,
-    restore_view: Option<ConfirmationViewMode>,
-) -> io::Result<EventResult> {
-    let Some(session_id) = confirmation_session_id else {
-        app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
-
-        return Ok(EventResult::Continue);
-    };
-    app.detach_managed_child(&session_id).await;
-    app.mode = restore_view.map_or(AppMode::List, ConfirmationViewMode::into_view_mode);
-
-    Ok(EventResult::Continue)
 }
 
 /// Cancels the confirmed cancelable session, when still present, and returns

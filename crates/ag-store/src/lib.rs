@@ -4,7 +4,6 @@ mod activity;
 mod connection;
 mod error;
 mod operation;
-mod orchestration;
 mod project;
 mod repository;
 mod review;
@@ -23,12 +22,6 @@ pub use connection::Database;
 pub use error::DbError;
 pub(crate) use error::DbResultExt;
 pub use operation::{OperationRepository, SessionOperationRow};
-#[cfg(any(test, feature = "test-utils"))]
-pub use orchestration::MockOrchestrationRepository;
-pub use orchestration::{
-    OrchestrationRepository, PersistedOrchestrationTask, SessionOrchestrationMetadataRow,
-    SessionOrchestrationRow, SessionOrchestrationTaskRow,
-};
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 pub use repository::AppRepositories;
 pub use review::{

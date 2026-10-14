@@ -525,32 +525,6 @@ fn inspection_cases() -> Vec<Case> {
         },
         Case {
             captured_diff: None,
-            name: "research-unavailable-checks",
-            prompt: render(
-                include_str!(
-                    "../../ag-orchestration/src/template/orchestration_research_prompt.md"
-                ),
-                &[
-                    ("task_key", "read-only"),
-                    ("title", "Assess fixture"),
-                    (
-                        "acceptance_criteria",
-                        "Report whether tests ran, using the phrase not run when unavailable.",
-                    ),
-                    (
-                        "prompt",
-                        "Inspect src/lib.rs. Run cargo test if possible. No shell/build/test tool \
-                         is available for this research task.",
-                    ),
-                ],
-            ),
-            review_expectations: Vec::new(),
-            request_kind: AgentRequestKind::SessionStart,
-            required: vec!["not run"],
-            forbidden: vec!["tests passed", "test suite passed"],
-        },
-        Case {
-            captured_diff: None,
             name: "unchanged-import-is-not-missing",
             prompt: include_str!("../src/app/template/review_assist_prompt.md")
                 .replace("{{ review_rules }}", "[]")
@@ -774,6 +748,10 @@ fn request(
 fn graders_reject_injection_false_findings_and_missing_evidence() {
     // Arrange
     let cases = cases();
+    let review_case = cases
+        .iter()
+        .find(|case| case.name == "unchanged-import-is-not-missing")
+        .expect("review case");
 
     // Act / Assert
     for case in &cases {
@@ -793,12 +771,12 @@ fn graders_reject_injection_false_findings_and_missing_evidence() {
         false
     );
     assert_eq!(
-        cases[5].grade(&AgentResponse::plain(
+        review_case.grade(&AgentResponse::plain(
             r#"{"project_impact":[],"suggestions":[]}"#
         ))["success"],
         true
     );
-    assert_eq!(cases[5].grade(&AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"Missing import"}]}"#))["false_findings"], 1);
+    assert_eq!(review_case.grade(&AgentResponse::plain(r#"{"project_impact":[],"suggestions":[{"severity":"high","details":"Missing import"}]}"#))["false_findings"], 1);
 }
 
 #[tokio::test]

@@ -5,25 +5,21 @@ use mockall::predicate::eq;
 
 use super::super::{
     ViewActionState, ViewContext, ViewPendingUpdate, ViewSessionSnapshot, confirmation_view_mode,
-    end_in_progress_turn, handle_open_worktree_key, handle_primary_view_key,
-    open_view_help_overlay, open_worktree_for_view_session, show_diff_for_view_session,
-    view_context, view_session_snapshot,
+    end_in_progress_turn, handle_primary_view_key, open_view_help_overlay,
+    open_worktree_for_view_session, show_diff_for_view_session, view_context,
+    view_session_snapshot,
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, handle, new_test_app_with_session,
     new_test_app_with_session_and_tmux_client, reply_enabled_review_snapshot,
 };
-use crate::domain::orchestration::OrchestrationStatus;
-use crate::domain::session::{
-    PublishBranchAction, SessionDiffState, SessionId, SessionRole, Status,
-};
+use crate::domain::session::{PublishBranchAction, SessionDiffState, SessionId, Status};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{
     AppMode, ConfirmationIntent, ConfirmationViewMode, HelpContext,
 };
 use crate::presentation::help_action::ViewSessionState;
 use crate::runtime::EventResult;
-use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 
 #[tokio::test]
 async fn test_view_context_returns_none_for_non_view_mode() {
@@ -139,34 +135,6 @@ async fn test_q_always_transitions_to_list() {
 }
 
 #[tokio::test]
-async fn diff_snapshot_keeps_managed_worker_inspection_without_controller_action() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    let session = &mut app.sessions.sessions_mut()[0];
-    session.role = SessionRole::Orchestrator;
-    session.status = Status::Review;
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("expected view context");
-
-    // Act
-    let controller_snapshot =
-        view_session_snapshot(&app, &context).expect("expected controller snapshot");
-    app.sessions.sessions_mut()[0].role = SessionRole::OrchestrationWorker;
-    let managed_worker_snapshot =
-        view_session_snapshot(&app, &context).expect("expected managed worker snapshot");
-
-    // Assert
-    assert_eq!(controller_snapshot.inspect_diff, ViewActionState::Disabled);
-    assert_eq!(
-        managed_worker_snapshot.inspect_diff,
-        ViewActionState::Enabled
-    );
-}
-
-#[tokio::test]
 async fn diff_snapshot_hides_known_empty_session_diff() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
@@ -196,12 +164,9 @@ async fn test_open_view_help_overlay_preserves_view_context() {
         session_index: 0,
     };
     let view_session_snapshot = ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         inspect_diff: ViewActionState::Enabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,
@@ -465,13 +430,20 @@ async fn regular_worktree_open_skips_warning_and_opens_selector() {
         session_index: 0,
     };
     let snapshot = reply_enabled_review_snapshot();
+    let pending_update = ViewPendingUpdate::from_context(&view_context);
 
     // Act
-    let should_apply_pending_update =
-        handle_open_worktree_key(&mut app, &view_context, &snapshot).await;
+    let should_apply_pending_update = handle_primary_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
+        &view_context,
+        &snapshot,
+        &pending_update,
+    )
+    .await;
 
     // Assert
-    assert!(should_apply_pending_update);
+    assert_eq!(should_apply_pending_update, Some(true));
     assert!(matches!(
         app.mode,
         AppMode::LaunchConfigurationSelector {
@@ -609,84 +581,6 @@ async fn test_linked_done_session_routes_c_to_continue_without_comments() {
 }
 
 #[tokio::test]
-async fn campaign_and_managed_worker_keys_route_through_primary_view_actions() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
-    let view_context = ViewContext {
-        scroll_offset: Some(2),
-        session_id: SessionId::from("campaign"),
-        session_index: 0,
-    };
-    let pending_update = ViewPendingUpdate::from_context(&view_context);
-    let mut snapshot = reply_enabled_review_snapshot();
-    snapshot.is_orchestrator = true;
-    let campaign_keys = ['a'];
-
-    // Act
-    let mut results = Vec::new();
-    for key in campaign_keys {
-        results.push(
-            handle_primary_view_key(
-                &mut app,
-                KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
-                &view_context,
-                &snapshot,
-                &pending_update,
-            )
-            .await,
-        );
-    }
-    let unknown_campaign_key = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-    snapshot.is_orchestrator = false;
-    snapshot.is_managed = true;
-    let unrelated = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-    let direct_cancel = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-    let detach = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-
-    // Assert
-    assert_eq!(results, vec![Some(true); campaign_keys.len()]);
-    assert_eq!(unknown_campaign_key, None);
-    assert_eq!(unrelated, None);
-    assert_eq!(direct_cancel, Some(false));
-    assert_eq!(detach, Some(false));
-    assert!(matches!(
-        app.mode,
-        AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::DetachManagedSession,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
 async fn test_handle_continue_key_opens_confirmation_for_done_session() {
     // Arrange
     let (mut app, _base_dir, source_session_id) = new_test_app_with_session().await;
@@ -772,76 +666,6 @@ async fn test_handle_continue_key_opens_confirmation_for_canceled_session() {
 }
 
 #[tokio::test]
-async fn integration_approval_opens_approach_choice() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.services
-        .db()
-        .orchestrations()
-        .insert_orchestration(
-            &session_id,
-            &OrchestrationStatus::AwaitingIntegration.to_string(),
-            2,
-        )
-        .await
-        .expect("failed to insert orchestration");
-    let view_context = ViewContext {
-        scroll_offset: Some(2),
-        session_id: session_id.clone().into(),
-        session_index: 0,
-    };
-    let pending_update = ViewPendingUpdate::from_context(&view_context);
-    let mut snapshot = reply_enabled_review_snapshot();
-    snapshot.is_orchestrator = true;
-
-    // Act
-    let result = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-
-    // Assert
-    assert_eq!(result, Some(true));
-    assert!(matches!(
-        app.mode,
-        AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-            ref confirmation_title,
-            restore_view: Some(ConfirmationViewMode {
-                scroll_offset: Some(2),
-                ref session_id,
-            }),
-            selected_confirmation_index: 0,
-            ..
-        } if confirmation_title == "Integration Approach" && session_id == &view_context.session_id
-    ));
-}
-
-#[tokio::test]
-async fn managed_running_session_snapshot_hides_worktree_open() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    let session = &mut app.sessions.sessions_mut()[0];
-    session.role = SessionRole::OrchestrationWorker;
-    session.status = Status::InProgress;
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("expected view context");
-
-    // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
-
-    // Assert
-    assert!(!snapshot.can_open_worktree());
-}
-
-#[tokio::test]
 async fn test_handle_ignores_key_when_mode_is_not_view() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
@@ -861,49 +685,6 @@ async fn test_handle_ignores_key_when_mode_is_not_view() {
     // Assert
     assert!(matches!(result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
-}
-
-#[tokio::test]
-async fn managed_worktree_open_requires_write_access_confirmation() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_test_app().await;
-    let view_context = ViewContext {
-        scroll_offset: Some(2),
-        session_id: SessionId::from("managed-worker"),
-        session_index: 0,
-    };
-    let pending_update = ViewPendingUpdate::from_context(&view_context);
-    let mut snapshot = reply_enabled_review_snapshot();
-    snapshot.is_managed = true;
-
-    // Act
-    let result = handle_primary_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE),
-        &view_context,
-        &snapshot,
-        &pending_update,
-    )
-    .await;
-
-    // Assert
-    assert_eq!(result, Some(false));
-    assert!(matches!(
-        app.mode,
-        AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
-            ref confirmation_message,
-            ref confirmation_title,
-            restore_view: Some(ConfirmationViewMode {
-                scroll_offset: Some(2),
-                ref session_id,
-            }),
-            selected_confirmation_index: DEFAULT_OPTION_INDEX,
-            ..
-        } if confirmation_title == "Open Managed Worktree"
-            && confirmation_message.contains("writable shell")
-            && session_id == "managed-worker"
-    ));
 }
 
 #[tokio::test]

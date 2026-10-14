@@ -798,7 +798,6 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
         .expect("reserved session");
     let (response_tx, response_rx) = oneshot::channel();
     app.apply_session_runtime_command(SessionRuntimeCommand::SendMessage {
-        access: crate::app::session_runtime::SessionRuntimeAccess::Coordinator,
         message: "retry this session".to_string(),
         response_tx,
         session_id: session_id.clone(),

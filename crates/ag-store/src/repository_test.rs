@@ -62,11 +62,6 @@ async fn injected_clock_drives_all_repository_timestamps() {
         .insert_session_operation("operation-a", "session-a", "reply")
         .await
         .expect("failed to insert operation");
-    let orchestration_id = repositories
-        .orchestrations()
-        .insert_orchestration("session-a", "Running", 2)
-        .await
-        .expect("failed to insert orchestration");
     repositories
         .usage()
         .upsert_session_usage(
@@ -82,7 +77,7 @@ async fn injected_clock_drives_all_repository_timestamps() {
         )
         .await
         .expect("failed to insert usage");
-    let timestamps = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64, i64, i64)>(
+    let timestamps = sqlx::query_as::<_, (i64, i64, i64, i64, i64, i64, i64)>(
         r"
 SELECT project.created_at,
        project.updated_at,
@@ -90,25 +85,20 @@ SELECT project.created_at,
        session.updated_at,
        session_message.created_at,
        session_operation.queued_at,
-       session_orchestration.created_at,
        session_usage.created_at
 FROM project
 INNER JOIN session ON session.project_id = project.id
 INNER JOIN session_message ON session_message.session_id = session.id
 INNER JOIN session_operation ON session_operation.session_id = session.id
-INNER JOIN session_orchestration
-ON session_orchestration.controller_session_id = session.id
 INNER JOIN session_usage ON session_usage.session_id = session.id
-WHERE session_orchestration.id = ?
 ",
     )
-    .bind(orchestration_id)
     .fetch_one(&pool)
     .await
     .expect("failed to load timestamps");
 
     // Assert
-    assert_eq!(timestamps, (120, 120, 121, 122, 122, 123, 124, 125));
+    assert_eq!(timestamps, (120, 120, 121, 122, 122, 123, 124));
 }
 
 #[tokio::test]
@@ -210,7 +200,6 @@ async fn repository_parts_support_focused_adapter_injection() {
         run: Arc::clone(&baseline.run),
         activity: Arc::clone(&baseline.activity),
         operation: Arc::new(operation),
-        orchestration: Arc::clone(&baseline.orchestration),
         project: Arc::clone(&baseline.project),
         review: Arc::clone(&baseline.review),
         session: Arc::clone(&baseline.session),

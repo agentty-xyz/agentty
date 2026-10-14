@@ -163,35 +163,6 @@ fn test_selectable_session_indexes_places_stacked_child_after_parent() {
 }
 
 #[test]
-fn test_selectable_session_indexes_places_orchestration_child_after_controller() {
-    // Arrange
-    let mut child_session =
-        crate::test_support::titled_session_fixture("child-1", Status::InProgress);
-    child_session.controller_session_id = Some("controller-1".into());
-    let sessions = vec![
-        child_session,
-        crate::test_support::titled_session_fixture("sibling-1", Status::Review),
-        crate::test_support::titled_session_fixture("controller-1", Status::Review),
-    ];
-
-    // Act
-    let ordered_ids = selectable_session_indexes(&sessions)
-        .into_iter()
-        .map(|index| sessions[index].id.clone())
-        .collect::<Vec<_>>();
-
-    // Assert
-    assert_eq!(
-        ordered_ids,
-        vec![
-            "sibling-1".to_string(),
-            "controller-1".to_string(),
-            "child-1".to_string(),
-        ]
-    );
-}
-
-#[test]
 fn test_grouped_session_rows_orders_merge_queue_before_active_and_archive_sessions() {
     // Arrange
     let sessions = vec![

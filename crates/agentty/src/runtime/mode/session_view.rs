@@ -1,6 +1,5 @@
 use std::io;
 
-use ag_orchestration::OrchestrationApprovalOutcome;
 use crossterm::event::{self, KeyCode, KeyEvent};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -79,13 +78,10 @@ impl ViewActionState {
 
 /// Snapshot of session-derived state used by view-mode key handling.
 struct ViewSessionSnapshot {
-    branch_actions: ViewActionState,
     continue_terminal_session: ViewActionState,
     follow_up_task_action: Option<FollowUpTaskAction>,
     fork_session: ViewActionState,
     inspect_diff: ViewActionState,
-    is_managed: bool,
-    is_orchestrator: bool,
     merge_session_branch: ViewActionState,
     mutate_session_branch: ViewActionState,
     open_worktree: ViewActionState,
@@ -102,8 +98,7 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can enter the merge queue from view
     /// mode.
     fn can_merge_session(&self) -> bool {
-        self.branch_actions.is_enabled()
-            && self.session_status.allows_session_actions()
+        self.session_status.allows_session_actions()
             && self.can_merge_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -111,8 +106,7 @@ impl ViewSessionSnapshot {
     /// Returns whether the active session can start the session sync action
     /// from view mode.
     fn can_rebase_session(&self) -> bool {
-        self.branch_actions.is_enabled()
-            && self.session_status.allows_rebase_action()
+        self.session_status.allows_rebase_action()
             && self.can_rebase_session_branch()
             && self.session_state != ViewSessionState::StackedDraft
     }
@@ -130,11 +124,6 @@ impl ViewSessionSnapshot {
     /// Returns whether this session can start branch-mutating stack work.
     fn can_mutate_session_branch(&self) -> bool {
         self.mutate_session_branch.is_enabled()
-    }
-
-    /// Returns whether managed-worker-only keys may be handled.
-    fn accepts_managed_keys(&self) -> bool {
-        self.is_managed && self.session_state != ViewSessionState::ManagedResearch
     }
 
     /// Returns whether this session can enter the merge queue under stack
@@ -294,22 +283,12 @@ async fn handle_primary_view_key(
     view_session_snapshot: &ViewSessionSnapshot,
     pending_update: &ViewPendingUpdate,
 ) -> Option<bool> {
-    if view_session_snapshot.is_orchestrator
-        && handle_orchestration_view_key(app, key, view_context).await
-    {
-        return Some(true);
-    }
-    let accepts_managed_keys = view_session_snapshot.accepts_managed_keys();
-    if accepts_managed_keys && handle_managed_view_key(app, key, view_context) {
-        return Some(false);
-    }
-
     match key.code {
         KeyCode::Char('q') => {
             app.mode = AppMode::List;
         }
         KeyCode::Char('o') if view_session_snapshot.can_open_worktree() => {
-            return Some(handle_open_worktree_key(app, view_context, view_session_snapshot).await);
+            return Some(handle_open_worktree_key(app, view_context).await);
         }
         KeyCode::Char('l') if view_session_snapshot.follow_up_task_action.is_some() => {
             if let Err(error) = app
@@ -418,68 +397,9 @@ fn open_review_comments_in_diff(app: &mut App, view_context: &ViewContext) {
 }
 
 /// Opens a regular worktree immediately or warns for a managed worker.
-async fn handle_open_worktree_key(
-    app: &mut App,
-    view_context: &ViewContext,
-    view_session_snapshot: &ViewSessionSnapshot,
-) -> bool {
+async fn handle_open_worktree_key(app: &mut App, view_context: &ViewContext) -> bool {
     let restore_view = confirmation_view_mode(view_context);
-    if view_session_snapshot.is_managed {
-        open_managed_worktree_confirmation(app, restore_view);
-
-        return false;
-    }
     open_worktree_for_view_session(app, restore_view).await;
-
-    true
-}
-
-/// Applies campaign-board controls owned by an orchestrator session.
-async fn handle_orchestration_view_key(
-    app: &mut App,
-    key: KeyEvent,
-    view_context: &ViewContext,
-) -> bool {
-    match key.code {
-        KeyCode::Char('a') => {
-            let outcome = app
-                .approve_orchestration(&view_context.session_id, None)
-                .await;
-            if outcome == OrchestrationApprovalOutcome::IntegrationApproachRequired {
-                app.mode = AppMode::Confirmation {
-                    confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-                    confirmation_message: "Choose how to integrate verified task branches."
-                        .to_string(),
-                    confirmation_title: "Integration Approach".to_string(),
-                    restore_view: Some(confirmation_view_mode(view_context)),
-                    session_id: Some(view_context.session_id.clone()),
-                    selected_confirmation_index: 0,
-                };
-            }
-        }
-        _ => return false,
-    }
-
-    true
-}
-
-/// Opens the one-way ownership-transfer confirmation for a managed worker.
-fn handle_managed_view_key(app: &mut App, key: KeyEvent, view_context: &ViewContext) -> bool {
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-        return true;
-    }
-    if key.code != KeyCode::Char('D') {
-        return false;
-    }
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::DetachManagedSession,
-        confirmation_message: "Detach this worker from its campaign and take permanent ownership?"
-            .to_string(),
-        confirmation_title: "Confirm Detach".to_string(),
-        restore_view: Some(confirmation_view_mode(view_context)),
-        session_id: Some(view_context.session_id.clone()),
-        selected_confirmation_index: DEFAULT_OPTION_INDEX,
-    };
 
     true
 }
@@ -524,7 +444,6 @@ async fn handle_workflow_view_key(
         }
         KeyCode::Char('f')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.branch_actions.is_enabled()
                 && view_session_snapshot.session_status.allows_review_actions() =>
         {
             open_or_regenerate_review(app, view_context, pending_update);
@@ -598,20 +517,6 @@ fn open_continue_confirmation(app: &mut App, view_context: &ViewContext) {
         confirmation_title: "Confirm Continue".to_string(),
         restore_view: Some(confirmation_view_mode(view_context)),
         session_id: Some(view_context.session_id.clone()),
-        selected_confirmation_index: DEFAULT_OPTION_INDEX,
-    };
-}
-
-/// Warns before opening a controller-managed worker's writable worktree.
-fn open_managed_worktree_confirmation(app: &mut App, restore_view: ConfirmationViewMode) {
-    app.mode = AppMode::Confirmation {
-        confirmation_intent: ConfirmationIntent::OpenManagedWorktree,
-        confirmation_message: "This opens a writable shell in a controller-managed worktree. \
-                               Edits can invalidate orchestration verification. Open anyway?"
-            .to_string(),
-        confirmation_title: "Open Managed Worktree".to_string(),
-        session_id: Some(restore_view.session_id.clone()),
-        restore_view: Some(restore_view),
         selected_confirmation_index: DEFAULT_OPTION_INDEX,
     };
 }
@@ -702,46 +607,29 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
             .unwrap_or(&false);
 
     Some(ViewSessionSnapshot {
-        branch_actions: ViewActionState::from_bool(
-            session.owns_branch_changes() && session.accepts_user_turns(),
-        ),
         continue_terminal_session: ViewActionState::from_bool(
             session.allows_terminal_continuation(),
         ),
         fork_session: ViewActionState::from_bool(session.allows_fork_action()),
         follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
-        inspect_diff: ViewActionState::from_bool(
-            session.stats.should_show_diff()
-                && (session.is_managed()
-                    || (session.owns_branch_changes() && session.status.allows_diff_view())),
-        ),
-        is_managed: session.is_managed(),
-        is_orchestrator: session.role == crate::domain::session::SessionRole::Orchestrator,
+        inspect_diff: ViewActionState::from_bool(session.allows_diff_view()),
         merge_session_branch: ViewActionState::from_bool(
-            session.owns_branch_changes()
-                && app
-                    .sessions
-                    .can_merge_session_branch_in_stack(view_context.session_id.as_str()),
+            app.sessions
+                .can_merge_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         mutate_session_branch: ViewActionState::from_bool(
-            session.owns_branch_changes()
-                && app
-                    .sessions
-                    .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
+            app.sessions
+                .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         open_worktree: ViewActionState::from_bool(can_open_worktree),
         publish_pull_request_action: session.publish_pull_request_action(),
         rebase_session_branch: ViewActionState::from_bool(
-            session.owns_branch_changes()
-                && app
-                    .sessions
-                    .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
+            app.sessions
+                .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
         ),
         reply_to_session: ViewActionState::from_bool(
-            session.accepts_user_turns()
-                && app
-                    .sessions
-                    .can_reply_to_session_in_stack(view_context.session_id.as_str()),
+            app.sessions
+                .can_reply_to_session_in_stack(view_context.session_id.as_str()),
         ),
         review_comments: ViewActionState::from_bool(
             session.has_review_request() && session.allows_review_comment_reply(),
@@ -751,11 +639,10 @@ fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSe
         start_staged_session: ViewActionState::from_bool(
             app.sessions
                 .can_start_staged_session(view_context.session_id.as_str())
-                || (session.accepts_user_turns()
-                    && session
-                        .transient_messages
-                        .get(TransientMessageSlot::WorkspacePreparation)
-                        .is_some()),
+                || (session
+                    .transient_messages
+                    .get(TransientMessageSlot::WorkspacePreparation)
+                    .is_some()),
         ),
     })
 }

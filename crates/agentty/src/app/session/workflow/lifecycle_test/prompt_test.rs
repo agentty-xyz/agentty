@@ -252,7 +252,7 @@ async fn test_title_generation_rejects_prompt_as_generated_title() {
 #[tokio::test]
 /// Ensures a retried coordinator delivery with an already accepted
 /// operation does not enqueue or append the roll-up prompt twice.
-async fn test_reply_to_coordinator_message_accepts_existing_operation_without_duplicate_prompt() {
+async fn test_reply_to_durable_message_accepts_existing_operation_without_duplicate_prompt() {
     // Arrange
     let session = test_session("Initial prompt", Status::Review, Some("Title"), "");
     let database = database_with_session(&session).await;
@@ -275,7 +275,7 @@ async fn test_reply_to_coordinator_message_accepts_existing_operation_without_du
 
     // Act
     let missing = session_manager
-        .reply_to_coordinator_message(
+        .reply_to_durable_message(
             &services,
             "missing-session",
             "orchestration-rollup-missing".to_string(),
@@ -284,7 +284,7 @@ async fn test_reply_to_coordinator_message_accepts_existing_operation_without_du
         )
         .await;
     let accepted = session_manager
-        .reply_to_coordinator_message(
+        .reply_to_durable_message(
             &services,
             "session-id",
             "orchestration-rollup-1".to_string(),

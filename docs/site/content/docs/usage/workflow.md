@@ -17,8 +17,7 @@ merge locally or publish a review request. See
 - **Projects**: Choose a repository; view activity, usage, and installed agent CLIs.
 - **Sessions**: Create and manage work in merge-queue, active, and archive groups. Press
   `p` to switch projects without leaving this tab.
-- **Settings**: Configure appearance, orchestration, model defaults, and launch
-  commands.
+- **Settings**: Configure appearance, model defaults, and launch commands.
 
 Selected rows, options, and tabs use contrasting background colors. Selected session
 rows retain their status, size, and warning colors, with bold emphasis on the title.
@@ -169,10 +168,10 @@ clear when the next turn starts. Read-only sessions cannot submit comments. See
 ### Focused Review
 
 Agentty automatically reviews a changed diff when an eligible session enters **Review**.
-Unchanged diffs, stopped turns, and orchestrator controllers skip automatic review.
-Press `f` to show the review or request one manually. While a review is running, `f`
-brings its progress into view without starting another review. A conflict-free sync
-keeps the running review and its progress visible.
+Unchanged diffs and stopped turns skip automatic review. Press `f` to show the review or
+request one manually. While a review is running, `f` brings its progress into view
+without starting another review. A conflict-free sync keeps the running review and its
+progress visible.
 
 Reviews use the diff and saved conversation, respecting accepted decisions. They inspect
 files and history and may browse, but recommend checks rather than run them. Progress
@@ -298,8 +297,6 @@ unchanged.
 - **Regular**: The first `Enter` submits work.
 - **Draft**: Each `Enter` stages a message; `s` starts the bundle and creates its
   worktree from the base branch at that time.
-- **Orchestrator** `[Preview]`: A controller plans, coordinates, and verifies managed
-  research or implementation sessions.
 - **Stacked**: Create a draft based on a parent session, up to five levels below a root.
 - **Append to stack** `[Preview]`: Move an independent review-ready session below an
   eligible parent and sync it onto that branch. Sessions with children or linked review
@@ -310,50 +307,18 @@ unchanged.
 
 Unavailable session types stay visible in readable muted text.
 
+The legacy orchestrator session type is retired. Existing controllers and children
+remain independent sessions with their transcripts and workspaces intact. Campaign
+plans, reports, and pending follow-up instructions are saved in the controller history;
+pending campaign work is stopped. Former controllers and research sessions retain
+read-only permissions. For completed or canceled sessions, `d` is available only when an
+archived diff is stored.
+
 Start stacked drafts from parent to child. Each needs a review-ready parent and an idle
 stack. Parents can receive replies and sync while materialized children are idle.
 Completing a parent turn or syncing it automatically rebases review-ready descendants. A
 parent merge retargets children to its base and keeps their own changes; failed child
 syncs show `[Sync Error]`. Canceling a parent also cancels all nonterminal descendants.
-
-### Parallel Orchestration
-
-Use orchestration for discovery or at least two independent implementation tasks:
-
-1. Create an **Orchestrator** session and describe the goal.
-1. Review its tasks and acceptance criteria on the campaign monitor. Implementation
-   plans contain two to eight tasks; research waves contain one to eight and run
-   separately. Touched areas guide planning but do not restrict worker edits.
-1. Press `a` to approve. Research waves start automatically when **Auto-approve
-   Research** is enabled. **Orchestrator Parallelism** controls simultaneous children.
-1. Follow progress and answer relayed worker questions in the controller. Blocking
-   questions arrive one at a time. Infrastructure failures retry twice.
-1. Implementation workers receive up to three review-and-repair passes. The controller
-   verifies results against the criteria; only explicit passes can integrate. Partial or
-   failed reviews remain visible evidence.
-1. At **AwaitingIntegration**, press `a` and choose **Local merges** or **Review
-   requests**. Integration follows plan order. Published tasks wait for remote merge;
-   closed requests become integration failures. Research-only work completes without
-   integration.
-
-Managed workers allow transcript and diff inspection. `D` permanently detaches an
-implementation worker into an ordinary session. In `tmux`, `o` can open a review-ready
-worker's worktree; edits there can invalidate verification. Other direct mutations are
-unavailable while managed.
-
-Researchers run read-only in temporary worktrees. Their reports and any unexpected diff
-are archived, then the worktree is discarded. They cannot be detached or integrated. The
-controller is instructed not to edit, but its read-only role is currently enforced only
-by its prompt; see [Orchestrator Design](@/docs/architecture/orchestrator.md).
-
-Continue feedback in controller chat. Reusing an implementation task continues its
-worker and branch; research corrections start a fresh temporary researcher. New scope
-requires approval. After the controller is **Done**, start a new campaign.
-
-To cancel, press `c` on the controller in the session list. Cancellation includes its
-active children. If a child cannot stop, the campaign remains **Canceling** so you can
-retry. The preview's flat task list and verification limits are documented in
-[Current Limits](@/docs/architecture/orchestrator.md#current-limits).
 
 ## Branch Publish Flow
 
@@ -534,8 +499,7 @@ the commit title. Failed refinement leaves the provisional title in place.
 The highlighted row is the selected setting. Move the selection with `j` / `k`, then
 press `Enter` to open or edit the setting.
 
-<a id="usage-settings-scope"></a> **Global settings** include theme, orchestrator
-parallelism (one to eight workers, default three), and research auto-approval. Project
+<a id="usage-settings-scope"></a> **Global settings** control the theme. Project
 settings include model, reasoning, speed and style defaults, commit trailers, and launch
 configurations. Defaults affect new sessions; use slash commands to change an existing
 one. See [Backend Defaults](@/docs/agents/backends.md#selecting-a-backend) for Smart,
@@ -570,10 +534,9 @@ Every event includes `app_source` (`cli`), `app_version`, and `install_method` (
 | `agentty_turn_finish`    | When a turn and its post-processing complete successfully           | `agent`, `model`                                 |
 | `agentty_turn_interrupt` | When an executing turn is stopped by the user                       | `agent`, `model`                                 |
 
-Session types are `regular`, `draft`, `stacked`, `fork`, `orchestrator`,
-`orchestration_child`, and `orchestration_research`. `agent` identifies the selected
-provider; `model` is its supported model identifier. Turn events use the selection
-captured when the turn was queued.
+Session types are `regular`, `draft`, `stacked`, and `fork`. `agent` identifies the
+selected provider; `model` is its supported model identifier. Turn events use the
+selection captured when the turn was queued.
 
 Each event carries a random installation ID that Agentty creates on the first launch
 with telemetry enabled and stores in its database, so events from one Agentty root share

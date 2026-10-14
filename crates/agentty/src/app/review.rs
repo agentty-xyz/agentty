@@ -135,7 +135,7 @@ pub(crate) struct FocusedReviewPersistence {
     pub(crate) request_id: Uuid,
     /// Stable session identifier for the focused-review cache row.
     pub(crate) session_id: SessionId,
-    /// Durable generation state consumed by managed-worker orchestration.
+    /// Durable generation state used to recover pending reviews.
     pub(crate) status: FocusedReviewStatus,
     /// Focused-review markdown to persist, or `None` when clearing it.
     pub(crate) text: Option<String>,

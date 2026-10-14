@@ -404,8 +404,6 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
                 resolution: ReviewCommentResolution::Fixed,
                 thread_id: "thread-1".to_string(),
             }],
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
         },
         context_reset: false,
         input_tokens: 0,

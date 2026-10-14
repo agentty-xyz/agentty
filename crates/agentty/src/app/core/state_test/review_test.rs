@@ -35,7 +35,7 @@ use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{
     ForgeKind, PublishBranchAction, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
-    SESSION_DATA_DIR, SessionHandles, SessionId, SessionRole, SessionStats, Status,
+    SESSION_DATA_DIR, SessionHandles, SessionId, SessionStats, Status,
 };
 use crate::domain::session_message::SessionMessageKind;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
@@ -412,34 +412,6 @@ async fn auto_start_reviews_skips_when_auto_review_is_suppressed() {
         app.review_cache.get(session_id),
         Some(ReviewCacheEntry::Suppressed)
     ));
-    assert_eq!(app.sessions.sessions()[0].status, Status::Review);
-}
-
-#[tokio::test]
-async fn auto_start_reviews_keeps_orchestrator_controller_in_review() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let session_id = "session-1";
-    let mut session = crate::test_support::session_fixture_with_folder(PathBuf::from(
-        "/tmp/orchestrator-auto-review-skip",
-    ));
-    session.role = SessionRole::Orchestrator;
-    session.status = Status::Review;
-    app.sessions.push_session(session);
-    let session_ids = HashSet::from([session_id.into()]);
-
-    let mut mock_git_client = ag_git::MockGitClient::new();
-    mock_git_client.expect_diff().times(0);
-    install_mock_git_client(&mut app, mock_git_client);
-
-    // Act
-    app.auto_start_reviews(&session_ids);
-
-    // Assert
-    assert!(!app.review_cache.contains_key(session_id));
     assert_eq!(app.sessions.sessions()[0].status, Status::Review);
 }
 

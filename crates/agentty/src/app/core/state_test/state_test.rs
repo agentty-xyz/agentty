@@ -406,61 +406,6 @@ async fn apply_app_events_session_workflow_notice_updates_session_state() {
 }
 
 #[tokio::test]
-/// Verifies orchestration progress updates the board without transcript noise.
-async fn apply_app_events_orchestration_progress_updates_board_snapshot() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_with_tmux_client_without_retained_base_dir(
-        Arc::new(MockTmuxClient::new()),
-    )
-    .await;
-    let mut session =
-        crate::test_support::session_fixture_with_folder(PathBuf::from("/tmp/controller"));
-    session.id = "controller".into();
-    app.sessions.push_session(session);
-
-    // Act
-    app.apply_app_events(AppEvent::SessionOrchestrationProgressUpdated {
-        progress: Some("Working... Protocol: running".to_string()),
-        session_id: "controller".into(),
-    })
-    .await;
-
-    // Assert
-    let controller = app
-        .sessions
-        .sessions()
-        .iter()
-        .find(|session| session.id == "controller")
-        .expect("controller should remain loaded");
-    assert_eq!(
-        controller.orchestration_progress.as_deref(),
-        Some("Working... Protocol: running")
-    );
-    assert!(
-        controller
-            .transient_messages
-            .get(crate::domain::transient_message::TransientMessageSlot::Orchestration)
-            .is_none()
-    );
-
-    // Act
-    app.apply_app_events(AppEvent::SessionOrchestrationProgressUpdated {
-        progress: None,
-        session_id: "controller".into(),
-    })
-    .await;
-
-    // Assert
-    assert!(
-        app.sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == "controller")
-            .is_some_and(|session| session.orchestration_progress.is_none())
-    );
-}
-
-#[tokio::test]
 /// Verifies stale `SessionUpdated` versions do not re-arm redraw when the
 /// reducer has already applied that handle snapshot.
 async fn apply_app_events_session_updated_same_version_keeps_redraw_clean() {

@@ -101,7 +101,6 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(!rendered_prompt.contains("{# task separator #}"));
     assert!(rendered_prompt.contains("For this session turn:"));
     assert!(normalized_prompt.contains("Do not create commits; do not suggest creating them"));
-    assert!(normalized_prompt.contains("Leave `subtasks` empty unless"));
     assert!(rendered_prompt.contains("\"answer\""));
     assert!(rendered_prompt.contains("\"questions\""));
     assert!(rendered_prompt.contains("\"title\""));

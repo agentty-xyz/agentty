@@ -355,22 +355,20 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
         .insert_session_with_agent(PersistedSessionCreation {
             agent: "codex",
             base_branch: "main",
-            id: "orchestrator",
+            id: "draft",
             is_draft: false,
             model: "gpt-5.6-sol",
-            orchestration_task_id: None,
             parent_session_id: None,
             permission_mode: ag_session::PermissionMode::AutoEdit,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_session::ResponseStyle::default(),
-            role: Some("Orchestrator"),
             speed_mode: SpeedMode::Normal,
-            status: "Review",
+            status: "Draft",
         })
         .await
-        .expect("failed to insert orchestrator session");
+        .expect("failed to insert draft session");
 
     // Act
     let deferred = database
@@ -383,11 +381,11 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
         .defer_session_focused_review("missing-session")
         .await
         .expect("failed to check missing session");
-    let orchestrator_deferred = database
+    let draft_deferred = database
         .sessions()
-        .defer_session_focused_review("orchestrator")
+        .defer_session_focused_review("draft")
         .await
-        .expect("failed to check orchestrator session");
+        .expect("failed to check draft session");
     let pending_session_ids = database
         .sessions()
         .load_pending_focused_review_session_ids(project_id)
@@ -402,7 +400,7 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
     // Assert
     assert!(deferred);
     assert!(!missing_deferred);
-    assert!(!orchestrator_deferred);
+    assert!(!draft_deferred);
     assert_eq!(pending_session_ids, ["session-a"]);
     assert_eq!(focused_reviews, [] as [crate::SessionFocusedReviewRow; 0]);
 }

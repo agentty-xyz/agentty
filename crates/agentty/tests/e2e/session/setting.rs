@@ -108,9 +108,15 @@ async fn seed_detailed_response_style_session(
     Ok(())
 }
 
-/// Seeds one review-ready session with a worktree-local personality.
+/// Seeds one review-ready session with its worktree-local personality selected
+/// so semantic execution and GIF replay select the same entry.
 async fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session(env).await?;
+    seed_review_ready_session_on_sessions_tab(env).await?;
+    common::open_database(env)
+        .await?
+        .sessions()
+        .update_session_personality_id("review-shortcut-0001", Some("reviewer".to_string()))
+        .await?;
 
     let session_folder =
         test_support::session_folder(&env.agentty_root.join("wt"), "review-shortcut-0001");
@@ -589,7 +595,6 @@ async fn test_session_personality() -> E2eResult {
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
@@ -609,7 +614,6 @@ async fn test_session_personality() -> E2eResult {
                         "personality_picker",
                         "Worktree personalities appear in the session picker",
                     )
-                    .press_key("Down")
                     .press_key("Enter")
                     .wait_for_text("Personality set to", 5000)
                     .viewing_pause_ms(1500)

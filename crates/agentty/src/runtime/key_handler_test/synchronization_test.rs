@@ -7,87 +7,10 @@ use super::super::{
 };
 use super::support::{appendable_stack_test_app, session_replay_text};
 use crate::app::App;
-use crate::domain::orchestration::{IntegrationApproach, OrchestrationStatus};
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::{AppMode, ConfirmationIntent, ConfirmationViewMode};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::ConfirmationDecision;
-
-#[tokio::test]
-async fn integration_choice_persists_local_merge_or_review_request() {
-    for (decision, expected_approach) in [
-        (
-            ConfirmationDecision::Confirm,
-            IntegrationApproach::LocalMerge,
-        ),
-        (
-            ConfirmationDecision::Reject,
-            IntegrationApproach::ReviewRequest,
-        ),
-    ] {
-        // Arrange
-        let (mut app, _base_dir) =
-            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
-        let session_id = app
-            .create_session()
-            .await
-            .expect("failed to create controller fixture");
-        app.services
-            .db()
-            .orchestrations()
-            .insert_orchestration(
-                &session_id,
-                &OrchestrationStatus::AwaitingIntegration.to_string(),
-                2,
-            )
-            .await
-            .expect("failed to insert orchestration");
-        app.mode = AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::ChooseIntegrationApproach,
-            confirmation_message: "Choose integration".to_string(),
-            confirmation_title: "Integration Approach".to_string(),
-            restore_view: Some(ConfirmationViewMode {
-                scroll_offset: Some(3),
-                session_id: session_id.clone().into(),
-            }),
-            session_id: Some(session_id.clone().into()),
-            selected_confirmation_index: 0,
-        };
-
-        // Act
-        let event_result = handle_confirmation_decision(&mut app, decision).await;
-        let orchestration = app
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_for_controller(&session_id)
-            .await
-            .expect("failed to load orchestration")
-            .expect("orchestration should exist");
-        let approach = app
-            .services
-            .db()
-            .orchestrations()
-            .load_orchestration_integration_approach(orchestration.id)
-            .await
-            .expect("failed to load integration approach");
-
-        // Assert
-        assert!(matches!(event_result, Ok(EventResult::Continue)));
-        assert_eq!(approach, expected_approach.to_string());
-        assert_eq!(
-            orchestration.status,
-            OrchestrationStatus::Integrating.to_string()
-        );
-        assert!(matches!(
-            app.mode,
-            AppMode::View {
-                scroll_offset: Some(3),
-                ..
-            }
-        ));
-    }
-}
 
 #[tokio::test]
 async fn test_merge_confirmation_accepts_an_already_active_merge() {

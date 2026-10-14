@@ -2,7 +2,7 @@
 //!
 //! Host applications implement [`SessionBackend`] to connect the stable
 //! programmatic API to their persistence, agent, Git, and forge workflows.
-//! Callers such as future orchestrator sessions use [`SessionService`] without
+//! Callers such as background callers use [`SessionService`] without
 //! depending on terminal UI state.
 
 mod agent;
@@ -10,7 +10,6 @@ mod discovery;
 mod error;
 mod message;
 mod model;
-mod orchestration;
 mod personality;
 mod project;
 mod question;
@@ -41,13 +40,8 @@ pub use message::{
 };
 pub use model::{
     ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
-    ReviewRequestSummary, Session, SessionId, SessionRole, SessionSettings, SessionStatus,
-    SpeedMode, activity_day_key_with_offset, session_branch,
-};
-pub use orchestration::{
-    IntegrationApproach, MAX_AUTOMATED_REVIEW_ITERATIONS, OrchestrationPlanTask,
-    OrchestrationPolicy, OrchestrationScheduleDecision, OrchestrationStatus, OrchestrationTaskKind,
-    OrchestrationTaskStatus, validate_subtasks,
+    ReviewRequestSummary, Session, SessionId, SessionSettings, SessionStatus, SpeedMode,
+    activity_day_key_with_offset, session_branch,
 };
 pub use personality::{
     PERSONALITY_PROMPT_MAX_BYTES, Personality, PersonalityParseError, PersonalitySummary,
@@ -62,11 +56,8 @@ pub use review::{
     review_suggestions,
 };
 pub use service::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, QuestionAnswer, SessionBackend, SessionService,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionService,
 };
-pub use setting::{
-    DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
-    MAX_ORCHESTRATION_PARALLELISM, SettingName,
-};
+pub use setting::SettingName;
 pub use transcript_notice::TranscriptNotice;

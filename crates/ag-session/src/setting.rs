@@ -2,13 +2,6 @@
 
 use std::fmt;
 
-/// Whether temporary read-only research waves start without plan approval.
-pub const DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH: bool = true;
-/// Default number of orchestration children allowed to run concurrently.
-pub const DEFAULT_ORCHESTRATION_PARALLELISM: u8 = 3;
-/// Maximum orchestration concurrency exposed by the settings selector.
-pub const MAX_ORCHESTRATION_PARALLELISM: u8 = 8;
-
 /// Stable keys used in the `setting` and `project_setting` tables.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SettingName {
@@ -16,8 +9,6 @@ pub enum SettingName {
     ActiveProjectId,
     /// Persists the active list tab selection.
     ActiveTab,
-    /// Persists whether research-only orchestration waves start immediately.
-    AutoApproveOrchestrationResearch,
     /// Persists the provider that owns the fast-model default.
     DefaultFastAgent,
     /// Persists the project or global fast-model selection.
@@ -51,8 +42,6 @@ pub enum SettingName {
     LaunchConfiguration,
     /// Persists whether the last used model should become the default.
     LastUsedModelAsDefault,
-    /// Persists how many orchestration children may run at once.
-    OrchestrationParallelism,
     /// Distinguishes registered projects from non-repository launch contexts.
     ProjectCatalogVisible,
     /// Records dismissal of the one-time project discovery suggestion.
@@ -69,7 +58,6 @@ impl SettingName {
         match self {
             Self::ActiveProjectId => "ActiveProjectId",
             Self::ActiveTab => "ActiveTab",
-            Self::AutoApproveOrchestrationResearch => "AutoApproveOrchestrationResearch",
             Self::DefaultFastAgent => "DefaultFastAgent",
             Self::DefaultFastModel => "DefaultFastModel",
             Self::DefaultFastReasoningLevel => "DefaultFastReasoningLevel",
@@ -86,7 +74,6 @@ impl SettingName {
             Self::IncludeCoauthoredByAgentty => "IncludeCoauthoredByAgentty",
             Self::LaunchConfiguration => "LaunchConfiguration",
             Self::LastUsedModelAsDefault => "LastUsedModelAsDefault",
-            Self::OrchestrationParallelism => "OrchestrationParallelism",
             Self::ProjectCatalogVisible => "ProjectCatalogVisible",
             Self::ProjectDiscoveryPromptSeen => "ProjectDiscoveryPromptSeen",
             Self::TelemetryInstallationId => "TelemetryInstallationId",

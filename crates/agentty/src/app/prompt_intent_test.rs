@@ -16,7 +16,7 @@ use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::personality::Personality;
-use crate::domain::session::{SessionId, SessionRole, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
@@ -733,10 +733,6 @@ async fn test_resolve_session_review_comments_rejects_blocked_and_empty_selectio
     let empty_selection = app
         .resolve_session_review_comments(&session_id, &snapshot, &[])
         .await;
-    app.sessions.sessions_mut()[0].role = SessionRole::OrchestrationWorker;
-    let managed = app
-        .resolve_session_review_comments(&session_id, &snapshot, &selections)
-        .await;
 
     // Assert
     assert_eq!(missing, ReviewCommentResolutionOutcome::KeepReviewComments);
@@ -745,7 +741,6 @@ async fn test_resolve_session_review_comments_rejects_blocked_and_empty_selectio
         empty_selection,
         ReviewCommentResolutionOutcome::KeepReviewComments
     );
-    assert_eq!(managed, ReviewCommentResolutionOutcome::KeepReviewComments);
 }
 
 /// Builds review data with one comment followed by current, resolved, and

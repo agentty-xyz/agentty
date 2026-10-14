@@ -4,8 +4,8 @@ use std::sync::Arc;
 use super::support::{FakeBackend, FakeBackendState, review_request_fixture, session_fixture};
 use crate::model::SessionId;
 use crate::service::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, QuestionAnswer, SessionService,
+    AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, QuestionAnswer, SessionService,
 };
 
 #[tokio::test]
@@ -63,12 +63,12 @@ async fn service_delegates_mutating_operations_through_clones() {
         .await
         .expect("message should be sent");
     service
-        .submit_coordinator_message(
+        .submit_durable_message(
             &session_id,
-            CoordinatorMessageRequest {
+            DurableMessageRequest {
                 message: "roll up".to_string(),
                 operation_id: "rollup-7".to_string(),
-                visibility: CoordinatorMessageVisibility::Hidden,
+                visibility: DurableMessageVisibility::Hidden,
             },
         )
         .await

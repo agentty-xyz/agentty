@@ -24,9 +24,6 @@ mod review;
 #[path = "session_api_test/setting_test.rs"]
 mod setting;
 
-#[path = "session_api_test/state_test.rs"]
-mod state;
-
 #[path = "session_api_test/synchronization_test.rs"]
 mod synchronization;
 

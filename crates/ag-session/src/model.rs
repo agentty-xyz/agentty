@@ -139,88 +139,6 @@ impl<'de> Deserialize<'de> for SessionId {
     }
 }
 
-/// Role one session plays in a multi-session workflow.
-///
-/// The role is orthogonal to [`SessionStatus`]: an orchestrator moves through
-/// the same lifecycle states as any other session, but its worktree exists only
-/// for repository reads and never receives commits. Diff, merge, and
-/// review-request affordances are therefore gated on the role rather than on a
-/// dedicated lifecycle state.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SessionRole {
-    /// Ordinary session that owns the changes on its own branch.
-    #[default]
-    Worker,
-    /// Worker whose write capabilities are owned exclusively by an
-    /// orchestration coordinator.
-    OrchestrationWorker,
-    /// Temporary read-only researcher whose worktree changes are discarded
-    /// after its report is captured.
-    OrchestrationResearcher,
-    /// Controller session that plans and supervises child worker sessions.
-    Orchestrator,
-}
-
-impl SessionRole {
-    /// Returns whether this role produces commits on its own session branch.
-    ///
-    /// Orchestrators read the repository to plan work but delegate every edit
-    /// to child sessions, so their branch stays empty for the session's whole
-    /// lifetime.
-    pub fn owns_branch_changes(self) -> bool {
-        matches!(self, SessionRole::Worker | SessionRole::OrchestrationWorker)
-    }
-
-    /// Returns whether Agentty should observe worktree changes after a turn.
-    ///
-    /// Research children do not own their changes, but the coordinator records
-    /// whether a child attempted edits before discarding its worktree.
-    pub fn tracks_worktree_changes(self) -> bool {
-        !matches!(self, SessionRole::Orchestrator)
-    }
-
-    /// Returns whether an end user may submit turns or branch mutations
-    /// directly to this session.
-    pub fn accepts_user_turns(self) -> bool {
-        !self.is_managed()
-    }
-
-    /// Returns whether this worker is owned by an orchestration coordinator.
-    pub fn is_managed(self) -> bool {
-        matches!(
-            self,
-            SessionRole::OrchestrationWorker | SessionRole::OrchestrationResearcher
-        )
-    }
-}
-
-impl fmt::Display for SessionRole {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            SessionRole::Worker => "Worker",
-            SessionRole::OrchestrationWorker => "OrchestrationWorker",
-            SessionRole::OrchestrationResearcher => "OrchestrationResearcher",
-            SessionRole::Orchestrator => "Orchestrator",
-        };
-
-        formatter.write_str(value)
-    }
-}
-
-impl FromStr for SessionRole {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "Worker" => Ok(SessionRole::Worker),
-            "OrchestrationWorker" => Ok(SessionRole::OrchestrationWorker),
-            "OrchestrationResearcher" => Ok(SessionRole::OrchestrationResearcher),
-            "Orchestrator" => Ok(SessionRole::Orchestrator),
-            _ => Err(format!("Unknown role: {value}")),
-        }
-    }
-}
-
 /// High-level lifecycle state for one session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionStatus {
@@ -278,7 +196,7 @@ impl SessionStatus {
 
     /// Returns whether this status permits opening the session diff.
     pub fn allows_diff_view(self) -> bool {
-        self.allows_review_actions() || self.is_read_only()
+        self.allows_review_actions() || self.is_read_only() || self.allows_terminal_continuation()
     }
 
     /// Returns whether this status permits starting or queueing session sync.
@@ -435,8 +353,6 @@ pub struct SessionSettings {
     pub reasoning_level: ReasoningLevel,
     /// Session-scoped response style.
     pub response_style: ResponseStyle,
-    /// Role this session plays in a multi-session workflow.
-    pub role: SessionRole,
     /// Session-scoped response-speed preference.
     pub speed_mode: SpeedMode,
 }

@@ -28,9 +28,9 @@ use super::super::{
 use super::support::{
     apply_worker_turn_result, auto_commit_run_client, default_turn_metadata, empty_transcript,
     expect_clean_main_checkout_snapshot, expect_safe_auto_push_state,
-    insert_in_progress_research_session, insert_in_progress_test_session,
+    insert_in_progress_read_only_session, insert_in_progress_test_session,
     mock_fs_client_with_existing_directories, mock_git_client_detecting_main_repo,
-    persist_test_personality_state, queue_test_context, queued_message, research_title_run_client,
+    persist_test_personality_state, queue_test_context, queued_message, read_only_title_run_client,
     resume_command, seed_recovery_test_operation, successful_turn_result, transcript_text,
     turn_prompt_with_attachment,
 };
@@ -286,8 +286,6 @@ fn test_build_assistant_message_content_prefers_answer_messages() {
         answer: "Implemented the fix.".to_string(),
         questions: vec![QuestionItem::new("Need me to run tests?")],
         review_comment_outcomes: Vec::new(),
-        subtasks: Vec::new(),
-        verification_verdicts: Vec::new(),
     };
 
     // Act
@@ -308,8 +306,6 @@ fn test_build_assistant_message_content_returns_none_for_blank_messages() {
         answer: String::new(),
         questions: vec![QuestionItem::new("\n")],
         review_comment_outcomes: Vec::new(),
-        subtasks: Vec::new(),
-        verification_verdicts: Vec::new(),
     };
 
     // Act
@@ -570,11 +566,11 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
-    insert_in_progress_research_session(&db).await;
+    insert_in_progress_read_only_session(&db).await;
     db.sessions()
         .update_session_provisional_title("sess1", "test prompt")
         .await
-        .expect("failed to persist provisional research title");
+        .expect("failed to persist provisional read-only title");
 
     let turn_started = Arc::new(Notify::new());
     let mut mock_channel = MockAgentChannel::new();
@@ -582,7 +578,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
         .expect_run_turn()
         .withf(|_session_id, request, _events| {
             request.permission_mode == PermissionMode::ReadOnly
-                && !request.prompt.text.contains("# Read Only Mode")
+                && request.prompt.text.contains("# Read Only Mode")
         })
         .returning({
             let turn_started = Arc::clone(&turn_started);
@@ -635,7 +631,7 @@ async fn test_run_channel_turn_returns_stopped_when_cancel_token_fires() {
     let (result, ()) = tokio::join!(
         run_channel_turn(
             &context,
-            research_title_run_client(),
+            read_only_title_run_client(),
             default_turn_metadata(),
             AgentRequestKind::SessionStart,
             None,
@@ -723,8 +719,6 @@ async fn test_run_channel_turn_proceeds_read_only_after_previous_cancellation() 
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
                     },
                     context_reset: false,
                     input_tokens: 0,
@@ -813,8 +807,6 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_is_clean_after_t
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
                     },
                     context_reset: false,
                     input_tokens: 0,
@@ -919,8 +911,6 @@ async fn test_run_channel_turn_skips_warning_when_main_checkout_stays_dirty() {
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
                     },
                     context_reset: false,
                     input_tokens: 0,
@@ -1012,8 +1002,6 @@ async fn test_run_channel_turn_skips_main_checkout_snapshot_for_bare_repo() {
                         answer: "done".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
                     },
                     context_reset: false,
                     input_tokens: 0,

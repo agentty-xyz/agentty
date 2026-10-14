@@ -409,10 +409,11 @@ fn test_format_protocol_parse_debug_details_reports_unrecognized_json_keys() {
     assert!(details.contains("direct_json_type: object"));
     assert!(details.contains("direct_json_keys: message"));
     assert!(details.contains("direct_json_recognized_protocol_keys: (none)"));
-    assert!(details.contains(
-        "direct_json_missing_protocol_keys: answer, questions, review_comment_outcomes, subtasks, \
-         verification_verdicts"
-    ));
+    assert!(
+        details.contains(
+            "direct_json_missing_protocol_keys: answer, questions, review_comment_outcomes"
+        )
+    );
 }
 
 #[test]
@@ -437,7 +438,6 @@ fn utility_profiles_validate_direct_wire_objects_before_normalizing() {
 
         // Assert
         assert_eq!(response.questions.len(), 0);
-        assert_eq!(response.subtasks.len(), 0);
         assert_ne!(response.answer, "");
         assert!(crate::parse_protocol_response_strict("", profile).is_err());
         assert!(crate::parse_protocol_response_strict("{}", profile).is_err());
@@ -481,7 +481,7 @@ fn utility_wrapper_recovery_still_rejects_unexpected_fields() {
     }
     assert!(
         crate::parse_protocol_response_strict(
-            r#"{"answer":"Done","subtasks":[]}"#,
+            r#"{"answer":"Done","unexpected":[]}"#,
             crate::ProtocolRequestProfile::UtilityPrompt
         )
         .is_err()

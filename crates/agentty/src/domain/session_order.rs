@@ -172,7 +172,7 @@ fn selectable_list_indexes(sessions: &[Session], archive_action_count: usize) ->
     indexes
 }
 
-/// Lookup of stacked or orchestrated children by display parent session id.
+/// Lookup of stacked children by display parent session id.
 type StackedChildIndex<'a> = HashMap<&'a str, Vec<(usize, &'a Session)>>;
 
 /// Builds a per-render child lookup so grouped rows do not rescan every
@@ -180,11 +180,7 @@ type StackedChildIndex<'a> = HashMap<&'a str, Vec<(usize, &'a Session)>>;
 fn stacked_child_index(sessions: &[Session]) -> StackedChildIndex<'_> {
     let mut children_by_parent = HashMap::new();
     for (index, session) in sessions.iter().enumerate() {
-        if let Some(parent_session_id) = session
-            .parent_session_id
-            .as_ref()
-            .or(session.controller_session_id.as_ref())
-        {
+        if let Some(parent_session_id) = session.parent_session_id.as_ref() {
             children_by_parent
                 .entry(parent_session_id.as_str())
                 .or_insert_with(Vec::new)
@@ -267,11 +263,7 @@ fn has_loaded_parent_session_in_group(
     session: &Session,
     group: SessionGroup,
 ) -> bool {
-    match session
-        .parent_session_id
-        .as_ref()
-        .or(session.controller_session_id.as_ref())
-    {
+    match session.parent_session_id.as_ref() {
         Some(parent_session_id) => sessions.iter().any(|candidate| {
             candidate.id.as_str() == parent_session_id.as_str() && session_group(candidate) == group
         }),

@@ -33,10 +33,8 @@ fn settings_rows_split_theme_into_global_and_project_sections() {
     let project_rows = manager.project_settings_rows();
 
     // Assert
-    assert_eq!(global_rows.len(), 3);
+    assert_eq!(global_rows.len(), 1);
     assert_eq!(global_rows[0].0, "Theme");
-    assert_eq!(global_rows[1].0, "Orchestrator Parallelism");
-    assert_eq!(global_rows[2].0, "Auto-approve Research");
     assert_eq!(project_rows.len(), 6);
     assert_eq!(project_rows[0].0, "Default Smart Model");
     assert_eq!(project_rows[1].0, "Default Fast Model");
@@ -105,18 +103,6 @@ async fn settings_manager_new_loads_project_scoped_values() {
         .upsert_setting(SettingName::Theme, ColorTheme::Green.as_str())
         .await
         .expect("failed to persist theme setting");
-    services
-        .db()
-        .settings()
-        .upsert_setting(SettingName::OrchestrationParallelism, "5")
-        .await
-        .expect("failed to persist orchestration parallelism");
-    services
-        .db()
-        .settings()
-        .upsert_setting(SettingName::AutoApproveOrchestrationResearch, "false")
-        .await
-        .expect("failed to persist research auto-approval");
 
     // Act
     let manager = settings_manager(&services, project_id).await;
@@ -145,8 +131,6 @@ async fn settings_manager_new_loads_project_scoped_values() {
     assert_eq!(settings.default_smart_speed_mode, SpeedMode::Fast);
     assert_eq!(settings.default_fast_speed_mode, SpeedMode::Fast);
     assert_eq!(settings.default_review_speed_mode, SpeedMode::Fast);
-    assert_eq!(settings.orchestration_parallelism, 5);
-    assert!(!settings.auto_approve_orchestration_research);
     assert_eq!(settings.theme, ColorTheme::Green);
     assert!(!settings.include_coauthored_by_agentty);
     assert!(settings.use_last_used_model_as_default);

@@ -727,52 +727,6 @@ fn test_status_column_width_uses_longest_possible_status_label() {
 }
 
 #[test]
-fn test_status_column_uses_visible_orchestration_phase_with_forge_indicator() {
-    // Arrange
-    let mut session = crate::test_support::titled_session_fixture("session-1", Status::Review);
-    session.review_request = Some(ReviewRequest {
-        last_refreshed_at: 0,
-        summary: ReviewRequestSummary {
-            display_id: "#42".to_string(),
-            forge_kind: ForgeKind::GitHub,
-            source_branch: "wt/session-id".to_string(),
-            state: ReviewRequestState::Open,
-            status_summary: None,
-            target_branch: "main".to_string(),
-            title: "feat".to_string(),
-            web_url: String::new(),
-        },
-    });
-    let expected_title = session.display_title().to_string();
-    session.orchestration_progress = Some(
-        "Phase: Running\nParallel workers: 3 (global setting)\n- protocol: running".to_string(),
-    );
-    let sessions = vec![session];
-    let expected_label = "Phase: Running ⊙ #42";
-    let expected_width = u16::try_from(expected_label.chars().count()).unwrap_or(u16::MAX);
-    let backend = ratatui::backend::TestBackend::new(120, 12);
-    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let mut table_state = TableState::default();
-    table_state.select(Some(0));
-    let rows = prepared_session_rows(&sessions, ReasoningLevel::High, None, 0);
-
-    // Act
-    let width = status_column_width(&rows);
-    terminal
-        .draw(|frame| {
-            SessionListPage::new(&sessions, &mut table_state, ReasoningLevel::High, 0)
-                .render(frame, frame.area());
-        })
-        .expect("failed to render session list");
-    let rendered = buffer_text(terminal.backend().buffer());
-
-    // Assert
-    assert_eq!(width, Constraint::Length(expected_width));
-    assert!(rendered.contains(expected_label));
-    assert!(rendered.contains(&expected_title));
-}
-
-#[test]
 fn test_timer_column_width_uses_longest_rendered_timer_label() {
     // Arrange
     let mut active_session =

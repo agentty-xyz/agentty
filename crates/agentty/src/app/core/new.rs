@@ -234,12 +234,6 @@ impl App {
             .sessions()
             .load_pending_focused_review_session_ids(project_id)
             .await?;
-        session_ids.extend(
-            repositories
-                .orchestrations()
-                .load_recoverable_focused_review_session_ids(project_id)
-                .await?,
-        );
         session_ids.sort_unstable();
         session_ids.dedup();
 

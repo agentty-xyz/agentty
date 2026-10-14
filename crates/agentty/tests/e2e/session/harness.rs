@@ -214,13 +214,13 @@ async fn test_harness_row_is_hidden_without_flag() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("a")
-                    .wait_for_text("Orchestrator", 5000)
+                    .wait_for_text("Stacked", 5000)
                     .capture_labeled("session_types", "Session types without Harness")
             },
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Orchestrator", &full);
+                    assertion::assert_text_in_region(frame, "Stacked", &full);
                     assertion::assert_not_visible(frame, "Harness");
                 })
             },

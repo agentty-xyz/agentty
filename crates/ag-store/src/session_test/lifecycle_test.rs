@@ -246,3 +246,63 @@ async fn test_clear_session_draft_flag_marks_draft_session_live() {
         .expect("missing draft session row");
     assert!(!session_row.is_draft);
 }
+
+/// Every session projection exposes usable archives independently of stale diff
+/// stats.
+#[tokio::test]
+async fn session_loaders_report_archived_diff_availability() {
+    // Arrange
+    let database = AppRepositories::in_memory().await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project("archive-project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("archive-session", "gpt-5.6-sol", "main", "Done", project_id)
+        .await
+        .expect("session");
+    database
+        .sessions()
+        .update_session_diff_stats(10, 2, true, "archive-session", "S")
+        .await
+        .expect("retained diff statistics");
+    for (archive, expected) in [
+        (None, false),
+        (Some(""), false),
+        (Some(" \t\r\n "), false),
+        (Some("diff --git a/file b/file\n+change"), true),
+    ] {
+        database
+            .sessions()
+            .update_session_archived_diff("archive-session", archive.map(str::to_owned))
+            .await
+            .expect("archive");
+
+        // Act
+        let session = database
+            .sessions()
+            .load_session("archive-session")
+            .await
+            .expect("session")
+            .expect("exists");
+        let all = database.sessions().load_sessions().await.expect("sessions");
+        let project = database
+            .sessions()
+            .load_sessions_for_project(project_id)
+            .await
+            .expect("project sessions");
+        let (page, _) = database
+            .sessions()
+            .load_sessions_for_project_page(project_id, 10, None)
+            .await
+            .expect("page");
+
+        // Assert
+        assert_eq!(session.has_archived_diff, expected);
+        assert_eq!(all[0].has_archived_diff, expected);
+        assert_eq!(project[0].has_archived_diff, expected);
+        assert_eq!(page[0].has_archived_diff, expected);
+    }
+}

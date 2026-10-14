@@ -2,19 +2,18 @@ use std::sync::Arc;
 
 use ag_contracts::{PermissionMode, ReasoningLevel, SpeedMode};
 use ag_session::{
-    AgentKind, AgentModel, CoordinatorMessageRequest, CoordinatorMessageVisibility,
-    CreateSessionMode, CreateSessionRequest, SessionError as ApiSessionError, SessionId,
-    SessionMessageKind, SessionRole, SessionStatus, test_support as model_fixture,
+    AgentKind, AgentModel, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
+    DurableMessageVisibility, SessionError as ApiSessionError, SessionId, SessionMessageKind,
+    SessionStatus, test_support as model_fixture,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 
 use super::support::{
-    persist_inherited_launch_settings, request_coordinator_message, request_message,
-    request_session, request_session_creation, seed_active_orchestration_session,
+    persist_inherited_launch_settings, request_durable_message, request_message, request_session,
+    request_session_creation,
 };
 use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentCliInfo;
-use crate::domain::orchestration::OrchestrationTaskKind;
 
 #[tokio::test]
 async fn runtime_backend_creates_and_loads_complete_sessions() {
@@ -162,7 +161,6 @@ async fn runtime_backend_creates_harness_sessions_only_when_available() {
     assert_eq!(session.settings.agent.kind(), AgentKind::Harness);
     assert_eq!(session.settings.agent.model(), AgentModel::KimiK3);
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);
-    assert_eq!(session.settings.role, SessionRole::Worker);
 }
 
 #[tokio::test]
@@ -619,38 +617,7 @@ async fn finishing_api_creation_schedules_registration_retry_after_load_failure(
 }
 
 #[tokio::test]
-async fn orchestration_research_mode_creates_a_managed_researcher() {
-    // Arrange
-    let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
-
-    // Act
-    let fixture =
-        seed_active_orchestration_session(&mut app, true, OrchestrationTaskKind::Research).await;
-    let child = app
-        .sessions
-        .session_for_id(&fixture.child)
-        .expect("research child should be loaded");
-    let persisted_task = app
-        .services
-        .db()
-        .orchestrations()
-        .load_orchestration_tasks(fixture.orchestration)
-        .await
-        .expect("research task should load from persistence")
-        .into_iter()
-        .find(|task| task.id == fixture.task)
-        .expect("research task should exist in persistence");
-
-    // Assert
-    assert_eq!(child.role, SessionRole::OrchestrationResearcher);
-    assert_eq!(
-        persisted_task.child_session_id.as_deref(),
-        Some(fixture.child.as_str())
-    );
-}
-
-#[tokio::test]
-async fn visible_coordinator_turn_persists_continuation_prompt() {
+async fn visible_durable_turn_persists_continuation_prompt() {
     // Arrange
     let (mut app, _temp_dir) = crate::test_support::new_git_test_app().await;
     let project_id = app.active_project_id();
@@ -658,26 +625,26 @@ async fn visible_coordinator_turn_persists_continuation_prompt() {
         &mut app,
         CreateSessionRequest {
             inherit_from_session_id: None,
-            mode: CreateSessionMode::Orchestrator,
+            mode: CreateSessionMode::Regular,
             project_id,
         },
     )
     .await
-    .expect("orchestrator should be created");
+    .expect("session should be created");
     crate::test_support::set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
 
     // Act
-    request_coordinator_message(
+    request_durable_message(
         &mut app,
         session_id.clone(),
-        CoordinatorMessageRequest {
+        DurableMessageRequest {
             message: "Apply the requested correction".to_string(),
-            operation_id: "orchestration-continuation-1-1".to_string(),
-            visibility: CoordinatorMessageVisibility::Visible,
+            operation_id: "background-continuation-1-1".to_string(),
+            visibility: DurableMessageVisibility::Visible,
         },
     )
     .await
-    .expect("visible coordinator turn should be accepted");
+    .expect("visible durable turn should be accepted");
     let messages = app
         .services
         .db()

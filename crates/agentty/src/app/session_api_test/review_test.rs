@@ -8,7 +8,6 @@ use tokio::sync::oneshot;
 
 use super::super::api_review_request_from_row;
 use super::support::{request_review_request, request_session_creation, session_row};
-use crate::app::SessionRuntimeAccess;
 use crate::app::branch_publish::{BranchPublishTaskSuccess, review_request_from_publish_result};
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
 
@@ -66,11 +65,7 @@ async fn review_request_runtime_handler_does_not_wait_for_branch_operation() {
     // Act
     let start_result = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        app.start_api_review_request_publish(
-            session_id.clone(),
-            SessionRuntimeAccess::User,
-            response_tx,
-        ),
+        app.start_api_review_request_publish(session_id.clone(), response_tx),
     )
     .await;
     let response_before_unlock = response_rx.try_recv();
@@ -116,12 +111,8 @@ async fn review_request_runtime_handler_queues_on_existing_worker() {
     );
     let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
     let (first_response_tx, _first_response_rx) = oneshot::channel();
-    app.start_api_review_request_publish(
-        session_id.clone(),
-        SessionRuntimeAccess::User,
-        first_response_tx,
-    )
-    .await;
+    app.start_api_review_request_publish(session_id.clone(), first_response_tx)
+        .await;
     crate::test_support::set_session_status_for_test(
         &mut app,
         &session_id,
@@ -130,12 +121,8 @@ async fn review_request_runtime_handler_queues_on_existing_worker() {
     let (queued_response_tx, _queued_response_rx) = oneshot::channel();
 
     // Act
-    app.start_api_review_request_publish(
-        session_id.clone(),
-        SessionRuntimeAccess::User,
-        queued_response_tx,
-    )
-    .await;
+    app.start_api_review_request_publish(session_id.clone(), queued_response_tx)
+        .await;
     let publish_body = app.sessions.state().sessions()[0]
         .transient_messages
         .get(TransientMessageSlot::BranchPublish)

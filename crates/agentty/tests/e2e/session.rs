@@ -6,7 +6,6 @@ mod fixture;
 mod harness;
 mod lifecycle;
 mod model;
-mod orchestration;
 mod output;
 mod prompt;
 mod provider;

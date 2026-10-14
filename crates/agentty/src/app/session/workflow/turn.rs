@@ -21,7 +21,7 @@ use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::{SessionId, SessionRole, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -323,8 +323,7 @@ async fn prepare_turn_request(
                     persistence: personality_persistence,
                     prompt: personality,
                 } = resolve_turn_personality(context).await;
-                let agent_prompt =
-                    prepare_agent_prompt(context, prompt.clone(), permission_mode).await;
+                let agent_prompt = apply_read_only_chat_prompt(prompt.clone(), permission_mode);
                 let model = turn_metadata.session_agent.model().provider_model_str();
 
                 Ok(PreparedTurnRequest {
@@ -352,26 +351,9 @@ async fn prepare_turn_request(
         .await
 }
 
-/// Applies role-specific controller and read-only chat instructions.
-async fn prepare_agent_prompt(
-    context: &SessionWorkerContext,
-    prompt: TurnPrompt,
-    permission_mode: PermissionMode,
-) -> TurnPrompt {
-    let session_role = load_session_role(&context.db, &context.session_id).await;
-    let agent_prompt =
-        ag_orchestration::controller_prompt(&context.db, &context.session_id, prompt).await;
-
-    apply_read_only_chat_prompt(agent_prompt, permission_mode, session_role)
-}
-
 /// Adds mode-switch guidance only to user-owned read-only chat sessions.
-fn apply_read_only_chat_prompt(
-    prompt: TurnPrompt,
-    permission_mode: PermissionMode,
-    session_role: SessionRole,
-) -> TurnPrompt {
-    if permission_mode != PermissionMode::ReadOnly || session_role != SessionRole::Worker {
+fn apply_read_only_chat_prompt(prompt: TurnPrompt, permission_mode: PermissionMode) -> TurnPrompt {
+    if permission_mode != PermissionMode::ReadOnly {
         return prompt;
     }
 
@@ -457,20 +439,6 @@ pub(super) async fn load_session_permission_mode(
         .load_session(session_id)
         .await?
         .ok_or(SessionError::NotFound)?;
-    let role = row
-        .role
-        .as_deref()
-        .map(str::parse::<SessionRole>)
-        .transpose()
-        .map_err(|reason| crate::infra::db::DbError::InvalidData {
-            entity: "session role",
-            reason,
-        })?
-        .unwrap_or_default();
-    if role == SessionRole::OrchestrationResearcher {
-        return Ok(PermissionMode::ReadOnly);
-    }
-
     row.permission_mode
         .parse()
         .map_err(|reason| crate::infra::db::DbError::InvalidData {
@@ -478,18 +446,6 @@ pub(super) async fn load_session_permission_mode(
             reason,
         })
         .map_err(SessionError::from)
-}
-
-/// Returns the persisted role controlling one session's execution policy.
-pub(super) async fn load_session_role(db: &AppRepositories, session_id: &str) -> SessionRole {
-    db.sessions()
-        .load_session(session_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|row| row.role)
-        .and_then(|role| role.parse::<SessionRole>().ok())
-        .unwrap_or_default()
 }
 
 /// Personality prompt plus the state persisted after a successful turn.

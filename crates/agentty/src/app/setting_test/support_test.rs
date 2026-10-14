@@ -14,9 +14,7 @@ use crate::app::AppServices;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::InputCommand;
-use crate::domain::setting::{
-    DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM, SettingName,
-};
+use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::infra::fs;
 use crate::presentation::setting::{
@@ -90,7 +88,6 @@ impl SettingsTestHarness {
                     .into_iter()
                     .map(ModelSelectorOption::selection)
                     .collect(),
-                auto_approve_orchestration_research: DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH,
                 default_fast_reasoning_level: ReasoningLevel::Low,
                 default_fast_selection: default_selection,
                 default_fast_speed_mode: SpeedMode::Normal,
@@ -103,7 +100,6 @@ impl SettingsTestHarness {
                 default_smart_speed_mode: SpeedMode::Normal,
                 include_coauthored_by_agentty: false,
                 launch_configuration: String::new(),
-                orchestration_parallelism: DEFAULT_ORCHESTRATION_PARALLELISM,
                 theme: ColorTheme::Current,
                 use_last_used_model_as_default: false,
             },

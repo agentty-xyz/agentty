@@ -44,12 +44,6 @@ pub enum SessionType {
     Stacked,
     /// Independent session copied from an existing conversation.
     Fork,
-    /// Controller that delegates work to child sessions.
-    Orchestrator,
-    /// Worker owned by an orchestration task.
-    OrchestrationChild,
-    /// Read-only researcher owned by an orchestration task.
-    OrchestrationResearch,
 }
 
 impl SessionType {
@@ -59,9 +53,6 @@ impl SessionType {
             Self::Draft => "draft",
             Self::Stacked => "stacked",
             Self::Fork => "fork",
-            Self::Orchestrator => "orchestrator",
-            Self::OrchestrationChild => "orchestration_child",
-            Self::OrchestrationResearch => "orchestration_research",
         }
     }
 }

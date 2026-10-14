@@ -156,7 +156,6 @@ struct MergeStartRestoreContext<'a> {
 
 struct MergeTaskInput {
     app_event_tx: mpsc::UnboundedSender<AppEvent>,
-    archive_diff: bool,
     available_agent_kinds: Arc<[AgentKind]>,
     base_branch: String,
     child_pid: Arc<Mutex<Option<u32>>>,
@@ -712,11 +711,6 @@ impl SessionMergeService {
         let session = manager
             .session_or_err(session_id)
             .map_err(|_| SessionError::NotFound)?;
-        if !session.owns_branch_changes() {
-            return Err(SessionError::Workflow(
-                "Orchestrator sessions do not own branch changes".to_string(),
-            ));
-        }
         if !(session.status.allows_review_actions() || session.status == Status::Queued) {
             return Err(SessionError::Workflow(
                 "Session must be in review or queued status".to_string(),
@@ -730,8 +724,7 @@ impl SessionMergeService {
             ));
         }
 
-        let (archive_diff, db, folder, id, session_agent) = (
-            session.is_managed(),
+        let (db, folder, id, session_agent) = (
             services.db().clone(),
             session.folder.clone(),
             session.id.clone(),
@@ -787,7 +780,6 @@ impl SessionMergeService {
 
         let merge_task_input = MergeTaskInput {
             app_event_tx,
-            archive_diff,
             available_agent_kinds: services.available_agent_kinds().into(),
             base_branch,
             child_pid,
@@ -1244,7 +1236,6 @@ impl SessionManager {
         let rebase_input = Self::merge_rebase_input(&input);
         let MergeTaskInput {
             app_event_tx,
-            archive_diff,
             base_branch,
             clock,
             db,
@@ -1276,11 +1267,6 @@ impl SessionManager {
             base_branch.clone(),
         )
         .await?;
-        if archive_diff {
-            db.sessions()
-                .update_session_archived_diff(&id, Some(squash_diff.clone()))
-                .await?;
-        }
         let authoritative_commit_message = if squash_diff.trim().is_empty() {
             None
         } else {

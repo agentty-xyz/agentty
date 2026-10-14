@@ -20,7 +20,7 @@ use super::{
     unix_timestamp_from_system_time,
 };
 use crate::analytics::SessionType;
-use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
+use crate::app::session::{SessionCreationSettings, SessionError};
 use crate::app::{AppEvent, AppServices, ProjectManager, SessionManager, agentty_home, setting};
 use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
@@ -116,8 +116,6 @@ enum ReplyEligibility {
 enum CancellationCapability {
     /// Cancellation initiated through the ordinary user action.
     User,
-    /// Coordinator-only cancellation of a managed worker.
-    Managed,
     /// Forced cancellation of a descendant after its stack parent is canceled.
     StackedDescendant,
 }
@@ -127,12 +125,6 @@ impl CancellationCapability {
     fn allows(self, session: &Session) -> bool {
         match self {
             Self::User => session.allows_cancel_action(),
-            Self::Managed => {
-                session.allows_cancel_action()
-                    || (session.is_managed()
-                        && (matches!(session.status, Status::Draft | Status::InProgress)
-                            || session.status.allows_review_actions()))
-            }
             Self::StackedDescendant => {
                 session.status != Status::Canceled
                     && session.status.can_transition_to(Status::Canceled)
@@ -225,8 +217,8 @@ impl ReplyOptions {
         }
     }
 
-    /// Builds idempotent coordinator-turn behavior for one durable operation.
-    fn coordinator(operation_id: String, persist_prompt: bool) -> Self {
+    /// Builds idempotent durable-turn behavior for one durable operation.
+    fn durable(operation_id: String, persist_prompt: bool) -> Self {
         Self {
             defer_prompt_until_enqueued: true,
             eligibility: ReplyEligibility::Standard,
@@ -405,7 +397,6 @@ impl SessionManager {
                     base_branch,
                     projects.working_dir().to_path_buf(),
                     None,
-                    SessionCreationKind::Worker,
                 )
                 .await
             },
@@ -692,7 +683,6 @@ impl SessionManager {
             .await?;
         let session_agent = creation_settings.agent;
         let session_model = session_agent.model();
-        let session_role = creation_settings.role.to_string();
 
         let session_id = Uuid::new_v4().to_string();
         let folder = session_folder(services.base_path(), &session_id);
@@ -713,14 +703,12 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: true,
                 model: session_model.as_str(),
-                orchestration_task_id: None,
                 parent_session_id,
                 permission_mode: creation_settings.permission_mode,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
-                role: Some(&session_role),
                 speed_mode: creation_settings.speed_mode,
                 status: &status,
             })
@@ -884,7 +872,6 @@ impl SessionManager {
         base_branch: &str,
         working_dir: PathBuf,
         creation_settings: Option<SessionCreationSettings>,
-        creation_kind: SessionCreationKind,
     ) -> Result<String, SessionError> {
         let creation_settings = self
             .resolve_session_creation_settings(services, project_id, creation_settings)
@@ -896,7 +883,6 @@ impl SessionManager {
             base_branch,
             working_dir,
             creation_settings,
-            creation_kind,
         )
         .await
     }
@@ -909,16 +895,9 @@ impl SessionManager {
         base_branch: &str,
         working_dir: PathBuf,
         creation_settings: SessionCreationSettings,
-        creation_kind: SessionCreationKind,
     ) -> Result<String, SessionError> {
-        let session_id = Self::reserve_session(
-            services,
-            project_id,
-            base_branch,
-            creation_settings,
-            creation_kind,
-        )
-        .await?;
+        let session_id =
+            Self::reserve_session(services, project_id, base_branch, creation_settings).await?;
         if let Err(error) = Self::prepare_reserved_session(services, &session_id).await {
             let folder = session_folder(services.base_path(), &session_id);
             let has_worktree = services.fs_client().is_dir(folder.clone());
@@ -946,7 +925,6 @@ impl SessionManager {
         project_id: i64,
         base_branch: &str,
         creation_settings: SessionCreationSettings,
-        creation_kind: SessionCreationKind,
     ) -> Result<String, SessionError> {
         let session_id = Uuid::new_v4().to_string();
         services
@@ -958,30 +936,18 @@ impl SessionManager {
                 id: &session_id,
                 is_draft: false,
                 model: creation_settings.agent.model().as_str(),
-                orchestration_task_id: creation_kind.orchestration_task_id(),
                 parent_session_id: None,
                 permission_mode: creation_settings.permission_mode,
                 personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
-                role: Some(&creation_kind.role().to_string()),
                 speed_mode: creation_settings.speed_mode,
                 status: &Status::Draft.to_string(),
             })
             .await?;
         Self::record_session_creation_activity(services, &session_id).await;
-        services.record_session_start(
-            match creation_kind {
-                SessionCreationKind::Worker => SessionType::Regular,
-                SessionCreationKind::Orchestrator => SessionType::Orchestrator,
-                SessionCreationKind::OrchestrationChild { .. } => SessionType::OrchestrationChild,
-                SessionCreationKind::OrchestrationResearch { .. } => {
-                    SessionType::OrchestrationResearch
-                }
-            },
-            creation_settings.agent,
-        );
+        services.record_session_start(SessionType::Regular, creation_settings.agent);
 
         Ok(session_id)
     }
@@ -1855,12 +1821,12 @@ impl SessionManager {
         .await
     }
 
-    /// Queues one coordinator-owned prompt directly on the serialized worker.
+    /// Queues one durable prompt directly on the serialized worker.
     ///
-    /// Callers gate this path to idle controller states, so it never falls
+    /// Callers gate this path to idle session states, so it never falls
     /// back to the lossy in-memory chat queue used by ordinary messages
     /// submitted during an active turn.
-    pub(crate) async fn reply_to_coordinator_message(
+    pub(crate) async fn reply_to_durable_message(
         &mut self,
         services: &AppServices,
         session_id: &str,
@@ -1879,7 +1845,7 @@ impl SessionManager {
             session_id,
             prompt,
             session_agent,
-            ReplyOptions::coordinator(operation_id, persist_prompt),
+            ReplyOptions::durable(operation_id, persist_prompt),
         )
         .await
     }
@@ -3542,7 +3508,6 @@ impl SessionManager {
             personality_id: None,
             reasoning_level,
             response_style,
-            role: crate::domain::session::SessionRole::Worker,
             speed_mode,
         })
     }
@@ -3689,8 +3654,7 @@ impl SessionManager {
         .await;
     }
 
-    /// Cancels a review, running, unstarted draft, or draft orchestrator
-    /// session.
+    /// Cancels a review, running, or unstarted draft session.
     ///
     /// Persisted transcript metadata remains available after the worktree
     /// checkout and session branch are removed. Draft sessions that never
@@ -3714,26 +3678,6 @@ impl SessionManager {
         }
         self.cancel_stacked_child_sessions(services, session_id)
             .await?;
-
-        Ok(())
-    }
-
-    /// Cancels one managed worker through the coordinator-only capability.
-    ///
-    /// This keeps the ordinary user action read-only while allowing campaign
-    /// cancellation to reclaim a worker using the same lifecycle cleanup.
-    pub(crate) async fn cancel_managed_session(
-        &self,
-        services: &AppServices,
-        session_id: &str,
-    ) -> Result<(), SessionError> {
-        let status_updated = self
-            .cancel_single_session(services, session_id, CancellationCapability::Managed)
-            .await?;
-        if status_updated {
-            self.cancel_stacked_child_sessions(services, session_id)
-                .await?;
-        }
 
         Ok(())
     }

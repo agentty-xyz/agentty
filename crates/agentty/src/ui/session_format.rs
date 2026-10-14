@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::resource::SessionResources;
 use crate::domain::review;
-use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionId, Status};
+use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action::{self, ViewHelpState};
 use crate::ui::icon::Icon;
@@ -124,17 +124,6 @@ pub fn session_header_lines(
             Style::default()
                 .fg(style::palette::danger())
                 .add_modifier(Modifier::BOLD),
-        )));
-    }
-
-    if session.is_managed() {
-        let controller = session
-            .controller_session_id
-            .as_ref()
-            .map_or("orchestrator", SessionId::as_str);
-        lines.push(Line::from(Span::styled(
-            format!("Managed by {controller} — actions restricted"),
-            Style::default().fg(style::palette::warning()),
         )));
     }
 

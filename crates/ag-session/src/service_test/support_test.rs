@@ -7,10 +7,10 @@ use async_trait::async_trait;
 use crate::error::SessionError;
 use crate::message::{SessionMessage, SessionMessageKind};
 use crate::model::{
-    PermissionMode, ReviewRequest, Session, SessionId, SessionRole, SessionSettings, SessionStatus,
+    PermissionMode, ReviewRequest, Session, SessionId, SessionSettings, SessionStatus,
 };
 use crate::service::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, SessionBackend,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, SessionBackend,
 };
 use crate::{ReasoningLevel, ResponseStyle, SpeedMode, test_support as model_fixture};
 
@@ -77,10 +77,10 @@ impl SessionBackend for FakeBackend {
             .unwrap_or_else(|| Err(SessionError::Operation("missing result".to_string())))
     }
 
-    async fn submit_coordinator_message(
+    async fn submit_durable_message(
         &self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), SessionError> {
         let mut state = self
             .state
@@ -192,7 +192,6 @@ pub(super) fn session_fixture() -> Session {
             project_id: 7,
             reasoning_level: ReasoningLevel::High,
             response_style: ResponseStyle::Balanced,
-            role: SessionRole::Worker,
             speed_mode: SpeedMode::Normal,
         },
         status: SessionStatus::Review,

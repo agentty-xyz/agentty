@@ -95,9 +95,6 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
         (SessionType::Draft, "draft"),
         (SessionType::Stacked, "stacked"),
         (SessionType::Fork, "fork"),
-        (SessionType::Orchestrator, "orchestrator"),
-        (SessionType::OrchestrationChild, "orchestration_child"),
-        (SessionType::OrchestrationResearch, "orchestration_research"),
     ];
     let agents = [
         AgentKind::Codex,
@@ -109,7 +106,7 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let host = format!("http://{}", listener.local_addr()?);
     let receiver = std::thread::spawn(move || -> TestResult<Vec<Value>> {
-        (0..19).map(|_| receive_event(&listener)).collect()
+        (0..16).map(|_| receive_event(&listener)).collect()
     });
     let analytics = Analytics::new("token", &host, INSTALLATION_ID)
         .ok_or_else(|| io::Error::other("configured sender"))?;
@@ -146,7 +143,12 @@ async fn session_and_turn_lifecycle_events_report_only_bounded_metadata() -> Tes
             ],
         );
     }
-    for (turn_events, agent) in events[7..].as_chunks::<3>().0.iter().zip(agents) {
+    for (turn_events, agent) in events[session_types.len()..]
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(agents)
+    {
         for (event, name) in turn_events.iter().zip([
             "agentty_turn_start",
             "agentty_turn_finish",

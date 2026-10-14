@@ -61,50 +61,8 @@ pub(crate) struct SessionCreationSettings {
     pub(crate) reasoning_level: ReasoningLevel,
     /// Session-scoped response style.
     pub(crate) response_style: ResponseStyle,
-    /// Role assigned to the new session.
-    pub(crate) role: crate::domain::session::SessionRole,
     /// Session-scoped response-speed preference.
     pub(crate) speed_mode: SpeedMode,
-}
-
-/// Branch-owning purpose assigned when materializing a regular worktree
-/// session.
-#[derive(Clone, Copy)]
-pub(crate) enum SessionCreationKind {
-    /// Independent worker session.
-    Worker,
-    /// Controller that delegates every repository change.
-    Orchestrator,
-    /// Worker linked durably to one orchestration task.
-    OrchestrationChild { task_id: i64 },
-    /// Temporary read-only researcher linked to one orchestration task.
-    OrchestrationResearch { task_id: i64 },
-}
-
-impl SessionCreationKind {
-    /// Returns the persisted role for this creation purpose.
-    pub(crate) fn role(self) -> crate::domain::session::SessionRole {
-        match self {
-            Self::Worker => crate::domain::session::SessionRole::Worker,
-            Self::OrchestrationChild { .. } => {
-                crate::domain::session::SessionRole::OrchestrationWorker
-            }
-            Self::OrchestrationResearch { .. } => {
-                crate::domain::session::SessionRole::OrchestrationResearcher
-            }
-            Self::Orchestrator => crate::domain::session::SessionRole::Orchestrator,
-        }
-    }
-
-    /// Returns the task link persisted on an orchestration child.
-    pub(crate) fn orchestration_task_id(self) -> Option<i64> {
-        match self {
-            Self::Worker | Self::Orchestrator => None,
-            Self::OrchestrationChild { task_id } | Self::OrchestrationResearch { task_id } => {
-                Some(task_id)
-            }
-        }
-    }
 }
 
 /// Borrowed session state required to draw one UI frame.
@@ -987,27 +945,6 @@ impl SessionManager {
                 .transient_messages
                 .retract(TransientMessageSlot::Activity);
         }
-    }
-
-    /// Replaces or clears the board snapshot for an orchestrator.
-    pub(crate) fn update_orchestration_progress(
-        &mut self,
-        session_id: &str,
-        progress: Option<String>,
-    ) {
-        let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        else {
-            return;
-        };
-
-        session.orchestration_progress = progress;
-        session
-            .transient_messages
-            .retract(TransientMessageSlot::Orchestration);
     }
 
     /// Applies one completed-turn projection to the matching in-memory

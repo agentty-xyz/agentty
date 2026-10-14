@@ -93,8 +93,8 @@ pub(super) async fn insert_in_progress_test_session(db: &AppRepositories) -> i64
     project_id
 }
 
-/// Inserts one in-progress read-only researcher for worker-flow tests.
-pub(super) async fn insert_in_progress_research_session(db: &AppRepositories) {
+/// Inserts one in-progress read-only session for worker-flow tests.
+pub(super) async fn insert_in_progress_read_only_session(db: &AppRepositories) {
     let project_id = db
         .projects()
         .upsert_project("/tmp/project", Some("main".to_string()))
@@ -107,19 +107,17 @@ pub(super) async fn insert_in_progress_research_session(db: &AppRepositories) {
             id: "sess1",
             is_draft: false,
             model: "gemini-3.8-flash",
-            orchestration_task_id: None,
             parent_session_id: None,
-            permission_mode: ag_contracts::PermissionMode::AutoEdit,
+            permission_mode: ag_contracts::PermissionMode::ReadOnly,
             personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_contracts::ResponseStyle::default(),
-            role: Some("OrchestrationResearcher"),
             speed_mode: SpeedMode::Normal,
             status: "InProgress",
         })
         .await
-        .expect("failed to insert research session");
+        .expect("failed to insert read-only session");
 }
 
 /// Seeds one unfinished operation and its owning session for recovery
@@ -216,9 +214,9 @@ pub(super) fn transcript_text(transcript: &Arc<Mutex<SessionTranscript>>) -> Str
         .unwrap_or_default()
 }
 
-/// Builds a title-generation boundary that verifies temporary research
+/// Builds a title-generation boundary that verifies read-only
 /// sessions use an isolated read-only utility request.
-pub(super) fn research_title_run_client() -> Arc<dyn RunClient> {
+pub(super) fn read_only_title_run_client() -> Arc<dyn RunClient> {
     let mut title_client = MockRunClient::new();
     title_client
         .expect_submit()
@@ -1169,8 +1167,6 @@ pub(super) fn successful_turn_result(answer: &str) -> TurnResult {
             answer: answer.to_string(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
         },
         context_reset: false,
         input_tokens: 0,
@@ -1190,8 +1186,6 @@ pub(super) fn fixed_review_turn_result() -> TurnResult {
                 resolution: ReviewCommentResolution::Fixed,
                 thread_id: "thread-42".to_string(),
             }],
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
         },
         context_reset: false,
         input_tokens: 0,
@@ -1313,8 +1307,6 @@ pub(super) fn mock_existing_session_rebase_channel(
                         answer: "Resolved conflicts inside existing session.".to_string(),
                         questions: Vec::new(),
                         review_comment_outcomes: Vec::new(),
-                        subtasks: Vec::new(),
-                        verification_verdicts: Vec::new(),
                     },
                     context_reset: false,
                     input_tokens: 11,

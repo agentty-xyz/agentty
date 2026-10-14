@@ -10,7 +10,7 @@ use crate::ui::{Component, overlay, style};
 
 /// Minimum popup height that leaves room for title, options, and hints
 /// without adding unused vertical space.
-const MIN_OVERLAY_HEIGHT: u16 = 13;
+const MIN_OVERLAY_HEIGHT: u16 = 12;
 /// Minimum popup height when the Harness row is visible.
 const MIN_HARNESS_OVERLAY_HEIGHT: u16 = MIN_OVERLAY_HEIGHT + 1;
 /// Minimum popup width sized for the longest option row plus shared overlay
@@ -20,8 +20,6 @@ const MIN_OVERLAY_WIDTH: u16 = 53;
 const OPTION_DETAIL_WIDTH: usize = 27;
 /// Fixed label width for the longest session-type label.
 const OPTION_LABEL_WIDTH: usize = 15;
-/// Detail text for the experimental orchestrator session creation path.
-const ORCHESTRATOR_SESSION_PREVIEW_DETAIL: &str = "[Preview] Plan workers";
 /// Detail text for the experimental append-to-stack action when enabled.
 const APPEND_TO_STACK_PREVIEW_DETAIL: &str = "[Preview] Move under parent";
 /// Detail text for the experimental append-to-stack action when disabled.
@@ -41,7 +39,7 @@ const OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
 const HARNESS_OVERLAY_DIMENSIONS: overlay::OverlayDimensions =
     overlay::OverlayDimensions::new(30, 22, MIN_OVERLAY_WIDTH, MIN_HARNESS_OVERLAY_HEIGHT);
 /// Selector row that creates a Harness session.
-pub(crate) const HARNESS_OPTION_INDEX: usize = 5;
+pub(crate) const HARNESS_OPTION_INDEX: usize = 4;
 
 /// Centered popup used to choose the type of session to create.
 pub struct SessionCreationOverlay {
@@ -92,9 +90,8 @@ impl SessionCreationOverlay {
             Line::from(""),
             self.cli_option_line(0, "Regular", "Start immediately", true),
             self.cli_option_line(1, "Draft", "Stage locally first", true),
-            self.cli_option_line(2, "Orchestrator", ORCHESTRATOR_SESSION_PREVIEW_DETAIL, true),
             self.cli_option_line(
-                3,
+                2,
                 "Stacked",
                 if self.can_create_stacked_session {
                     STACKED_SESSION_DETAIL
@@ -104,7 +101,7 @@ impl SessionCreationOverlay {
                 self.can_create_stacked_session,
             ),
             self.cli_option_line(
-                4,
+                3,
                 "Append to stack",
                 if self.can_append_to_stack {
                     APPEND_TO_STACK_PREVIEW_DETAIL

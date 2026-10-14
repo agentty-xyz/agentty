@@ -1,4 +1,4 @@
-use ag_session::{SessionId, SessionRole, SessionStatus as Status};
+use ag_session::{SessionId, SessionStatus as Status};
 
 use super::super::{SessionSize, TERMINAL_CONTINUATION_PROMPT_INTRO, can_create_stacked_child};
 use super::support::test_session;
@@ -36,26 +36,18 @@ fn test_allows_fork_action_rejects_drafts_children_active_and_terminal_sessions(
         .draft(false)
         .status(Status::Done)
         .build();
-    let orchestrator_session = SessionFixtureBuilder::new()
-        .draft(false)
-        .role(SessionRole::Orchestrator)
-        .status(Status::Review)
-        .build();
 
     // Act
     let allows_draft_fork = draft_review_session.allows_fork_action();
     let allows_child_fork = child_review_session.allows_fork_action();
     let allows_active_fork = in_progress_session.allows_fork_action();
     let allows_done_fork = done_session.allows_fork_action();
-    let allows_orchestrator_fork = orchestrator_session.allows_fork_action();
 
     // Assert
     assert!(!allows_draft_fork);
     assert!(!allows_child_fork);
     assert!(!allows_active_fork);
     assert!(!allows_done_fork);
-    assert!(!allows_orchestrator_fork);
-    assert!(!orchestrator_session.owns_branch_changes());
 }
 
 #[test]
@@ -215,20 +207,6 @@ fn test_session_allows_cancel_action_for_unstarted_draft_session() {
     let mut session = test_session(None);
     session.status = Status::Draft;
     session.is_draft = true;
-
-    // Act
-    let allows_cancel_action = session.allows_cancel_action();
-
-    // Assert
-    assert!(allows_cancel_action);
-}
-
-#[test]
-fn test_session_allows_cancel_action_for_draft_orchestrator() {
-    // Arrange
-    let mut session = test_session(None);
-    session.status = Status::Draft;
-    session.role = SessionRole::Orchestrator;
 
     // Act
     let allows_cancel_action = session.allows_cancel_action();

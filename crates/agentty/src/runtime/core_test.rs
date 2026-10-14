@@ -17,7 +17,6 @@ use tokio::sync::mpsc;
 use super::{
     DrawStamp, EventReaderTask, EventResult, FORCED_REDRAW_INTERVAL, MainLoopState,
     forced_redraw_elapsed, render_frame, run, run_until_quit, run_with_backend,
-    stop_orchestration_task,
 };
 use crate::analytics::TurnOutcome;
 use crate::app::AppEvent;
@@ -226,51 +225,6 @@ async fn event_reader_task_maps_blocking_join_failure() {
         error
             .to_string()
             .starts_with("failed to join event reader task:")
-    );
-}
-
-#[tokio::test]
-async fn stop_orchestration_task_accepts_completed_task() {
-    // Arrange
-    let task = tokio::spawn(async {});
-    tokio::task::yield_now().await;
-
-    // Act
-    let result = stop_orchestration_task(task).await;
-
-    // Assert
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn stop_orchestration_task_accepts_cancelled_task() {
-    // Arrange
-    let task = tokio::spawn(std::future::pending::<()>());
-
-    // Act
-    let result = stop_orchestration_task(task).await;
-
-    // Assert
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn stop_orchestration_task_reports_panicked_task() {
-    // Arrange
-    let task = tokio::spawn(async {
-        std::panic::resume_unwind(Box::new("coordinator panic"));
-    });
-    tokio::task::yield_now().await;
-
-    // Act
-    let result = stop_orchestration_task(task).await;
-
-    // Assert
-    let error = result.expect_err("coordinator panic should be reported");
-    assert!(
-        error
-            .to_string()
-            .starts_with("orchestration coordinator task failed:")
     );
 }
 

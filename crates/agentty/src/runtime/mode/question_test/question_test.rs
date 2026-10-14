@@ -9,7 +9,7 @@ use super::support::{TEST_TERMINAL_SIZE, handle, question_mode_with_options};
 use crate::app::AppEvent;
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, default_option_index};
-use crate::domain::session::{Session, SessionId, SessionRole, SessionSize, SessionStats, Status};
+use crate::domain::session::{Session, SessionId, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::PromptAtMentionState;
@@ -127,13 +127,11 @@ async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
         draft_attachments: Vec::new(),
         folder: session_dir.path().to_path_buf(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: session_id.into(),
         in_progress_started_at: None,
         in_progress_total_seconds: 0,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,

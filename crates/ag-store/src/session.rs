@@ -61,8 +61,6 @@ pub struct PersistedSessionCreation<'a> {
     pub is_draft: bool,
     /// Persisted model identifier for the session.
     pub model: &'a str,
-    /// Orchestration task that owns this child session, when applicable.
-    pub orchestration_task_id: Option<i64>,
     /// Optional parent session id for one-level stacked drafts.
     pub parent_session_id: Option<&'a str>,
     /// Provider permission mode captured for the session.
@@ -75,8 +73,6 @@ pub struct PersistedSessionCreation<'a> {
     pub reasoning_level: ReasoningLevel,
     /// Response style captured from the project default at creation.
     pub response_style: ResponseStyle,
-    /// Persisted session role, or `None` for the default worker role.
-    pub role: Option<&'a str>,
     /// Response-speed preference captured for the session.
     pub speed_mode: SpeedMode,
     /// Initial lifecycle status string.
@@ -176,6 +172,8 @@ session_rows! {
         pub created_at: i64,
         /// Persisted deleted-line count from the latest diff stats refresh.
         pub deleted_lines: i64,
+        /// Whether retained archive storage contains a nonempty diff.
+        pub has_archived_diff: bool,
         /// Whether the latest successful diff refresh returned content, or
         /// `None` when diff availability is unknown.
         pub has_diff: Option<bool>,
@@ -213,8 +211,6 @@ session_rows! {
         pub response_style: String,
         /// Joined forge review-request metadata, when present and complete.
         pub review_request: Option<SessionReviewRequestRow>,
-        /// Persisted session role string, or `None` for the default worker role.
-        pub role: Option<String>,
         /// Persisted size bucket string.
         pub size: String,
         /// Persisted session response-speed preference.
@@ -468,7 +464,7 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
         session_id: &str,
     ) -> Result<Option<String>, DbError>;
 
-    /// Loads the immutable diff archived before managed-session cleanup.
+    /// Loads the immutable diff archived before session cleanup.
     async fn load_session_archived_diff(&self, session_id: &str)
     -> Result<Option<String>, DbError>;
 
@@ -828,14 +824,12 @@ impl SqliteSessionRepository {
             id,
             is_draft,
             model,
-            orchestration_task_id,
             parent_session_id,
             permission_mode,
             personality_id,
             project_id,
             reasoning_level,
             response_style,
-            role,
             speed_mode,
             status,
         } = row;
@@ -857,14 +851,12 @@ impl SqliteSessionRepository {
         project_id,
         reasoning_level,
         response_style,
-        role,
         speed_mode,
-        orchestration_task_id,
         prompt,
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ",
         )
         .bind(id)
@@ -881,9 +873,7 @@ impl SqliteSessionRepository {
         .bind(project_id)
         .bind(reasoning_level.as_str())
         .bind(response_style.as_str())
-        .bind(role)
         .bind(speed_mode.as_str())
-        .bind(orchestration_task_id)
         .bind("")
         .bind(timestamp_seconds)
         .bind(timestamp_seconds)
@@ -981,7 +971,6 @@ SET focused_review_status = 'Pending',
     updated_at = ?
 WHERE id = ?
   AND status IN ('InProgress', 'Review', 'AgentReview')
-  AND (role IS NULL OR role <> 'Orchestrator')
 "#,
             now,
             id
@@ -1137,14 +1126,12 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
-                orchestration_task_id: None,
                 parent_session_id: None,
                 permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
-                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1172,14 +1159,12 @@ WHERE id = ?
                 id,
                 is_draft: true,
                 model,
-                orchestration_task_id: None,
                 parent_session_id: Some(parent_session_id),
                 permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
-                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1206,14 +1191,12 @@ WHERE id = ?
                 id,
                 is_draft: false,
                 model,
-                orchestration_task_id: None,
                 parent_session_id: None,
                 permission_mode: PermissionMode::AutoEdit,
                 personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
-                role: None,
                 speed_mode: SpeedMode::Normal,
                 status,
             },
@@ -1231,14 +1214,12 @@ WHERE id = ?
             id,
             is_draft,
             model,
-            orchestration_task_id,
             parent_session_id,
             permission_mode,
             personality_id,
             project_id,
             reasoning_level,
             response_style,
-            role,
             speed_mode,
             status,
         } = session;
@@ -1252,14 +1233,12 @@ WHERE id = ?
                 id,
                 is_draft,
                 model,
-                orchestration_task_id,
                 parent_session_id,
                 permission_mode,
                 personality_id,
                 project_id,
                 reasoning_level,
                 response_style,
-                role,
                 speed_mode,
                 status,
             },
@@ -1290,6 +1269,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
@@ -1317,7 +1297,6 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
-       session.role,
        session.size AS size,
        session.status AS status,
        session.title,
@@ -1367,6 +1346,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
        session.in_progress_started_at,
@@ -1394,7 +1374,6 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
-       session.role,
        session.size AS size,
        session.status AS status,
        session.title,
@@ -1429,6 +1408,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS "has_archived_diff!: bool",
        session.has_diff AS "has_diff: bool",
        session.id AS id,
        session.in_progress_started_at,
@@ -1456,7 +1436,6 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
-       session.role,
        session.size AS size,
        session.status AS status,
        session.title,
@@ -1503,6 +1482,7 @@ SELECT session.base_branch AS base_branch,
        session.agent AS agent,
        session.created_at AS created_at,
        session.deleted_lines AS deleted_lines,
+       COALESCE(length(trim(session.archived_diff, char(9) || char(10) || char(13) || ' ')) > 0, 0) AS has_archived_diff,
        session.has_diff AS has_diff,
        session.id AS id,
        session.in_progress_started_at,
@@ -1530,7 +1510,6 @@ SELECT session.base_branch AS base_branch,
        session_review_request.target_branch AS review_request_target_branch,
        session_review_request.title AS review_request_title,
        session_review_request.web_url AS review_request_web_url,
-       session.role,
        session.size AS size,
        session.status AS status,
        session.title,
@@ -1746,7 +1725,6 @@ FROM session
 WHERE project_id = ?
   AND focused_review_status = 'Pending'
   AND status IN ('Review', 'AgentReview')
-  AND (role IS NULL OR role <> 'Orchestrator')
 ORDER BY updated_at DESC, id
 "#,
             project_id
@@ -3089,6 +3067,7 @@ struct SessionJoinRow {
     base_branch: String,
     created_at: i64,
     deleted_lines: i64,
+    has_archived_diff: bool,
     has_diff: Option<bool>,
     id: String,
     in_progress_started_at: Option<i64>,
@@ -3115,7 +3094,6 @@ struct SessionJoinRow {
     review_request_target_branch: Option<String>,
     review_request_title: Option<String>,
     review_request_web_url: Option<String>,
-    role: Option<String>,
     size: String,
     speed_mode: String,
     status: String,
@@ -3166,6 +3144,7 @@ impl SessionJoinRow {
             base_branch,
             created_at,
             deleted_lines,
+            has_archived_diff,
             has_diff,
             id,
             in_progress_started_at,
@@ -3192,7 +3171,6 @@ impl SessionJoinRow {
             review_request_target_branch,
             review_request_title,
             review_request_web_url,
-            role,
             size,
             speed_mode,
             status,
@@ -3219,6 +3197,7 @@ impl SessionJoinRow {
             base_branch,
             created_at,
             deleted_lines,
+            has_archived_diff,
             has_diff,
             id,
             in_progress_started_at,
@@ -3235,7 +3214,6 @@ impl SessionJoinRow {
             reasoning_level_override,
             response_style,
             review_request,
-            role,
             size,
             speed_mode,
             status,

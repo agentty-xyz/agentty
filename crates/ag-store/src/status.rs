@@ -2,23 +2,13 @@
 
 use std::str::FromStr;
 
-use ag_session::{OrchestrationStatus, OrchestrationTaskStatus, SessionStatus};
+use ag_session::SessionStatus;
 
 use crate::DbError;
 
 /// Validates one persisted session-operation status.
 pub(super) fn validate_operation(value: &str) -> Result<(), DbError> {
     OperationStatus::from_str(value).map(|_| ())
-}
-
-/// Validates one persisted orchestration status.
-pub(super) fn validate_orchestration(value: &str) -> Result<(), DbError> {
-    validate::<OrchestrationStatus>("orchestration", value)
-}
-
-/// Validates one persisted orchestration-task status.
-pub(super) fn validate_orchestration_task(value: &str) -> Result<(), DbError> {
-    validate::<OrchestrationTaskStatus>("orchestration task", value)
 }
 
 /// Validates one persisted session status, including supported legacy values.

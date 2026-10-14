@@ -83,7 +83,7 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(normalized_prompt.contains("at most 16 nodes and 24 edges"));
     assert!(normalized_prompt.contains("at most 4 sequence participants"));
     assert!(normalized_prompt.contains("Do not create commits; do not suggest creating them"));
-    assert!(normalized_prompt.contains("Leave `subtasks` empty unless"));
+    assert!(!normalized_prompt.contains("`subtasks`"));
     assert!(normalized_prompt.contains("Emit `review_comment_outcomes` only"));
     assert!(normalized_prompt.contains("otherwise use an empty array"));
     assert!(rendered_prompt.contains("\"answer\""));

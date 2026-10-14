@@ -43,9 +43,7 @@ pub(crate) use review::ReviewCacheEntry;
 pub use service::AppServices;
 pub use session::{SessionError, SessionManager, SessionState};
 pub(crate) use session_diff::SessionDiffUpdate;
-pub(crate) use session_runtime::{
-    SessionRuntimeAccess, SessionRuntimeCommand, SessionRuntimeHandle,
-};
+pub(crate) use session_runtime::{SessionRuntimeCommand, SessionRuntimeHandle};
 pub use setting::SettingsManager;
 pub(crate) use sync::{ProjectSyncPhase, ProjectSyncStatus};
 pub use tab::{Tab, TabManager};
