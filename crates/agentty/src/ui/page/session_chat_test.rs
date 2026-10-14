@@ -429,12 +429,7 @@ fn rendered_prompt_mode_text(session: &Session) -> String {
 
 #[test]
 fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
-    for status in [
-        Status::Draft,
-        Status::InProgress,
-        Status::Review,
-        Status::Done,
-    ] {
+    for status in [Status::Draft, Status::InProgress, Status::Review] {
         // Arrange
         let mut session = session_fixture();
         session.agent = model_fixture::codex_selection();
@@ -471,6 +466,67 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         assert_eq!(border.fg, style::palette::border());
         assert!(!buffer_text(buffer).contains("Type your message"));
         assert!(buffer_row_text(buffer, height - 2, width).contains("q: back"));
+    }
+}
+
+#[test]
+fn test_archived_session_reclaims_composer_space_for_transcript() {
+    // Arrange
+    let mut session = session_fixture();
+    let mode = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: None,
+    };
+    let area = Rect::new(0, 0, 80, 30);
+    let active_height = transcript_view_height(layout_input(area, &session, &mode));
+
+    for status in [Status::Done, Status::Canceled] {
+        session.status = status;
+
+        // Act
+        let archived_height = transcript_view_height(layout_input(area, &session, &mode));
+
+        // Assert
+        assert_eq!(archived_height, active_height + 3);
+    }
+}
+
+#[test]
+fn test_render_archived_session_keeps_transcript_and_navigation_without_composer() {
+    // Arrange
+    for status in [Status::Done, Status::Canceled] {
+        let mut session = session_fixture();
+        session.status = status;
+        session.transcript = Some(crate::test_support::assistant_transcript(
+            "Archived conversation remains readable.",
+        ));
+        let mode = AppMode::View {
+            session_id: session.id.clone(),
+            scroll_offset: None,
+        };
+        let mut page = test_session_chat_page(&session, &mode);
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = ratatui::Terminal::new(backend).expect("create terminal");
+
+        // Act
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                Page::render(&mut page, frame, area);
+            })
+            .expect("render archived session");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        let text = buffer_text(buffer);
+        assert!(text.contains("Archived conversation remains readable."));
+        assert!(!text.contains("Auto Edit"));
+        assert!(!text.contains("Started"));
+        assert!(!text.contains("╭"));
+        let footer = buffer_row_text(buffer, 18, 100);
+        for action in ["q: back", "c: continue", "j/k: scroll", "?: help"] {
+            assert!(footer.contains(action), "missing archive action: {action}");
+        }
     }
 }
 

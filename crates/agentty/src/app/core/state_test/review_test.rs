@@ -778,6 +778,9 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
         .join(SESSION_DATA_DIR);
     fs::create_dir_all(session_data_dir).expect("failed to create session data dir");
     app.refresh_sessions_now().await;
+    let mut draft = test_prompt_mode_snapshot(session_id.into());
+    draft.scroll_offset = Some(3);
+    app.mode = draft.into_prompt_mode();
 
     let task_result = SyncReviewRequestTaskResult {
         outcome: session::SyncReviewRequestOutcome::Closed {
@@ -805,6 +808,11 @@ async fn test_apply_review_request_status_update_closed_cancels_session() {
         .session_or_err(session_id)
         .expect("expected session to remain loaded");
     assert_eq!(session.status, Status::Canceled);
+    assert!(matches!(
+        app.mode,
+        AppMode::View { ref session_id, scroll_offset: Some(3) }
+            if session_id == "session-closed"
+    ));
 }
 
 #[tokio::test]

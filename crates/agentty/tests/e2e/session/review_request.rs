@@ -715,6 +715,87 @@ async fn review_request_sync_runs_in_background() -> E2eResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn review_request_closure_leaves_focused_reply_composer() -> E2eResult {
+    // Arrange
+    let gate_dir = tempfile::tempdir()?;
+    let release_path = gate_dir.path().join("close-review");
+    let setup_release_path = release_path.clone();
+    FeatureTest::new("review_request_closure_focused_reply")
+        .with_git()
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_review_ready_session_with_review_request(env).await?;
+                let gh_path = env.stub_bin.join("gh");
+                let release = setup_release_path
+                    .to_string_lossy()
+                    .replace('\'', "'\"'\"'");
+                let script = std::fs::read_to_string(&gh_path)?
+                    .replace("\"state\":\"OPEN\"", "\"state\":\"CLOSED\"")
+                    .replace(
+                        "*\"mergeStateStatus\"*)",
+                        &format!(
+                            "*\"mergeStateStatus\"*)\n    until [ -f '{release}' ]; do sleep \
+                             0.05; done"
+                        ),
+                    );
+                std::fs::write(gh_path, script)?;
+
+                Ok(())
+            })
+        })
+        .run(
+            move |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("unfinished reply")
+                    .eventually(
+                        Duration::from_secs(5),
+                        Duration::from_millis(20),
+                        move |frame| {
+                            assertion::match_text_in_region(
+                                frame,
+                                "unfinished reply",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )?;
+                            std::fs::write(&release_path, "close")
+                                .expect("release closed review status");
+                            Ok(())
+                        },
+                    )
+                    .wait_for_text("c: continue", 10000)
+                    .capture_labeled("archived", "Background closure exits the focused composer")
+                    .press_key("c")
+                    .wait_for_text("Confirm Continue", 5000)
+                    .press_key("Esc")
+                    .wait_for_text("c: continue", 5000)
+                    .press_key("q")
+                    .wait_for_text("ARCHIVE", 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let archived = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&archived, "unfinished reply");
+                    assertion::assert_not_visible(&archived, "Auto Edit");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "Canceled",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Verify that a remote merge stays read-only `Merged` until the user syncs
 /// main, then moves to `Done` without waiting for slow worktree cleanup.
 #[tokio::test]
