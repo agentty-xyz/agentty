@@ -591,6 +591,7 @@ async fn seed_discovery_invitation(env: &BuilderEnv) -> Result<(), Box<dyn std::
 async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error::Error>> {
     // Arrange, Act, Assert
     FeatureTest::new("project_discovery_startup_skip")
+        .with_terminal_size(120, 40)
         .with_git()
         .setup(|env| Box::pin(seed_discovery_invitation(env)))
         .run(
@@ -616,6 +617,68 @@ async fn test_project_discovery_startup_skip() -> Result<(), Box<dyn std::error:
                     assertion::assert_text_in_region(&invitation, "macOS folder-access", &full);
                     assertion::assert_text_in_region(&invitation, "prompts.", &full);
                     assertion::assert_text_in_region(&invitation, "Skip", &full);
+                    assertion::assert_text_in_region(&invitation, "Enter: confirm", &full);
+                    let title = invitation.find_text("Discover repositories?")[0].rect;
+                    let border = invitation.row_text(title.row);
+                    let left = border
+                        .chars()
+                        .position(|cell| cell == '╭')
+                        .expect("left border");
+                    let right = border
+                        .chars()
+                        .position(|cell| cell == '╮')
+                        .expect("right border");
+                    assert_eq!(right - left + 1, 70);
+                    assert_eq!(left, 25);
+                    let help = invitation.find_text("Enter: confirm")[0].rect;
+                    assert_eq!(invitation.cell_text(help.row + 2, 25), "╰");
+                    assert!(help.row + 3 - title.row < 20, "popup fits its content");
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_project_discovery_startup_short_viewport() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange, Act, Assert
+    FeatureTest::new("project_discovery_startup_short_viewport")
+        .with_terminal_size(80, 11)
+        .with_git()
+        .setup(|env| Box::pin(seed_discovery_invitation(env)))
+        .run(
+            |scenario| {
+                scenario
+                    .wait_for_text("Discover repositories?", 30000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "short_invitation",
+                        "Choices remain visible in a short terminal",
+                    )
+                    .press_key("Esc")
+                    .wait_for_stable_frame(300, 5000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assertion::assert_not_visible(frame, "Discover repositories?");
+                    let capture = report
+                        .captures
+                        .iter()
+                        .find(|capture| capture.label == "short_invitation")
+                        .expect("short invitation capture");
+                    let invitation = common::frame_from_capture(capture);
+                    let full = Region::full(invitation.cols(), invitation.rows());
+                    for expected in ["Discover", "Skip", "Enter: confirm", "n/Esc: skip"] {
+                        assertion::assert_text_in_region(&invitation, expected, &full);
+                    }
+                    assert!(
+                        invitation
+                            .find_text("Skip")
+                            .iter()
+                            .any(|choice| choice.style.bold())
+                    );
                 })
             },
         )

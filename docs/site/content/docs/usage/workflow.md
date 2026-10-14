@@ -49,10 +49,11 @@ Launch directories outside repositories stay out of the project catalog. Older p
 saved as repository subdirectories remain selectable in **Projects** and retain their
 existing sessions and settings.
 
-A one-time startup popup offers to discover repositories in your home directory.
-**Skip** is selected by default. Accepting permits one scan; Agentty remembers either
-choice and never scans automatically on later launches. Scanning may trigger
-operating-system folder-access prompts.
+A compact, content-sized startup popup offers once to discover repositories in your home
+directory. **Skip** is selected by default. Accepting permits one scan; Agentty
+remembers either choice and never scans automatically on later launches. Scanning may
+trigger operating-system folder-access prompts. On short terminals, the explanation is
+clipped to keep the choices and keyboard help visible.
 
 In **Projects**, press `a` to add a repository root by path, or `d` to discover within a
 folder you choose. Paths can be absolute, relative to the current project, or start with
