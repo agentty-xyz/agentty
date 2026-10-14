@@ -213,16 +213,7 @@ pub(super) async fn run_channel_turn(
             .await;
         }
     };
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
-    let consumer = tokio::spawn(
-        consume_turn_events(
-            event_rx,
-            context.app_event_tx.clone(),
-            context.session_id.clone(),
-            Arc::clone(&context.child_pid),
-        )
-        .with_context(ag_telemetry::Context::current()),
-    );
+    let (event_tx, consumer) = spawn_turn_event_consumer(context);
 
     spawn_turn_title_generation(
         context,
@@ -678,6 +669,29 @@ pub(super) async fn load_session_speed_mode(
         .load_session_speed_mode(session_id)
         .await
         .unwrap_or_default()
+}
+
+/// Spawns [`consume_turn_events`] for one turn under the current telemetry
+/// context and returns the sender that feeds it with the task collecting the
+/// turn's activity.
+fn spawn_turn_event_consumer(
+    context: &SessionWorkerContext,
+) -> (
+    mpsc::UnboundedSender<TurnEvent>,
+    tokio::task::JoinHandle<super::activity::TurnActivity>,
+) {
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<TurnEvent>();
+    let consumer = tokio::spawn(
+        consume_turn_events(
+            event_rx,
+            context.app_event_tx.clone(),
+            context.session_id.clone(),
+            Arc::clone(&context.child_pid),
+        )
+        .with_context(ag_telemetry::Context::current()),
+    );
+
+    (event_tx, consumer)
 }
 
 /// Consumes [`TurnEvent`]s from `event_rx` and applies their side effects.
