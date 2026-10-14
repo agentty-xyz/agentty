@@ -44,9 +44,9 @@ pub(crate) fn tool_output_limit(budget: ContextBudget) -> u64 {
 /// A JSON object keeps every field; its largest string fields, largest
 /// first, keep their head and tail around a marker counting the cut lines
 /// and bytes, and an [`TRUNCATION_KEY`] field states the original weight and
-/// how to request the cut part. Any other content is cut the same way inside
-/// one `output` field. When even empty excerpts outweigh `limit`, the
-/// smallest form is returned.
+/// how to request the cut part. Any other content, including an object that
+/// already has that field, is cut the same way inside one `output` field. When
+/// even empty excerpts outweigh `limit`, the smallest form is returned.
 pub(crate) fn truncate_tool_output(
     estimator: &dyn ContextEstimator,
     call: &ToolCall,
@@ -65,7 +65,11 @@ pub(crate) fn truncate_tool_output(
         return (content, false);
     }
     let fields = match serde_json::from_str::<Value>(&content) {
-        Ok(Value::Object(fields)) if fields.values().any(Value::is_string) => fields,
+        Ok(Value::Object(fields))
+            if fields.values().any(Value::is_string) && !fields.contains_key(TRUNCATION_KEY) =>
+        {
+            fields
+        }
         _ => Map::from_iter([(RAW_OUTPUT_KEY.to_string(), Value::String(content))]),
     };
     let truncation = Truncation {

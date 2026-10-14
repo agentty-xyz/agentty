@@ -181,3 +181,23 @@ fn a_limit_below_even_empty_excerpts_records_the_smallest_form() {
     assert_eq!(result["stdout"], "…4000 bytes truncated…");
     assert_eq!(result["status"], "…400 bytes truncated…");
 }
+
+#[test]
+fn an_object_that_already_reports_truncation_is_cut_as_raw_output() {
+    // Arrange
+    let content = json!({TRUNCATION_KEY: "tool's own", "stdout": "o".repeat(4_000)}).to_string();
+
+    // Act
+    let (recorded, cut) = truncate_tool_output(&HeuristicContextEstimator, &bash(), content, 500);
+
+    // Assert
+    assert!(cut);
+    let result: Value = serde_json::from_str(&recorded).expect("JSON");
+    assert!(
+        result["output"]
+            .as_str()
+            .expect("output")
+            .starts_with(r#"{"output_truncated":"tool's own""#)
+    );
+    assert!(warning(&result).contains("The middle of `output` (1 line) was cut."));
+}
