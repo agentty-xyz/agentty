@@ -187,11 +187,7 @@ pub(super) async fn run_channel_turn(
             }
         };
 
-    let PreparedTurnRequest {
-        personality_persistence,
-        request: req,
-        session_project_id,
-    } = match prepare_turn_request(
+    let prepared = match prepare_turn_request(
         context,
         &turn_metadata,
         request_kind,
@@ -227,13 +223,14 @@ pub(super) async fn run_channel_turn(
     spawn_turn_title_generation(
         context,
         Arc::clone(&run_client),
-        session_project_id,
+        prepared.session_project_id,
         &prompt.text,
         turn_metadata.session_agent,
     )
     .await;
 
-    let turn_result = run_turn_with_cancellation(context, turn_cancel_token, req, event_tx).await;
+    let turn_result =
+        run_turn_with_cancellation(context, turn_cancel_token, prepared.request, event_tx).await;
     SessionManager::cleanup_prompt_attachment_paths(
         context.fs_client.clone(),
         prompt.local_image_paths().cloned().collect(),
@@ -250,7 +247,7 @@ pub(super) async fn run_channel_turn(
             post_turn::apply_turn_result(
                 &post_turn_context,
                 turn_metadata,
-                personality_persistence,
+                prepared.personality_persistence,
                 turn_result,
                 &activity,
             ),
