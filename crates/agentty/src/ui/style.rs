@@ -274,7 +274,7 @@ const GREEN_PALETTE: ThemePalette = ThemePalette {
     surface_clarification: Color::Rgb(12, 28, 14),
     surface_danger: Color::Rgb(44, 18, 18),
     surface_elevated: Color::Rgb(10, 32, 12),
-    surface_selection: Color::Rgb(24, 54, 28),
+    surface_selection: Color::Rgb(44, 78, 54),
     surface_success: Color::Rgb(12, 38, 17),
     surface_overlay: Color::Black,
     surface_prompt: Color::Rgb(6, 18, 8),
@@ -357,14 +357,19 @@ pub fn border_style() -> Style {
     Style::default().fg(palette::border())
 }
 
+/// Highlights semantic rows without replacing their foregrounds or emphasis.
+#[must_use]
+pub fn row_selection_style() -> Style {
+    Style::default().bg(palette::surface_selection())
+}
+
 /// Readable selection colors independent of terminal-defined ANSI palettes.
 ///
 /// Selected labels use bold text and a contrasting background.
 #[must_use]
 pub fn selection_style() -> Style {
-    Style::default()
+    row_selection_style()
         .fg(palette::text_selection())
-        .bg(palette::surface_selection())
         .add_modifier(Modifier::BOLD)
 }
 

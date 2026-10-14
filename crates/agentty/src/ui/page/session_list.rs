@@ -264,7 +264,7 @@ impl Page for SessionListPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
         let areas = layout::tab_page_areas(area);
 
-        let selected_style = style::selection_style();
+        let selected_style = style::row_selection_style();
         let header_style = Style::default()
             .bg(style::palette::surface())
             .fg(style::palette::text_muted())
@@ -325,7 +325,7 @@ impl Page for SessionListPage<'_> {
             .enumerate()
             .map(|(index, table_row)| {
                 if row_window.contains(&index) {
-                    render_table_row(table_row, title_column_width)
+                    render_table_row(table_row, title_column_width, selected_row == Some(index))
                 } else {
                     render_offscreen_row(&table_row)
                 }
@@ -513,11 +513,20 @@ fn set_archive_session_count(rows: &mut Vec<PreparedSessionRow<'_>>, total: usiz
 }
 
 /// Converts one grouped row descriptor into a `ratatui` table row.
-fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> Row<'static> {
+fn render_table_row(
+    row: PreparedSessionRow<'_>,
+    title_column_width: usize,
+    is_selected: bool,
+) -> Row<'static> {
     match row {
         PreparedSessionRow::ArchiveAction(action) => {
-            Row::new(vec![Cell::from(archive_action_label(action))])
-                .style(Style::default().fg(style::palette::text_muted()))
+            let action_style = if is_selected {
+                style::selection_style()
+            } else {
+                Style::default().fg(style::palette::text_muted())
+            };
+
+            Row::new(vec![Cell::from(archive_action_label(action))]).style(action_style)
         }
         PreparedSessionRow::GroupLabel {
             group,
@@ -536,6 +545,7 @@ fn render_table_row(row: PreparedSessionRow<'_>, title_column_width: usize) -> R
             title_column_width,
             adds_group_spacing,
             has_merge_conflict,
+            is_selected,
         ),
     }
 }
@@ -600,11 +610,13 @@ fn render_session_row(
     title_column_width: usize,
     adds_group_spacing: bool,
     has_merge_conflict: bool,
+    is_selected: bool,
 ) -> Row<'static> {
     let title_spans = render_session_title(
         session,
         title_column_width.saturating_sub(tree_position_width(tree_position)),
         has_merge_conflict,
+        is_selected,
     );
     let mut title_line_spans = Vec::new();
     let tree_label = tree_position_label(tree_position);
@@ -723,11 +735,14 @@ fn render_session_title(
     session: &Session,
     title_column_width: usize,
     has_merge_conflict: bool,
+    is_selected: bool,
 ) -> Vec<Span<'static>> {
-    let mut title_spans = markdown::parse_inline_spans(
-        &inline_text(session.display_title()),
-        session_row_style(session),
-    );
+    let mut title_style = session_row_style(session);
+    if is_selected {
+        title_style = title_style.add_modifier(Modifier::BOLD);
+    }
+    let mut title_spans =
+        markdown::parse_inline_spans(&inline_text(session.display_title()), title_style);
     title_spans.insert(
         0,
         Span::styled(

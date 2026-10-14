@@ -5,7 +5,8 @@ use ratatui::style::{Color, Modifier};
 use super::super::icon::Icon;
 use super::{
     DARK_HORIZON_PALETTE, GREEN_PALETTE, border_style, forge_indicator_color, palette,
-    prepare_terminal_frame, scoped_active_theme, selection_style, status_color, status_icon,
+    prepare_terminal_frame, row_selection_style, scoped_active_theme, selection_style,
+    status_color, status_icon,
 };
 use crate::domain::session::{ReviewRequestState, Status};
 use crate::domain::theme::ColorTheme;
@@ -14,11 +15,14 @@ use crate::domain::theme::ColorTheme;
 fn terminal_frames_preserve_selections_and_attributes_with_and_without_colors() {
     for theme in ColorTheme::ALL {
         // Arrange
-        let mut buffer = Buffer::empty(Rect::new(0, 0, 3, 1));
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 1));
         {
             let _theme_scope = scoped_active_theme(theme);
             buffer[(0, 0)].set_symbol("S").set_style(selection_style());
             buffer[(1, 0)].set_symbol("U").set_style(border_style());
+            buffer[(3, 0)]
+                .set_symbol("R")
+                .set_style(row_selection_style());
         }
         buffer[(1, 0)].modifier = Modifier::BOLD | Modifier::ITALIC;
         buffer[(2, 0)].underline_color = Color::Red;
@@ -33,6 +37,7 @@ fn terminal_frames_preserve_selections_and_attributes_with_and_without_colors() 
         // Assert
         assert_eq!(colored_buffer, original_buffer);
         assert_eq!(buffer[(0, 0)].symbol(), "S");
+        assert_eq!(buffer[(3, 0)].modifier, Modifier::BOLD | Modifier::REVERSED);
         assert_eq!(buffer[(0, 0)].modifier, Modifier::BOLD | Modifier::REVERSED);
         assert_eq!(buffer[(1, 0)].symbol(), "U");
         assert_eq!(buffer[(1, 0)].modifier, Modifier::BOLD | Modifier::ITALIC);
@@ -73,6 +78,26 @@ fn selections_have_fixed_rgb_colors_and_readable_contrast_in_every_theme() {
         assert_ne!(background, palette::surface_overlay());
         assert!(selected.add_modifier.contains(Modifier::BOLD));
     }
+}
+
+#[test]
+fn green_selection_remains_visible_on_charcoal_terminal_backgrounds() {
+    // Arrange
+    let _theme_scope = scoped_active_theme(ColorTheme::Green);
+    let terminal_background = Color::Rgb(39, 43, 49);
+
+    // Act
+    let selected = row_selection_style();
+    let selection_luminance = relative_luminance(selected.bg.expect("selection background"));
+    let terminal_luminance = relative_luminance(terminal_background);
+    let contrast = (selection_luminance + 0.05) / (terminal_luminance + 0.05);
+
+    // Assert
+    assert!(
+        contrast >= 1.5,
+        "selection must stand out on charcoal: {contrast}"
+    );
+    assert_eq!(selected.fg, None, "semantic foregrounds must be preserved");
 }
 
 /// RGB is required so terminal ANSI palette remapping cannot erase contrast.

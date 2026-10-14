@@ -163,7 +163,12 @@ fn project_and_session_highlights_move_without_shifting_columns() {
                 let buffer = terminal.backend().buffer();
                 session_positions.push(text_position(buffer, "Alpha").0);
                 if let Some(index) = selected {
-                    assert_selection(buffer, ["Alpha", "Beta"][index]);
+                    let (column, row) = text_position(buffer, ["Alpha", "Beta"][index]);
+                    let cell = &buffer[(column, row)];
+                    assert_eq!(cell.fg, style::palette::text());
+                    assert_eq!(cell.bg, style::palette::surface_selection());
+                    assert!(cell.modifier.contains(Modifier::BOLD));
+                    assert_eq!(selector_count(buffer), 0);
                 } else {
                     assert_eq!(selector_count(buffer), 0);
                 }
