@@ -349,11 +349,19 @@ worktree changes to fit a prompt.
 - **Remote merge** marks `Merged`. Successful manual target sync persists archival and
   child-restack intent before cleanup; failed persistence leaves work retryable.
 
-Review-comment turns validate a complete allowlisted outcome batch before forge effects.
-Outcomes persist with the answer and bind to the successful fix commit. Replies and
-resolutions run only after that exact tip is pushed. Durable posting markers permit
-recovery without duplicate replies; later commits invalidate the batch. Only `fixed`
-threads resolve, while `no_change_needed` receives a reply and remains open.
+Review-comment targets persist before execution and are scoped to the linked open review
+request. Clarification answers and subsequent turns restore unfinished targets and
+re-evaluate prior outcomes. Complete outcome batches persist with the answer and bind to
+the successful fix commit. Review turns await post-push thread updates before the worker
+runs queued edits. Automatic and manual pushes share the same handler; a changed tip
+retains the batch for re-evaluation. Durable posting markers permit retries without
+duplicate replies. Only `fixed` threads resolve, while `no_change_needed` receives a
+reply and remains open.
+
+Turn cancellation interrupts workspace preparation while waiting for earlier branch
+effects. Awaited review publishing observes the same turn token and drops in-flight Git
+and forge work before releasing the branch lock. Unfinished operations retain their
+posting markers for retry; cancellation does not undo effects already accepted remotely.
 
 ## Persistence and Recovery Boundaries
 

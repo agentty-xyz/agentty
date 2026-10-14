@@ -13,6 +13,7 @@ use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use serde_json;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -55,6 +56,8 @@ pub(super) struct PostTurnContext {
     pub(super) available_agent_kinds: Arc<[AgentKind]>,
     /// Serializes post-turn publish ownership with queued branch operations.
     pub(super) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Cancellation scoped to this turn, including awaited review effects.
+    pub(super) cancel_token: CancellationToken,
     /// Shared child-process PID slot reused by auto-commit cancellation.
     pub(super) child_pid: Arc<Mutex<Option<u32>>>,
     /// Clock used by linked review-request metadata refresh.
@@ -84,11 +87,13 @@ impl PostTurnContext {
     pub(super) fn from_worker(
         context: &SessionWorkerContext,
         run_client: Arc<dyn RunClient>,
+        cancel_token: CancellationToken,
     ) -> Self {
         Self {
             app_event_tx: context.app_event_tx.clone(),
             available_agent_kinds: Arc::clone(&context.available_agent_kinds),
             branch_operation_lock: Arc::clone(&context.branch_operation_lock),
+            cancel_token,
             child_pid: Arc::clone(&context.child_pid),
             clock: Arc::clone(&context.clock),
             db: context.db.clone(),
@@ -516,12 +521,16 @@ async fn apply_successful_turn_result(
         .await;
     }
     append_turn_activity(context, activity).await;
-    let review_comment_resolutions = prepare_review_comment_resolutions(
-        context,
-        &turn_metadata.review_comment_thread_ids,
-        &assistant_message.review_comment_outcomes,
-    )
-    .await?;
+    let review_comment_resolutions = if assistant_message.questions.is_empty() {
+        prepare_review_comment_resolutions(
+            context,
+            &turn_metadata.review_comment_thread_ids,
+            &assistant_message.review_comment_outcomes,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
     let persistence = Span::child("turn.persist");
     let turn_applied_state = match (TurnPersistence {
         context,
@@ -570,9 +579,12 @@ async fn apply_successful_turn_result(
     } else {
         (true, None)
     };
-    if owns_branch_changes && can_auto_push {
+    if owns_branch_changes
+        && can_auto_push
+        && (turn_metadata.review_comment_thread_ids.is_empty() || target_status != Status::Question)
+    {
         start_published_branch_auto_push(context, turn_metadata, review_request_commit_message)
-            .await;
+            .await?;
     }
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
@@ -624,21 +636,39 @@ async fn prepare_review_comment_resolutions(
             return Err(error.into());
         }
     };
+    let pending = context
+        .db
+        .reviews()
+        .load_session_review_comment_resolutions(&context.session_id)
+        .await?;
 
     Ok(validation
         .outcomes
         .iter()
-        .map(|outcome| NewSessionReviewCommentResolution {
-            commit_hash: None,
-            reply: outcome.reply.clone(),
-            reply_token: Uuid::new_v4().to_string(),
-            resolution: match outcome.resolution {
+        .map(|outcome| {
+            let resolution = match outcome.resolution {
                 ReviewCommentResolution::Fixed => "fixed",
                 ReviewCommentResolution::NoChangeNeeded => "no_change_needed",
+            };
+            let prior_reply = pending.iter().find(|operation| {
+                operation.review_request_display_id == review_request.display_id
+                    && operation.thread_id == outcome.thread_id
+                    && operation.is_posting
+                    && operation.reply == outcome.reply
+                    && operation.resolution == resolution
+            });
+
+            NewSessionReviewCommentResolution {
+                commit_hash: None,
+                reply: outcome.reply.clone(),
+                reply_token: prior_reply.map_or_else(
+                    || Uuid::new_v4().to_string(),
+                    |operation| operation.reply_token.clone(),
+                ),
+                resolution: resolution.to_string(),
+                review_request_display_id: review_request.display_id.clone(),
+                thread_id: outcome.thread_id.clone(),
             }
-            .to_string(),
-            review_request_display_id: review_request.display_id.clone(),
-            thread_id: outcome.thread_id.clone(),
         })
         .collect())
 }
@@ -882,21 +912,26 @@ async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
-) {
+) -> Result<(), SessionError> {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
-        return;
+        return Ok(());
     };
-    if context.has_queued_messages() {
-        return;
+    let finishes_review_comments = !turn_metadata.review_comment_thread_ids.is_empty();
+    if context.has_queued_messages() && !finishes_review_comments {
+        return Ok(());
     }
-    let branch_operation_guard = Arc::clone(&context.branch_operation_lock)
-        .lock_owned()
-        .await;
+    let branch_operation_guard = tokio::select! {
+        biased;
+        () = context.cancel_token.cancelled() => return Err(SessionError::StoppedByUser(
+            "[Stopped] Turn canceled before publishing.".to_string(),
+        )),
+        guard = Arc::clone(&context.branch_operation_lock).lock_owned() => guard,
+    };
     if context.has_unfinished_branch_operation().await {
-        return;
+        return Ok(());
     }
 
-    published_branch::start_published_branch_auto_push(
+    let push_task = published_branch::start_published_branch_auto_push(
         published_branch::PublishedBranchAutoPushStartInput {
             app_event_tx: context.app_event_tx.clone(),
             branch_operation_guard,
@@ -913,7 +948,25 @@ async fn start_published_branch_auto_push(
             session_update_versions: context.session_update_versions.clone(),
             transcript: Arc::clone(&context.transcript),
         },
+        if finishes_review_comments {
+            context.cancel_token.clone()
+        } else {
+            CancellationToken::new()
+        },
     );
+    if finishes_review_comments {
+        // Keep the worker serialized through forge effects so a queued turn
+        // cannot replace the commit being acknowledged on the forge.
+        let _ = push_task.await;
+        if context.cancel_token.is_cancelled() {
+            return Err(SessionError::StoppedByUser(
+                "[Stopped] Review publishing canceled; unfinished thread updates remain pending."
+                    .to_string(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Reconciles a failed turn-metadata write by surfacing the error and forcing

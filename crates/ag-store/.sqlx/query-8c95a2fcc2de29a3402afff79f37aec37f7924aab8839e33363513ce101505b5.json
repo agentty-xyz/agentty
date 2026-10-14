@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT target.thread_id AS \"thread_id!\" FROM (\n                 SELECT session_id, review_request_display_id, thread_id\n                 FROM session_review_comment_target\n                 UNION\n                 SELECT session_id, review_request_display_id, thread_id\n                 FROM session_review_comment_resolution\n             ) AS target JOIN session_review_request AS review\n             ON review.session_id = target.session_id\n             AND review.display_id = target.review_request_display_id\n             WHERE target.session_id = ? AND review.state = 'Open'\n             ORDER BY target.thread_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "thread_id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_review_comment_resolution",
+            "name": "thread_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8c95a2fcc2de29a3402afff79f37aec37f7924aab8839e33363513ce101505b5"
+}

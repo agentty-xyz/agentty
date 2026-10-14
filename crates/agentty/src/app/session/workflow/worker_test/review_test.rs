@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::future::pending;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,17 +21,21 @@ use super::super::{
 use super::support::{
     apply_worker_turn_result, assert_later_push_skips_review_operations,
     auto_commit_git_client_with_push_failure, auto_commit_run_client, dirty_auto_commit_git_client,
-    empty_transcript, expect_safe_auto_push_state, fixed_review_turn_result,
-    insert_in_progress_session_with_review_request, push_descendant_that_reverted_fix,
-    queue_test_context, queued_message, resume_command, review_resolution_client,
-    review_resolution_git_client, successful_turn_result,
+    empty_transcript, expect_safe_auto_push_state, fixed_review_turn_result, github_forge_remote,
+    insert_in_progress_session_with_review_request, linked_github_review_request,
+    push_descendant_that_reverted_fix, queue_test_context, queued_message, resume_command,
+    review_resolution_client, review_resolution_git_client, successful_turn_result,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::domain::question::QuestionItem;
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
-use crate::infra::db::{AppRepositories, SessionMessageRow, SessionOperationRow};
+use crate::domain::turn_prompt::TurnPrompt;
+use crate::infra::db::{
+    AppRepositories, NewSessionReviewCommentResolution, SessionMessageRow, SessionOperationRow,
+};
 use crate::infra::fs;
 use crate::infra::personality::RealPersonalityCatalogClient;
 
@@ -277,7 +282,10 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
         git_client: Arc::new(mock_git_client),
         transcript: Arc::clone(&transcript),
         personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+        queued_messages: Arc::new(Mutex::new(VecDeque::from([queued_message(
+            0,
+            "Make another change",
+        )]))),
         review_request_client: Arc::new(review_request_client),
         session_update_versions: Arc::default(),
         session_id: "sess1".into(),
@@ -298,6 +306,16 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
     )
     .await
     .expect("turn result should succeed");
+    // The awaited result must include forge completion despite queued chat.
+    assert_eq!(
+        context
+            .db
+            .reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("operations"),
+        Vec::<crate::infra::db::SessionReviewCommentResolutionRow>::new()
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
         let mut completed = false;
         while !completed {
@@ -422,7 +440,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
 }
 
 #[tokio::test]
-async fn test_failed_push_discards_review_fix_undone_by_descendant() {
+async fn test_failed_push_retains_but_does_not_resolve_review_fix_undone_by_descendant() {
     // Arrange
     let base_dir = tempdir().expect("failed to create temp dir");
     let db = AppRepositories::in_memory().await.expect("db should open");
@@ -519,12 +537,12 @@ async fn test_failed_push_discards_review_fix_undone_by_descendant() {
         pending_operations[0].commit_hash.as_deref(),
         Some("fix-commit")
     );
-    assert_eq!(remaining_operations, Vec::new());
+    assert_eq!(remaining_operations, pending_operations);
     assert_eq!(
         notice.trim(),
-        "[Review Comments Warning] Discarded 1 saved review thread update(s) because the pushed \
-         branch tip no longer exactly matches the reported fix commit. Reopen review comments to \
-         retry."
+        "[Review Comments Warning] Retained 1 saved review thread update(s) because the pushed \
+         branch tip no longer exactly matches the reported fix commit. Continue the session to \
+         re-evaluate them."
     );
 }
 
@@ -967,4 +985,560 @@ async fn skipped_review_comment_command_resolves_its_waiting_row() {
         }
     );
     assert!(event_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn review_targets_survive_clarification_and_restore_the_follow_up_allowlist() {
+    // Arrange
+    let (context, db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+    db.reviews()
+        .update_session_review_request("sess1", Some(linked_github_review_request()))
+        .await
+        .expect("link review");
+    let mut metadata = TurnMetadata {
+        published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        review_comment_thread_ids: vec!["thread-42".to_string()],
+        session_agent: context.session_agent,
+    };
+    let mut prompt = TurnPrompt::from_text("Address the selected comment".to_string());
+    SessionWorkerService::prepare_review_comment_turn(&context, &mut metadata, &mut prompt)
+        .await
+        .expect("persist targets before agent execution");
+    let mut result = successful_turn_result("A decision is needed.");
+    result.assistant_message.questions = vec![QuestionItem::new("Which format should this use?")];
+
+    // Act
+    let status = apply_worker_turn_result(&context, metadata, Ok(result))
+        .await
+        .expect("question turn");
+    let mut follow_up = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: Vec::new(),
+        session_agent: context.session_agent,
+    };
+    let mut answer = TurnPrompt::from_text("Use JSON".to_string());
+    SessionWorkerService::prepare_review_comment_turn(&context, &mut follow_up, &mut answer)
+        .await
+        .expect("restore targets");
+
+    // Assert
+    assert_eq!(status, Status::Question);
+    assert_eq!(follow_up.review_comment_thread_ids, vec!["thread-42"]);
+    assert!(answer.text.starts_with("Use JSON"));
+    assert!(answer.text.contains("[\"thread-42\"]"));
+    assert!(answer.text.contains("review_comment_outcomes"));
+    let transcript = context
+        .transcript
+        .lock()
+        .expect("transcript")
+        .replay_text()
+        .expect("text");
+    assert!(!transcript.contains("No review replies were posted"));
+    assert_eq!(
+        db.reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("operations"),
+        Vec::<crate::infra::db::SessionReviewCommentResolutionRow>::new()
+    );
+}
+
+#[tokio::test]
+async fn review_continuation_merges_targets_without_duplicates_and_rejects_missing_links() {
+    // Arrange
+    let (context, db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::Review).await;
+    let mut metadata = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: vec!["thread-42".to_string()],
+        session_agent: context.session_agent,
+    };
+    let mut prompt = TurnPrompt::from_text("Review".to_string());
+
+    // Act
+    let missing =
+        SessionWorkerService::prepare_review_comment_turn(&context, &mut metadata, &mut prompt)
+            .await;
+    db.reviews()
+        .update_session_review_request("sess1", Some(linked_github_review_request()))
+        .await
+        .expect("link review");
+    SessionWorkerService::prepare_review_comment_turn(&context, &mut metadata, &mut prompt)
+        .await
+        .expect("initial turn");
+    SessionWorkerService::prepare_review_comment_turn(&context, &mut metadata, &mut prompt)
+        .await
+        .expect("retry turn");
+
+    // Assert
+    assert!(missing.is_err());
+    assert_eq!(metadata.review_comment_thread_ids, vec!["thread-42"]);
+}
+
+#[tokio::test]
+async fn review_target_persistence_failure_finishes_the_turn_with_a_visible_error() {
+    // Arrange
+    let (context, _db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+    let mut command = resume_command("missing-review-link");
+    if let SessionCommand::Run { turn_metadata, .. } = &mut command {
+        turn_metadata.review_comment_thread_ids = vec!["thread-42".to_string()];
+    }
+
+    // Act
+    let result =
+        SessionWorkerService::execute_session_command(&context, &auto_commit_run_client(), command)
+            .await;
+
+    // Assert
+    assert!(result.is_err());
+    assert_eq!(*context.status.lock().expect("status"), Status::Review);
+    assert!(
+        context
+            .transcript
+            .lock()
+            .expect("transcript")
+            .replay_text()
+            .expect("text")
+            .contains("the session no longer has an open linked review request")
+    );
+}
+
+#[tokio::test]
+async fn next_turn_waits_for_previous_branch_effects() {
+    // Arrange
+    let mut channel = MockAgentChannel::new();
+    channel.expect_run_turn().once().returning(|_, _, _| {
+        Box::pin(async { Ok(successful_turn_result("Continued after publishing.")) })
+    });
+    let (context, _db, _, _directory) =
+        queue_test_context(channel, VecDeque::new(), Status::InProgress).await;
+    let guard = Arc::clone(&context.branch_operation_lock)
+        .lock_owned()
+        .await;
+    let run_client = auto_commit_run_client();
+    let mut turn = Box::pin(SessionWorkerService::execute_session_command(
+        &context,
+        &run_client,
+        resume_command("next-turn"),
+    ));
+
+    // Act
+    let blocked = tokio::time::timeout(Duration::from_millis(20), &mut turn).await;
+    drop(guard);
+    let result = turn.await;
+
+    // Assert
+    assert!(blocked.is_err());
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn posted_reply_survives_revalidation_commit_failure_and_successful_retry() {
+    // Arrange
+    let (mut context, db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+    db.reviews()
+        .update_session_review_request("sess1", Some(linked_github_review_request()))
+        .await
+        .expect("link review");
+    context.review_request_client = Arc::new(reply_once_resolve_on_retry_client());
+    let targets = vec!["thread-42".to_string()];
+    let session_agent = context.session_agent;
+    let metadata = || TurnMetadata {
+        published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        review_comment_thread_ids: targets.clone(),
+        session_agent,
+    };
+    context.git_client = Arc::new(review_resolution_git_client(&mut Sequence::new()));
+    db.reviews()
+        .prepare_session_review_comment_turn("sess1", &targets)
+        .await
+        .expect("first turn");
+
+    // Act: the reply succeeds, but resolving the thread fails.
+    apply_worker_turn_result(&context, metadata(), Ok(fixed_review_turn_result()))
+        .await
+        .expect("first outcome");
+    let original = db
+        .reviews()
+        .load_session_review_comment_resolutions("sess1")
+        .await
+        .expect("reply awaiting resolution");
+    assert_eq!(original.len(), 1);
+    assert!(original[0].is_posting);
+    let mut failed_commit = MockGitClient::new();
+    failed_commit
+        .expect_is_worktree_clean()
+        .times(4)
+        .returning(|_| {
+            Box::pin(async { Err(ag_git::GitError::OutputParse("commit failed".to_string())) })
+        });
+    failed_commit
+        .expect_push_current_branch_to_remote_branch()
+        .never();
+    context.git_client = Arc::new(failed_commit);
+    db.reviews()
+        .prepare_session_review_comment_turn("sess1", &targets)
+        .await
+        .expect("revalidate");
+    apply_worker_turn_result(&context, metadata(), Ok(fixed_review_turn_result()))
+        .await
+        .expect("failed commit remains recoverable");
+    let retained = db
+        .reviews()
+        .load_session_review_comment_resolutions("sess1")
+        .await
+        .expect("retained posting token");
+
+    // Assert: failed commit must not erase the evidence used to recognize the
+    // reply.
+    assert_eq!(retained.len(), 1);
+    assert_eq!(retained[0].reply_token, original[0].reply_token);
+    assert!(retained[0].is_posting);
+    assert_eq!(retained[0].commit_hash, None);
+    assert_later_push_skips_review_operations(&context).await;
+
+    // Act: an identical revalidation succeeds and recognizes the already-posted
+    // reply.
+    context.git_client = Arc::new(review_resolution_git_client(&mut Sequence::new()));
+    db.reviews()
+        .prepare_session_review_comment_turn("sess1", &targets)
+        .await
+        .expect("retry turn");
+    apply_worker_turn_result(&context, metadata(), Ok(fixed_review_turn_result()))
+        .await
+        .expect("successful retry");
+
+    // Assert: the forge mock permits only one reply across all three turns.
+    assert_eq!(
+        db.reviews()
+            .load_session_review_comment_resolutions("sess1")
+            .await
+            .expect("completed operations"),
+        Vec::new()
+    );
+    assert_eq!(
+        db.reviews()
+            .load_session_review_comment_targets("sess1")
+            .await
+            .expect("completed targets"),
+        Vec::<String>::new()
+    );
+    assert!(
+        context
+            .transcript
+            .lock()
+            .expect("transcript")
+            .replay_text()
+            .expect("notices")
+            .contains("Replied to 1 review thread(s) and resolved 1 fixed thread(s)")
+    );
+}
+
+/// Models a reply visible on the forge while resolution initially fails.
+fn reply_once_resolve_on_retry_client() -> forge::MockReviewRequestClient {
+    let posted_reply = Arc::new(Mutex::new(None::<String>));
+    let mut client = forge::MockReviewRequestClient::new();
+    client
+        .expect_detect_remote()
+        .times(2)
+        .returning(|_| Ok(github_forge_remote()));
+    client
+        .expect_fetch_review_comment_snapshot()
+        .times(2)
+        .returning({
+            let posted_reply = Arc::clone(&posted_reply);
+            move |_, _| {
+                let comments = posted_reply
+                    .lock()
+                    .expect("posted reply")
+                    .iter()
+                    .map(|body| forge::ReviewComment {
+                        author: "agent".to_string(),
+                        authored_by_current_user: true,
+                        body: body.clone(),
+                    })
+                    .collect();
+                Box::pin(async move {
+                    Ok(forge::ReviewCommentSnapshot {
+                        pr_level_comments: Vec::new(),
+                        threads: vec![forge::ReviewCommentThread {
+                            anchor_side: forge::ReviewCommentAnchorSide::New,
+                            comments,
+                            id: "thread-42".to_string(),
+                            is_outdated: Some(false),
+                            is_resolved: false,
+                            line: Some(1),
+                            path: "src/lib.rs".to_string(),
+                            start_line: None,
+                        }],
+                    })
+                })
+            }
+        });
+    client
+        .expect_reply_to_thread()
+        .once()
+        .returning(move |_, _, _, body| {
+            *posted_reply.lock().expect("posted reply") = Some(body);
+            Box::pin(async { Ok(()) })
+        });
+    let mut sequence = Sequence::new();
+    client
+        .expect_resolve_thread()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _| {
+            Box::pin(async {
+                Err(forge::ReviewRequestError::OperationFailed {
+                    forge_kind: forge::ForgeKind::GitHub,
+                    message: "resolution failed".to_string(),
+                })
+            })
+        });
+    client
+        .expect_resolve_thread()
+        .once()
+        .in_sequence(&mut sequence)
+        .returning(|_, _, _| Box::pin(async { Ok(()) }));
+
+    client
+}
+
+#[tokio::test]
+async fn stopped_follow_up_finishes_while_previous_branch_effects_keep_the_lock() {
+    // Arrange
+    let (mut context, db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+    db.reviews()
+        .update_session_review_request("sess1", Some(linked_github_review_request()))
+        .await
+        .expect("link review");
+    let operation = NewSessionReviewCommentResolution {
+        commit_hash: Some("published-tip".to_string()),
+        reply: "Previously validated reply".to_string(),
+        reply_token: "existing-token".to_string(),
+        resolution: "fixed".to_string(),
+        review_request_display_id: "#42".to_string(),
+        thread_id: "thread-42".to_string(),
+    };
+    db.reviews()
+        .insert_session_review_comment_resolutions("sess1", &[operation])
+        .await
+        .expect("pending operation");
+    let mut git = MockGitClient::new();
+    git.expect_main_checkout_working_tree().never();
+    git.expect_tracked_worktree_status().never();
+    git.expect_diff()
+        .returning(|_, _| Box::pin(async { Ok(String::new()) }));
+    context.git_client = Arc::new(git);
+    let guard = Arc::clone(&context.branch_operation_lock)
+        .lock_owned()
+        .await;
+    let run_client = auto_commit_run_client();
+    let mut turn = Box::pin(SessionWorkerService::execute_session_command(
+        &context,
+        &run_client,
+        resume_command("canceled-follow-up"),
+    ));
+
+    // Act
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut turn)
+            .await
+            .is_err()
+    );
+    context.cancel_token.lock().expect("fresh token").cancel();
+    let result = tokio::time::timeout(Duration::from_secs(1), &mut turn)
+        .await
+        .expect("cancellation must finish without acquiring the held lock");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::StoppedByUser(_))));
+    assert!(context.branch_operation_lock.try_lock().is_err());
+    assert_eq!(*context.status.lock().expect("status"), Status::InProgress);
+    let operations = db
+        .reviews()
+        .load_session_review_comment_resolutions("sess1")
+        .await
+        .expect("retained operation");
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].commit_hash.as_deref(), Some("published-tip"));
+    assert_eq!(operations[0].reply_token, "existing-token");
+    drop(guard);
+}
+
+#[tokio::test]
+async fn stopped_review_drops_blocked_reply_before_releasing_branch_lock() {
+    // Arrange, Act, Assert
+    assert_stopped_review_call_retains_operation(true).await;
+}
+
+#[tokio::test]
+async fn stopped_review_drops_blocked_resolution_before_releasing_branch_lock() {
+    // Arrange, Act, Assert
+    assert_stopped_review_call_retains_operation(false).await;
+}
+
+/// Stops a remote call that may already have exposed its durable reply token.
+async fn assert_stopped_review_call_retains_operation(block_reply: bool) {
+    // Arrange
+    let (mut context, db, _, _directory) =
+        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
+    db.reviews()
+        .update_session_review_request("sess1", Some(linked_github_review_request()))
+        .await
+        .expect("link review");
+    db.reviews()
+        .prepare_session_review_comment_turn("sess1", &["thread-42".to_string()])
+        .await
+        .expect("review turn");
+    context.git_client = Arc::new(review_resolution_git_client(&mut Sequence::new()));
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (dropped_tx, dropped_rx) = oneshot::channel::<()>();
+    let posted_body = Arc::new(Mutex::new(String::new()));
+    context.review_request_client = Arc::new(blocked_review_call_client(
+        block_reply,
+        entered_tx,
+        dropped_tx,
+        Arc::clone(&posted_body),
+    ));
+    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = app_event_tx;
+    let metadata = TurnMetadata {
+        published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        review_comment_thread_ids: vec!["thread-42".to_string()],
+        session_agent: context.session_agent,
+    };
+    let mut turn = Box::pin(apply_worker_turn_result(
+        &context,
+        metadata,
+        Ok(fixed_review_turn_result()),
+    ));
+
+    // Act
+    tokio::select! {
+        result = &mut turn => panic!("turn finished before the blocked forge call: {result:?}"),
+        started = entered_rx => started.expect("forge call entered"),
+    }
+    assert!(context.branch_operation_lock.try_lock().is_err());
+    context.cancel_token.lock().expect("token").cancel();
+    let result = tokio::time::timeout(Duration::from_secs(1), &mut turn)
+        .await
+        .expect("stopped forge task must complete");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::StoppedByUser(_))));
+    assert!(
+        dropped_rx.await.is_err(),
+        "remote future must be dropped, not detached"
+    );
+    assert!(context.branch_operation_lock.try_lock().is_ok());
+    let operations = db
+        .reviews()
+        .load_session_review_comment_resolutions("sess1")
+        .await
+        .expect("retained operation");
+    assert_eq!(operations.len(), 1);
+    assert!(operations[0].is_posting);
+    assert!(operations[0].commit_hash.is_some());
+    assert!(
+        posted_body
+            .lock()
+            .expect("body")
+            .contains(&operations[0].reply_token)
+    );
+    assert_eq!(
+        db.reviews()
+            .load_session_review_comment_targets("sess1")
+            .await
+            .expect("targets"),
+        vec!["thread-42"]
+    );
+    let sync_states = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::PublishedBranchSyncUpdated { sync_status, .. } => Some(sync_status),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sync_states,
+        vec![
+            PublishedBranchSyncStatus::InProgress,
+            PublishedBranchSyncStatus::Failed
+        ]
+    );
+}
+
+/// Builds a forge boundary with one reply or resolution held open until
+/// dropped.
+fn blocked_review_call_client(
+    block_reply: bool,
+    entered_tx: oneshot::Sender<()>,
+    dropped_tx: oneshot::Sender<()>,
+    body_capture: Arc<Mutex<String>>,
+) -> forge::MockReviewRequestClient {
+    let mut forge = forge::MockReviewRequestClient::new();
+    forge
+        .expect_detect_remote()
+        .once()
+        .returning(|_| Ok(github_forge_remote()));
+    forge
+        .expect_fetch_review_comment_snapshot()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(forge::ReviewCommentSnapshot {
+                    pr_level_comments: Vec::new(),
+                    threads: vec![forge::ReviewCommentThread {
+                        anchor_side: forge::ReviewCommentAnchorSide::New,
+                        comments: Vec::new(),
+                        id: "thread-42".to_string(),
+                        is_outdated: Some(false),
+                        is_resolved: false,
+                        line: Some(1),
+                        path: "src/lib.rs".to_string(),
+                        start_line: None,
+                    }],
+                })
+            })
+        });
+    if block_reply {
+        forge
+            .expect_reply_to_thread()
+            .once()
+            .return_once(move |_, _, _, body| {
+                Box::pin(async move {
+                    *body_capture.lock().expect("body") = body;
+                    let _drop_signal = dropped_tx;
+                    entered_tx.send(()).expect("call started");
+                    pending().await
+                })
+            });
+        forge.expect_resolve_thread().never();
+    } else {
+        forge
+            .expect_reply_to_thread()
+            .once()
+            .return_once(move |_, _, _, body| {
+                Box::pin(async move {
+                    *body_capture.lock().expect("body") = body;
+                    Ok(())
+                })
+            });
+        forge
+            .expect_resolve_thread()
+            .once()
+            .return_once(move |_, _, _| {
+                Box::pin(async move {
+                    let _drop_signal = dropped_tx;
+                    entered_tx.send(()).expect("call started");
+                    pending().await
+                })
+            });
+    }
+
+    forge
 }

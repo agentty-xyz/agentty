@@ -4,8 +4,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ag_session::{AgentSelectionMetadata, SettingName};
-use ag_store::Database;
+use ag_store::{Database, NewSessionReviewCommentResolution};
 use ag_worker::RunInfo;
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn project_setting_values_load_selected_key_for_all_projects() {
@@ -1442,4 +1443,276 @@ async fn archived_session_count_uses_covering_project_status_index() {
         plan.iter()
             .all(|(_, _, _, detail)| !detail.contains("SCAN session"))
     );
+}
+
+#[tokio::test]
+async fn review_targets_survive_restart_and_finish_only_with_their_forge_operation() {
+    // Arrange
+    let directory = tempdir().expect("directory");
+    let path = directory.path().join("review.sqlite");
+    let database = Database::open(&path).await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project("review", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("review-session", "codex", "main", "Review", project_id)
+        .await
+        .expect("session");
+    sqlx::query(
+        "INSERT INTO session_review_request
+        (session_id, display_id, forge_kind, last_refreshed_at, \
+         source_branch, state, target_branch, title, web_url)
+        VALUES ('review-session', '#42', \
+         'github', 0, 'work', 'Open', 'main', 'Review', 'https://example.test/42')",
+    )
+    .execute(database.pool())
+    .await
+    .expect("review link");
+    let targets = vec!["thread-1".to_string()];
+
+    // Act: a question or interrupted turn has no outcome yet.
+    database
+        .reviews()
+        .prepare_session_review_comment_turn("review-session", &targets)
+        .await
+        .expect("targets");
+    database.pool().close().await;
+    drop(database);
+    let database = Database::open(&path).await.expect("reopen");
+
+    // Assert
+    assert_eq!(
+        database
+            .reviews()
+            .load_session_review_comment_targets("review-session")
+            .await
+            .expect("restored"),
+        targets
+    );
+
+    // Arrange: a prior outcome must be re-evaluated when a later turn edits the
+    // branch.
+    let original = NewSessionReviewCommentResolution {
+        commit_hash: Some("old-tip".to_string()),
+        reply: "Original fix".to_string(),
+        reply_token: "old-token".to_string(),
+        resolution: "fixed".to_string(),
+        review_request_display_id: "#42".to_string(),
+        thread_id: "thread-1".to_string(),
+    };
+    database
+        .reviews()
+        .insert_session_review_comment_resolutions(
+            "review-session",
+            std::slice::from_ref(&original),
+        )
+        .await
+        .expect("original");
+    let renewed = NewSessionReviewCommentResolution {
+        commit_hash: None,
+        reply: "Verified the fix after the later change".to_string(),
+        reply_token: "new-token".to_string(),
+        ..original
+    };
+
+    // Act
+    database
+        .reviews()
+        .prepare_session_review_comment_turn("review-session", &targets)
+        .await
+        .expect("re-evaluate");
+    database
+        .reviews()
+        .insert_session_review_comment_resolutions("review-session", std::slice::from_ref(&renewed))
+        .await
+        .expect("new outcome");
+    database
+        .reviews()
+        .bind_session_review_comment_resolutions_to_commit("review-session", &[renewed], "new-tip")
+        .await
+        .expect("bind");
+    let pending = database
+        .reviews()
+        .load_session_review_comment_resolutions("review-session")
+        .await
+        .expect("pending");
+    database
+        .reviews()
+        .remove_session_review_comment_resolution("review-session", "new-token")
+        .await
+        .expect("forge completed");
+
+    // Assert
+    assert_eq!(pending[0].reply_token, "new-token");
+    assert_eq!(pending[0].commit_hash.as_deref(), Some("new-tip"));
+    assert_eq!(
+        database
+            .reviews()
+            .load_session_review_comment_targets("review-session")
+            .await
+            .expect("completed"),
+        Vec::<String>::new()
+    );
+    database.pool().close().await;
+}
+
+#[tokio::test]
+async fn review_targets_are_scoped_to_the_open_link_and_include_legacy_operations() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project("review", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "codex", "main", "Review", project_id)
+        .await
+        .expect("session");
+    let targets = vec!["thread".to_string()];
+
+    // Act and assert: an absent review cannot authorize new targets.
+    assert!(
+        database
+            .reviews()
+            .prepare_session_review_comment_turn("session", &targets)
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "INSERT INTO session_review_request
+        (session_id, display_id, forge_kind, last_refreshed_at, \
+         source_branch, state, target_branch, title, web_url)
+        VALUES ('session', '#42', 'github', \
+         0, 'work', 'Open', 'main', 'Review', 'https://example.test/42')",
+    )
+    .execute(database.pool())
+    .await
+    .expect("review link");
+    database
+        .reviews()
+        .insert_session_review_comment_resolutions(
+            "session",
+            &[NewSessionReviewCommentResolution {
+                commit_hash: Some("old-tip".to_string()),
+                reply: "Fixed".to_string(),
+                reply_token: "token".to_string(),
+                resolution: "fixed".to_string(),
+                review_request_display_id: "#42".to_string(),
+                thread_id: "thread".to_string(),
+            }],
+        )
+        .await
+        .expect("legacy operation");
+    assert_eq!(
+        database
+            .reviews()
+            .load_session_review_comment_targets("session")
+            .await
+            .expect("legacy targets"),
+        targets
+    );
+    database
+        .reviews()
+        .prepare_session_review_comment_turn("session", &targets)
+        .await
+        .expect("durable targets");
+
+    // Act and assert: neither a terminal link nor a different review inherits
+    // authorization.
+    sqlx::query("UPDATE session_review_request SET state = 'Merged' WHERE session_id = 'session'")
+        .execute(database.pool())
+        .await
+        .expect("close link");
+    assert_eq!(
+        database
+            .reviews()
+            .load_session_review_comment_targets("session")
+            .await
+            .expect("closed"),
+        Vec::<String>::new()
+    );
+    assert!(
+        database
+            .reviews()
+            .prepare_session_review_comment_turn("session", &targets)
+            .await
+            .is_err()
+    );
+    sqlx::query(
+        "UPDATE session_review_request SET state = 'Open', display_id = '#43' WHERE session_id = \
+         'session'",
+    )
+    .execute(database.pool())
+    .await
+    .expect("replace link");
+    assert_eq!(
+        database
+            .reviews()
+            .load_session_review_comment_targets("session")
+            .await
+            .expect("other review"),
+        Vec::<String>::new()
+    );
+}
+
+#[tokio::test]
+async fn commit_failure_preserves_posting_tokens_without_authorizing_a_push() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    let project_id = database
+        .projects()
+        .upsert_project("review", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "codex", "main", "Review", project_id)
+        .await
+        .expect("session");
+    let operations =
+        ["posted", "unposted", "unrelated"].map(|name| NewSessionReviewCommentResolution {
+            commit_hash: Some("previous-tip".to_string()),
+            reply: format!("Reply for {name}"),
+            reply_token: name.to_string(),
+            resolution: "fixed".to_string(),
+            review_request_display_id: "#42".to_string(),
+            thread_id: name.to_string(),
+        });
+    database
+        .reviews()
+        .insert_session_review_comment_resolutions("session", &operations)
+        .await
+        .expect("operations");
+    database
+        .reviews()
+        .mark_session_review_comment_resolution_posting("session", "posted")
+        .await
+        .expect("reply may be visible");
+
+    // Act
+    database
+        .reviews()
+        .discard_session_review_comment_resolutions("session", &operations[..2])
+        .await
+        .expect("commit failure cleanup");
+    let retained = database
+        .reviews()
+        .load_session_review_comment_resolutions("session")
+        .await
+        .expect("retained operations");
+
+    // Assert
+    assert_eq!(retained.len(), 2);
+    assert_eq!(retained[0].reply_token, "posted");
+    assert_eq!(retained[0].reply, operations[0].reply);
+    assert_eq!(retained[0].commit_hash, None);
+    assert!(retained[0].is_posting);
+    assert_eq!(retained[1].reply_token, "unrelated");
+    assert_eq!(retained[1].commit_hash.as_deref(), Some("previous-tip"));
+    assert!(!retained[1].is_posting);
 }

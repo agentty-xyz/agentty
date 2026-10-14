@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_review_comment_resolution SET commit_hash = NULL\n                 WHERE session_id = ? AND thread_id = ? AND review_request_display_id =\n                 (SELECT display_id FROM session_review_request WHERE session_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "6a3e4062159e55c9002400243994d75a369a3ead9003cd2374613aa0ac9d0438"
+}

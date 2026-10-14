@@ -9,6 +9,7 @@ use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument::WithSubscriber;
 
 use super::super::worker::TurnMetadata;
@@ -84,6 +85,7 @@ fn review_operation_test_context(
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db,
@@ -391,6 +393,7 @@ async fn test_unfinished_rebase_check_fails_closed_when_operation_query_fails() 
         app_event_tx: mpsc::unbounded_channel().0,
         available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db,
@@ -635,6 +638,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
         app_event_tx,
         available_agent_kinds: Arc::from(AgentKind::ALL),
         branch_operation_lock,
+        cancel_token: CancellationToken::new(),
         child_pid: Arc::new(Mutex::new(None)),
         clock: Arc::new(crate::infra::clock::RealClock),
         db: db.clone(),
@@ -663,7 +667,8 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
                 },
                 None,
             )
-            .await;
+            .await
+            .expect("queued sync should suppress auto-push");
         })
     };
     db.operations()
@@ -680,4 +685,114 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
         app_event_rx.try_recv().is_err(),
         "the queued sync should retain publish ownership"
     );
+}
+
+#[tokio::test]
+async fn revalidated_identical_reply_keeps_its_posting_token_but_changed_reply_gets_a_new_one() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("database");
+    insert_research_session(&db, "session-id").await;
+    link_review_operation_test_request(&db).await;
+    let context = review_operation_test_context(db.clone(), MockGitClient::new());
+    let targets = vec!["thread-fixed".to_string()];
+    let mut outcomes = vec![ReviewCommentOutcome {
+        reply: "Applied the fix.".to_string(),
+        resolution: ReviewCommentResolution::Fixed,
+        thread_id: "thread-fixed".to_string(),
+    }];
+    let original = prepare_review_comment_resolutions(&context, &targets, &outcomes)
+        .await
+        .expect("outcome");
+    db.reviews()
+        .insert_session_review_comment_resolutions("session-id", &original)
+        .await
+        .expect("operation");
+    db.reviews()
+        .mark_session_review_comment_resolution_posting("session-id", &original[0].reply_token)
+        .await
+        .expect("posting");
+    db.reviews()
+        .bind_session_review_comment_resolutions_to_commit("session-id", &original, "old-tip")
+        .await
+        .expect("original tip");
+
+    // Act
+    db.reviews()
+        .prepare_session_review_comment_turn("session-id", &targets)
+        .await
+        .expect("next turn");
+    let repeated = prepare_review_comment_resolutions(&context, &targets, &outcomes)
+        .await
+        .expect("revalidated");
+    db.reviews()
+        .insert_session_review_comment_resolutions("session-id", &repeated)
+        .await
+        .expect("save repeated reply");
+    db.reviews()
+        .bind_session_review_comment_resolutions_to_commit("session-id", &repeated, "new-tip")
+        .await
+        .expect("new tip");
+    let pending = db
+        .reviews()
+        .load_session_review_comment_resolutions("session-id")
+        .await
+        .expect("pending");
+    outcomes[0].reply = "The behavior now needs a different explanation.".to_string();
+    outcomes[0].resolution = ReviewCommentResolution::NoChangeNeeded;
+    db.reviews()
+        .prepare_session_review_comment_turn("session-id", &targets)
+        .await
+        .expect("another turn");
+    let changed = prepare_review_comment_resolutions(&context, &targets, &outcomes)
+        .await
+        .expect("changed outcome");
+    db.reviews()
+        .insert_session_review_comment_resolutions("session-id", &changed)
+        .await
+        .expect("save changed reply");
+    let replacement = db
+        .reviews()
+        .load_session_review_comment_resolutions("session-id")
+        .await
+        .expect("replacement");
+
+    // Assert
+    assert_eq!(repeated[0].reply_token, original[0].reply_token);
+    assert!(pending[0].is_posting);
+    assert_eq!(pending[0].commit_hash.as_deref(), Some("new-tip"));
+    assert_ne!(changed[0].reply_token, original[0].reply_token);
+    assert!(!replacement[0].is_posting);
+    assert_eq!(replacement[0].resolution, "no_change_needed");
+}
+
+#[tokio::test]
+async fn stopped_review_does_not_wait_for_publish_lock() {
+    // Arrange
+    let db = AppRepositories::in_memory().await.expect("database");
+    let context = review_operation_test_context(db, MockGitClient::new());
+    let guard = Arc::clone(&context.branch_operation_lock)
+        .lock_owned()
+        .await;
+    let metadata = TurnMetadata {
+        published_upstream_ref: Some("origin/wt/session-id".to_string()),
+        review_comment_thread_ids: vec!["thread-42".to_string()],
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+    };
+    let mut publishing = Box::pin(start_published_branch_auto_push(&context, metadata, None));
+
+    // Act
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut publishing)
+            .await
+            .is_err()
+    );
+    context.cancel_token.cancel();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut publishing)
+        .await
+        .expect("stop must finish while lock remains held");
+
+    // Assert
+    assert!(matches!(result, Err(SessionError::StoppedByUser(_))));
+    assert!(context.branch_operation_lock.try_lock().is_err());
+    drop(guard);
 }

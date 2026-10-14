@@ -1317,6 +1317,9 @@ async fn branch_publish_task_helpers_reject_unsupported_session_states() {
     let push_result = run_branch_publish_action(
         PublishBranchAction::Push,
         BranchPublishTaskContext {
+            app_event_tx: app.services.event_sender(),
+            session_update_versions: app.services.session_update_versions(),
+            transcript: Arc::default(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             session: done_snapshot.clone(),
         },

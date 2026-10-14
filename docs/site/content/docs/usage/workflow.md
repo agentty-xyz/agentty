@@ -381,14 +381,20 @@ a resolving indicator when the turn starts. If clarification is pending, the bat
 for your answers even when no other work is queued. Only one review-comment batch can
 wait at a time.
 
-After a successful commit and push, Agentty replies to each selected thread and resolves
-only those reported as fixed. Threads needing no change receive an explanation and stay
-open. An `addressed` thread becomes actionable again when a reviewer follows up.
+Review targets survive clarification and restart. After a successful commit and push,
+Agentty replies to each selected thread and resolves only those reported as fixed.
+Threads needing no change receive an explanation and stay open. An `addressed` thread
+becomes actionable again when a reviewer follows up.
 
-`[Review Comments Warning]` reports failures. After a commit failure, reopen comments
-and retry. A push failure retains the batch for retry only while its fix commit remains
-the branch tip; later changes require a fresh review batch. Interrupted replies can
-resume without duplicating a reply already posted.
+`[Review Comments Warning]` reports failures. Failed or incomplete batches remain
+pending for the next session turn. Review turns finish their push and thread updates
+before queued edits begin. Automatic and manual pushes retry saved replies when the fix
+commit still matches the branch tip. If the branch has changed, continue the session to
+re-evaluate the pending comments before resolving them. Interrupted replies can resume
+without duplicating a reply already posted, including when a later automatic commit
+fails. Stopping a review turn also stops its pending push and thread updates; unfinished
+updates remain available for retry. A follow-up waiting for an earlier push can be
+stopped without waiting for that push to finish.
 
 <a id="usage-review-request-prerequisites"></a> Publishing requires both Git credentials
 and an authenticated forge CLI: `gh` for GitHub or `glab` for GitLab. See

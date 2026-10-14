@@ -2,6 +2,7 @@
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc, OnceLock};
 
 use agentty::domain::session_message::SessionMessageKind;
 use testty::assertion;
@@ -822,6 +823,83 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
     )?;
     #[cfg(unix)]
     std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
+/// A clarification asked while addressing a forge thread must retain the
+/// selected target when the answer resumes the agent.
+#[tokio::test]
+async fn test_review_comment_clarification_retains_target() -> E2eResult {
+    // Arrange
+    let inspection_db = Arc::new(OnceLock::new());
+    let setup_db = Arc::clone(&inspection_db);
+    FeatureTest::new("review_comment_clarification_retains_target")
+        .with_git()
+        .with_terminal_size(160, 60)
+        .setup(move |env| {
+            let setup_db = Arc::clone(&setup_db);
+            Box::pin(async move {
+                seed_review_comment_agent_resolution(env).await?;
+                let database = common::open_database(env).await?;
+                assert!(setup_db.set(database).is_ok());
+                let claude_path = env.stub_bin.join("claude");
+                std::fs::write(&claude_path, r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *"For this utility request"*)
+    response='{ \"answer\": \"Address review comments\" }' ;;
+  *"This session still has unfinished forge review comments"*)
+    response='{ \"answer\": \"Review completed with JSON output\", \"review_comment_outcomes\": [{ \"reply\": \"Clarified the JSON output\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }' ;;
+  *)
+    response='{ \"answer\": \"Need a format decision\", \"questions\": [{ \"text\": \"Which output format?\", \"options\": [\"JSON\"] }] }' ;;
+esac
+printf '%s\n' '{"type":"system","subtype":"init"}'
+printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
+"#)?;
+                #[cfg(unix)]
+                std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
+                Ok(())
+            })
+        })
+        .run(
+            // Act
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("c: comments", 5000)
+                    .press_key("c")
+                    .wait_for_text("Space: select", 5000)
+                    .press_key("Space")
+                    .press_key("Enter")
+                    .wait_for_text("Question 1/1", 10000)
+                    .wait_for_text("Which output format?", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Review completed with JSON output", 10000)
+                    .wait_for_text("Enter: reply", 10000)
+            },
+            // Assert
+            move |frame, _report| {
+                let inspection_db = Arc::clone(&inspection_db);
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "Review completed with JSON output", &full);
+                    assertion::assert_not_visible(frame, "No review replies were posted");
+                    let operations = inspection_db.get().expect("fixture database").reviews()
+                        .load_session_review_comment_resolutions("review-shortcut-0001")
+                        .await.expect("accepted outcomes");
+                    assert_eq!(operations.len(), 1);
+                    assert_eq!(operations[0].thread_id, "thread-inline");
+                    assert_eq!(operations[0].reply, "Clarified the JSON output");
+                    assert!(operations[0].commit_hash.is_some());
+                })
+            },
+        ).await?;
 
     Ok(())
 }

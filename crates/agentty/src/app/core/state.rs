@@ -2438,8 +2438,11 @@ impl App {
         branch_publish_session.base_branch = self.review_target_branch_for_session(session);
 
         Some(BranchPublishTaskContext {
+            app_event_tx: self.services.event_sender(),
             branch_operation_lock: Arc::clone(&handles.branch_operation_lock),
             session: branch_publish_session,
+            session_update_versions: self.services.session_update_versions(),
+            transcript: Arc::clone(&handles.transcript),
         })
     }
 

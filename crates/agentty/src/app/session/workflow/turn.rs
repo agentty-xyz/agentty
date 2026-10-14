@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
-use super::worker::{SessionWorkerContext, TurnMetadata};
+use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
@@ -153,10 +153,10 @@ impl MainCheckoutSnapshot {
 pub(super) async fn run_channel_turn(
     context: &SessionWorkerContext,
     run_client: Arc<dyn RunClient>,
-    turn_metadata: TurnMetadata,
+    mut turn_metadata: TurnMetadata,
     request_kind: AgentRequestKind,
     replay_transcript: Option<String>,
-    prompt: TurnPrompt,
+    mut prompt: TurnPrompt,
 ) -> Result<(), SessionError> {
     // Discard stale cancellations, then keep the new token for this turn.
     let turn_cancel_token = fresh_turn_cancel_token(context)?;
@@ -168,23 +168,24 @@ pub(super) async fn run_channel_turn(
 
     prepare_session_turn(context, &request_kind).await;
 
-    let post_turn_context = PostTurnContext::from_worker(context, Arc::clone(&run_client));
-    let main_checkout_snapshot = match Span::child("workspace.prepare")
-        .run(MainCheckoutSnapshot::capture(context), |_| Outcome::Failed)
-        .await
-    {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            return finalize_turn_setup_failure(
-                context,
-                &post_turn_context,
-                turn_metadata,
-                &prompt,
-                &error,
-            )
-            .await;
-        }
-    };
+    let post_turn_context =
+        PostTurnContext::from_worker(context, Arc::clone(&run_client), turn_cancel_token.clone());
+    let main_checkout_snapshot =
+        match prepare_turn_workspace(context, &mut turn_metadata, &mut prompt, &turn_cancel_token)
+            .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return finalize_turn_setup_failure(
+                    context,
+                    &post_turn_context,
+                    turn_metadata,
+                    &prompt,
+                    &error,
+                )
+                .await;
+            }
+        };
 
     let PreparedTurnRequest {
         personality_persistence,
@@ -264,6 +265,31 @@ pub(super) async fn run_channel_turn(
         .await;
 
     result.map(|_| ())
+}
+
+/// Waits for earlier branch effects, snapshots isolation state, and restores
+/// unfinished review targets before constructing the next agent request.
+async fn prepare_turn_workspace(
+    context: &SessionWorkerContext,
+    turn_metadata: &mut TurnMetadata,
+    prompt: &mut TurnPrompt,
+    cancel_token: &CancellationToken,
+) -> Result<Option<MainCheckoutSnapshot>, SessionError> {
+    tokio::select! {
+        biased;
+        () = cancel_token.cancelled() => Err(SessionError::StoppedByUser(
+            "[Stopped] Turn canceled before workspace preparation completed.".to_string(),
+        )),
+        result = async {
+            drop(context.branch_operation_lock.lock().await);
+            let snapshot = Span::child("workspace.prepare")
+                .run(MainCheckoutSnapshot::capture(context), |_| Outcome::Failed)
+                .await?;
+            SessionWorkerService::prepare_review_comment_turn(context, turn_metadata, prompt).await?;
+
+            Ok(snapshot)
+        } => result,
+    }
 }
 
 /// Request and host bookkeeping resolved together during context preparation.
@@ -379,7 +405,10 @@ async fn finalize_turn_setup_failure(
         post_turn_context,
         turn_metadata,
         post_turn::TurnPersonalityPersistence::default(),
-        Err(AgentError::Backend(error.to_string())),
+        Err(match error {
+            SessionError::StoppedByUser(message) => AgentError::InterruptedByUser(message.clone()),
+            _ => AgentError::Backend(error.to_string()),
+        }),
         &super::activity::TurnActivity::default(),
     )
     .await;

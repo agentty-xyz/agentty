@@ -1,14 +1,17 @@
 //! Branch-publish workflow helpers for session review branches.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::GitClient;
+use tokio::sync::mpsc;
 
 use super::session::{self, unix_timestamp_from_system_time};
-use crate::app::review_request;
+use crate::app::service::SessionUpdateVersionMap;
+use crate::app::{AppEvent, review_request};
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::clock::Clock;
 use crate::infra::db;
@@ -51,11 +54,17 @@ impl BranchPublishTaskSession {
 
 /// Session snapshot and shared operation lock moved into one publish task.
 pub(crate) struct BranchPublishTaskContext {
+    /// Event sink for post-push review-comment notices.
+    pub(crate) app_event_tx: mpsc::UnboundedSender<AppEvent>,
     /// Serializes manual publishing with other branch mutations for the same
     /// session.
     pub(crate) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
     /// Immutable session data used throughout the background workflow.
     pub(crate) session: BranchPublishTaskSession,
+    /// Shared transcript projection versions.
+    pub(crate) session_update_versions: SessionUpdateVersionMap,
+    /// Live transcript receiving durable review-comment progress.
+    pub(crate) transcript: Arc<Mutex<SessionTranscript>>,
 }
 
 /// Final reducer payload for a completed branch-publish background action.
@@ -242,12 +251,25 @@ pub(crate) async fn run_branch_publish_action(
     remote_branch_name: Option<String>,
 ) -> BranchPublishTaskResult {
     let BranchPublishTaskContext {
+        app_event_tx,
         branch_operation_lock,
         session: branch_publish_session,
+        session_update_versions,
+        transcript,
     } = branch_publish_context;
     let _branch_operation_guard = branch_operation_lock.lock_owned().await;
+    let review_sync = session::ReviewCommentSyncInput {
+        app_event_tx,
+        db: db.clone(),
+        folder: branch_publish_session.folder.clone(),
+        git_client: Arc::clone(&git_client),
+        review_request_client: Arc::clone(&review_request_client),
+        session_id: branch_publish_session.id.clone(),
+        session_update_versions,
+        transcript,
+    };
 
-    match publish_branch_action {
+    let result = match publish_branch_action {
         PublishBranchAction::Push => {
             push_session_branch(
                 publish_branch_action,
@@ -269,7 +291,12 @@ pub(crate) async fn run_branch_publish_action(
             )
             .await
         }
+    };
+    if result.is_ok() {
+        session::resolve_review_comments_after_push(&review_sync).await;
     }
+
+    result
 }
 
 /// Returns whether error output looks like a git push authentication failure.
