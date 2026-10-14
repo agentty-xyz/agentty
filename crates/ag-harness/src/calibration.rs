@@ -204,8 +204,10 @@ impl Envelope {
             self.base_weight
                 .saturating_add(u64::try_from(above).unwrap_or(u64::MAX))
         } else {
-            let excess = u128::from(base - capacity) * u128::from(PERMILLE);
-            let below = excess.div_ceil(u128::from(self.slope_permille));
+            // The fewest units below the base whose rounded-up tokens remove
+            // more than all but one token of the excess.
+            let excess = u128::from(base - capacity - 1) * u128::from(PERMILLE);
+            let below = excess / u128::from(self.slope_permille) + 1;
 
             self.base_weight
                 .saturating_sub(u64::try_from(below).unwrap_or(u64::MAX))

@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::calibration::ContextCalibration;
+use crate::calibration::{ContextCalibration, Envelope};
 use crate::context::ContextBudget;
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::turn::TurnError;
@@ -251,4 +251,88 @@ fn other_failures_pass_through_unchanged() {
 
     // Assert
     assert!(matches!(declared, TurnError::Cancelled));
+}
+
+/// Envelopes across the clamped slope range, measured and lifted, with
+/// bases that put capacities on both sides of the base request.
+fn sample_envelopes() -> Vec<Envelope> {
+    let mut envelopes = Vec::new();
+    for slope_permille in [1_000, 1_001, 1_333, 1_500, 2_333, 2_999, 3_000] {
+        for (base_weight, base_tokens, lift) in [(0, 0, 0), (40, 300, 0), (250, 420, 37)] {
+            envelopes.push(Envelope {
+                base_tokens,
+                base_weight,
+                lift,
+                measured: lift > 0,
+                slope_permille,
+            });
+        }
+    }
+
+    envelopes
+}
+
+#[test]
+fn weight_within_is_the_largest_weight_whose_tokens_fit() {
+    // Arrange
+    let envelopes = sample_envelopes();
+
+    for envelope in envelopes {
+        for capacity in 0..1_200 {
+            if envelope.tokens(0) > capacity {
+                continue;
+            }
+
+            // Act
+            let weight = envelope.weight_within(capacity);
+
+            // Assert
+            assert!(
+                envelope.tokens(weight) <= capacity,
+                "{envelope:?} weight {weight} exceeds capacity {capacity}"
+            );
+            assert!(
+                envelope.tokens(weight + 1) > capacity,
+                "{envelope:?} weight {} also fits capacity {capacity}",
+                weight + 1
+            );
+        }
+    }
+}
+
+#[test]
+fn restated_failures_exceed_the_declared_budget_exactly_when_the_effective_one_is_exceeded() {
+    // Arrange
+    let calibrations = [
+        ContextCalibration::default(),
+        calibrated(&[(100, 600), (500, 1_080)]),
+        calibrated(&[(400, 500)]),
+        calibrated(&[(800, 200)]),
+    ];
+
+    for calibration in calibrations {
+        let (effective, envelope) = calibration.effective_budget(budget());
+        let effective_capacity = effective.max_request_weight().get() - 100;
+        for weight in effective_capacity.saturating_sub(50)..effective_capacity + 50 {
+            // Act
+            let restated = ContextCalibration::declared_failure(
+                budget(),
+                envelope,
+                TurnError::ContextBudgetExceeded {
+                    budget: effective.max_request_weight().get(),
+                    required: weight + 100,
+                },
+            );
+
+            // Assert
+            let TurnError::ContextBudgetExceeded { budget, required } = restated else {
+                unreachable!("budget failures stay budget failures");
+            };
+            assert_eq!(
+                required > budget,
+                weight > effective_capacity,
+                "{envelope:?} weight {weight} restated as {required} of {budget}"
+            );
+        }
+    }
 }
