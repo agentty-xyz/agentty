@@ -16,8 +16,9 @@ use std::time::Duration;
 use ag_harness::bash::{CommandCleanupScope, CommandIntent, CommandOutcome, CommandTermination};
 use ag_harness::model::{ModelCompletion, ModelMessage, ModelRequest, ModelResponse};
 use ag_harness::store::{
-    AcquiredTurn, HistoryTurn, MemoryStore, ModelSwitch, NewSession, SessionCheckpoint,
-    SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner, TurnStop, WriteStatus,
+    AcquiredTurn, CompactionSource, HistoryTurn, MemoryStore, ModelSwitch, NewSession,
+    SessionCheckpoint, SessionStore, SqliteStore, StoreIdentity, StoredTurnOptions, TurnOwner,
+    TurnStop, WriteStatus,
 };
 use ag_harness::tool::ToolCall;
 use ag_harness::{
@@ -696,6 +697,159 @@ async fn journaled_backends_keep_an_oversized_completed_turn_elided_or_brief() {
         ];
         assert_eq!(brief, briefly);
         assert_eq!(bounded, briefly);
+    }
+}
+
+/// Completes one turn with `input` and a `{}` answer.
+async fn complete_turn(store: &Arc<dyn SessionStore>, id: &str, input: &str) {
+    let turn = AcquiredTurn::begin(
+        Arc::clone(store),
+        id,
+        &TurnInput::from(input),
+        &options(),
+        0,
+    )
+    .await
+    .expect("turn");
+    store
+        .complete_turn(turn.owner(), &[ModelMessage::Assistant("{}".to_string())])
+        .await
+        .expect("complete");
+}
+
+#[tokio::test]
+async fn journaled_backends_load_the_oldest_uncovered_turns_as_the_compaction_source() {
+    for store in journaled_stores().await {
+        // Arrange
+        for id in ["elided", "brief"] {
+            store
+                .create_session(&NewSession::new(id, schema()), None, 4096)
+                .await
+                .expect("create");
+            complete_tool_heavy_turn(&store, id).await;
+            complete_turn(&store, id, "new").await;
+        }
+        store
+            .create_session(&NewSession::new("forced", schema()), None, 4096)
+            .await
+            .expect("create");
+        complete_turn(&store, "forced", &"x".repeat(50)).await;
+        complete_turn(&store, "forced", "next").await;
+        let failed = AcquiredTurn::begin(
+            Arc::clone(&store),
+            "forced",
+            &TurnInput::from("work"),
+            &options(),
+            0,
+        )
+        .await
+        .expect("stopped turn");
+        store
+            .fail_turn(
+                failed.owner(),
+                &TurnError::Model(ModelError::InvalidResponse),
+            )
+            .await
+            .expect("fail");
+        drop(failed);
+        let brief = |input: &str| {
+            HistoryTurn::from(vec![
+                ModelMessage::User(input.to_string()),
+                ModelMessage::Assistant("{}".to_string()),
+            ])
+        };
+
+        // Act
+        let elided = store
+            .load_compaction_source("elided", 1000)
+            .await
+            .expect("source");
+        let briefly = store
+            .load_compaction_source("brief", 100)
+            .await
+            .expect("source");
+        let forced = store
+            .load_compaction_source("forced", 4)
+            .await
+            .expect("source");
+        let everything = store
+            .load_compaction_source("forced", 4096)
+            .await
+            .expect("source");
+
+        // Assert
+        // Older turns keep their most complete fitting form and the newest
+        // turn still follows, unlike replayed history, which keeps the newest.
+        let positions = |source: &CompactionSource| -> Vec<i64> {
+            source.turns.iter().map(|(position, _)| *position).collect()
+        };
+        assert_eq!(positions(&elided), [0, 1, 2]);
+        assert_eq!(elided.turns[0].1, brief("old"));
+        assert_eq!(elided.turns[1].1.messages.len(), 4);
+        assert!(matches!(
+            &elided.turns[1].1.messages[2],
+            ModelMessage::ToolResult { content, .. } if content.starts_with(r#"{"context_cleared":"#)
+        ));
+        assert_eq!(elided.turns[2].1, brief("new"));
+        assert_eq!(positions(&briefly), [0, 1, 2]);
+        assert_eq!(briefly.turns[1].1, brief("work"));
+        // The oldest turn is kept briefly even beyond the limit, and nothing
+        // after it fits.
+        assert_eq!(forced.turns, [(0, brief(&"x".repeat(50)))]);
+        assert_eq!(positions(&everything), [0, 1, 2]);
+        assert_eq!(everything.turns[2].1.stop, Some(failed_stop()));
+    }
+}
+
+#[tokio::test]
+async fn all_backends_load_the_compaction_source_after_the_checkpoint_boundary() {
+    for store in stores().await {
+        // Arrange
+        store
+            .create_session(&NewSession::new("source", schema()), None, 4096)
+            .await
+            .expect("create");
+        for input in ["zero", "one", "two"] {
+            complete_turn(&store, "source", input).await;
+        }
+        let checkpoint = SessionCheckpoint::new(
+            0,
+            0,
+            None,
+            None,
+            json!({"context": "c", "decisions": [], "state": "s"}),
+        )
+        .expect("checkpoint");
+        store
+            .publish_checkpoint("source", &checkpoint)
+            .await
+            .expect("publish");
+
+        // Act
+        let source = store
+            .load_compaction_source("source", 4096)
+            .await
+            .expect("source");
+        let missing = store
+            .load_compaction_source("missing", 4096)
+            .await
+            .expect("missing source");
+
+        // Assert
+        assert_eq!(source.checkpoint, Some(checkpoint));
+        let inputs: Vec<(i64, ModelMessage)> = source
+            .turns
+            .iter()
+            .map(|(position, turn)| (*position, turn.messages[0].clone()))
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                (1, ModelMessage::User("one".to_string())),
+                (2, ModelMessage::User("two".to_string())),
+            ]
+        );
+        assert_eq!(missing, CompactionSource::default());
     }
 }
 

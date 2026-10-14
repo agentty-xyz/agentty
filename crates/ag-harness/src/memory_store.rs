@@ -13,8 +13,9 @@ use crate::model::{ModelMessage, ModelMetadata};
 use crate::recovery::{HostRequest, HostTurnRecord, HostTurnStatus};
 use crate::reservation::TURN_LEASE_SECONDS;
 use crate::store::{
-    Admission, AdmissionState, LoadedSession, ModelSwitch, NewSession, Reservation, ReservedTurn,
-    SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord, WriteStatus,
+    Admission, AdmissionState, CompactionSource, LoadedSession, ModelSwitch, NewSession,
+    Reservation, ReservedTurn, SessionStore, StoreIdentity, TurnAdmission, TurnOwner, WriteRecord,
+    WriteStatus,
 };
 use crate::write_journal::content_hash;
 use crate::{SessionError, TurnError, TurnOutcome};
@@ -228,6 +229,20 @@ impl SessionStore for MemoryStore {
         loaded.turns = session.history();
 
         Ok(loaded)
+    }
+
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<CompactionSource, SessionError> {
+        let mut state = self.lock();
+        let Some(session) = state.sessions.get_mut(session_id) else {
+            return Ok(CompactionSource::default());
+        };
+        session.recover();
+
+        Ok(session.compaction_source(max_history_bytes))
     }
 
     async fn publish_checkpoint(
@@ -609,6 +624,31 @@ impl Record {
             });
 
         context::fit_history_bytes(newest_first, self.configuration.max_history_bytes)
+    }
+
+    fn compaction_source(&self, max_history_bytes: usize) -> CompactionSource {
+        let checkpoint = self.configuration.checkpoint.clone();
+        let boundary = checkpoint
+            .as_ref()
+            .map_or(-1, crate::store::SessionCheckpoint::covered_through);
+        let oldest_first = self
+            .turns
+            .iter()
+            .filter(|turn| turn.status != Status::Running && turn.owner.turn_position() > boundary)
+            .map(|turn| {
+                (
+                    turn.owner.turn_position(),
+                    HistoryTurn {
+                        messages: turn.messages.clone(),
+                        stop: self.stop(turn),
+                    },
+                )
+            });
+
+        CompactionSource {
+            checkpoint,
+            turns: context::fit_oldest_history_bytes(oldest_first, max_history_bytes),
+        }
     }
 
     /// Describes a stopped turn and its effects without a recorded outcome.

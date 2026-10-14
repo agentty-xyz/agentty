@@ -9,9 +9,9 @@ use std::time::Duration;
 use ag_harness::model::{ModelMessage, ModelMetadata};
 use ag_harness::recovery::{HostTurnRecord, HostTurnStatus};
 use ag_harness::store::{
-    Admission, AdmissionState, HistoryTurn, LoadedSession, ModelSwitch, NewSession, Reservation,
-    ReservedTurn, SessionCheckpoint, SessionStore, StoreIdentity, TurnAdmission, TurnOwner,
-    TurnStop, WriteRecord, WriteStatus,
+    Admission, AdmissionState, CompactionSource, HistoryTurn, LoadedSession, ModelSwitch,
+    NewSession, Reservation, ReservedTurn, SessionCheckpoint, SessionStore, StoreIdentity,
+    TurnAdmission, TurnOwner, TurnStop, WriteRecord, WriteStatus,
 };
 use ag_harness::{SessionError, TurnError, TurnOutcome};
 use async_trait::async_trait;
@@ -101,6 +101,34 @@ impl Record {
         loaded.turns = turns;
 
         loaded
+    }
+
+    /// Returns the oldest uncovered turns, whole, that fit `max_bytes`; the
+    /// oldest is always returned.
+    fn compaction_source(&self, max_bytes: usize) -> CompactionSource {
+        let checkpoint = self.loaded.checkpoint.clone();
+        let boundary = checkpoint
+            .as_ref()
+            .map_or(-1, SessionCheckpoint::covered_through);
+        let mut remaining = max_bytes;
+        let mut turns = Vec::new();
+        for (position, turn) in self.positions.iter().zip(self.loaded.turns.iter()) {
+            let bytes = turn
+                .messages
+                .iter()
+                .map(ModelMessage::retained_bytes)
+                .sum::<usize>();
+            if *position <= boundary {
+                continue;
+            }
+            if bytes > remaining && !turns.is_empty() {
+                break;
+            }
+            remaining = remaining.saturating_sub(bytes);
+            turns.push((*position, turn.clone()));
+        }
+
+        CompactionSource { checkpoint, turns }
     }
 
     /// Ends the active turn with its persisted messages and, for a stopped
@@ -307,6 +335,20 @@ impl SessionStore for ExternalStore {
         Ok(Reservation::Reserved(
             ReservedTurn::new(owner, deadline, bounded.turns).with_checkpoint(bounded.checkpoint),
         ))
+    }
+
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<CompactionSource, SessionError> {
+        let mut sessions = self.sessions.lock().expect("sessions");
+        let Some(session) = sessions.get_mut(session_id) else {
+            return Ok(CompactionSource::default());
+        };
+        session.recover();
+
+        Ok(session.compaction_source(max_history_bytes))
     }
 
     async fn publish_checkpoint(

@@ -1137,6 +1137,29 @@ pub(crate) fn fit_history_bytes(
     kept
 }
 
+/// Returns the oldest of `oldest_first` turns, keyed by position, that fit
+/// `max_bytes` in order, each in the most complete form that fits what is
+/// left, stopping at the first turn that fits in no form. The first turn is
+/// always kept, in brief form when no form fits, so compaction can advance
+/// past it.
+pub(crate) fn fit_oldest_history_bytes(
+    oldest_first: impl IntoIterator<Item = (i64, HistoryTurn)>,
+    max_bytes: usize,
+) -> Vec<(i64, HistoryTurn)> {
+    let mut remaining = max_bytes;
+    let mut kept = Vec::new();
+    for (position, turn) in oldest_first {
+        let brief = kept.is_empty().then(|| turn.brief());
+        let Some(turn) = turn.fit_bytes(remaining, max_bytes).or(brief) else {
+            break;
+        };
+        remaining = remaining.saturating_sub(retained_bytes(&turn.messages));
+        kept.push((position, turn));
+    }
+
+    kept
+}
+
 /// Returns, oldest first, the replays of the most recent finished turns whose
 /// combined weight fits `available_weight`, dropping every turn older than
 /// the first that does not fit, so a turn's tool groups are never split. Each

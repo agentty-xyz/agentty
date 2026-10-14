@@ -79,6 +79,16 @@ impl SessionStore for Gate {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
 
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<ag_harness::store::CompactionSource, SessionError> {
+        self.store
+            .load_compaction_source(session_id, max_history_bytes)
+            .await
+    }
+
     async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         if self.panic_switch {
             std::panic::resume_unwind(Box::new("injected switch panic"));

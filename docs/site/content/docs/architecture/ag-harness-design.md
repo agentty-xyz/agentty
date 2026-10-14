@@ -172,7 +172,12 @@ a stopped turn keeps everything it already did.
   request, so matching retries return recorded outcomes instead of executing again.
 - `switch_model` selects another registration for an idle session, whose context budget
   bounds every later request. `compact` publishes a schema-validated summary checkpoint
-  that request projection replays ahead of the remaining recent turns.
+  that request projection replays ahead of the remaining recent turns. Its source is the
+  previous summary and the oldest uncovered turns, loaded oldest first within the
+  history byte limit and rendered as JSON lines that keep tool-call arguments and bound
+  every text. The newest turns are dropped until the source fits the context budget, and
+  the checkpoint covers exactly the rendered turns, so the rest stay uncovered for a
+  later call. A summary that is no smaller than its source is rejected.
 - Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
   by its registration: requests keep the most recent turns that fit, each whole, with
   its tool traffic replaced by notices, or as its input and final output (input and stop

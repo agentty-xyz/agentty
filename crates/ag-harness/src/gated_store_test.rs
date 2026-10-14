@@ -116,6 +116,16 @@ impl SessionStore for GatedStore {
             .await
     }
 
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<crate::store::CompactionSource, SessionError> {
+        self.database
+            .load_compaction_source(session_id, max_history_bytes)
+            .await
+    }
+
     async fn switch_model(&self, id: &str, switch: &ModelSwitch) -> Result<i64, SessionError> {
         self.database.switch_model(id, switch).await
     }

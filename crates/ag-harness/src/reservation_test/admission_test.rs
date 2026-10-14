@@ -51,7 +51,12 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
             .await
             .expect("publish through decorator");
         let loaded = decorated.load_session("session").await.expect("load");
-        assert_eq!(loaded.checkpoint, Some(checkpoint));
+        let source = decorated
+            .load_compaction_source("session", loaded.max_history_bytes)
+            .await
+            .expect("source through decorator");
+        assert_eq!(loaded.checkpoint, Some(checkpoint.clone()));
+        assert_eq!(source.checkpoint, Some(checkpoint));
     }
 }
 

@@ -1,6 +1,6 @@
 //! Compaction checkpoint contract shared by both built-in stores.
 
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -37,6 +37,7 @@ struct CompactingModel {
 enum SummaryMode {
     Valid,
     Fail,
+    Inflated,
     Malformed,
     Oversized,
 }
@@ -101,6 +102,13 @@ impl Model for CompactingModel {
             ))),
             SummaryMode::Fail => Err(ModelError::request(std::io::Error::other(
                 "generation failed",
+            ))),
+            SummaryMode::Inflated => Ok(ModelCompletion::from_response(ModelResponse::Output(
+                json!({
+                    "context": "c".repeat(3000),
+                    "decisions": [],
+                    "state": "compacted"
+                }),
             ))),
             SummaryMode::Malformed => Ok(ModelCompletion::from_response(ModelResponse::Output(
                 json!({"context": "missing required fields"}),
@@ -562,13 +570,14 @@ async fn compaction_without_completed_turns_is_a_noop() {
 }
 
 #[tokio::test]
-async fn bounded_generation_drops_the_oldest_turns_from_an_oversized_source() {
+async fn bounded_generation_covers_only_the_oldest_turns_its_source_renders() {
     for store in stores().await {
         // Arrange: four long turns cannot all render into a source the budget
-        // admits, so generation keeps only the newest turns that fit.
+        // admits, so each generation renders only the oldest uncovered turns
+        // that fit and covers exactly those.
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = CompactingModel::shared("trimming", &requests);
-        let registry = registry(Arc::clone(&model), budget(500));
+        let registry = registry(Arc::clone(&model), budget(650));
         let harness = Harness::from_registry(&registry, "trimming")
             .expect("harness")
             .store(Arc::clone(&store));
@@ -586,27 +595,144 @@ async fn bounded_generation_drops_the_oldest_turns_from_an_oversized_source() {
         }
 
         // Act
-        let checkpoint = session
-            .compact()
-            .await
-            .expect("compact")
-            .expect("checkpoint");
+        let mut boundaries = Vec::new();
+        while let Some(checkpoint) = session.compact().await.expect("compact") {
+            boundaries.push(checkpoint.covered_through());
+        }
 
         // Assert
-        assert_eq!(checkpoint.covered_through(), 3);
         let requests = requests.lock().expect("requests");
-        let generation = requests
+        let sources: Vec<String> = requests
+            .iter()
+            .filter(|request| CompactingModel::is_generation(request))
+            .map(|request| request.prompt().to_string())
+            .collect();
+        assert_eq!(sources.len(), boundaries.len());
+        assert!(
+            sources[0].contains("turn 0") && !sources[0].contains("turn 3"),
+            "the first source keeps the oldest turns and drops the newest"
+        );
+        assert!(
+            boundaries.windows(2).all(|pair| pair[0] < pair[1]),
+            "every generation advances coverage: {boundaries:?}"
+        );
+        assert_eq!(
+            boundaries.last(),
+            Some(&3),
+            "coverage reaches the newest turn"
+        );
+        // A turn is covered only after a source rendered it.
+        let mut covered = -1;
+        for (source, boundary) in sources.iter().zip(&boundaries) {
+            for turn in covered + 1..=*boundary {
+                assert!(
+                    source.contains(&format!("turn {turn} ")),
+                    "turn {turn} is covered through {boundary} without being rendered"
+                );
+            }
+            covered = *boundary;
+        }
+    }
+}
+
+#[tokio::test]
+async fn generation_covers_turns_beyond_the_replayed_history_oldest_first() {
+    for store in stores().await {
+        // Arrange: the history byte limit replays only the newest turns, while
+        // the context budget would admit every turn into a source.
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let model = CompactingModel::shared("history", &requests);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
+        let harness = Harness::from_registry(&registry, "history")
+            .expect("harness")
+            .store(Arc::clone(&store))
+            .max_history_bytes(NonZeroUsize::new(700).expect("limit"));
+        let mut session = harness
+            .session("history", schema())
+            .create()
+            .await
+            .expect("session");
+        for index in 0..4 {
+            let padding = "y".repeat(250);
+            session
+                .send(format!("turn {index} {padding}"))
+                .await
+                .expect("turn");
+        }
+        let replayed = store.load_session("history").await.expect("load").turns;
+        assert!(
+            replayed.len() < 4,
+            "older turns fall outside replayed history"
+        );
+
+        // Act
+        let first = session
+            .compact()
+            .await
+            .expect("first compact")
+            .expect("checkpoint");
+        let mut last = first.covered_through();
+        while let Some(checkpoint) = session.compact().await.expect("compact") {
+            last = checkpoint.covered_through();
+        }
+
+        // Assert
+        let requests = requests.lock().expect("requests");
+        let first_source = requests
             .iter()
             .find(|request| CompactingModel::is_generation(request))
-            .expect("generation request");
+            .expect("generation")
+            .prompt()
+            .to_string();
         assert!(
-            generation.prompt().contains("turn 3"),
-            "the newest turn stays in the source"
+            first_source.contains("turn 0 "),
+            "the oldest turn is summarized first"
         );
+        for turn in 0..=first.covered_through() {
+            assert!(
+                first_source.contains(&format!("turn {turn} ")),
+                "turn {turn} is covered without being rendered"
+            );
+        }
         assert!(
-            !generation.prompt().contains("turn 0"),
-            "turns that overflow the budget are dropped oldest-first"
+            first.covered_through() < 3,
+            "turns beyond the source stay uncovered"
         );
+        assert_eq!(last, 3, "later generations cover the rest");
+    }
+}
+
+#[tokio::test]
+async fn generation_rejects_a_summary_no_smaller_than_its_source() {
+    for store in stores().await {
+        // Arrange: a schema-valid summary larger than its one short turn.
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let model = CompactingModel::shared("inflated", &requests);
+        let registry = registry(Arc::clone(&model), unbounded_context_budget());
+        let harness = Harness::from_registry(&registry, "inflated")
+            .expect("harness")
+            .store(Arc::clone(&store));
+        let mut session = harness
+            .session("inflated", schema())
+            .create()
+            .await
+            .expect("session");
+        session.send("one").await.expect("one");
+        model.set_mode(SummaryMode::Inflated);
+
+        // Act
+        let rejected = session.compact().await;
+
+        // Assert
+        assert!(matches!(
+            rejected,
+            Err(SessionError::Checkpoint(
+                CheckpointError::SummaryNotSmaller { .. }
+            ))
+        ));
+        let loaded = store.load_session("inflated").await.expect("load");
+        assert!(loaded.checkpoint.is_none(), "nothing is published");
+        assert_eq!(loaded.turns.len(), 1, "the turn stays uncovered");
     }
 }
 
