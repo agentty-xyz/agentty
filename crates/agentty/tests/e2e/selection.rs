@@ -130,11 +130,19 @@ fn assert_selection_report(
             active_tab,
             colors_enabled.then_some((foreground, background)),
         );
+        let label_foreground = if label == "Alpha" && theme == ColorTheme::Current {
+            CellColor::white()
+        } else {
+            foreground
+        };
         assert_selected_label(
             &frame,
             label,
-            colors_enabled.then_some((foreground, background)),
+            colors_enabled.then_some((label_foreground, background)),
         );
+        if label == "Alpha" {
+            assert_session_detail_colors(&frame, theme, colors_enabled, background);
+        }
     }
     let colors = colors_enabled.then_some((foreground, background));
     for (before, after, initial, next) in [
@@ -160,6 +168,57 @@ fn assert_selection_report(
         assert_unselected_label(&after_frame, initial, colors, option_region);
         assert_selected_label_in_region(&before_frame, initial, colors, option_region);
         assert_selected_label_in_region(&after_frame, next, colors, option_region);
+    }
+}
+
+/// Session metadata keeps semantic colors and regular weight inside the
+/// highlight.
+fn assert_session_detail_colors(
+    frame: &TerminalFrame,
+    theme: ColorTheme,
+    colors_enabled: bool,
+    background: CellColor,
+) {
+    let (text, muted, success) = match theme {
+        ColorTheme::Current => (
+            CellColor::white(),
+            CellColor::new(192, 192, 192),
+            CellColor::new(0, 128, 0),
+        ),
+        ColorTheme::Green => (
+            CellColor::new(205, 245, 211),
+            CellColor::new(126, 159, 120),
+            CellColor::new(86, 184, 105),
+        ),
+        ColorTheme::DarkHorizon => (
+            CellColor::new(214, 217, 232),
+            CellColor::new(132, 136, 168),
+            CellColor::new(41, 211, 152),
+        ),
+    };
+    let title = frame.find_text("Alpha");
+    let row = Region::new(0, title[0].rect.row, frame.cols(), 1);
+    for (label, foreground) in [
+        ("[XS]", success),
+        ("Draft", muted),
+        (model_fixture::CODEX_MODEL_ID, text),
+    ] {
+        let matches = frame.find_text_in_region(label, &row);
+        assert_eq!(matches.len(), 1, "session detail {label} must be visible");
+        let detail = &matches[0];
+        if colors_enabled {
+            assert_eq!(detail.foreground, Some(foreground), "color for {label}");
+            assert_eq!(detail.background, Some(background));
+            assert!(
+                !detail.style.bold(),
+                "metadata must retain regular weight: {label}"
+            );
+        } else {
+            assert!(detail.style.inverse());
+            assert!(detail.style.bold());
+            assert_eq!(detail.foreground, None);
+            assert_eq!(detail.background, None);
+        }
     }
 }
 
@@ -311,7 +370,7 @@ fn assert_unselected_label(
 pub(crate) fn selection_colors(theme: ColorTheme) -> (CellColor, CellColor) {
     match theme {
         ColorTheme::Current => (CellColor::new(245, 245, 245), CellColor::new(50, 62, 78)),
-        ColorTheme::Green => (CellColor::new(205, 245, 211), CellColor::new(24, 54, 28)),
+        ColorTheme::Green => (CellColor::new(205, 245, 211), CellColor::new(44, 78, 54)),
         ColorTheme::DarkHorizon => (CellColor::new(214, 217, 232), CellColor::new(45, 50, 68)),
     }
 }

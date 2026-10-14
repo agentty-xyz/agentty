@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use ag_session::test_support as model_fixture;
 use ratatui::layout::Constraint;
+use ratatui::style::Modifier;
 use ratatui::widgets::TableState;
 
 use super::{
@@ -267,7 +268,7 @@ fn test_render_selected_conflict_alert_stays_readable() {
     // Assert
     let conflict_cell = find_text_start_cell(terminal.backend().buffer(), "[merge conflict]")
         .expect("merge conflict alert should be visible");
-    assert_eq!(conflict_cell.fg, style::palette::text_selection());
+    assert_eq!(conflict_cell.fg, style::palette::danger());
 }
 
 #[test]
@@ -306,7 +307,7 @@ fn test_render_selected_ready_pr_label_stays_readable() {
     // Assert
     let label_cell = find_text_start_cell(terminal.backend().buffer(), "[ready]")
         .expect("ready PR label should be visible");
-    assert_eq!(label_cell.fg, style::palette::text_selection());
+    assert_eq!(label_cell.fg, style::palette::success());
 }
 
 #[test]
@@ -518,7 +519,7 @@ fn test_render_selected_reasoning_level_stays_readable() {
     session.agent = model_fixture::codex_selection();
     session.reasoning_level_override = Some(ReasoningLevel::High);
     let sessions = vec![session];
-    let expected_reasoning_color = style::palette::text_selection();
+    let expected_reasoning_color = style::palette::warning_soft();
 
     // Act
     terminal
@@ -535,7 +536,7 @@ fn test_render_selected_reasoning_level_stays_readable() {
         find_text_start_cell(buffer, model_fixture::CODEX_MODEL_ID).unwrap_or(fallback_cell);
     let reasoning_cell = find_text_start_cell(buffer, "high").unwrap_or(fallback_cell);
 
-    assert_eq!(model_cell.fg, style::palette::text_selection());
+    assert_eq!(model_cell.fg, style::palette::text());
     assert_eq!(reasoning_cell.fg, expected_reasoning_color);
 }
 
@@ -624,7 +625,7 @@ fn test_render_session_row_connects_stacked_child_to_parent() {
     let buffer = terminal.backend().buffer();
     let fallback_cell = &buffer.content()[0];
     let tree_cell = find_text_start_cell(buffer, "└").unwrap_or(fallback_cell);
-    assert_eq!(tree_cell.fg, style::palette::text_selection());
+    assert_eq!(tree_cell.fg, style::palette::text_muted());
     assert_eq!(tree_cell.bg, style::palette::surface_selection());
     assert_ne!(tree_cell.fg, tree_cell.bg);
 }
@@ -1030,7 +1031,7 @@ fn test_render_keeps_selected_new_status_text_visible() {
     let title_cell = find_text_start_cell(buffer, "new-1").unwrap_or(fallback_cell);
     let new_cell = find_text_start_cell(buffer, "Draft").unwrap_or(fallback_cell);
     assert_ne!(title_cell.fg, title_cell.bg);
-    assert_eq!(new_cell.fg, style::palette::text_selection());
+    assert_eq!(new_cell.fg, style::palette::text_muted());
     assert_eq!(new_cell.bg, style::palette::surface_selection());
     assert_ne!(new_cell.fg, new_cell.bg);
 }
@@ -1205,6 +1206,81 @@ fn archive_header_remains_visible_without_loaded_archived_rows() {
                 .expect("archive");
             assert_eq!(lines[archive_row - 1].trim_matches([' ', '│']), "");
             assert!(text.contains("ACTIVE —— 1"));
+        }
+    }
+}
+
+#[test]
+fn selected_session_preserves_semantic_colors_and_only_bolds_title_across_themes() {
+    for theme in ColorTheme::ALL {
+        for status in [Status::Review, Status::Done] {
+            // Arrange
+            let _theme_scope = style::scoped_active_theme(theme);
+            let mut session = crate::test_support::titled_session_fixture("Colorful title", status);
+            session.agent = model_fixture::codex_selection();
+            session.reasoning_level_override = Some(ReasoningLevel::High);
+            session.size = SessionSize::Xxl;
+            let git_statuses = HashMap::from([(
+                session.id.clone(),
+                SessionGitStatus {
+                    base_status: Some((1, 1)),
+                    has_merge_conflict: Some(true),
+                    remote_status: None,
+                },
+            )]);
+            let sessions = [session];
+            let mut state = TableState::default();
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 12))
+                .expect("create terminal");
+            terminal
+                .draw(|frame| {
+                    SessionListPage::new(&sessions, &mut state, ReasoningLevel::High, 0)
+                        .session_git_statuses(&git_statuses)
+                        .render(frame, frame.area());
+                })
+                .expect("draw unselected session");
+            let unselected = terminal.backend().buffer().clone();
+            state.select(Some(0));
+
+            // Act
+            terminal
+                .draw(|frame| {
+                    SessionListPage::new(&sessions, &mut state, ReasoningLevel::High, 0)
+                        .session_git_statuses(&git_statuses)
+                        .render(frame, frame.area());
+                })
+                .expect("draw selected session");
+
+            // Assert
+            let selected = terminal.backend().buffer();
+            let row_index = buffer_lines(&unselected)
+                .iter()
+                .position(|line| line.contains("Colorful title"))
+                .expect("session row visible");
+            let width = usize::from(selected.area.width);
+            let row_start = row_index * width;
+            let unselected_row = &unselected.content[row_start..row_start + width];
+            let selected_row = &selected.content[row_start..row_start + width];
+            for (before, after) in unselected_row.iter().zip(selected_row) {
+                assert_eq!(after.symbol(), before.symbol());
+                assert_eq!(after.fg, before.fg, "{theme:?} {status:?}: {before:?}");
+            }
+            let title = find_text_start_cell(selected, "Colorful title").expect("title visible");
+            assert!(title.modifier.contains(Modifier::BOLD));
+            for label in [
+                "[XXL]",
+                "[merge conflict]",
+                model_fixture::CODEX_MODEL_ID,
+                "high",
+                &status.to_string(),
+            ] {
+                let cell = find_text_start_cell(selected, label).expect("detail visible");
+                assert_eq!(cell.bg, style::palette::surface_selection());
+                assert!(
+                    !cell.modifier.contains(Modifier::BOLD),
+                    "only title is bold: {label}"
+                );
+            }
         }
     }
 }

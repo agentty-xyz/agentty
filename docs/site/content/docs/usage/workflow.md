@@ -20,9 +20,10 @@ merge locally or publish a review request. See
 - **Settings**: Configure appearance, orchestration, model defaults, and launch
   commands.
 
-Selected rows, options, and tabs use bold text and contrasting background colors.
-Selection colors stay readable across themes when terminal colors are enabled. With
-`NO_COLOR`, selections use bold reverse video without a selector glyph.
+Selected rows, options, and tabs use contrasting background colors. Selected session
+rows retain their status, size, and warning colors, with bold emphasis on the title.
+Other selected controls use bold labels. With `NO_COLOR`, selections use bold reverse
+video without a selector glyph.
 
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
 title, followed by changed-line totals, active-work timer, token usage, and linked
