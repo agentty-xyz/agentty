@@ -38,7 +38,7 @@ fn project_dialogs_render_scope_choices_selection_errors_and_controls() {
 }
 
 #[test]
-fn startup_suggestion_visually_selects_skip() {
+fn startup_suggestion_visually_selects_no() {
     // Arrange
     let dialog = ProjectCatalogDialog::SuggestHome {
         root: PathBuf::from("/home/test"),
@@ -51,19 +51,16 @@ fn startup_suggestion_visually_selects_skip() {
         .expect("draw");
     // Assert
     let cells = terminal.backend().buffer().content();
-    let skip = cells
+    let no = cells
         .windows(4)
         .find(|span| {
             span.iter()
                 .map(ratatui::buffer::Cell::symbol)
                 .collect::<String>()
-                == "Skip"
+                == " No "
         })
-        .expect("Skip choice");
-    assert!(
-        skip.iter()
-            .all(|cell| cell.modifier.contains(Modifier::BOLD))
-    );
+        .expect("No choice");
+    assert!(no.iter().all(|cell| cell.modifier.contains(Modifier::BOLD)));
 }
 
 #[test]
@@ -84,28 +81,33 @@ fn startup_suggestion_fits_content_and_stays_centered() {
         // Assert
         let buffer = terminal.backend().buffer();
         let left = (width - 70) / 2;
-        let top = (height - 14) / 2;
+        let top = (height - 13) / 2;
         assert_eq!(buffer[(left, top)].symbol(), "╭");
-        assert_eq!(buffer[(left + 69, top + 13)].symbol(), "╯");
+        assert_eq!(buffer[(left + 69, top + 12)].symbol(), "╯");
         let text = buffer
             .content()
             .iter()
             .map(ratatui::buffer::Cell::symbol)
             .collect::<String>();
-        for expected in [
-            "/home/test",
-            "Projects later.",
-            "Discover",
-            "Skip",
-            "Enter: confirm",
-        ] {
+        for expected in ["/home/test", "Projects later.", "Yes", "No"] {
             assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("Enter: confirm"));
+        assert!(!text.contains("n/Esc: skip"));
+        for row in [top + 1, top + 2] {
+            assert!((left + 1..left + 69).all(|column| buffer[(column, row)].symbol() == " "));
+        }
+        assert_eq!(buffer[(left + 3, top + 3)].symbol(), "D");
+        for column in left + 3..left + 13 {
+            let cell = &buffer[(column, top + 4)];
+            assert_eq!(cell.fg, palette::accent());
+            assert!(cell.modifier.contains(Modifier::BOLD));
         }
     }
 }
 
 #[test]
-fn startup_suggestion_wraps_long_paths_and_help_in_narrow_terminals() {
+fn startup_suggestion_wraps_and_highlights_long_paths_in_narrow_terminals() {
     // Arrange
     let root = format!("/home/{}/last-folder", "界".repeat(60));
     let dialog = ProjectCatalogDialog::SuggestHome {
@@ -134,7 +136,7 @@ fn startup_suggestion_wraps_long_paths_and_help_in_narrow_terminals() {
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
     assert!(unwrapped.contains(&root), "complete path survives wrapping");
-    for expected in ["Projects later.", "Discover", "Skip", "Enter: confirm"] {
+    for expected in ["Projects later.", "Yes", "No"] {
         assert!(text.contains(expected), "missing {expected}: {text}");
     }
     assert_eq!(text.matches('界').count(), 60);
@@ -144,19 +146,23 @@ fn startup_suggestion_wraps_long_paths_and_help_in_narrow_terminals() {
         .position(|cell| cell.symbol() == "╰")
         .expect("bottom border")
         / 50;
-    let help = buffer
+    for cell in buffer.content().iter().filter(|cell| cell.symbol() == "界") {
+        assert_eq!(cell.fg, palette::accent());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+    let choices = buffer
         .content()
-        .windows(14)
+        .windows(3)
         .position(|cells| {
             cells
                 .iter()
                 .map(ratatui::buffer::Cell::symbol)
                 .collect::<String>()
-                == "Enter: confirm"
+                == "Yes"
         })
-        .expect("complete help")
+        .expect("Yes choice")
         / 50;
-    assert_eq!(bottom, help + 2, "only padding follows the help");
+    assert_eq!(bottom, choices + 2, "only padding follows the choices");
 }
 
 #[test]
@@ -188,7 +194,7 @@ fn startup_suggestion_preserves_controls_in_short_and_resized_viewports() {
             root: PathBuf::from("/home/test"),
             selected,
         };
-        let selected_label = ["Discover", "Skip"][selected];
+        let selected_label = ["Yes", "No"][selected];
         let mut terminal = Terminal::new(TestBackend::new(80, 11)).expect("terminal");
         for height in [11, 24, 11, 8, 6, 24] {
             // Act
@@ -203,7 +209,7 @@ fn startup_suggestion_preserves_controls_in_short_and_resized_viewports() {
                 .iter()
                 .map(ratatui::buffer::Cell::symbol)
                 .collect::<String>();
-            for expected in ["Discover", "Skip", "Enter: confirm", "n/Esc: skip"] {
+            for expected in ["Yes", "No"] {
                 assert!(
                     text.contains(expected),
                     "missing {expected} at height {height}: {text}"
@@ -233,14 +239,14 @@ fn project_dialog_cases() -> [(ProjectCatalogDialog, [&'static str; 3]); 9] {
                 root: PathBuf::from("/home/test"),
                 selected: 1,
             },
-            ["Discover repositories?", "Skip", "Enter: confirm"],
+            ["Discover repositories?", " No ", "/home/test"],
         ),
         (
             ProjectCatalogDialog::SuggestHome {
                 root: PathBuf::from("/home/test"),
                 selected: 0,
             },
-            ["Discover repositories?", "Discover", "n/Esc: skip"],
+            ["Discover repositories?", " Yes ", "/home/test"],
         ),
         (
             ProjectCatalogDialog::PathInput {
