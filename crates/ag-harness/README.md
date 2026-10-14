@@ -141,6 +141,13 @@ let outcome = session
   `TurnReport::malformed_tool_calls` counts them and each is listed as
   `ToolActivity::MalformedArguments`. A third consecutive response made only of
   malformed calls fails the turn; any decodable call resets the count.
+- **Repeated tool calls are nudged, then stopped.** A call that matches an earlier one
+  in tool, arguments, and result is counted within the turn's last 12 calls, including
+  reads answered from the earlier result; a `write` or `bash` call unlike any in that
+  window restarts the count. At three identical calls the next request carries
+  request-only feedback asking the model to stop, counted by
+  `TurnReport::repetition_nudges`; at five the turn fails with
+  `TurnError::RepeatedToolCalls`. Both emit `LifecycleEventKind::ToolCallsRepeated`.
 
 Input is anything `Into<TurnInput>`: a string, or ordered `InputBlock`s mixing text with
 PNG/JPEG images for models that declare image support.

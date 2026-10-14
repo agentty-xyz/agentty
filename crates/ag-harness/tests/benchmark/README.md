@@ -87,7 +87,8 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 
 - `success` means every check passed; `correctness` is the passed fraction. Both are
   derived from the final output and worktree, never from the answer text alone.
-- `model_calls`, `output_corrections`, and `tool_calls` come from the turn report.
+- `model_calls`, `output_corrections`, `repetition_nudges`, and `tool_calls` come from
+  the turn report.
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the

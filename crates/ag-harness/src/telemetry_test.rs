@@ -121,6 +121,8 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
         )
         .expect("observer should request a budget tool")
         .failed(ToolErrorType::Execution);
+    // A repetition nudge records no metric of its own.
+    lifecycle.repeated_tool_calls("read", 3, false, Some(budget_turn_id));
     budget_turn.failed(TurnErrorType::ContextBudget);
 }
 

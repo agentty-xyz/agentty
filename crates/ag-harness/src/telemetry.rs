@@ -47,9 +47,13 @@ pub(crate) const ERROR_REPOSITORY_REQUIRED: &str = "repository_required";
 pub(crate) const ERROR_COMPARISON_REPOSITORY_MISMATCH: &str = "comparison_repository_mismatch";
 pub(crate) const ERROR_CONTEXT_BUDGET: &str = "context_budget_exceeded";
 pub(crate) const ERROR_CONTEXT_OVERFLOW: &str = "context_overflow";
+pub(crate) const ERROR_REPEATED_TOOL_CALLS: &str = "repeated_tool_calls";
 pub(crate) const ERROR_SESSION: &str = "session_error";
 pub(crate) const ERROR_UNSUPPORTED_INPUT: &str = "unsupported_input";
 pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
+pub(crate) const EVENT_TOOL_CALLS_REPEATED: &str = "ag_harness.tool_calls.repeated";
+pub(crate) const ATTRIBUTE_REPEATS: &str = "ag_harness.tool_calls.repeats";
+pub(crate) const ATTRIBUTE_STOPPED: &str = "ag_harness.tool_calls.stopped";
 pub(crate) const INSTRUMENTATION_SCOPE: &str = "ag-harness";
 pub(crate) const OPERATION_CHAT: &str = "chat";
 pub(crate) const OPERATION_EXECUTE_TOOL: &str = "execute_tool";
@@ -268,6 +272,7 @@ impl LifecycleMetricState {
                 ..
             } => self.complete_tool(*duration, Some(error_type.as_str()), *tool_call_id),
             LifecycleEventKind::ModelRequestStarted { turn_id: None, .. }
+            | LifecycleEventKind::ToolCallsRepeated { .. }
             | LifecycleEventKind::ModelRequestCompleted { .. }
             | LifecycleEventKind::ModelRequestFailed { .. }
             | LifecycleEventKind::ModelRequestCancelled { .. } => None,

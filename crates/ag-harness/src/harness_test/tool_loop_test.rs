@@ -10,6 +10,7 @@ use crate::context::ContextBudget;
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
+use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelMessage, ModelRequest, ModelResponse};
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
@@ -428,4 +429,170 @@ async fn malformed_calls_to_disallowed_tools_are_denied() {
 
     // Assert
     assert!(matches!(error, crate::TurnError::ToolDenied { ref name } if name == "bash"));
+}
+
+/// Responds with the same `read` call `times` times, each with its own call
+/// identifier, then with the final output.
+fn repeated_reads(times: usize) -> Vec<Result<ModelResponse, ModelError>> {
+    (0..times)
+        .map(|index| {
+            Ok(ModelResponse::ToolCall(read_of(
+                &format!("read_{index}"),
+                &json!({"path": "notes.txt"}),
+            )))
+        })
+        .chain([Ok(output())])
+        .collect()
+}
+
+/// Returns the `[harness]` user messages a request carries after its input.
+fn harness_feedback(request: &ModelRequest) -> Vec<String> {
+    request
+        .messages()
+        .iter()
+        .skip(request.input_index() + 1)
+        .filter_map(|message| match message {
+            ModelMessage::User(text) if text.starts_with("[harness]") => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Returns the repetition events among `events` as `(repeats, stopped,
+/// tool)`.
+fn repetition_events(events: &Mutex<Vec<LifecycleEvent>>) -> Vec<(usize, bool, String)> {
+    events
+        .lock()
+        .expect("events lock")
+        .iter()
+        .filter_map(|event| match event.kind() {
+            LifecycleEventKind::ToolCallsRepeated {
+                repeats,
+                stopped,
+                tool_name,
+                ..
+            } => Some((*repeats, *stopped, tool_name.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn repetition_harness(
+    model: crate::model::MockModel,
+    events: &Arc<Mutex<Vec<LifecycleEvent>>>,
+) -> Harness {
+    let recorded = Arc::clone(events);
+    let opened = Arc::new(AtomicUsize::new(0));
+
+    Harness::new(model, unbounded_context_budget())
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .allow(Tool::Write)
+        .file_system(counting_file_system(
+            b"line one of a longer manifest\n".repeat(20),
+            &opened,
+        ))
+        .with_lifecycle_observer(move |event: LifecycleEvent| {
+            recorded.lock().expect("events lock").push(event);
+        })
+}
+
+#[tokio::test]
+async fn a_third_identical_call_nudges_the_model_once() {
+    // Arrange
+    let (model, requests) = scripted(repeated_reads(4));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
+
+    // Act
+    let outcome = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    assert_eq!(outcome.report().repetition_nudges(), 1);
+    let requests = requests.lock().expect("requests lock");
+    assert_eq!(harness_feedback(&requests[2]), Vec::<String>::new());
+    let nudges = harness_feedback(&requests[3]);
+    assert_eq!(nudges.len(), 1);
+    assert!(nudges[0].starts_with("[harness] You have called `read` 3 times"));
+    assert_eq!(harness_feedback(&requests[4]), nudges);
+    assert_eq!(repetition_events(&events), [(3, false, "read".to_string())]);
+}
+
+#[tokio::test]
+async fn a_fifth_identical_call_fails_the_turn() {
+    // Arrange
+    let (model, requests) = scripted(repeated_reads(5));
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the fifth identical call fails the turn");
+
+    // Assert
+    assert!(matches!(
+        &error,
+        crate::TurnError::RepeatedToolCalls { repeats: 5, tool } if tool == "read"
+    ));
+    assert_eq!(error.error_type(), TurnErrorType::RepeatedToolCalls);
+    assert_eq!(error.error_type().as_str(), "repeated_tool_calls");
+    assert_eq!(requests.lock().expect("requests lock").len(), 5);
+    assert_eq!(
+        repetition_events(&events),
+        [
+            (3, false, "read".to_string()),
+            (5, true, "read".to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_differing_write_restarts_the_repetition_count() {
+    // Arrange
+    let read = || read_of("read", &json!({"path": "notes.txt"}));
+    let (model, requests) = scripted(vec![
+        Ok(ModelResponse::ToolCalls(vec![
+            read_of("read_0", &json!({"path": "notes.txt"})),
+            read_of("read_1", &json!({"path": "notes.txt"})),
+        ])),
+        Ok(ModelResponse::ToolCall(write_call("write_2", "not a diff"))),
+        Ok(ModelResponse::ToolCall(
+            ToolCall::from_json(
+                "read_3".to_string(),
+                "read",
+                &json!({"path": "notes.txt"}).to_string(),
+                None,
+            )
+            .expect("read call"),
+        )),
+        Ok(ModelResponse::ToolCall(write_call(
+            "write_4",
+            "still not a diff",
+        ))),
+        Ok(ModelResponse::ToolCall(read())),
+        Ok(output()),
+    ]);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
+
+    // Act
+    let outcome = harness
+        .run_once("read and edit the notes", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    assert_eq!(outcome.report().repetition_nudges(), 0);
+    assert_eq!(repetition_events(&events), []);
+    let requests = requests.lock().expect("requests lock");
+    assert!(
+        requests
+            .iter()
+            .all(|request| harness_feedback(request).is_empty())
+    );
 }

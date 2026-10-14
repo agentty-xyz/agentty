@@ -111,6 +111,19 @@ are journaled like any tool exchange, because a durable record describes what th
 returned, and the turn report lists it as `ToolActivity::ReadRepeated`. `write` and
 `bash` always run.
 
+After each response's calls, the engine counts identical calls among the turn's last 12
+handled calls: the same tool, the same canonical arguments, and the same result digest.
+Keying on the result keeps polling a changing command from counting, and a `read`
+answered by the repeated-read note counts with the result it pointed to, so a model that
+keeps re-reading still converges on a stop. A `write` or `bash` call unlike any call in
+the window may change what later calls return, so it restarts the count; malformed calls
+have their own bound and are not counted. The third identical call appends request-only
+`[harness]` feedback, never journaled, that asks the model to use what it has, change
+approach, or answer, and `TurnReport::repetition_nudges` counts it. The fifth fails the
+turn with `TurnError::RepeatedToolCalls` after its results are journaled, so replayed
+history stays well-formed. Both emit `LifecycleEventKind::ToolCallsRepeated`, which the
+trace projection records as a turn-span event.
+
 The heuristic estimate under-counts some content, so the harness calibrates it from
 provider usage, much like Codex combines the last reported usage with an estimate of
 newer items. Providers also add a fixed per-request cost the estimate never sees (live

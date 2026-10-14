@@ -71,6 +71,20 @@ AG_LIVE_ROUNDS=1 \
 cargo test --locked -p ag-harness --test e2e features::test_context_overflow_classification -- --exact --ignored --nocapture
 ```
 
+## Repeated tool calls
+
+`features::test_repeated_tool_calls` injects three identical `read` calls before the
+live model takes over, so the provider must accept the request-only nudge that follows
+their results and the model must answer from what it already read. A second case asks
+the live model to repeat one read six times; when it does, the harness must nudge it or
+stop the turn with `RepeatedToolCalls`, and a model that declines to repeat is reported
+as inconclusive:
+
+```sh
+AG_LIVE_PROVIDERS=muse,qwen \
+cargo test --locked -p ag-harness --test e2e features::test_repeated_tool_calls -- --exact --ignored --nocapture
+```
+
 ## Images
 
 The `image` checks send ordered PNG and JPEG blocks through one-shot and durable turns

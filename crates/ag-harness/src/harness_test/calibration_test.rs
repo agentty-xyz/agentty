@@ -25,7 +25,7 @@ const BUDGET: u64 = 6_000;
 const OVERHEAD: u64 = 500;
 const READS: usize = 6;
 
-/// Reads `notes.txt` for [`READS`] rounds per turn, then answers, and
+/// Reads a notes file for [`READS`] rounds per turn, then answers, and
 /// reports a fixed [`OVERHEAD`] plus `inflation` times each request's
 /// estimated weight as its input tokens, or no usage when `inflation` is
 /// `None`.
@@ -68,8 +68,12 @@ impl Model for InflatingModel {
         self.weights.lock().expect("weights lock").push(weight);
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         let response = if call % (READS + 1) < READS {
-            let arguments = serde_json::from_value(json!({"path": "notes.txt"}))
-                .expect("read arguments should be valid");
+            // Each round reads another path with the same content, so the
+            // loop grows the request without repeating one call.
+            let arguments = serde_json::from_value(
+                json!({"path": format!("notes_{}.txt", call % (READS + 1))}),
+            )
+            .expect("read arguments should be valid");
             ModelResponse::ToolCall(ToolCall::read(format!("read_{call}"), arguments, None))
         } else {
             ModelResponse::Output(json!({"summary": "read everything"}))

@@ -171,7 +171,37 @@ impl TraceState {
                     Vec::new(),
                 );
             }
+            LifecycleEventKind::ToolCallsRepeated {
+                repeats,
+                stopped,
+                tool_name,
+                turn_id,
+            } => self.record_repetition(*turn_id, tool_name, *repeats, *stopped),
         }
+    }
+
+    /// Adds a repeated-tool-call event to the turn's span.
+    fn record_repetition(
+        &self,
+        turn_id: LifecycleId,
+        tool_name: &str,
+        repeats: usize,
+        stopped: bool,
+    ) {
+        let Some(turn) = self.turn_spans.get(&turn_id) else {
+            return;
+        };
+        turn.span().add_event(
+            telemetry::EVENT_TOOL_CALLS_REPEATED,
+            vec![
+                KeyValue::new(telemetry::ATTRIBUTE_TOOL_NAME, tool_name.to_string()),
+                KeyValue::new(
+                    telemetry::ATTRIBUTE_REPEATS,
+                    i64::try_from(repeats).unwrap_or(i64::MAX),
+                ),
+                KeyValue::new(telemetry::ATTRIBUTE_STOPPED, stopped),
+            ],
+        );
     }
 
     fn start_turn(&mut self, turn_id: LifecycleId) {

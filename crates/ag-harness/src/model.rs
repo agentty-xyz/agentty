@@ -674,8 +674,9 @@ impl ModelRequest {
         })
     }
 
-    /// Appends request-only harness feedback after a rejected final output.
-    pub(crate) fn record_output_feedback(&mut self, feedback: String) -> &ModelMessage {
+    /// Appends request-only harness feedback, such as after a rejected final
+    /// output or repeated tool calls; it is never journaled.
+    pub(crate) fn record_feedback(&mut self, feedback: String) -> &ModelMessage {
         self.record(ModelMessage::User(feedback))
     }
 
