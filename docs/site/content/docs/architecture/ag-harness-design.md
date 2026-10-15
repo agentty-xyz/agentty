@@ -249,16 +249,24 @@ reasoning models can spend more than a minute on one completion; a timed-out req
 reported as a transport failure without a retry, while a connection failure is retried
 once. A `429` response is retried up to five times with exponential backoff capped at
 five seconds, and a provider `Retry-After` is honored up to sixty seconds so a
-per-minute quota can be waited out. Model content is parsed as one JSON object; content
-that wraps the object in Markdown fences or surrounding prose is accepted when the
-embedded object parses, and every accepted value is still validated against the
-requested schema. Invalid content is reported with the parser diagnostic, the leading
-character, and the length, never the content itself. A final output rejected as invalid
-JSON or for violating the schema is re-requested up to twice in the same turn: the
-engine appends a request-only feedback message carrying that bounded diagnostic and
-asking for a single JSON value, and the follow-up request goes through the same context
-fitting. Neither the rejected output nor the feedback is journaled, because only
-finished, accepted exchanges belong in replayed history;
+per-minute quota can be waited out. A provider rejection of input beyond the model's
+context window is classified as `ErrorClass::ContextOverflow` in `ag-router` and
+`ModelErrorType::ContextOverflow` in the harness, so callers can shrink and retry
+instead of failing: any `413`, or a `400` or `422` whose body carries a known marker.
+Shared markers are OpenAI's `context_length_exceeded` code and "maximum context length"
+message; each provider policy adds its own, captured live: Kimi's "exceeded model token
+limit", Qwen's "Range of input length", and the Meta Model API's generic "The request
+contains invalid parameters" message, which it returns only for an overflow while every
+other validation failure names its parameter. Model content is parsed as one JSON
+object; content that wraps the object in Markdown fences or surrounding prose is
+accepted when the embedded object parses, and every accepted value is still validated
+against the requested schema. Invalid content is reported with the parser diagnostic,
+the leading character, and the length, never the content itself. A final output rejected
+as invalid JSON or for violating the schema is re-requested up to twice in the same
+turn: the engine appends a request-only feedback message carrying that bounded
+diagnostic and asking for a single JSON value, and the follow-up request goes through
+the same context fitting. Neither the rejected output nor the feedback is journaled,
+because only finished, accepted exchanges belong in replayed history;
 `TurnReport::output_corrections` counts the retries, and a third rejection fails the
 turn with the original error type.
 

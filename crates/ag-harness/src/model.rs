@@ -375,6 +375,7 @@ impl ModelClient {
             ag_router::ErrorClass::Request => ModelErrorType::Request,
             ag_router::ErrorClass::Transport => ModelErrorType::Transport,
             ag_router::ErrorClass::Provider => ModelErrorType::Provider,
+            ag_router::ErrorClass::ContextOverflow => ModelErrorType::ContextOverflow,
             ag_router::ErrorClass::InvalidProviderResponse => {
                 ModelErrorType::InvalidProviderResponse
             }
@@ -952,6 +953,19 @@ impl ModelError {
         Self::Request(Box::new(error))
     }
 
+    /// Wraps a provider failure that rejected the request because its input
+    /// exceeds the model's context window, so custom [`Model`]s report the
+    /// same [`ModelErrorType::ContextOverflow`] as built-in providers.
+    pub fn context_overflow(error: impl Error + Send + Sync + 'static) -> Self {
+        Self::classified_request(ModelErrorType::ContextOverflow, None, Box::new(error))
+    }
+
+    /// Returns whether the provider rejected the request because its input
+    /// exceeds the model's context window.
+    pub fn is_context_overflow(&self) -> bool {
+        self.error_type() == ModelErrorType::ContextOverflow
+    }
+
     /// Returns a stable, low-cardinality classification for this failure.
     pub fn error_type(&self) -> ModelErrorType {
         match self {
@@ -1014,6 +1028,9 @@ pub enum ModelErrorType {
     Transport,
     /// The provider returned an unsuccessful HTTP response.
     Provider,
+    /// The provider rejected the request because its input exceeds the
+    /// model's context window; a smaller request may succeed.
+    ContextOverflow,
     /// The provider returned a malformed response envelope.
     InvalidProviderResponse,
     /// The provider returned an unusable or incomplete successful response.
@@ -1037,6 +1054,7 @@ impl ModelErrorType {
             Self::Request => telemetry::ERROR_REQUEST,
             Self::Transport => telemetry::ERROR_TRANSPORT,
             Self::Provider => telemetry::ERROR_PROVIDER,
+            Self::ContextOverflow => telemetry::ERROR_CONTEXT_OVERFLOW,
             Self::InvalidProviderResponse => telemetry::ERROR_INVALID_PROVIDER_RESPONSE,
             Self::InvalidResponse => telemetry::ERROR_INVALID_RESPONSE,
             Self::UnsupportedOutput => telemetry::ERROR_UNSUPPORTED_OUTPUT,

@@ -61,6 +61,7 @@ fn normalizes_transport_error_classification() {
         "https://example.com/v1".to_string(),
         "model".to_string(),
         ChatCompletionProviderPolicy {
+            context_overflow_markers: &[],
             display_name: "Provider",
             image_input: false,
             reasoning_format: ReasoningFormat::Effort(max_as_xhigh),

@@ -294,6 +294,90 @@ async fn client_returns_multiple_tool_calls() {
 }
 
 #[tokio::test]
+async fn client_classifies_provider_context_overflow() {
+    // Arrange
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "invalid_parameter_error",
+                "message": "Range of input length should be [1, 1000000]",
+                "type": "invalid_request_error"
+            }
+        })))
+        .mount(&server)
+        .await;
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed_events = Arc::clone(&events);
+    let client = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: server.uri(),
+        model: "qwen-plus".to_string(),
+    })
+    .expect("fixture configuration should be valid")
+    .with_lifecycle_observer(move |event| {
+        observed_events
+            .lock()
+            .expect("event recorder should not be poisoned")
+            .push(event);
+    });
+    let schema =
+        OutputSchema::new(json!({ "type": "object" })).expect("fixture schema should be valid");
+
+    // Act
+    let error = client
+        .complete(ModelRequest::new("prompt", schema))
+        .await
+        .expect_err("an overflowing request should fail");
+
+    // Assert
+    assert_eq!(error.error_type(), ModelErrorType::ContextOverflow);
+    assert!(error.is_context_overflow());
+    assert_eq!(error.http_status(), Some(400));
+    let events = events
+        .lock()
+        .expect("event recorder should not be poisoned");
+    assert!(matches!(
+        events[1].kind(),
+        LifecycleEventKind::ModelRequestFailed {
+            error_type: ModelErrorType::ContextOverflow,
+            http_status: Some(400),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn custom_models_report_context_overflow() {
+    // Arrange
+    let overflow = ModelError::context_overflow(io::Error::other("input exceeds the window"));
+    let other = ModelError::request(io::Error::other("offline"));
+
+    // Act
+    let classifications = [&overflow, &other].map(|error| {
+        (
+            error.error_type(),
+            error.is_context_overflow(),
+            error.http_status(),
+        )
+    });
+
+    // Assert
+    assert_eq!(
+        classifications,
+        [
+            (ModelErrorType::ContextOverflow, true, None),
+            (ModelErrorType::Request, false, None),
+        ]
+    );
+    assert_eq!(
+        overflow.to_string(),
+        "model request failed: input exceeds the window"
+    );
+}
+
+#[tokio::test]
 async fn client_observes_classified_failure() {
     // Arrange
     let server = MockServer::start().await;
@@ -781,6 +865,7 @@ fn classifies_model_errors_with_stable_telemetry_values() {
     assert_eq!(ModelErrorType::Request.as_str(), "request_error");
     assert_eq!(ModelErrorType::Transport.as_str(), "transport_error");
     assert_eq!(ModelErrorType::Provider.as_str(), "provider_error");
+    assert_eq!(ModelErrorType::ContextOverflow.as_str(), "context_overflow");
     assert_eq!(
         ModelErrorType::InvalidProviderResponse.as_str(),
         "invalid_provider_response"

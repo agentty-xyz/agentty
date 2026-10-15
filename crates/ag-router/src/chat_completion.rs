@@ -66,15 +66,47 @@ impl StructuredOutputMode {
     }
 }
 
+/// Lowercase markers that, in an unsuccessful response body from any
+/// OpenAI-compatible provider, mean the request input exceeded the model's
+/// context window: the `context_length_exceeded` code and "maximum
+/// context length" message of the `OpenAI` API.
+const CONTEXT_OVERFLOW_MARKERS: [&str; 2] = ["context_length_exceeded", "maximum context length"];
+
 /// Provider policy applied by the shared Chat Completions backend.
 #[derive(Clone, Copy)]
 pub(crate) struct ChatCompletionProviderPolicy {
+    /// Lowercase provider-specific body markers of a context-window
+    /// overflow, checked beside [`CONTEXT_OVERFLOW_MARKERS`].
+    pub(crate) context_overflow_markers: &'static [&'static str],
     pub(crate) display_name: &'static str,
     pub(crate) image_input: bool,
     pub(crate) reasoning_format: ReasoningFormat,
     pub(crate) response_format_with_tools: bool,
     pub(crate) structured_output: StructuredOutputMode,
     pub(crate) unsupported_schema_reason: &'static str,
+}
+
+impl ChatCompletionProviderPolicy {
+    /// Returns whether an unsuccessful response rejected the request because
+    /// its input exceeds the model's context window: any `413`, or a `400`
+    /// or `422` whose body carries a shared or provider-specific marker.
+    fn is_context_overflow(&self, status: reqwest::StatusCode, body: &str) -> bool {
+        if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE {
+            return true;
+        }
+        if !matches!(
+            status,
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+        ) {
+            return false;
+        }
+        let body = body.to_lowercase();
+
+        CONTEXT_OVERFLOW_MARKERS
+            .iter()
+            .chain(self.context_overflow_markers)
+            .any(|marker| body.contains(marker))
+    }
 }
 
 /// Provider wire representation for a requested reasoning depth.
@@ -453,7 +485,15 @@ impl ChatCompletionBackend {
                 source,
                 status,
             } => {
-                model::ModelError::provider_request(self.policy.display_name, body, source, status)
+                let context_overflow = self.policy.is_context_overflow(status, &body);
+
+                model::ModelError::provider_request(
+                    self.policy.display_name,
+                    body,
+                    source,
+                    status,
+                    context_overflow,
+                )
             }
             error @ ChatCompletionError::InvalidResponse(_) => {
                 model::ModelError::classified_request(
