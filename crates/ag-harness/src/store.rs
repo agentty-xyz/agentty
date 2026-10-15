@@ -14,7 +14,9 @@ use tokio::time::Instant;
 pub use crate::admission::{
     Admission, AdmissionState, ModelSwitch, NewTurn, Reservation, ReservedTurn, TurnAdmission,
 };
-pub use crate::compaction::{CheckpointError, MAX_SUMMARY_BYTES, SessionCheckpoint};
+pub use crate::compaction::{
+    CheckpointError, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint,
+};
 pub use crate::context::{HistoryTurn, TurnStop};
 pub use crate::memory_store::MemoryStore;
 use crate::model::{ModelMessage, ModelMetadata};
@@ -146,6 +148,20 @@ pub trait SessionStore: Send + Sync {
         session_id: &str,
         checkpoint: &crate::store::SessionCheckpoint,
     ) -> Result<(), SessionError>;
+    /// Loads what the next compaction checkpoint may cover: the current
+    /// checkpoint and the oldest finished turns after its boundary, oldest
+    /// first, each with its turn position and in the most complete form whose
+    /// retained bytes fit what `max_history_bytes` leaves, as
+    /// [`LoadedSession::turns`] chooses forms. Stop before the first turn that
+    /// fits in no form, except that the oldest uncovered turn is always
+    /// returned, in brief form when no form fits, so coverage can always
+    /// advance. A failed or interrupted turn carries its stop record. An
+    /// unknown session has an empty source.
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<CompactionSource, SessionError>;
 
     /// Recover expired reservations and return the canonical request outcome
     /// plus its current journal. Never execute a model or tool. Missing host

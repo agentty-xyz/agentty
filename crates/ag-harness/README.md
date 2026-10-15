@@ -223,7 +223,8 @@ let harness = Harness::from_registry(&models, "review-model")?;
   the most recent turns that fit and fails before any provider call when mandatory
   content cannot fit. `TurnReport::history` says what was replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
-  `session.compact()` stores a schema-validated summary that later turns replay first.
+  `session.compact()` stores a schema-validated summary of the oldest uncovered turns
+  that fit, which later turns replay first; call it again to cover the rest.
 - Bump the registration revision whenever configuration or credentials scope changes.
   Never put secrets in it.
 

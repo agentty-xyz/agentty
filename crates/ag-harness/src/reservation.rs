@@ -756,6 +756,16 @@ impl SessionStore for AdmittedStore {
         self.store.publish_checkpoint(session_id, checkpoint).await
     }
 
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<crate::store::CompactionSource, SessionError> {
+        self.store
+            .load_compaction_source(session_id, max_history_bytes)
+            .await
+    }
+
     async fn load_request(
         &self,
         id: &str,

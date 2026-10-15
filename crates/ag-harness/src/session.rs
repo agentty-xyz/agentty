@@ -19,7 +19,7 @@ use tokio::time::Instant;
 use crate::admission::{
     Admission, AdmissionState, ModelSwitch, Reservation, ReservedTurn, TurnAdmission,
 };
-use crate::compaction::{CheckpointError, SessionCheckpoint};
+use crate::compaction::{CheckpointError, CompactionSource, SessionCheckpoint};
 use crate::context::{self, HistoryTurn, TurnStop};
 use crate::input::{StoredTurnInput, TurnInput};
 use crate::model::{ModelMessage, ModelMetadata};
@@ -152,6 +152,16 @@ struct TurnSizeRow {
     output_bytes: i64,
     retained_bytes: i64,
     turn_position: i64,
+}
+
+/// Which end of the uncovered history a window keeps when not every turn
+/// fits.
+#[derive(Clone, Copy)]
+enum WindowEnd {
+    /// The most recent turns, replayed with later requests.
+    Newest,
+    /// The oldest turns, which the next compaction checkpoint covers.
+    Oldest,
 }
 
 /// Form in which one turn of the history window replays.
@@ -919,6 +929,27 @@ WHERE id = ?
             system_prompt: row.system_prompt,
             turns,
         })
+    }
+
+    async fn load_compaction_source(
+        &self,
+        session_id: &str,
+        max_history_bytes: usize,
+    ) -> Result<CompactionSource, SessionError> {
+        let operation = "load session compaction source";
+        let mut transaction = self.pool.begin().await.session_context(operation)?;
+        let checkpoint = load_checkpoint_from(&mut transaction, session_id).await?;
+        let turns = load_window_turns(
+            &mut transaction,
+            session_id,
+            max_history_bytes,
+            checkpoint_boundary(checkpoint.as_ref()),
+            WindowEnd::Oldest,
+        )
+        .await?;
+        transaction.commit().await.session_context(operation)?;
+
+        Ok(CompactionSource { checkpoint, turns })
     }
 
     async fn publish_checkpoint(
@@ -2006,8 +2037,29 @@ async fn load_turns_from(
     max_history_bytes: usize,
     after_turn: Option<i64>,
 ) -> Result<Vec<HistoryTurn>, SessionError> {
-    let window = history_window(connection, session_id, max_history_bytes, after_turn).await?;
-    let Some(oldest_turn) = window.last().map(|(position, _)| *position) else {
+    let turns = load_window_turns(
+        connection,
+        session_id,
+        max_history_bytes,
+        after_turn,
+        WindowEnd::Newest,
+    )
+    .await?;
+
+    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+}
+
+/// Loads the history window kept from `end`, oldest first, with each turn's
+/// position.
+async fn load_window_turns(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    max_history_bytes: usize,
+    after_turn: Option<i64>,
+    end: WindowEnd,
+) -> Result<Vec<(i64, HistoryTurn)>, SessionError> {
+    let window = history_window(connection, session_id, max_history_bytes, after_turn, end).await?;
+    let Some(oldest_turn) = window.first().map(|(position, _)| *position) else {
         return Ok(Vec::new());
     };
     let positions = |wanted: fn(&WindowForm) -> bool| {
@@ -2026,7 +2078,7 @@ async fn load_turns_from(
         .into_iter()
         .peekable();
     let mut turns = Vec::with_capacity(window.len());
-    for (position, form) in window.into_iter().rev() {
+    for (position, form) in window {
         let mut next_loaded = || {
             loaded
                 .next_if(|(loaded_position, _)| *loaded_position == position)
@@ -2043,7 +2095,7 @@ async fn load_turns_from(
         attach_unfinished_effects(connection, session_id, oldest_turn, &mut turns).await?;
     }
 
-    Ok(turns.into_iter().map(|(_, turn)| turn).collect())
+    Ok(turns)
 }
 
 /// Loads every message of the `full_turns` and only the input and final
@@ -2173,70 +2225,55 @@ fn loaded_stop(turns: &mut [(i64, HistoryTurn)], position: i64) -> Option<&mut T
         .and_then(|(_, turn)| turn.stop.as_mut())
 }
 
-/// Returns, newest first, the most recent finished turns that fit
-/// `max_history_bytes`, each in the most complete form that fits what is
-/// left, exactly as [`context::fit_history_bytes`] selects them, and stops at
-/// the first turn that does not fit even in brief form. Stored sizes decide
-/// whole and brief turns without loading them; only a turn that fits briefly
-/// but not whole, and stays within [`context::ELIDED_SOURCE_LIMIT_FACTOR`]
-/// times `max_history_bytes`, is loaded here, to weigh its elided form.
+/// Returns, oldest first, the finished turns after `after_turn` that fit
+/// `max_history_bytes` when taken from `end`, each in the most complete form
+/// that fits what is left, exactly as [`context::fit_history_bytes`] and
+/// [`context::fit_oldest_history_bytes`] select them, stopping at the first
+/// turn that does not fit even in brief form; from the oldest end, the first
+/// turn is always kept, briefly when no form fits. Stored sizes decide whole
+/// and brief turns without loading them; only a turn that fits briefly but
+/// not whole, and stays within [`context::ELIDED_SOURCE_LIMIT_FACTOR`] times
+/// `max_history_bytes`, is loaded here, to weigh its elided form.
 async fn history_window(
     connection: &mut SqliteConnection,
     session_id: &str,
     max_history_bytes: usize,
     after_turn: Option<i64>,
+    end: WindowEnd,
 ) -> Result<Vec<(i64, WindowForm)>, SessionError> {
     let mut remaining = max_history_bytes;
     let mut window = Vec::new();
+    let mut oldest_last = Vec::new();
     let mut before_turn = None;
 
     'pages: loop {
         let turn_sizes =
             load_turn_size_page(connection, session_id, before_turn, after_turn).await?;
-        if turn_sizes.is_empty() {
-            break;
-        }
         let page_is_full =
             turn_sizes.len() == usize::try_from(TURN_SIZE_PAGE_SIZE).unwrap_or(usize::MAX);
-
-        for turn_size in turn_sizes {
-            let decode = |bytes: i64| {
-                usize::try_from(bytes).map_err(|_| SessionError::InvalidData {
-                    reason: format!("session `{session_id}` has an invalid retained byte count"),
-                })
-            };
-            let full_bytes = decode(turn_size.retained_bytes)?;
-            let brief_bytes =
-                decode(turn_size.input_bytes)?.saturating_add(decode(turn_size.output_bytes)?);
-            let position = turn_size.turn_position;
-            let (form, bytes) = if full_bytes <= remaining {
-                (WindowForm::Full, full_bytes)
-            } else if brief_bytes <= remaining
-                && full_bytes
-                    <= max_history_bytes.saturating_mul(context::ELIDED_SOURCE_LIMIT_FACTOR)
-            {
-                let full_turn = Value::from(vec![position]).to_string();
-                let elided = load_turn_messages(connection, session_id, &full_turn, "[]")
+        let Some(last) = turn_sizes.last() else {
+            break;
+        };
+        before_turn = Some(last.turn_position);
+        match end {
+            WindowEnd::Newest => {
+                for turn_size in turn_sizes {
+                    let Some((form, bytes)) = window_form(
+                        connection,
+                        session_id,
+                        &turn_size,
+                        remaining,
+                        max_history_bytes,
+                    )
                     .await?
-                    .pop()
-                    .map(|(_, turn)| turn.elided())
-                    .filter(|turn| context::retained_bytes(&turn.messages) <= remaining);
-                match elided {
-                    Some(turn) => {
-                        let bytes = context::retained_bytes(&turn.messages);
-
-                        (WindowForm::Elided(turn), bytes)
-                    }
-                    None => (WindowForm::Brief, brief_bytes),
+                    else {
+                        break 'pages;
+                    };
+                    remaining -= bytes;
+                    window.push((turn_size.turn_position, form));
                 }
-            } else if brief_bytes <= remaining {
-                (WindowForm::Brief, brief_bytes)
-            } else {
-                break 'pages;
-            };
-            remaining -= bytes;
-            window.push((position, form));
-            before_turn = Some(position);
+            }
+            WindowEnd::Oldest => oldest_last.extend(turn_sizes),
         }
 
         if !page_is_full {
@@ -2244,7 +2281,71 @@ async fn history_window(
         }
     }
 
+    window.reverse();
+    for turn_size in oldest_last.into_iter().rev() {
+        let form = match window_form(
+            connection,
+            session_id,
+            &turn_size,
+            remaining,
+            max_history_bytes,
+        )
+        .await?
+        {
+            Some((form, bytes)) => {
+                remaining -= bytes;
+                form
+            }
+            None if window.is_empty() => {
+                remaining = 0;
+                WindowForm::Brief
+            }
+            None => break,
+        };
+        window.push((turn_size.turn_position, form));
+    }
+
     Ok(window)
+}
+
+/// Returns the most complete form of one sized turn whose retained bytes fit
+/// `remaining`, with those bytes, or `None` when no form fits.
+async fn window_form(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    turn_size: &TurnSizeRow,
+    remaining: usize,
+    max_history_bytes: usize,
+) -> Result<Option<(WindowForm, usize)>, SessionError> {
+    let decode = |bytes: i64| {
+        usize::try_from(bytes).map_err(|_| SessionError::InvalidData {
+            reason: format!("session `{session_id}` has an invalid retained byte count"),
+        })
+    };
+    let full_bytes = decode(turn_size.retained_bytes)?;
+    let brief_bytes =
+        decode(turn_size.input_bytes)?.saturating_add(decode(turn_size.output_bytes)?);
+    if full_bytes <= remaining {
+        return Ok(Some((WindowForm::Full, full_bytes)));
+    }
+    if brief_bytes > remaining {
+        return Ok(None);
+    }
+    if full_bytes <= max_history_bytes.saturating_mul(context::ELIDED_SOURCE_LIMIT_FACTOR) {
+        let full_turn = Value::from(vec![turn_size.turn_position]).to_string();
+        let elided = load_turn_messages(connection, session_id, &full_turn, "[]")
+            .await?
+            .pop()
+            .map(|(_, turn)| turn.elided())
+            .filter(|turn| context::retained_bytes(&turn.messages) <= remaining);
+        if let Some(turn) = elided {
+            let bytes = context::retained_bytes(&turn.messages);
+
+            return Ok(Some((WindowForm::Elided(turn), bytes)));
+        }
+    }
+
+    Ok(Some((WindowForm::Brief, brief_bytes)))
 }
 
 async fn load_turn_size_page(

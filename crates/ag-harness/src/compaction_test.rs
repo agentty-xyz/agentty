@@ -3,8 +3,9 @@
 use serde_json::{Value, json};
 
 use super::{
-    CheckpointError, GENERATION_INSTRUCTIONS, MAX_SUMMARY_BYTES, SessionCheckpoint, render_source,
-    summary_schema,
+    CheckpointError, GENERATION_INSTRUCTIONS, MAX_SOURCE_ARGUMENT_BYTES, MAX_SOURCE_TEXT_BYTES,
+    MAX_SUMMARY_BYTES, SOURCE_PREAMBLE, SessionCheckpoint, accept_summary, bounded_text,
+    render_messages, render_source, summary_schema,
 };
 use crate::input::{ImageContent, ImageMediaType, InputBlock, TurnInput};
 use crate::model::ModelMessage;
@@ -172,20 +173,34 @@ fn summary_schema_accepts_only_bounded_structured_output() {
 }
 
 #[test]
-fn render_source_carries_forward_every_message_kind_without_reasoning() {
+fn render_source_encodes_every_message_kind_as_json_lines_without_reasoning() {
     // Arrange
-    let previous = checkpoint();
+    let previous = summary();
     let mut png = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     png.extend_from_slice(b"payload");
     let image = ImageContent::new(ImageMediaType::Png, png).expect("image");
     let digest = image.content_digest();
     let call = ToolCall::from_json("call-1".to_string(), "read", r#"{"path":"a"}"#, None)
         .expect("tool call");
-    let batch = ToolCall::from_json("call-2".to_string(), "read", r#"{"path":"b"}"#, None)
-        .expect("tool call");
+    let batch = vec![
+        ToolCall::from_json(
+            "call-2".to_string(),
+            "bash",
+            r#"{"command":"cargo test"}"#,
+            None,
+        )
+        .expect("tool call"),
+        ToolCall::from_json(
+            "call-3".to_string(),
+            "write",
+            r#"{"path":"notes.txt","patch":"+line"}"#,
+            None,
+        )
+        .expect("tool call"),
+    ];
     let turn = vec![
         ModelMessage::System("policy".to_string()),
-        ModelMessage::User("plain".to_string()),
+        ModelMessage::User("plain \"quoted\"\nnext line".to_string()),
         ModelMessage::UserInput(
             TurnInput::from_blocks(vec![
                 InputBlock::Text("look".to_string()),
@@ -194,11 +209,21 @@ fn render_source_carries_forward_every_message_kind_without_reasoning() {
             .expect("input"),
         ),
         ModelMessage::AssistantToolCall(call),
-        ModelMessage::AssistantToolCalls(vec![batch]),
         ModelMessage::ToolResult {
             call_id: "call-1".to_string(),
             content: "contents".to_string(),
             name: "read".to_string(),
+        },
+        ModelMessage::AssistantToolCalls(batch),
+        ModelMessage::ToolResult {
+            call_id: "call-3".to_string(),
+            content: r#"{"status":"applied"}"#.to_string(),
+            name: "write".to_string(),
+        },
+        ModelMessage::ToolResult {
+            call_id: "call-2".to_string(),
+            content: r#"{"exit_code":0}"#.to_string(),
+            name: "bash".to_string(),
         },
         ModelMessage::AssistantReasoning {
             content: "{\"answer\":\"done\"}".to_string(),
@@ -208,18 +233,177 @@ fn render_source_carries_forward_every_message_kind_without_reasoning() {
     ];
 
     // Act
-    let source = render_source(Some(&previous), &[turn]);
+    let source = render_source(Some(&previous), &[(4, turn)]);
 
     // Assert
-    assert!(source.contains("carry its content forward"));
-    assert!(source.contains("reviewed the parser"));
-    assert!(source.contains("system: policy"));
-    assert!(source.contains("user: plain"));
-    assert!(source.contains(&format!("[image image/png sha256:{digest}]")));
-    assert!(source.contains("[tool call read]"));
-    assert!(source.contains("[tool calls read]"));
-    assert!(source.contains("tool read: contents"));
-    assert!(source.contains("{\"answer\":\"done\"}"));
-    assert!(source.contains("{\"answer\":\"final\"}"));
+    let mut lines = source.lines();
+    assert_eq!(lines.next(), Some(SOURCE_PREAMBLE));
+    let earlier: Value = serde_json::from_str(lines.next().expect("summary line")).expect("json");
+    assert_eq!(earlier, json!({"earlier_summary": summary()}));
+    let turn: Value = serde_json::from_str(lines.next().expect("turn line")).expect("json");
+    assert_eq!(lines.next(), None);
+    assert_eq!(
+        turn,
+        json!({
+            "turn": 4,
+            "messages": [
+                {"role": "system", "text": "policy"},
+                {"role": "user", "text": "plain \"quoted\"\nnext line"},
+                {"role": "user", "text": format!("look [image image/png sha256:{digest}]")},
+                {"role": "assistant", "tool_calls": [
+                    {"call": 1, "tool": "read", "arguments": {"path": "a"}}
+                ]},
+                {"role": "tool", "call": 1, "tool": "read", "result": "contents"},
+                {"role": "assistant", "tool_calls": [
+                    {"call": 2, "tool": "bash", "arguments": {"command": "cargo test"}},
+                    {"call": 3, "tool": "write", "arguments": {"path": "notes.txt", "patch": "+line"}}
+                ]},
+                {"role": "tool", "call": 3, "tool": "write", "result": "{\"status\":\"applied\"}"},
+                {"role": "tool", "call": 2, "tool": "bash", "result": "{\"exit_code\":0}"},
+                {"role": "assistant", "text": "{\"answer\":\"done\"}"},
+                {"role": "assistant", "text": "{\"answer\":\"final\"}"}
+            ]
+        })
+    );
     assert!(!source.contains("secret chain"));
+}
+
+#[test]
+fn render_source_without_a_previous_summary_lists_only_turns() {
+    // Arrange
+    let turns = [
+        (0, vec![ModelMessage::User("first".to_string())]),
+        (2, vec![ModelMessage::User("third".to_string())]),
+    ];
+
+    // Act
+    let source = render_source(None, &turns);
+
+    // Assert
+    let lines: Vec<Value> = source
+        .lines()
+        .skip(1)
+        .map(|line| serde_json::from_str(line).expect("json line"))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            json!({"turn": 0, "messages": [{"role": "user", "text": "first"}]}),
+            json!({"turn": 2, "messages": [{"role": "user", "text": "third"}]}),
+        ]
+    );
+}
+
+#[test]
+fn render_messages_bounds_text_results_and_arguments() {
+    // Arrange
+    let long_command = format!("echo {}", "a".repeat(3 * MAX_SOURCE_ARGUMENT_BYTES));
+    let arguments = json!({"command": long_command}).to_string();
+    let call = ToolCall::from_json("call-1".to_string(), "bash", &arguments, None).expect("call");
+    let long_text = format!("start {} end", "b".repeat(2 * MAX_SOURCE_TEXT_BYTES));
+    let messages = [
+        ModelMessage::User(long_text.clone()),
+        ModelMessage::AssistantToolCall(call),
+        ModelMessage::ToolResult {
+            call_id: "call-1".to_string(),
+            content: long_text,
+            name: "bash".to_string(),
+        },
+        ModelMessage::ToolResult {
+            call_id: "unknown".to_string(),
+            content: "orphan".to_string(),
+            name: "read".to_string(),
+        },
+    ];
+
+    // Act
+    let rendered = render_messages(&messages);
+
+    // Assert
+    let text = rendered[0]["text"].as_str().expect("text");
+    assert!(text.len() < MAX_SOURCE_TEXT_BYTES + 64);
+    assert!(text.starts_with("start "));
+    assert!(text.ends_with(" end"));
+    assert!(text.contains("bytes omitted ...]"));
+    let command = rendered[1]["tool_calls"][0]["arguments"]["command"]
+        .as_str()
+        .expect("command");
+    assert!(command.len() < MAX_SOURCE_ARGUMENT_BYTES + 64);
+    assert!(command.starts_with("echo "));
+    let result = rendered[2]["result"].as_str().expect("result");
+    assert!(result.len() < MAX_SOURCE_TEXT_BYTES + 64);
+    assert_eq!(rendered[3]["call"], Value::Null);
+}
+
+#[test]
+fn render_messages_keeps_malformed_arguments_as_bounded_raw_text() {
+    // Arrange
+    let unknown_field = ToolCall::from_json(
+        "call-1".to_string(),
+        "read",
+        r#"{"path src/": [true, "x"]}"#,
+        None,
+    )
+    .expect("call");
+    let not_json =
+        ToolCall::from_json("call-2".to_string(), "bash", "{\"command\": ls", None).expect("call");
+
+    // Act
+    let rendered = render_messages(&[ModelMessage::AssistantToolCalls(vec![
+        unknown_field,
+        not_json,
+    ])]);
+
+    // Assert
+    assert_eq!(
+        rendered[0]["tool_calls"][0]["arguments"],
+        json!({"path src/": [true, "x"]})
+    );
+    assert_eq!(
+        rendered[0]["tool_calls"][1]["arguments"],
+        json!({"unparsed": "{\"command\": ls"})
+    );
+}
+
+#[test]
+fn bounded_text_keeps_whole_characters_around_the_marker() {
+    // Arrange
+    let text = "é".repeat(10);
+
+    // Act
+    let bounded = bounded_text(&text, 7);
+    let unchanged = bounded_text("short", 7);
+
+    // Assert
+    assert_eq!(unchanged, "short");
+    assert_eq!(bounded, "é[... 14 bytes omitted ...]éé");
+}
+
+#[test]
+fn accept_summary_requires_a_valid_bounded_summary_smaller_than_its_source() {
+    // Arrange
+    let valid = summary();
+    let valid_bytes = valid.to_string().len();
+
+    // Act
+    let accepted = accept_summary(&valid, MAX_SUMMARY_BYTES, valid_bytes + 1);
+    let not_smaller = accept_summary(&valid, MAX_SUMMARY_BYTES, valid_bytes);
+    let too_large = accept_summary(&valid, valid_bytes - 1, usize::MAX);
+    let invalid = accept_summary(&json!({"context": "c"}), MAX_SUMMARY_BYTES, usize::MAX);
+
+    // Assert
+    assert_eq!(accepted.expect("accepted"), valid_bytes);
+    assert!(matches!(
+        not_smaller,
+        Err(CheckpointError::SummaryNotSmaller { source_bytes, summary_bytes })
+            if source_bytes == valid_bytes && summary_bytes == valid_bytes
+    ));
+    assert!(matches!(
+        too_large,
+        Err(CheckpointError::SummaryTooLarge { max_bytes, .. }) if max_bytes == valid_bytes - 1
+    ));
+    assert!(matches!(
+        invalid,
+        Err(CheckpointError::SummaryInvalid { .. })
+    ));
 }

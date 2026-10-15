@@ -11,7 +11,7 @@ use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
-use crate::compaction::{self, SessionCheckpoint};
+use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
     self, ContextBudget, ContextEstimator, HeuristicContextEstimator, HistoryTurn,
 };
@@ -140,14 +140,16 @@ impl Session {
         Ok(())
     }
 
-    /// Generates and publishes a compaction checkpoint covering every
-    /// finished turn, replacing covered turns with a structured summary in
-    /// later outgoing requests.
+    /// Generates and publishes a compaction checkpoint covering the oldest
+    /// uncovered finished turns, replacing covered turns with a structured
+    /// summary in later outgoing requests.
     ///
     /// Generation runs the session's current model through the shared engine
     /// with every tool denied, outside store writer transactions, and bounded
-    /// by the effective context budget: the most recent uncovered turns that
-    /// fit are summarized together with the previous checkpoint. Dropping the
+    /// by the effective context budget: the previous checkpoint's summary and
+    /// the oldest uncovered turns that fit render, as JSON, into its source.
+    /// The checkpoint covers exactly the rendered turns, so turns left out for
+    /// size stay uncovered until a later call summarizes them. Dropping the
     /// returned future cancels generation before anything is published.
     /// Publication is atomic and only succeeds while the model selection and
     /// existing coverage are still current. On any failure the previous
@@ -160,8 +162,9 @@ impl Session {
     ///
     /// # Errors
     /// Returns [`SessionError`] for a stale handle, model or validation
-    /// failure, a summary violating the bounded checkpoint schema, or a
-    /// publication rejected as [`SessionError::CheckpointStale`].
+    /// failure, a summary violating the bounded checkpoint schema or no
+    /// smaller than its source, or a publication rejected as
+    /// [`SessionError::CheckpointStale`].
     pub async fn compact(&mut self) -> Result<Option<SessionCheckpoint>, SessionError> {
         let loaded = self.database.load_session(&self.id).await?;
         crate::session_model::check_generation(
@@ -169,24 +172,22 @@ impl Session {
             loaded.model_generation,
             self.model_generation,
         )?;
-        let Some(boundary) = loaded.latest_finished_turn else {
-            return Ok(None);
-        };
-        if loaded
-            .checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.covered_through() >= boundary)
-        {
-            self.checkpoint = loaded.checkpoint;
+        let source = self
+            .database
+            .load_compaction_source(&self.id, loaded.max_history_bytes)
+            .await?;
+        if source.turns.is_empty() {
+            self.checkpoint = source.checkpoint;
 
             return Ok(None);
         }
         let schema = compaction::summary_schema().map_err(SessionError::Schema)?;
         let options = TurnOptions::new(schema, ToolPolicy::default());
-        let input = self.compaction_input(&loaded, &options)?;
+        let (input, covered_through, source_bytes) = self.compaction_input(&source, &options)?;
         let outcome = self.harness.run_compaction(input, &options).await?;
+        compaction::accept_summary(outcome.output(), MAX_SUMMARY_BYTES, source_bytes)?;
         let checkpoint = SessionCheckpoint::new(
-            boundary,
+            covered_through,
             self.model_generation,
             loaded.provider,
             loaded.model,
@@ -207,26 +208,38 @@ impl Session {
     }
 
     /// Renders the bounded generation source: the previous summary plus the
-    /// most recent uncovered turns that fit the effective context budget.
+    /// oldest uncovered turns that fit the effective context budget, dropping
+    /// the newest while the source does not fit. Returns the source with the
+    /// position of the newest rendered turn, which the checkpoint covers
+    /// through, and the source's rendered bytes.
     fn compaction_input(
         &self,
-        loaded: &LoadedSession,
+        source: &CompactionSource,
         options: &TurnOptions,
-    ) -> Result<TurnInput, SessionError> {
-        let mut turns: Vec<Vec<ModelMessage>> =
-            loaded.turns.iter().map(HistoryTurn::replay).collect();
+    ) -> Result<(TurnInput, i64, usize), SessionError> {
+        let previous = source.checkpoint.as_ref().map(SessionCheckpoint::summary);
+        let mut turns: Vec<(i64, Vec<ModelMessage>)> = source
+            .turns
+            .iter()
+            .map(|(position, turn)| (*position, turn.replay()))
+            .collect();
 
         loop {
-            let source = compaction::render_source(loaded.checkpoint.as_ref(), &turns);
-            let input = TurnInput::text(source);
+            let rendered = compaction::render_source(previous, &turns);
+            let source_bytes = rendered.len();
+            let input = TurnInput::text(rendered);
             match self.harness.admit_mandatory_content(
                 Some(compaction::GENERATION_INSTRUCTIONS),
                 &input,
                 options,
             ) {
-                Ok(_) => return Ok(input),
-                Err(_) if !turns.is_empty() => {
-                    turns.remove(0);
+                Ok(_) => {
+                    let covered_through = turns.last().map_or(-1, |(position, _)| *position);
+
+                    return Ok((input, covered_through, source_bytes));
+                }
+                Err(_) if turns.len() > 1 => {
+                    turns.pop();
                 }
                 Err(error) => return Err(error.into()),
             }
