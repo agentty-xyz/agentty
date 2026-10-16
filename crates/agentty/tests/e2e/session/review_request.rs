@@ -16,7 +16,7 @@ use testty::scenario::Scenario;
 use super::fixture::{
     E2eResult, RESOLVED_DECISION_REVIEW_TEXT, run_git, seed_review_ready_session,
     seed_review_ready_session_with_review_request, seed_review_with_resolved_decision,
-    seed_review_worktree_with_diff,
+    seed_review_worktree_with_diff, seed_sessions_tab,
 };
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
@@ -443,10 +443,15 @@ async fn test_pr_ready_label() -> E2eResult {
 /// publish popup.
 #[tokio::test]
 async fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("review_request_publish_shortcut")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_sessions_tab(env).await
+            })
+        })
         .zola(
             "Review request publish shortcut",
             "Open the review-request publish popup directly from session view with `p`.",
@@ -454,11 +459,12 @@ async fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("p")
+                    .wait_for_text("Publish Review Request", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -468,6 +474,7 @@ async fn review_request_publish_shortcut_opens_publish_popup() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
+                    // Assert
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Publish Review Request", &full);
                     assertion::assert_text_in_region(frame, "Enter: publish review request", &full);
@@ -670,11 +677,14 @@ async fn review_request_notice_follows_completed_review() -> E2eResult {
 /// manual review-request sync shortcut and disable local merge queueing.
 #[tokio::test]
 async fn review_request_sync_runs_in_background() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("review_request_background_sync")
         .with_git()
         .setup(|env| {
-            Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
+            Box::pin(async move {
+                seed_review_ready_session_with_review_request(env).await?;
+                seed_sessions_tab(env).await
+            })
         })
         .zola(
             "Background review-request sync",
@@ -684,11 +694,12 @@ async fn review_request_sync_runs_in_background() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("?")
+                    .wait_for_text("p: Create or refresh", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(
@@ -698,6 +709,7 @@ async fn review_request_sync_runs_in_background() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
+                    // Assert
                     let full = Region::full(frame.cols(), frame.rows());
                     let view_text = frame.text_in_region(&full);
 

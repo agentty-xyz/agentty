@@ -119,8 +119,8 @@ fn test_session_chat_areas_reserve_margin_header_and_bottom_panel() {
 
     // Assert
     assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 2));
-    assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 15));
-    assert_eq!(chat_areas.bottom_area, Rect::new(1, 18, 78, 5));
+    assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 16));
+    assert_eq!(chat_areas.bottom_area, Rect::new(1, 19, 78, 5));
 }
 
 #[test]
@@ -133,8 +133,8 @@ fn test_session_chat_areas_expand_for_three_line_header() {
 
     // Assert
     assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 3));
-    assert_eq!(chat_areas.output_area, Rect::new(1, 4, 78, 14));
-    assert_eq!(chat_areas.bottom_area, Rect::new(1, 18, 78, 5));
+    assert_eq!(chat_areas.output_area, Rect::new(1, 4, 78, 15));
+    assert_eq!(chat_areas.bottom_area, Rect::new(1, 19, 78, 5));
 }
 
 #[test]

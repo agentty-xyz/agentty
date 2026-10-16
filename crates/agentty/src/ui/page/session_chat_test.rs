@@ -80,7 +80,7 @@ fn layout_input<'a>(
 }
 
 #[test]
-fn test_transcript_view_height_matches_empty_composer_when_entering_reply() {
+fn test_transcript_view_height_reclaims_inactive_composer_row() {
     // Arrange
     let session = session_fixture();
     let view_mode = AppMode::View {
@@ -99,7 +99,13 @@ fn test_transcript_view_height_matches_empty_composer_when_entering_reply() {
                 transcript_view_height(layout_input(area, &session, &empty_prompt_mode));
 
             // Assert
-            assert_eq!(view_height, prompt_height, "width {width}, height {height}");
+            assert!(
+                view_height == prompt_height || view_height == prompt_height + 1,
+                "width {width}, height {height}"
+            );
+            if width >= 40 && height >= 20 {
+                assert_eq!(view_height, prompt_height + 1);
+            }
         }
     }
 }
@@ -466,7 +472,10 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         assert_eq!(border.symbol(), "╭");
         assert_eq!(border.fg, style::palette::border());
         assert!(!buffer_text(buffer).contains("Type your message"));
-        assert!(buffer_row_text(buffer, height - 2, width).contains("q: back"));
+        assert_eq!(composer_row, height - 3);
+        assert_eq!(buffer[(1, composer_row + 1)].symbol(), "╰");
+        assert!(!buffer_text(buffer).contains("›"));
+        assert!(buffer_row_text(buffer, height - 1, width).contains("q: back"));
     }
 }
 
@@ -488,7 +497,7 @@ fn test_archived_session_reclaims_composer_space_for_transcript() {
         let archived_height = transcript_view_height(layout_input(area, &session, &mode));
 
         // Assert
-        assert_eq!(archived_height, active_height + 3);
+        assert_eq!(archived_height, active_height + 2);
     }
 }
 
@@ -524,7 +533,7 @@ fn test_render_archived_session_keeps_transcript_and_navigation_without_composer
         assert!(!text.contains("Auto Edit"));
         assert!(!text.contains("Started"));
         assert!(!text.contains("╭"));
-        let footer = buffer_row_text(buffer, 18, 100);
+        let footer = buffer_row_text(buffer, 19, 100);
         for action in ["q: back", "c: continue", "j/k: scroll", "?: help"] {
             assert!(footer.contains(action), "missing archive action: {action}");
         }
@@ -766,7 +775,7 @@ fn test_render_question_mode_includes_blank_row_between_question_and_input() {
     // Assert
     let area = Rect::new(0, 0, width, height);
     let bottom_height = non_prompt_bottom_height(area, &mode);
-    let bottom_top = 1 + height.saturating_sub(2).saturating_sub(bottom_height);
+    let bottom_top = height.saturating_sub(bottom_height);
     let panel_areas = layout::question_panel_areas(
         Rect::new(1, bottom_top, width.saturating_sub(2), bottom_height),
         &question,

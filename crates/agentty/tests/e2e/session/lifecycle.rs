@@ -1169,6 +1169,7 @@ async fn draft_session_creation_opens_staging_mode() -> E2eResult {
     // Arrange
     FeatureTest::new("draft_session_creation")
         .with_git()
+        .setup(|env| Box::pin(async move { seed_sessions_tab(env).await }))
         .zola(
             "Draft session creation",
             "Create a draft session that clearly starts in local staging mode before the bundle \
@@ -1180,7 +1181,6 @@ async fn draft_session_creation_opens_staging_mode() -> E2eResult {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(1500)
                     .press_key("a")
                     .wait_for_text("Regular", 5000)
@@ -1414,7 +1414,7 @@ async fn canceled_session_continue_opens_seeded_prompt() -> E2eResult {
 /// timing.
 #[tokio::test]
 async fn session_list_jk_navigation() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("session_navigation")
         .with_git()
         .setup(|env| {
@@ -1426,6 +1426,12 @@ async fn session_list_jk_navigation() -> E2eResult {
                             .with_title(title),
                     )
                     .await?;
+                    // Keep list ordering independent of the time spent seeding.
+                    common::open_database(env)
+                        .await?
+                        .sessions()
+                        .update_session_updated_at(id, common::PINNED_CLOCK_UNIX_SECONDS)
+                        .await?;
                     std::fs::create_dir_all(test_support::session_folder(
                         &env.agentty_root.join("wt"),
                         id,
@@ -1442,6 +1448,7 @@ async fn session_list_jk_navigation() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .wait_for_text("alpha", 5000)
@@ -1464,6 +1471,7 @@ async fn session_list_jk_navigation() -> E2eResult {
             },
             |_frame, report| {
                 Box::pin(async move {
+                    // Assert
                     assert_eq!(
                         report.captures.len(),
                         3,
@@ -1498,25 +1506,15 @@ async fn session_list_jk_navigation() -> E2eResult {
                         session_after_up_navigation_frame.rows(),
                     );
 
-                    let down_navigation_text =
-                        session_after_down_navigation_frame.text_in_region(&down_navigation_full);
-                    let up_navigation_text =
-                        session_after_up_navigation_frame.text_in_region(&up_navigation_full);
-
-                    // Each opened view must contain one of the session prompts.
-                    assert!(
-                        down_navigation_text.contains("alpha")
-                            || down_navigation_text.contains("beta"),
-                        "Session opened after j must contain alpha or beta"
+                    assertion::assert_text_in_region(
+                        &session_after_down_navigation_frame,
+                        "[XS] beta",
+                        &down_navigation_full,
                     );
-                    assert!(
-                        up_navigation_text.contains("alpha") || up_navigation_text.contains("beta"),
-                        "Session opened after k must contain alpha or beta"
-                    );
-                    assert_ne!(
-                        down_navigation_text.contains("alpha"),
-                        up_navigation_text.contains("alpha"),
-                        "j and k must open different sessions"
+                    assertion::assert_text_in_region(
+                        &session_after_up_navigation_frame,
+                        "[XS] alpha",
+                        &up_navigation_full,
                     );
                 })
             },

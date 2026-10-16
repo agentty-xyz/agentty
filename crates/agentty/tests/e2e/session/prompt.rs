@@ -5,7 +5,7 @@ use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
-use super::fixture::{E2eResult, seed_sessions_startup_tab};
+use super::fixture::{E2eResult, seed_review_ready_session, seed_sessions_startup_tab};
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
@@ -72,6 +72,50 @@ async fn seed_nested_stacked_at_lookup_session(
         parent_worktree.join("ancestor_lookup_target.txt"),
         "ancestor lookup target\n",
     )?;
+
+    Ok(())
+}
+
+/// Verify that viewing a session collapses the composer and keeps help next to
+/// the bottom bar, while opening a reply restores the editable input row.
+#[tokio::test]
+async fn session_collapsed_composer() -> E2eResult {
+    // Arrange
+    FeatureTest::new("session_collapsed_composer")
+        .with_git()
+        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .wait_for_text("Review-ready session shortcuts", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 3000)
+                    .capture_labeled("collapsed", "Inactive composer keeps only border rows")
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 3000)
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    let collapsed = common::frame_from_capture(&report.captures[0]);
+                    let help_row = collapsed.rows() - 2;
+                    assert!(collapsed.row_text(help_row).contains("q: back"));
+                    assert!(collapsed.row_text(help_row - 1).contains("Started"));
+                    assert!(collapsed.row_text(help_row - 2).contains("Auto Edit"));
+                    assertion::assert_not_visible(&collapsed, "›");
+                    assert!(frame.row_text(frame.rows() - 2).contains("Enter: send"));
+                    assert!(
+                        frame
+                            .row_text(frame.rows() - 4)
+                            .contains("Type your message")
+                    );
+                })
+            },
+        )
+        .await?;
 
     Ok(())
 }
@@ -241,6 +285,7 @@ async fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
     // Arrange
     FeatureTest::new("prompt_cancel")
         .with_git()
+        .setup(|env| Box::pin(async move { seed_sessions_startup_tab(env).await }))
         .zola(
             "Prompt cancel",
             "Cancel prompt input with Esc to return to the session view.",
@@ -251,14 +296,15 @@ async fn session_prompt_cancel_returns_to_empty_list() -> E2eResult {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .press_key("a")
                     .press_key("Enter")
+                    .wait_for_text("Tab: focus | Enter: send", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("prompt_open", "Prompt mode opened")
                     .press_key("Esc")
+                    .wait_for_text("No sessions", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("back_to_list", "Sessions list after cancel")
@@ -367,9 +413,10 @@ async fn stacked_session_at_lookup() -> E2eResult {
 /// Verify that typed text appears in the prompt input.
 #[tokio::test]
 async fn prompt_typing_shows_text() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("prompt_typing")
         .with_git()
+        .setup(|env| Box::pin(async move { seed_sessions_startup_tab(env).await }))
         .zola(
             "Prompt typing",
             "Type text into the prompt input and see it appear in real time.",
@@ -377,9 +424,9 @@ async fn prompt_typing_shows_text() -> E2eResult {
         )
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .press_key("a")
                     .press_key("Enter")
@@ -393,6 +440,7 @@ async fn prompt_typing_shows_text() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
+                    // Assert
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "hello world", &full);
                 })
