@@ -150,14 +150,19 @@ pub fn tab_page_areas(area: Rect) -> TabPageAreas {
 
 /// Splits one session chat page into header, transcript, and bottom panel.
 ///
-/// The outer frame keeps a one-cell margin, reserves `bottom_height` for the
-/// prompt/help region, and then dedicates the requested header rows above the
-/// bordered session output panel.
+/// The outer frame keeps one-cell top and side margins, reserves
+/// `bottom_height` for the prompt/help region flush with the page bottom, and
+/// dedicates the requested header rows above the bordered session output panel.
 pub fn session_chat_areas(area: Rect, bottom_height: u16, header_height: u16) -> SessionChatAreas {
+    let area = Rect {
+        y: area.y.saturating_add(1.min(area.height)),
+        height: area.height.saturating_sub(1),
+        ..area
+    };
     let header_height = header_height.max(SESSION_HEADER_HEIGHT_MIN);
     let vertical_chunks = Layout::default()
         .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
-        .margin(1)
+        .horizontal_margin(1)
         .split(area);
     let output_chunks = Layout::default()
         .constraints([Constraint::Length(header_height), Constraint::Min(0)])

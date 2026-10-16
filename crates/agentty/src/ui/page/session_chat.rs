@@ -32,6 +32,9 @@ use crate::ui::{
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
 
+/// Height of the inactive composer, keeping only its two border rows.
+const INACTIVE_COMPOSER_HEIGHT: u16 = 2;
+
 /// Header height assumed when the rendered header line count does not fit
 /// `u16`.
 const SESSION_HEADER_FALLBACK_HEIGHT: u16 = 2;
@@ -577,8 +580,8 @@ fn prepare_prompt_panel(
 /// Returns the bottom-panel height reserved for non-prompt page modes.
 ///
 /// Question mode derives its height from the question layout helper and the
-/// visible option list. All other modes reserve an empty inactive composer
-/// and a footer row, matching the height of an empty prompt panel.
+/// visible option list. All other modes reserve the inactive composer borders
+/// and a footer row, with no empty input row.
 fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
     let AppMode::Question {
         questions,
@@ -588,7 +591,7 @@ fn non_prompt_bottom_height(area: Rect, mode: &AppMode) -> u16 {
         ..
     } = mode
     else {
-        return calculate_input_height(area.width.saturating_sub(2), "")
+        return INACTIVE_COMPOSER_HEIGHT
             .saturating_add(SINGLE_ROW_FOOTER_HEIGHT)
             .min(area.height.saturating_sub(1));
     };

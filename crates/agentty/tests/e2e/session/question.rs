@@ -233,13 +233,14 @@ async fn test_question_answer_at_lookup() -> E2eResult {
 /// Verify a short terminal hides lookup controls when no result row fits.
 #[tokio::test]
 async fn test_question_answer_at_lookup_clipped() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("question_answer_at_lookup_clipped")
         .with_git()
-        .with_terminal_size(100, 10)
+        .with_terminal_size(100, 9)
         .setup(|env| Box::pin(async move { seed_question_at_lookup_session(env).await }))
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -254,6 +255,7 @@ async fn test_question_answer_at_lookup_clipped() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
+                    // Assert
                     let clipped = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_not_visible(&clipped, "answer_lookup_target.rs");
                     assertion::assert_not_visible(&clipped, "Tab/Enter: select");
