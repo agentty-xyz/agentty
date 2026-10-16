@@ -12,8 +12,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 use super::{
-    Directory, Inspection, LocalInspection, Native, NativeProcess, bounded_text, inspect_tree,
-    validate_executable,
+    Directory, Inspection, LocalInspection, Monotonic, Native, NativeProcess, bounded_text,
+    inspect_tree, validate_executable,
 };
 use crate::bash::BashConfig;
 use crate::command_journal::CommandCleanupScope;
@@ -21,7 +21,25 @@ use crate::execution::contract::{
     BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,
     ProcessEvent,
 };
+use crate::execution::supervisor::Clock;
 use crate::execution::wire::Notice;
+
+#[tokio::test(start_paused = true)]
+async fn monotonic_wait_preserves_remaining_time_after_runtime_clock_advance() {
+    // Arrange
+    tokio::time::advance(Duration::from_secs(101)).await;
+    let deadline = Monotonic.now() + Duration::from_secs(1);
+
+    // Act
+    let result =
+        tokio::time::timeout(Duration::from_millis(10), Monotonic.wait_until(deadline)).await;
+
+    // Assert
+    assert!(
+        result.is_err(),
+        "a future deadline must not expire immediately"
+    );
+}
 
 #[test]
 fn native_executor_states_identity_and_platform_cleanup_scope() {

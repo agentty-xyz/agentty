@@ -27,6 +27,14 @@ jobs:
       - name: Trust checked-out repository
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Ensure zstd cache compression
+        # Bootstrap older pinned images; rebuilt images include zstd.
+        run: |
+          if ! command -v zstd >/dev/null 2>&1; then
+            apt-get update
+            apt-get install -y --no-install-recommends zstd
+          fi
+
       - name: Restore E2E Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -34,6 +42,8 @@ jobs:
           key: ${{ hashFiles('container/e2e.Containerfile', '.github/workflows/e2e.yml') }}
           cache-bin: "false"
           cache-workspace-crates: "true"
+          # PRs restore main's cache without uploading competing archives.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run end-to-end feature suite
         run: prek run test-agentty-e2e --all-files --hook-stage manual
