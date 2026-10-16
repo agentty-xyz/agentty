@@ -5,7 +5,7 @@ use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
 use ag_git::{GitClient, GitError};
-use ag_session::{SessionRole, test_support as model_fixture};
+use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use mockall::Sequence;
 use tempfile::tempdir;
@@ -19,7 +19,7 @@ use super::super::{
     RebaseAssistWorkspace, RebasePlan, SessionMergeService, SyncSessionStartError,
 };
 use super::support::{
-    assert_managed_merge_metadata, blocking_auto_push_git_client, build_merge_task_input_for_test,
+    assert_merge_metadata, blocking_auto_push_git_client, build_merge_task_input_for_test,
     build_rebase_assist_input_for_test, build_sync_rebase_input_for_test,
     collect_published_branch_sync_statuses, create_passthrough_mock_fs_client,
     empty_review_request_client, empty_transcript,
@@ -1554,8 +1554,7 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
         .times(1)
         .in_sequence(&mut sequence)
         .returning(|_, _| Box::pin(async { Ok(()) }));
-    let (_temp_dir, mut input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
-    input.archive_diff = true;
+    let (_temp_dir, input) = build_merge_task_input_for_test(Arc::new(mock_git_client)).await;
     let project_id = input
         .db
         .projects()
@@ -1582,7 +1581,7 @@ async fn test_execute_merge_workflow_reuses_session_head_commit_message() {
     // Assert
     let message = result.expect("merge workflow should succeed");
     assert_eq!(message, "Successfully merged wt/session-123 into main");
-    assert_managed_merge_metadata(&db, expected_merged_commit_hash).await;
+    assert_merge_metadata(&db, expected_merged_commit_hash).await;
 }
 
 #[tokio::test]
@@ -1692,32 +1691,6 @@ async fn test_merge_session_rejects_linked_review_request_before_workflow_start(
     assert_eq!(
         error.to_string(),
         "Merge cannot run for linked review requests or while another stack session is active"
-    );
-}
-
-#[tokio::test]
-async fn test_merge_session_rejects_orchestrator_before_workflow_start() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .role(SessionRole::Orchestrator)
-            .status(Status::Review)
-            .build(),
-    );
-
-    // Act
-    let result = app
-        .sessions
-        .merge_session("session-id", &app.projects, &app.services)
-        .await;
-
-    // Assert
-    assert_eq!(
-        result
-            .expect_err("orchestrator merge should fail")
-            .to_string(),
-        "Orchestrator sessions do not own branch changes"
     );
 }
 

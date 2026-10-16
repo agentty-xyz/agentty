@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ExecutionPolicy {
     /// Concurrent provider-native children, excluding the parent. This is
-    /// distinct from the worker's concurrent runs and orchestration sessions.
+    /// distinct from the worker's concurrent runs and session admission limits.
     pub max_concurrent_subagents: Option<NonZeroUsize>,
     /// Whether the harness may load its configured MCP servers.
     pub mcp: McpPolicy,

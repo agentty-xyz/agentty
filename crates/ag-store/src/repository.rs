@@ -5,14 +5,13 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::timestamp::TimestampSource;
-use crate::{activity, operation, orchestration, project, review, session, setting, usage};
+use crate::{activity, operation, project, review, session, setting, usage};
 
 /// App-layer repository bundle used for selective mock injection.
 #[derive(Clone)]
 pub struct AppRepositories {
     activity: Arc<dyn activity::ActivityRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
-    orchestration: Arc<dyn orchestration::OrchestrationRepository>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,
     run: Arc<dyn ag_worker::RunRepository>,
@@ -30,17 +29,6 @@ impl AppRepositories {
     /// Returns the session-operation repository.
     pub fn operations(&self) -> &dyn operation::OperationRepository<crate::DbError> {
         self.operation.as_ref()
-    }
-
-    /// Returns the orchestration repository.
-    pub fn orchestrations(&self) -> &dyn orchestration::OrchestrationRepository {
-        self.orchestration.as_ref()
-    }
-
-    /// Returns a cloneable orchestration repository for background
-    /// reconciliation.
-    pub fn orchestration_repository(&self) -> Arc<dyn orchestration::OrchestrationRepository> {
-        Arc::clone(&self.orchestration)
     }
 
     /// Returns the project repository.
@@ -81,10 +69,6 @@ impl AppRepositories {
         Self {
             activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
             operation: Arc::new(operation::SqliteOperationRepository::new(
-                pool.clone(),
-                Arc::clone(&timestamp_source),
-            )),
-            orchestration: Arc::new(orchestration::SqliteOrchestrationRepository::new(
                 pool.clone(),
                 Arc::clone(&timestamp_source),
             )),

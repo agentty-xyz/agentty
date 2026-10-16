@@ -28,38 +28,6 @@ async fn seed_cancelable_draft_session(env: &BuilderEnv) -> E2eResult {
     .await
 }
 
-/// Seeds one draft orchestrator with its materialized controller worktree.
-async fn seed_cancelable_draft_orchestrator(env: &BuilderEnv) -> E2eResult {
-    let session_id = "orchdraft-0001";
-
-    common::seed_session(
-        env,
-        SessionSeed::regular(session_id, model_fixture::CODEX_MODEL_ID, "main", "Draft")
-            .with_title("Cancel draft orchestrator"),
-    )
-    .await?;
-
-    (async {
-        let database = common::open_database(env).await?;
-        sqlx::query!(
-            "UPDATE session SET role = 'Orchestrator' WHERE id = ?",
-            session_id
-        )
-        .execute(database.pool())
-        .await?;
-
-        Ok::<(), Box<dyn std::error::Error>>(())
-    })
-    .await?;
-
-    std::fs::create_dir_all(test_support::session_folder(
-        &env.agentty_root.join("wt"),
-        session_id,
-    ))?;
-
-    Ok(())
-}
-
 /// Seeds one running session for list-mode cancel confirmation.
 async fn seed_cancelable_running_session(env: &BuilderEnv) -> E2eResult {
     let session_id = "running-cancel-0001";
@@ -354,69 +322,6 @@ async fn draft_session_cancel_confirmation() -> E2eResult {
 
                     let final_full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "ARCHIVE —— 1", &final_full);
-                    assertion::assert_text_in_region(frame, "Canceled", &final_full);
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Verify that a draft orchestrator can be canceled directly from the session
-/// list before its first goal is submitted.
-#[tokio::test]
-async fn test_draft_orchestrator_cancel() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("draft_orchestrator_cancel")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_cancelable_draft_orchestrator(env).await }))
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .wait_for_text("Cancel draft orchestrator", 5000)
-                    .capture_labeled(
-                        "draft_orchestrator",
-                        "Draft orchestrator visible with cancel available",
-                    )
-                    .press_key("c")
-                    .wait_for_text("Confirm Cancel", 3000)
-                    .capture_labeled(
-                        "confirm_cancel",
-                        "Cancel confirmation for the draft orchestrator",
-                    )
-                    .press_key("y")
-                    .wait_for_text("Canceled", 5000)
-                    .capture_labeled(
-                        "canceled_orchestrator",
-                        "Canceled draft orchestrator moved into the archive group",
-                    )
-            },
-            |frame, report| {
-                Box::pin(async move {
-                    let list_frame = common::frame_from_capture(&report.captures[0]);
-                    let list_full = Region::full(list_frame.cols(), list_frame.rows());
-                    assertion::assert_text_in_region(
-                        &list_frame,
-                        "Cancel draft orchestrator",
-                        &list_full,
-                    );
-                    assertion::assert_text_in_region(&list_frame, "Draft", &list_full);
-                    assertion::assert_text_in_region(&list_frame, "c: cancel", &list_full);
-
-                    let confirmation_frame = common::frame_from_capture(&report.captures[1]);
-                    let confirmation_full =
-                        Region::full(confirmation_frame.cols(), confirmation_frame.rows());
-                    assertion::assert_text_in_region(
-                        &confirmation_frame,
-                        "Confirm Cancel",
-                        &confirmation_full,
-                    );
-
-                    let final_full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "ARCHIVE", &final_full);
                     assertion::assert_text_in_region(frame, "Canceled", &final_full);
                 })
             },

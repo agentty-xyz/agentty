@@ -1,5 +1,3 @@
-use ag_session::SessionRole;
-
 use super::{
     DiffFileCommentAvailability, DiffFooterContext, DiffLineCommentFooterState,
     PROMPT_IMAGE_PASTE_SHORTCUT_LABEL, ViewActionAvailability, ViewHelpState, ViewSessionState,
@@ -589,7 +587,7 @@ fn test_view_actions_done_shows_continue_and_hides_edit_actions() {
     }));
     assert!(!actions.iter().any(|action| action.key == "p"));
     assert!(!actions.iter().any(|action| action.key == "Enter"));
-    assert!(!actions.iter().any(|action| action.key == "d"));
+    assert!(actions.iter().any(|action| action.key == "d"));
     assert!(!actions.iter().any(|action| action.key == "f"));
     assert!(!actions.iter().any(|action| action.key == "m"));
     assert!(!actions.iter().any(|action| action.key == "r"));
@@ -1106,109 +1104,17 @@ fn test_view_footer_actions_review_hides_stop() {
 }
 
 #[test]
-fn test_session_view_state_maps_agent_review_and_orchestrator_review_statuses() {
+fn test_session_view_state_maps_agent_review_status() {
     // Arrange
     let session = SessionFixtureBuilder::new()
         .status(Status::AgentReview)
         .build();
-    let orchestrator = SessionFixtureBuilder::new()
-        .role(SessionRole::Orchestrator)
-        .status(Status::Review)
-        .build();
-    let managed = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationWorker)
-        .status(Status::Review)
-        .build();
-    let researcher = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationResearcher)
-        .status(Status::Review)
-        .build();
 
     // Act
     let state = session_view_state(&session);
-    let orchestrator_state = session_view_state(&orchestrator);
-    let managed_state = session_view_state(&managed);
-    let researcher_state = session_view_state(&researcher);
 
     // Assert
     assert_eq!(state, ViewSessionState::AgentReview);
-    assert_eq!(orchestrator_state, ViewSessionState::Orchestrator);
-    assert_eq!(managed_state, ViewSessionState::Managed);
-    assert_eq!(researcher_state, ViewSessionState::ManagedResearch);
-}
-
-#[test]
-fn orchestration_view_actions_expose_only_owned_controls() {
-    // Arrange
-    let mut state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Disabled,
-        can_merge_session_branch: ViewActionAvailability::Disabled,
-        can_mutate_session_branch: ViewActionAvailability::Disabled,
-        can_open_worktree: ViewActionAvailability::Disabled,
-        can_rebase_session_branch: ViewActionAvailability::Disabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Disabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Managed,
-    };
-
-    // Act
-    let managed_keys = view_actions(state)
-        .iter()
-        .map(|action| action.key)
-        .collect::<Vec<_>>();
-    state.session_state = ViewSessionState::ManagedResearch;
-    let research_keys = view_actions(state)
-        .iter()
-        .map(|action| action.key)
-        .collect::<Vec<_>>();
-    state.session_state = ViewSessionState::Orchestrator;
-    state.reply_to_session = ViewActionAvailability::Enabled;
-    let controller_keys = view_actions(state)
-        .iter()
-        .map(|action| action.key)
-        .collect::<Vec<_>>();
-
-    // Assert
-    assert!(managed_keys.contains(&"d"));
-    assert!(managed_keys.contains(&"D"));
-    assert!(!managed_keys.contains(&"o"));
-    assert!(!managed_keys.contains(&"Enter"));
-    assert!(research_keys.contains(&"d"));
-    assert!(!research_keys.contains(&"D"));
-    assert!(!research_keys.contains(&"o"));
-    assert!(controller_keys.contains(&"a"));
-    assert!(controller_keys.contains(&"Enter"));
-    assert!(!controller_keys.contains(&"m"));
-}
-
-#[test]
-fn managed_review_view_actions_expose_worktree_open_when_available() {
-    // Arrange
-    let state = ViewHelpState {
-        can_fork_session: ViewActionAvailability::Disabled,
-        can_merge_session_branch: ViewActionAvailability::Disabled,
-        can_mutate_session_branch: ViewActionAvailability::Disabled,
-        can_open_worktree: ViewActionAvailability::Enabled,
-        can_rebase_session_branch: ViewActionAvailability::Disabled,
-        can_show_diff: ViewActionAvailability::Enabled,
-        reply_to_session: ViewActionAvailability::Disabled,
-        can_start_staged_session: ViewActionAvailability::Disabled,
-        publish_pull_request_action: None,
-        session_state: ViewSessionState::Managed,
-    };
-
-    // Act
-    let managed_keys = view_actions(state)
-        .iter()
-        .map(|action| action.key)
-        .collect::<Vec<_>>();
-
-    // Assert
-    assert!(managed_keys.contains(&"o"));
-    assert!(!managed_keys.contains(&"Enter"));
-    assert!(!managed_keys.contains(&"m"));
 }
 
 #[test]

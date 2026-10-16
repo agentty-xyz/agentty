@@ -60,33 +60,33 @@ async fn test_session_creation_navigation_moves_up_and_clamps_disabled_options()
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_mock_tmux_client().await;
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 4,
+        selected_option_index: 3,
     };
 
     // Act
-    update_session_creation_selection(&mut app, 4);
+    update_session_creation_selection(&mut app, 3);
     let clamped_selection = current_session_creation_selection(&app);
     let result =
         handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)).await;
     let moved_selection = current_session_creation_selection(&app);
     let unknown_option_enabled = session_creation_option_is_enabled(&app, usize::MAX);
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 4,
+        selected_option_index: 3,
     };
     let disabled_append_result =
         handle_session_creation_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .await;
 
     // Assert
-    assert_eq!(clamped_selection, 2);
+    assert_eq!(clamped_selection, 1);
     assert!(matches!(result, Ok(EventResult::Continue)));
-    assert_eq!(moved_selection, 1);
+    assert_eq!(moved_selection, 0);
     assert!(!unknown_option_enabled);
     assert!(matches!(disabled_append_result, Ok(EventResult::Continue)));
     assert!(matches!(
         app.mode,
         AppMode::SessionCreation {
-            selected_option_index: 4,
+            selected_option_index: 3,
         }
     ));
 }
@@ -191,18 +191,14 @@ async fn test_handle_key_event_routes_stack_parent_escape_to_creation_selector()
     assert!(matches!(
         app.mode,
         AppMode::SessionCreation {
-            selected_option_index: 4,
+            selected_option_index: 3,
         }
     ));
 }
 
 #[tokio::test]
 async fn test_handle_session_creation_key_creates_each_root_session_type() {
-    for (selected_option_index, is_draft, role) in [
-        (0, false, ag_session::SessionRole::Worker),
-        (1, true, ag_session::SessionRole::Worker),
-        (2, false, ag_session::SessionRole::Orchestrator),
-    ] {
+    for (selected_option_index, is_draft) in [(0, false), (1, true)] {
         // Arrange
         let (mut app, _base_dir) =
             crate::test_support::new_git_test_app_with_mock_tmux_client().await;
@@ -231,7 +227,6 @@ async fn test_handle_session_creation_key_creates_each_root_session_type() {
         assert!(matches!(result, Ok(EventResult::Continue)));
         assert_eq!(app.sessions.sessions().len(), 1);
         assert_eq!(app.sessions.sessions()[0].is_draft_session(), is_draft);
-        assert_eq!(app.sessions.sessions()[0].role, role);
         assert!(matches!(
             app.mode,
             AppMode::Prompt {
@@ -258,7 +253,7 @@ async fn test_handle_session_creation_key_creates_stacked_session() {
     );
     app.sessions.select_session_index(Some(0));
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 2,
+        selected_option_index: 1,
     };
 
     // Act
@@ -438,7 +433,7 @@ async fn test_harness_option_is_disabled_without_availability() {
         .await;
 
         // Assert
-        assert_eq!(clamped_selection, 2);
+        assert_eq!(clamped_selection, 1);
         assert!(!session_creation_option_is_enabled(
             &app,
             HARNESS_OPTION_INDEX

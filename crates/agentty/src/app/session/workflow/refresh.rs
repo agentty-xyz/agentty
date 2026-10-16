@@ -1,6 +1,6 @@
 //! Session refresh scheduling and post-reload view state restoration.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::time::Instant;
 
 use ag_forge as forge;
@@ -171,23 +171,11 @@ impl SessionManager {
             .and_then(|index| self.state.sessions.get(index))
             .map(|session| session.id.clone());
         let detail_session_id = Self::mode_session_id(mode).cloned();
-        let live_orchestration_progress = self
-            .state
-            .sessions
-            .iter()
-            .filter_map(|session| {
-                session
-                    .orchestration_progress
-                    .as_deref()
-                    .filter(|progress| progress.starts_with("Phase:"))
-                    .map(|progress| (session.id.clone(), progress.to_string()))
-            })
-            .collect::<HashMap<_, _>>();
 
         let archive_limit = self.state.archive_limit;
         let clock = services.clock();
         let fs_client = services.fs_client();
-        let (mut sessions, stats_activity, session_worktree_availability, archive_page) =
+        let (sessions, stats_activity, session_worktree_availability, archive_page) =
             match Self::try_load_sessions_with_fs_client(
                 SessionLoadInput {
                     archive_limit,
@@ -210,7 +198,6 @@ impl SessionManager {
                     return false;
                 }
             };
-        Self::preserve_live_orchestration_progress(&mut sessions, &live_orchestration_progress);
         self.state.archived_session_count = archive_page.archived_session_count;
         self.state.has_more_archived_sessions = archive_page.has_more_archived_sessions;
         self.state.replace_sessions(sessions);
@@ -274,21 +261,6 @@ impl SessionManager {
                 ..
             } => Some(session_id),
             _ => None,
-        }
-    }
-
-    /// Keeps a coordinator-emitted task snapshot across metadata reloads while
-    /// the persisted campaign remains active.
-    fn preserve_live_orchestration_progress(
-        sessions: &mut [crate::domain::session::Session],
-        live_progress: &HashMap<SessionId, String>,
-    ) {
-        for session in sessions {
-            if session.orchestration_progress.is_some()
-                && let Some(progress) = live_progress.get(&session.id)
-            {
-                session.orchestration_progress = Some(progress.clone());
-            }
         }
     }
 

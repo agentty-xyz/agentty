@@ -3,14 +3,12 @@
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::selection::SelectionState;
-use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
 use crate::domain::theme::ColorTheme;
 
 /// Immutable setting values and available choices required by the settings
 /// screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SettingsView {
-    pub(crate) auto_approve_orchestration_research: bool,
     pub(crate) available_model_selections: Vec<AgentSelection>,
     pub(crate) default_fast_reasoning_level: ReasoningLevel,
     pub(crate) default_fast_selection: AgentSelection,
@@ -24,7 +22,6 @@ pub(crate) struct SettingsView {
     pub(crate) default_smart_speed_mode: SpeedMode,
     pub(crate) include_coauthored_by_agentty: bool,
     pub(crate) launch_configuration: String,
-    pub(crate) orchestration_parallelism: u8,
     pub(crate) theme: ColorTheme,
     pub(crate) use_last_used_model_as_default: bool,
 }
@@ -32,7 +29,6 @@ pub(crate) struct SettingsView {
 /// One persistence operation requested by the settings screen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SettingsOperation {
-    AutoApproveOrchestrationResearch(bool),
     DefaultFastSelection {
         reasoning_level: ReasoningLevel,
         selection: AgentSelection,
@@ -52,7 +48,6 @@ pub(crate) enum SettingsOperation {
     },
     IncludeCoauthoredByAgentty(bool),
     LaunchConfiguration(String),
-    OrchestrationParallelism(u8),
     Theme(ColorTheme),
 }
 
@@ -739,17 +734,11 @@ fn settings_operation_for_primary_selector(
     value: SettingSelectorValue,
 ) -> Option<SettingsOperation> {
     match (row, value) {
-        (SettingRow::AutoApproveOrchestrationResearch, SettingSelectorValue::Bool(value)) => {
-            Some(SettingsOperation::AutoApproveOrchestrationResearch(value))
-        }
         (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
             Some(SettingsOperation::IncludeCoauthoredByAgentty(value))
         }
         (SettingRow::DefaultResponseStyle, SettingSelectorValue::ResponseStyle(value)) => {
             Some(SettingsOperation::DefaultResponseStyle(value))
-        }
-        (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
-            Some(SettingsOperation::OrchestrationParallelism(value))
         }
         (SettingRow::Theme, SettingSelectorValue::Theme(value)) => {
             Some(SettingsOperation::Theme(value))
@@ -766,22 +755,18 @@ enum SettingControl {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingRow {
-    AutoApproveOrchestrationResearch,
     DefaultSmartModel,
     DefaultFastModel,
     DefaultReviewModel,
     DefaultResponseStyle,
     IncludeCoauthoredByAgentty,
     LaunchConfiguration,
-    OrchestrationParallelism,
     Theme,
 }
 
 impl SettingRow {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 7] = [
         Self::Theme,
-        Self::OrchestrationParallelism,
-        Self::AutoApproveOrchestrationResearch,
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
         Self::DefaultReviewModel,
@@ -789,11 +774,7 @@ impl SettingRow {
         Self::LaunchConfiguration,
         Self::DefaultResponseStyle,
     ];
-    const GLOBAL: [Self; 3] = [
-        Self::Theme,
-        Self::OrchestrationParallelism,
-        Self::AutoApproveOrchestrationResearch,
-    ];
+    const GLOBAL: [Self; 1] = [Self::Theme];
     const PROJECT: [Self; 6] = [
         Self::DefaultSmartModel,
         Self::DefaultFastModel,
@@ -820,14 +801,12 @@ impl SettingRow {
 
     fn label(self) -> &'static str {
         match self {
-            Self::AutoApproveOrchestrationResearch => "Auto-approve Research",
             Self::DefaultSmartModel => "Default Smart Model",
             Self::DefaultFastModel => "Default Fast Model",
             Self::DefaultReviewModel => "Default Review Model",
             Self::DefaultResponseStyle => "Default Response Style",
             Self::IncludeCoauthoredByAgentty => "Coauthored by Agentty",
             Self::LaunchConfiguration => "Launch Configurations",
-            Self::OrchestrationParallelism => "Orchestrator Parallelism",
             Self::Theme => "Theme",
         }
     }
@@ -988,9 +967,6 @@ struct SettingSelectorOption {
 impl SettingSelectorOption {
     fn is_current_for(&self, view: &SettingsView, row: SettingRow) -> bool {
         match (row, self.value) {
-            (SettingRow::AutoApproveOrchestrationResearch, SettingSelectorValue::Bool(value)) => {
-                view.auto_approve_orchestration_research == value
-            }
             (SettingRow::DefaultSmartModel, SettingSelectorValue::LastUsedModel) => {
                 view.use_last_used_model_as_default
             }
@@ -1009,9 +985,6 @@ impl SettingSelectorOption {
             (SettingRow::IncludeCoauthoredByAgentty, SettingSelectorValue::Bool(value)) => {
                 view.include_coauthored_by_agentty == value
             }
-            (SettingRow::OrchestrationParallelism, SettingSelectorValue::Parallelism(value)) => {
-                view.orchestration_parallelism == value
-            }
             (SettingRow::Theme, SettingSelectorValue::Theme(value)) => view.theme == value,
             _ => false,
         }
@@ -1023,7 +996,6 @@ enum SettingSelectorValue {
     Bool(bool),
     LastUsedModel,
     ModelSelection(AgentSelection),
-    Parallelism(u8),
     ResponseStyle(ResponseStyle),
     Theme(ColorTheme),
 }
@@ -1080,9 +1052,7 @@ fn move_launch_configuration_list_editor_selection(
 
 fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<SettingSelectorOption> {
     match row {
-        SettingRow::AutoApproveOrchestrationResearch | SettingRow::IncludeCoauthoredByAgentty => {
-            bool_selector_options()
-        }
+        SettingRow::IncludeCoauthoredByAgentty => bool_selector_options(),
         SettingRow::DefaultSmartModel => {
             let mut options = model_selector_options(view);
             options.push(SettingSelectorOption {
@@ -1104,12 +1074,6 @@ fn selector_options_for_row(view: &SettingsView, row: SettingRow) -> Vec<Setting
             })
             .collect(),
         SettingRow::LaunchConfiguration => Vec::new(),
-        SettingRow::OrchestrationParallelism => (1..=MAX_ORCHESTRATION_PARALLELISM)
-            .map(|value| SettingSelectorOption {
-                label: value.to_string(),
-                value: SettingSelectorValue::Parallelism(value),
-            })
-            .collect(),
         SettingRow::Theme => ColorTheme::ALL
             .iter()
             .copied()
@@ -1158,9 +1122,6 @@ fn speed_selector_option_labels() -> Vec<String> {
 
 fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
     match row {
-        SettingRow::AutoApproveOrchestrationResearch => {
-            bool_setting_display(view.auto_approve_orchestration_research)
-        }
         SettingRow::DefaultSmartModel if view.use_last_used_model_as_default => {
             display_last_used_model_value(
                 view.default_smart_selection,
@@ -1190,7 +1151,6 @@ fn display_value_for_row(view: &SettingsView, row: SettingRow) -> String {
         SettingRow::LaunchConfiguration => {
             display_launch_configuration_summary(&view.launch_configuration)
         }
-        SettingRow::OrchestrationParallelism => view.orchestration_parallelism.to_string(),
         SettingRow::Theme => view.theme.label().to_string(),
     }
 }

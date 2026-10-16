@@ -123,12 +123,9 @@ pub(super) fn attach_open_review_request(session: &mut crate::domain::session::S
 /// Builds one reply-enabled review snapshot for primary-key routing tests.
 pub(super) fn reply_enabled_review_snapshot() -> ViewSessionSnapshot {
     ViewSessionSnapshot {
-        branch_actions: ViewActionState::Enabled,
         continue_terminal_session: ViewActionState::Disabled,
         fork_session: ViewActionState::Enabled,
         inspect_diff: ViewActionState::Enabled,
-        is_managed: false,
-        is_orchestrator: false,
         merge_session_branch: ViewActionState::Enabled,
         mutate_session_branch: ViewActionState::Enabled,
         rebase_session_branch: ViewActionState::Enabled,

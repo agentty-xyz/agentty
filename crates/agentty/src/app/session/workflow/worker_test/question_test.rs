@@ -25,8 +25,6 @@ fn test_build_assistant_message_content_falls_back_to_question_text() {
         answer: String::new(),
         questions: vec![QuestionItem::new("Should I apply the patch?")],
         review_comment_outcomes: Vec::new(),
-        subtasks: Vec::new(),
-        verification_verdicts: Vec::new(),
     };
 
     // Act
@@ -49,8 +47,6 @@ fn test_agent_response_questions_returns_only_question_messages() {
             QuestionItem::new("Need migration notes?"),
         ],
         review_comment_outcomes: Vec::new(),
-        subtasks: Vec::new(),
-        verification_verdicts: Vec::new(),
     };
 
     // Act
@@ -76,8 +72,6 @@ fn test_agent_response_questions_preserves_ordered_list_as_single_question_text(
         answer: String::new(),
         questions: vec![QuestionItem::new(numbered_questions)],
         review_comment_outcomes: Vec::new(),
-        subtasks: Vec::new(),
-        verification_verdicts: Vec::new(),
     };
 
     // Act

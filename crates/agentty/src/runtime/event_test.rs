@@ -20,7 +20,7 @@ use super::{
 use crate::app::{App, AppEvent};
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
-use crate::domain::session::{Session, SessionRole, SessionSize, SessionStats, Status};
+use crate::domain::session::{Session, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::{
@@ -334,13 +334,11 @@ async fn test_process_event_with_key_handler_pastes_into_prompt_mode() {
         draft_attachments: Vec::new(),
         folder: std::env::temp_dir(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: session_id.clone().into(),
         in_progress_started_at: None,
         in_progress_total_seconds: 0,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentKind::Antigravity.default_model(),
@@ -522,7 +520,7 @@ async fn test_process_paste_event_updates_launch_configuration_input() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.tabs.set(crate::app::Tab::Settings);
-    for _ in 0..7 {
+    for _ in 0..5 {
         let view = app.settings.view();
         let _ = app.settings_presentation.apply(&view, SettingsAction::Next);
     }

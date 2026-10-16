@@ -620,7 +620,6 @@ async fn submit_response(app: &mut App, response: String) {
     let session_id = completed_response.session_id.clone();
     let answers =
         structured_question_answers(&completed_response.questions, &completed_response.responses);
-    let is_orchestration_proxy = app.has_orchestration_question_proxy(&session_id).await;
     app.mode = AppMode::View {
         session_id: session_id.clone(),
         scroll_offset: None,
@@ -649,18 +648,9 @@ async fn submit_response(app: &mut App, response: String) {
     // pending question is not hidden behind a stalled `InProgress` state.
     if reply_enqueued {
         app.clear_diff_comment_progress(&session_id);
-        mark_answered_session(app, &session_id, is_orchestration_proxy);
+        mark_session_in_progress(app, &session_id);
     } else {
         restore_completed_question_response(app, completed_response);
-    }
-}
-
-/// Advances the session that owned one accepted question response.
-fn mark_answered_session(app: &mut App, session_id: &str, is_orchestration_proxy: bool) {
-    if is_orchestration_proxy {
-        mark_orchestration_controller_review(app, session_id);
-    } else {
-        mark_session_in_progress(app, session_id);
     }
 }
 
@@ -742,26 +732,6 @@ fn mark_session_in_progress(app: &mut App, session_id: &str) {
         .find(|session| session.id == session_id)
     {
         session.status = Status::InProgress;
-    }
-}
-
-/// Optimistically restores a controller after its proxied child answers were
-/// accepted.
-fn mark_orchestration_controller_review(app: &mut App, session_id: &str) {
-    if let Some(handles) = app.sessions.session_handles().get(session_id)
-        && let Ok(mut handle_status) = handles.status.lock()
-    {
-        *handle_status = Status::Review;
-    }
-
-    if let Some(session) = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-    {
-        session.status = Status::Review;
-        session.questions.clear();
     }
 }
 

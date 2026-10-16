@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use ag_forge::ReviewRequestClient;
 use ag_git::GitClient;
-use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
 use ag_worker::{RunClient, RunWorker, RuntimeConfig, SessionRunClient, SessionWorkerTask};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -494,9 +493,6 @@ impl AppServices {
             AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
             AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",
             AppEvent::SessionWorkflowNoticeUpdated { .. } => "SessionWorkflowNoticeUpdated",
-            AppEvent::SessionOrchestrationProgressUpdated { .. } => {
-                "SessionOrchestrationProgressUpdated"
-            }
             AppEvent::PublishedBranchSyncUpdated { .. } => "PublishedBranchSyncUpdated",
             AppEvent::ReviewRequestStatusUpdated { .. } => "ReviewRequestStatusUpdated",
         }
@@ -545,22 +541,6 @@ impl AppServices {
                 }
             }
         }
-    }
-}
-
-impl OrchestrationEventSink for AppServices {
-    fn emit(&self, event: OrchestrationEvent) {
-        let event = match event {
-            OrchestrationEvent::RefreshSessions => AppEvent::RefreshSessions,
-            OrchestrationEvent::ProgressUpdated {
-                progress,
-                session_id,
-            } => AppEvent::SessionOrchestrationProgressUpdated {
-                progress,
-                session_id,
-            },
-        };
-        self.emit_app_event(event);
     }
 }
 

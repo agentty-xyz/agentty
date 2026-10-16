@@ -20,8 +20,8 @@ use crate::common::{BuilderEnv, FeatureTest};
 use crate::test_support::{persist_active_tab_for_test, persist_project_reasoning_levels_for_test};
 use crate::{common, selection};
 
-const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 3;
-const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 7;
+const DEFAULT_SMART_MODEL_ROW_OFFSET: usize = 1;
+const LAUNCH_CONFIGURATIONS_ROW_OFFSET: usize = 5;
 
 /// Moves from the initial Theme row to a known settings row.
 fn move_to_settings_row(name: &str, row_offset: usize) -> Journey {
@@ -208,8 +208,6 @@ async fn settings_tab_shows_content() {
                     assertion::assert_text_in_region(frame, "Launch Configurations", &full);
                     assertion::assert_text_in_region(frame, "Theme", &full);
                     assertion::assert_text_in_region(frame, "Agentty Default", &full);
-                    assertion::assert_text_in_region(frame, "Orchestrator Parallelism", &full);
-                    assertion::assert_text_in_region(frame, "Auto-approve Research", &full);
                 })
             },
         )
@@ -234,22 +232,21 @@ async fn settings_selection_highlight() {
                     .capture_labeled("initial", "Highlight on Theme")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("next_global", "Highlight on Orchestrator Parallelism")
-                    .press_key("j")
+                    .capture_labeled("project", "Highlight on Default Smart Model")
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("project", "Highlight on Default Smart Model")
+                    .capture_labeled("next_project", "Highlight on Default Fast Model")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
-                    .capture_labeled("back_global", "Highlight on Auto-approve Research")
+                    .capture_labeled("back_project", "Highlight on Default Smart Model")
             },
             |_frame, report| {
                 Box::pin(async move {
                     let selected_labels = [
                         "Theme",
-                        "Orchestrator Parallelism",
                         "Default Smart Model",
-                        "Auto-approve Research",
+                        "Default Fast Model",
+                        "Default Smart Model",
                     ];
                     assert_eq!(report.captures.len(), selected_labels.len());
                     for (capture, selected_label) in report.captures.iter().zip(selected_labels) {
@@ -304,12 +301,6 @@ async fn settings_jk_navigation() {
                     .press_key("j")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(1500)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000)
-                    .viewing_pause_ms(1500)
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .press_key("Enter")
@@ -323,7 +314,7 @@ async fn settings_jk_navigation() {
                     .press_key("Enter")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
-                    .capture_labeled("moved_down", "Selection moved down five rows")
+                    .capture_labeled("moved_down", "Selection moved down three rows")
                     .press_key("k")
                     .wait_for_stable_frame(200, 3000)
                     .viewing_pause_ms(1500)
@@ -420,10 +411,6 @@ fn settings_dropdown_scenario(scenario: Scenario) -> Scenario {
         .compose(&common::wait_for_agentty_startup())
         .wait_for_text("claude/claude-opus-5-5", 5000)
         .viewing_pause_ms(2000)
-        .press_key("j")
-        .wait_for_stable_frame(200, 3000)
-        .press_key("j")
-        .wait_for_stable_frame(200, 3000)
         .press_key("j")
         .wait_for_stable_frame(200, 3000)
         .capture_labeled(

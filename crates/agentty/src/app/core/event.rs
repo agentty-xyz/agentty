@@ -38,8 +38,8 @@ use crate::domain::file_entry::{FileEntry, at_mention_lookup_root};
 use crate::domain::input::InputState;
 use crate::domain::question::default_option_index;
 use crate::domain::session::{
-    PublishBranchAction, PublishedBranchSyncStatus, Session, SessionDiffStats, SessionHandles,
-    SessionId, Status,
+    PublishBranchAction, PublishedBranchSyncStatus, SessionDiffStats, SessionHandles, SessionId,
+    Status,
 };
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::transient_message::TransientMessageBody;
@@ -284,12 +284,6 @@ pub(crate) enum AppEvent {
         notice: String,
         session_id: SessionId,
     },
-    /// Indicates that the replaceable child-status loader changed for an
-    /// orchestrator.
-    SessionOrchestrationProgressUpdated {
-        progress: Option<String>,
-        session_id: SessionId,
-    },
     /// Indicates that one published session branch started or finished a
     /// background auto-push after a completed turn.
     PublishedBranchSyncUpdated {
@@ -410,7 +404,6 @@ pub(super) struct AppEventBatch {
     pub(super) session_git_status_updates: HashMap<SessionId, SessionGitStatus>,
     pub(super) session_ids: HashSet<SessionId>,
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
-    pub(super) session_orchestration_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_permission_mode_updates:
         HashMap<SessionId, crate::domain::permission::PermissionMode>,
     pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
@@ -492,7 +485,6 @@ impl AppEventBatch {
             || !self.review_updates.is_empty()
             || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
-            || !self.session_orchestration_progress_updates.is_empty()
             || !self.session_personality_updates.is_empty()
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
@@ -569,13 +561,6 @@ impl AppEventBatch {
             } => {
                 self.review_progress_updates
                     .push((session_id, diff_hash, request_id, progress));
-            }
-            AppEvent::SessionOrchestrationProgressUpdated {
-                progress,
-                session_id,
-            } => {
-                self.session_orchestration_progress_updates
-                    .insert(session_id, progress);
             }
             AppEvent::SessionCreationCompleted { request_id, result } => {
                 self.session_creations.push((request_id, result));
@@ -721,7 +706,6 @@ impl AppEventBatch {
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
             AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
-            | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::GitStatusUpdated { .. }
             | AppEvent::VersionAvailabilityUpdated { .. }
@@ -871,7 +855,6 @@ impl AppEventBatch {
             } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
-            | AppEvent::SessionOrchestrationProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::AtMentionEntriesLoaded { .. }
             | AppEvent::PromptImagePasted { .. }
@@ -1275,12 +1258,6 @@ impl App {
             }
             self.sessions
                 .update_review_comment_resolution(&session_id, comment_count);
-        }
-        for (session_id, progress) in
-            std::mem::take(&mut event_batch.session_orchestration_progress_updates)
-        {
-            self.sessions
-                .update_orchestration_progress(&session_id, progress);
         }
         for (session_id, notices) in
             std::mem::take(&mut event_batch.session_workflow_notice_updates)
@@ -1962,11 +1939,7 @@ impl App {
             return;
         }
 
-        let accepts_user_turns = self
-            .sessions
-            .session_for_id(session_id)
-            .is_some_and(Session::accepts_user_turns);
-        if accepts_user_turns && self.is_viewing_session(session_id) {
+        if self.is_viewing_session(session_id) {
             self.mode = AppMode::Question {
                 at_mention_state: None,
                 selected_option_index: default_option_index(&questions, 0),
@@ -2295,7 +2268,7 @@ impl App {
             warn!(
                 session_id = %session_id,
                 error = %error,
-                "focused-review persistence retries exhausted; durable orchestration state \
+                "focused-review persistence retries exhausted; durable review state \
                  will recover the review on restart"
             );
 

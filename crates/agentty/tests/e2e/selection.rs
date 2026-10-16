@@ -90,7 +90,7 @@ fn selection_scenario(scenario: Scenario, theme_navigation: &str) -> Scenario {
         .capture_labeled("next_theme", "Highlight moved to another theme option")
         .press_key("Esc")
         .wait_for_stable_frame(200, 3000);
-    let scenario = (0..7).fold(scenario, |scenario, _| scenario.press_key("j"));
+    let scenario = (0..5).fold(scenario, |scenario, _| scenario.press_key("j"));
     scenario
         .press_key("Enter")
         .wait_for_text("J/K: reorder", 5000)

@@ -14,32 +14,30 @@ For file-level detail, read the module docstrings directly.
 
 ## Workspace Crates
 
-| Crate              | Responsibility                                                   |
-| ------------------ | ---------------------------------------------------------------- |
-| `ag-clipboard`     | Host clipboard reads                                             |
-| `ag-contracts`     | Transport-independent execution types and interfaces             |
-| `ag-runtime`       | Adapter composition and dispatch                                 |
-| `ag-scheduler`     | Shared session admission and campaign task selection             |
-| `ag-worker`        | Scheduling, cancellation, heartbeats, recovery, execution policy |
-| `ag-agent`         | CLI, app-server, and native harness adapters; policy enforcement |
-| `ag-forge`         | GitHub/GitLab review requests and comments                       |
-| `ag-git`           | Worktrees, captured diff parsing, sync, rebase, merge            |
-| `ag-harness`       | Native model loop, tools, durable sessions                       |
-| `ag-harness-cli`   | Companion harness CLI                                            |
-| `ag-orchestration` | Campaign planning, verification, integration                     |
-| `ag-protocol`      | Response schemas, parsing, prompt envelopes                      |
-| `ag-router`        | Structured chat routing and provider transports                  |
-| `ag-session`       | Session models, policies, catalog, lifecycle API                 |
-| `ag-store`         | Persistence contracts, SQLite adapters, migrations               |
-| `ag-telemetry`     | Content-free spans, async trace context, and opt-in OTLP export  |
-| `ag-tui-text`      | Markdown, forge HTML, terminal diagrams and text layout          |
-| `agentty`          | Application composition and TUI                                  |
-| `testty`           | PTY assertions and visual recordings                             |
-| `ag-xtask`         | Workspace maintenance checks                                     |
+| Crate            | Responsibility                                                   |
+| ---------------- | ---------------------------------------------------------------- |
+| `ag-clipboard`   | Host clipboard reads                                             |
+| `ag-contracts`   | Transport-independent execution types and interfaces             |
+| `ag-runtime`     | Adapter composition and dispatch                                 |
+| `ag-scheduler`   | Shared session admission                                         |
+| `ag-worker`      | Scheduling, cancellation, heartbeats, recovery, execution policy |
+| `ag-agent`       | CLI, app-server, and native harness adapters; policy enforcement |
+| `ag-forge`       | GitHub/GitLab review requests and comments                       |
+| `ag-git`         | Worktrees, captured diff parsing, sync, rebase, merge            |
+| `ag-harness`     | Native model loop, tools, durable sessions                       |
+| `ag-harness-cli` | Companion harness CLI                                            |
+| `ag-protocol`    | Response schemas, parsing, prompt envelopes                      |
+| `ag-router`      | Structured chat routing and provider transports                  |
+| `ag-session`     | Session models, policies, catalog, lifecycle API                 |
+| `ag-store`       | Persistence contracts, SQLite adapters, migrations               |
+| `ag-telemetry`   | Content-free spans, async trace context, and opt-in OTLP export  |
+| `ag-tui-text`    | Markdown, forge HTML, terminal diagrams and text layout          |
+| `agentty`        | Application composition and TUI                                  |
+| `testty`         | PTY assertions and visual recordings                             |
+| `ag-xtask`       | Workspace maintenance checks                                     |
 
 All crates live under `crates/`. See
-[`ag-harness` Design](@/docs/architecture/ag-harness-design.md) and
-[Orchestrator Design](@/docs/architecture/orchestrator.md) for their component
+[`ag-harness` Design](@/docs/architecture/ag-harness-design.md) for its component
 contracts.
 
 ## Application Layers (`crates/agentty/src/`)

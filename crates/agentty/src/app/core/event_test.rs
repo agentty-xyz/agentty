@@ -25,6 +25,93 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::review_comment as review_comment_selection;
 
+/// Captures the `log` fallback emitted before tracing is initialized.
+struct WarningLogger(std::sync::Mutex<Vec<String>>);
+
+impl tracing::log::Log for WarningLogger {
+    fn enabled(&self, metadata: &tracing::log::Metadata<'_>) -> bool {
+        metadata.level() == tracing::log::Level::Warn
+    }
+
+    fn log(&self, record: &tracing::log::Record<'_>) {
+        self.0
+            .lock()
+            .expect("warning buffer lock")
+            .push(record.args().to_string());
+    }
+
+    fn flush(&self) {}
+}
+
+#[tokio::test]
+async fn exhausted_focused_review_persistence_logs_without_tracing() {
+    // Arrange: isolate process-global logging from other tests' subscribers.
+    const CHILD_ENV: &str = "AGENTTY_TEST_REVIEW_LOG_FALLBACK";
+    static LOGGER: WarningLogger = WarningLogger(std::sync::Mutex::new(Vec::new()));
+
+    if std::env::var_os(CHILD_ENV).is_none() {
+        let mut child = tokio::process::Command::new(
+            std::env::current_exe().expect("test binary should exist"),
+        );
+        child
+            .args([
+                "--exact",
+                "app::core::event::tests::exhausted_focused_review_persistence_logs_without_tracing",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1");
+        if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+            child.env(
+                "LLVM_PROFILE_FILE",
+                profile
+                    .to_string_lossy()
+                    .replace(".profraw", "-review-log-child.profraw"),
+            );
+        }
+
+        // Act
+        let status = child.status().await.expect("isolated logging test");
+
+        // Assert
+        assert!(status.success());
+
+        return;
+    }
+    tracing::log::set_logger(&LOGGER).expect("isolated logger should install");
+    tracing::log::set_max_level(tracing::log::LevelFilter::Warn);
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let retry = FocusedReviewPersistenceRetry {
+        attempt: app::review::MAX_FOCUSED_REVIEW_PERSISTENCE_RETRIES,
+        persistence_update: FocusedReviewPersistence {
+            generation_request_id: None,
+            request_id: uuid::Uuid::nil(),
+            diff_hash: Some(42),
+            session_id: "session-1".into(),
+            status: crate::domain::review::FocusedReviewStatus::Ready,
+            text: Some("review output".to_string()),
+        },
+    };
+
+    // Act
+    let retry_scheduled = App::handle_focused_review_persistence_result(
+        sender,
+        retry,
+        Err(DbError::Query(sqlx::Error::PoolClosed)),
+    );
+
+    // Assert
+    assert!(!retry_scheduled);
+    assert_eq!(receiver.recv().await, None);
+    let warnings = LOGGER.0.lock().expect("warning buffer lock");
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains(
+        "focused-review persistence retries exhausted; durable review state will recover the \
+         review on restart"
+    ));
+    assert!(warnings[0].contains("session_id=session-1"));
+    assert!(warnings[0].contains("error=attempted to acquire a connection on a closed pool"));
+}
+
 #[tokio::test]
 async fn review_progress_updates_only_the_loading_generation_and_never_replaces_results() {
     // Arrange

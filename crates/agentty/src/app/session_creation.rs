@@ -4,7 +4,7 @@ use ag_session::{CreateSessionRequest, SessionError, SessionId};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::app::session::{SessionCreationKind, SessionCreationSettings};
+use crate::app::session::SessionCreationSettings;
 use crate::app::{App, AppError, AppEvent, SessionManager};
 use crate::domain::input::InputState;
 use crate::domain::session::Status;
@@ -17,7 +17,6 @@ use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState};
 pub(super) enum PreparedSessionCreation {
     Materialized {
         base_branch: String,
-        creation_kind: SessionCreationKind,
         project_id: i64,
         settings: SessionCreationSettings,
     },
@@ -53,7 +52,6 @@ impl App {
         let session_id = match result {
             Ok(PreparedSessionCreation::Materialized {
                 base_branch,
-                creation_kind,
                 project_id,
                 settings,
             }) => {
@@ -62,7 +60,6 @@ impl App {
                     project_id,
                     &base_branch,
                     settings,
-                    creation_kind,
                 )
                 .await
                 {
@@ -403,7 +400,7 @@ impl App {
         } else if session.status == Status::Review {
             if !self
                 .sessions
-                .reply_to_coordinator_message(
+                .reply_to_durable_message(
                     &self.services,
                     session_id,
                     format!("workspace:{session_id}"),

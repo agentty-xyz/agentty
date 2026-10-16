@@ -27,8 +27,7 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel
 use crate::domain::question::QuestionItem;
 use crate::domain::selection::SelectionState;
 use crate::domain::session::{
-    ReviewRequest, Session, SessionHandles, SessionId, SessionRole, SessionSize, SessionStats,
-    Status,
+    ReviewRequest, Session, SessionHandles, SessionId, SessionSize, SessionStats, Status,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::TransientMessageStore;
@@ -131,13 +130,11 @@ impl SessionFixtureBuilder {
                 draft_attachments: Vec::new(),
                 folder: PathBuf::new(),
                 follow_up_tasks: Vec::new(),
+                has_archived_diff: false,
                 id: SessionId::from("session-id"),
                 in_progress_started_at: None,
                 in_progress_total_seconds: 0,
                 is_draft: false,
-                controller_session_id: None,
-                orchestration_progress: None,
-                role: SessionRole::default(),
                 parent_session_id: None,
                 permission_mode: crate::domain::permission::PermissionMode::default(),
                 personality_id: None,
@@ -244,13 +241,6 @@ impl SessionFixtureBuilder {
     /// Overrides the persisted forge review request.
     pub(crate) fn review_request(mut self, review_request: Option<ReviewRequest>) -> Self {
         self.session.review_request = review_request;
-
-        self
-    }
-
-    /// Overrides the session's orchestration role.
-    pub(crate) fn role(mut self, role: SessionRole) -> Self {
-        self.session.role = role;
 
         self
     }

@@ -8,8 +8,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use ag_orchestration::{OrchestrationCoordinator, OrchestrationSchedule};
-use async_trait::async_trait;
 use crossterm::style::Colored;
 use ratatui::Terminal;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend};
@@ -24,30 +22,6 @@ use crate::ui::style;
 /// events arrive.
 const FORCED_REDRAW_INTERVAL: Duration = Duration::from_millis(200);
 const SECONDS_PER_MINUTE: i64 = 60;
-/// Coordinator polling cadence while the terminal runtime is active.
-const ORCHESTRATION_RECONCILE_INTERVAL: Duration = Duration::from_millis(500);
-
-/// Tokio-backed production schedule for orchestration reconciliation.
-struct RuntimeOrchestrationSchedule {
-    interval: tokio::time::Interval,
-}
-
-impl RuntimeOrchestrationSchedule {
-    fn new() -> Self {
-        let mut interval = tokio::time::interval(ORCHESTRATION_RECONCILE_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-        Self { interval }
-    }
-}
-
-#[async_trait]
-impl OrchestrationSchedule for RuntimeOrchestrationSchedule {
-    async fn wait_for_reconciliation(&mut self) {
-        self.interval.tick().await;
-    }
-}
-
 /// Concrete terminal type used by the production runtime entry point.
 pub(crate) type TuiTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -172,13 +146,6 @@ where
     B::Error: std::error::Error + Send + Sync + 'static,
 {
     let _session_runtime_consumer = app.sessions.foreground_consumer();
-    let orchestration_coordinator = OrchestrationCoordinator::new(
-        Arc::new(app.services.clone()),
-        app.services.db().orchestration_repository(),
-        app.coordinator_session_service(),
-    );
-    let orchestration_task =
-        tokio::spawn(orchestration_coordinator.run(RuntimeOrchestrationSchedule::new()));
     let clock = app.services.clock();
     let last_draw = DrawStamp::now(clock.as_ref());
     let mut main_loop_state = MainLoopState {
@@ -191,25 +158,7 @@ where
         tick,
     };
 
-    let result = run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await;
-    let orchestration_shutdown_result = stop_orchestration_task(orchestration_task).await;
-
-    result.and(orchestration_shutdown_result)
-}
-
-/// Cancels the coordinator and observes its final task result.
-async fn stop_orchestration_task(
-    orchestration_task: tokio::task::JoinHandle<()>,
-) -> io::Result<()> {
-    orchestration_task.abort();
-
-    match orchestration_task.await {
-        Ok(()) => Ok(()),
-        Err(error) if error.is_cancelled() => Ok(()),
-        Err(error) => Err(io::Error::other(format!(
-            "orchestration coordinator task failed: {error}"
-        ))),
-    }
+    run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await
 }
 
 /// Clock readings captured when the latest frame was drawn.

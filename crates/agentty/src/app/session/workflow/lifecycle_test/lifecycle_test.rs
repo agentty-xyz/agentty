@@ -9,10 +9,10 @@ use tracing::instrument::WithSubscriber;
 
 use super::support::{
     create_passthrough_mock_fs_client, database_with_session, database_with_session_and_pool,
-    load_persisted_session_row, orchestration_task_ids, rollback_git_client,
-    session_manager_with_one_session, test_services, test_services_with_fs_client, test_session,
+    load_persisted_session_row, rollback_git_client, session_manager_with_one_session,
+    test_services, test_services_with_fs_client, test_session,
 };
-use crate::app::session::{SessionCreationKind, SessionCreationSettings, SessionError};
+use crate::app::session::{SessionCreationSettings, SessionError};
 use crate::app::{ProjectManager, SessionManager};
 use crate::domain::agent::{AgentSelection, AgentSelectionMetadata, ResponseStyle};
 use crate::domain::session::{SessionHandles, Status};
@@ -98,7 +98,6 @@ async fn successful_reservations_report_creation_types() {
         .await
         .expect("project lookup")
         .expect("source project");
-    let task_ids = orchestration_task_ids(&database, &source_id).await;
     let mut git = git::MockGitClient::new();
     git.expect_find_git_repo_root()
         .returning(|path| Box::pin(async move { Some(path) }));
@@ -117,11 +116,10 @@ async fn successful_reservations_report_creation_types() {
         personality_id: None,
         reasoning_level: source.reasoning_level_override.unwrap_or_default(),
         response_style: source.response_style,
-        role: source.role,
         speed_mode: source.speed_mode,
     };
     let mut manager = session_manager_with_one_session(source);
-    let (analytics, receiver) = capture_events(7);
+    let (analytics, receiver) = capture_events(4);
     services.set_analytics(Some(analytics));
 
     // Act
@@ -141,26 +139,9 @@ async fn successful_reservations_report_creation_types() {
         .reserve_fork_session(&services, &source_id)
         .await
         .expect("fork reservation");
-    for creation_kind in [
-        SessionCreationKind::Worker,
-        SessionCreationKind::Orchestrator,
-        SessionCreationKind::OrchestrationChild {
-            task_id: task_ids[0],
-        },
-        SessionCreationKind::OrchestrationResearch {
-            task_id: task_ids[1],
-        },
-    ] {
-        SessionManager::reserve_session(
-            &services,
-            project_id,
-            "main",
-            settings.clone(),
-            creation_kind,
-        )
+    SessionManager::reserve_session(&services, project_id, "main", settings.clone())
         .await
         .expect("regular reservation");
-    }
     services.wait_for_cleanup_tasks(None).await;
     let events = receiver.join().expect("telemetry receiver");
 
@@ -176,18 +157,7 @@ async fn successful_reservations_report_creation_types() {
         })
         .collect::<Vec<_>>();
     types.sort_unstable();
-    assert_eq!(
-        types,
-        vec![
-            "draft",
-            "fork",
-            "orchestration_child",
-            "orchestration_research",
-            "orchestrator",
-            "regular",
-            "stacked",
-        ]
-    );
+    assert_eq!(types, vec!["draft", "fork", "regular", "stacked",]);
 }
 
 #[tokio::test]
@@ -444,7 +414,6 @@ async fn creation_and_fork_reserve_metadata_before_checkout() {
                     "main",
                     PathBuf::from("/tmp/project"),
                     None,
-                    SessionCreationKind::Worker,
                 )
                 .await
         };

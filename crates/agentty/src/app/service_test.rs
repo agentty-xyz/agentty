@@ -4,10 +4,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ag_contracts::{AgentRequestKind, OneShotRequest, PermissionMode, ReasoningLevel, SpeedMode};
-use ag_orchestration::{OrchestrationEvent, OrchestrationEventSink};
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient, RealOneShotClient};
 use ag_worker::{HeartbeatClock, RunWorker};
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -38,41 +36,6 @@ impl Drop for CleanupResource {
     fn drop(&mut self) {
         assert!(self.should_succeed, "injected cleanup failure");
     }
-}
-
-#[tokio::test]
-async fn orchestration_notifications_reach_the_app_event_channel() {
-    // Arrange
-    let (app, _directory) = crate::test_support::new_test_app().await;
-    let mut services = app.services;
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    services.event_tx = event_tx;
-    let session_id = SessionId::from("controller");
-
-    // Act
-    services.emit(OrchestrationEvent::RefreshSessions);
-    for progress in [Some("Running 2 tasks".to_string()), None] {
-        services.emit(OrchestrationEvent::ProgressUpdated {
-            progress,
-            session_id: session_id.clone(),
-        });
-    }
-
-    // Assert
-    assert_eq!(
-        event_rx.try_recv().expect("refresh event"),
-        AppEvent::RefreshSessions
-    );
-    for progress in [Some("Running 2 tasks".to_string()), None] {
-        assert_eq!(
-            event_rx.try_recv().expect("progress event"),
-            AppEvent::SessionOrchestrationProgressUpdated {
-                progress,
-                session_id: session_id.clone(),
-            }
-        );
-    }
-    assert!(event_rx.try_recv().is_err());
 }
 
 #[test]
@@ -196,21 +159,6 @@ fn app_event_label_names_session_diff_stats_updates() {
 
     // Assert
     assert_eq!(label, "SessionDiffStatsUpdated");
-}
-
-#[test]
-fn app_event_label_names_orchestration_progress_updates() {
-    // Arrange
-    let event = AppEvent::SessionOrchestrationProgressUpdated {
-        progress: Some("Working... protocol: running".to_string()),
-        session_id: "controller".into(),
-    };
-
-    // Act
-    let label = AppServices::app_event_label(&event);
-
-    // Assert
-    assert_eq!(label, "SessionOrchestrationProgressUpdated");
 }
 
 #[test]

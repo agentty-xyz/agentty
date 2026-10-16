@@ -36,7 +36,7 @@ async fn test_session_creation_skips_append_option_for_non_review_session() {
         .expect("source session should exist");
     app.sessions.select_session_index(Some(source_index));
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 3,
+        selected_option_index: 2,
     };
 
     // Act
@@ -45,7 +45,7 @@ async fn test_session_creation_skips_append_option_for_non_review_session() {
         .expect("failed to navigate creation options");
 
     // Assert
-    assert_eq!(current_session_creation_selection(&app), 3);
+    assert_eq!(current_session_creation_selection(&app), 2);
 }
 
 #[tokio::test]
@@ -455,7 +455,7 @@ async fn test_handle_session_creation_key_opens_parent_selector_for_review_sessi
         .expect("source session should exist");
     app.sessions.select_session_index(Some(source_index));
     app.mode = AppMode::SessionCreation {
-        selected_option_index: 3,
+        selected_option_index: 2,
     };
 
     // Act

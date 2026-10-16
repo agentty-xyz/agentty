@@ -446,36 +446,6 @@ fn test_is_session_refresh_due_returns_false_before_deadline() {
 }
 
 #[test]
-fn preserve_live_orchestration_progress_keeps_active_board_and_respects_terminal_clear() {
-    // Arrange
-    let mut session = test_session(PathBuf::from("/tmp/session"), None, Status::Review);
-    session.orchestration_progress = Some("2 running, 0 waiting on you".to_string());
-    let live_progress = HashMap::from([(
-        session.id.clone(),
-        "Phase: Running\n- protocol [protocol]: running".to_string(),
-    )]);
-
-    // Act
-    SessionManager::preserve_live_orchestration_progress(
-        std::slice::from_mut(&mut session),
-        &live_progress,
-    );
-    let active_progress = session.orchestration_progress.clone();
-    session.orchestration_progress = None;
-    SessionManager::preserve_live_orchestration_progress(
-        std::slice::from_mut(&mut session),
-        &live_progress,
-    );
-
-    // Assert
-    assert_eq!(
-        active_progress.as_deref(),
-        Some("Phase: Running\n- protocol [protocol]: running")
-    );
-    assert!(session.orchestration_progress.is_none());
-}
-
-#[test]
 fn test_is_session_refresh_due_returns_true_at_deadline() {
     // Arrange
     let now = Instant::now();

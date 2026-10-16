@@ -3,7 +3,7 @@
 //! [`SessionRuntime`] owns the live [`SessionManager`] plus a bounded command
 //! mailbox. The terminal runtime drives accepted commands on the foreground
 //! task so reducer-owned render snapshots and session handles remain coherent,
-//! while [`SessionRuntimeHandle`] gives background coordinators a cloneable
+//! while [`SessionRuntimeHandle`] gives background callers a cloneable
 //! `Send + Sync` capability without sharing all of [`crate::app::App`] behind
 //! a mutex.
 
@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 
 use ag_session::{
-    AnswerQuestionsRequest, CoordinatorMessageRequest, CreateSessionRequest, ReviewRequest,
-    Session, SessionError, SessionId,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReviewRequest, Session,
+    SessionError, SessionId,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -40,58 +40,43 @@ pub(crate) enum SessionRuntimeCommand {
     },
     /// Sends one user message.
     SendMessage {
-        access: SessionRuntimeAccess,
         message: String,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
-    /// Submits one coordinator-owned turn directly on the session worker.
-    SubmitCoordinatorMessage {
-        request: CoordinatorMessageRequest,
+    /// Submits one durable turn directly on the session worker.
+    SubmitDurableMessage {
+        request: DurableMessageRequest,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Answers one complete clarification-question set.
     AnswerQuestions {
-        access: SessionRuntimeAccess,
         request: AnswerQuestionsRequest,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Cancels one session.
     Cancel {
-        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Enqueues one session for merge.
     Merge {
-        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<(), SessionError>>,
         session_id: SessionId,
     },
     /// Queues publication of one session branch and creates or refreshes its
     /// review request.
     CreateReviewRequest {
-        access: SessionRuntimeAccess,
         response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
         session_id: SessionId,
     },
 }
 
-/// Capability level attached to one programmatic session request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SessionRuntimeAccess {
-    /// Ordinary frontend or public API request.
-    User,
-    /// Coordinator-owned request for a managed orchestration worker.
-    Coordinator,
-}
-
 /// Cloneable control capability for the foreground session runtime.
 #[derive(Clone)]
 pub(crate) struct SessionRuntimeHandle {
-    access: SessionRuntimeAccess,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
 }
@@ -132,7 +117,6 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::SendMessage {
-            access: self.access,
             message,
             response_tx,
             session_id,
@@ -140,21 +124,19 @@ impl SessionRuntimeHandle {
         .await
     }
 
-    /// Submits one coordinator-owned turn through the runtime actor.
-    pub(crate) async fn submit_coordinator_message(
+    /// Submits one durable turn through the runtime actor.
+    pub(crate) async fn submit_durable_message(
         &self,
         session_id: &SessionId,
-        request: CoordinatorMessageRequest,
+        request: DurableMessageRequest,
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(
-            |response_tx| SessionRuntimeCommand::SubmitCoordinatorMessage {
-                request,
-                response_tx,
-                session_id,
-            },
-        )
+        self.request(|response_tx| SessionRuntimeCommand::SubmitDurableMessage {
+            request,
+            response_tx,
+            session_id,
+        })
         .await
     }
 
@@ -168,7 +150,6 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::AnswerQuestions {
-            access: self.access,
             request,
             response_tx,
             session_id,
@@ -181,7 +162,6 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::Cancel {
-            access: self.access,
             response_tx,
             session_id,
         })
@@ -193,7 +173,6 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::Merge {
-            access: self.access,
             response_tx,
             session_id,
         })
@@ -209,7 +188,6 @@ impl SessionRuntimeHandle {
         let session_id = session_id.clone();
 
         self.request(|response_tx| SessionRuntimeCommand::CreateReviewRequest {
-            access: self.access,
             response_tx,
             session_id,
         })
@@ -333,16 +311,6 @@ impl SessionRuntime {
     /// Returns a cloneable control handle for background or frontend callers.
     pub(crate) fn handle(&self) -> SessionRuntimeHandle {
         SessionRuntimeHandle {
-            access: SessionRuntimeAccess::User,
-            command_tx: self.command_tx.clone(),
-            consumer_state: Arc::clone(&self.consumer_state),
-        }
-    }
-
-    /// Returns a handle authorized to mutate coordinator-owned workers.
-    pub(crate) fn coordinator_handle(&self) -> SessionRuntimeHandle {
-        SessionRuntimeHandle {
-            access: SessionRuntimeAccess::Coordinator,
             command_tx: self.command_tx.clone(),
             consumer_state: Arc::clone(&self.consumer_state),
         }

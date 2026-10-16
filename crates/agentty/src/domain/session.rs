@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 pub use ag_contracts::{ResponseStyle, SessionDiffState, SessionStats, SpeedMode};
 pub use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status, activity_day_key_with_offset,
 };
 use tokio::sync::Mutex as AsyncMutex;
@@ -243,8 +243,6 @@ pub struct Session {
     pub agent: AgentSelection,
     /// Base branch used to create the session worktree.
     pub base_branch: String,
-    /// Controller session that owns this orchestration child, when present.
-    pub controller_session_id: Option<SessionId>,
     /// Session creation timestamp (Unix seconds).
     pub created_at: i64,
     /// Ordered image attachments staged for the draft-session prompt stored in
@@ -254,6 +252,8 @@ pub struct Session {
     pub folder: PathBuf,
     /// Persisted read-only follow-up tasks emitted after the latest turn.
     pub follow_up_tasks: Vec<SessionFollowUpTask>,
+    /// Whether retained archive storage contains a nonempty diff.
+    pub has_archived_diff: bool,
     /// Stable session identifier.
     pub id: SessionId,
     /// Unix timestamp when the current active-work interval started, if the
@@ -265,8 +265,6 @@ pub struct Session {
     /// Whether the session was created through the explicit draft workflow
     /// from the sessions list.
     pub is_draft: bool,
-    /// Derived orchestration progress rendered in place of a lifecycle label.
-    pub orchestration_progress: Option<String>,
     /// Parent session this stacked session is based on while its parent branch
     /// remains active.
     pub parent_session_id: Option<SessionId>,
@@ -294,8 +292,6 @@ pub struct Session {
     pub response_style: ResponseStyle,
     /// Persisted forge review-request link for this session, when available.
     pub review_request: Option<ReviewRequest>,
-    /// Role this session plays in multi-session orchestration.
-    pub role: SessionRole,
     /// Derived size bucket computed from diff size.
     pub size: SessionSize,
     /// Response-speed preference selected through `/speed`.
@@ -315,6 +311,15 @@ pub struct Session {
 }
 
 impl Session {
+    /// Returns whether the diff action has an available source for this status.
+    pub fn allows_diff_view(&self) -> bool {
+        if matches!(self.status, Status::Done | Status::Canceled) {
+            return self.has_archived_diff;
+        }
+
+        self.status.allows_diff_view() && self.stats.should_show_diff()
+    }
+
     /// Returns the latest persisted user-prompt position for transient-message
     /// lifecycle binding.
     pub(crate) fn latest_user_prompt_position(&self) -> Option<i64> {
@@ -392,9 +397,7 @@ impl Session {
     /// source must be an independent, review-ready user-owned branch without
     /// a forge review request whose target would become stale.
     pub fn allows_stack_append(&self) -> bool {
-        self.accepts_user_turns()
-            && self.owns_branch_changes()
-            && self.parent_session_id.is_none()
+        self.parent_session_id.is_none()
             && self.review_request.is_none()
             && self.status.allows_review_actions()
     }
@@ -410,9 +413,7 @@ impl Session {
     /// statuses are excluded because active branch work or terminal cleanup
     /// could race with the snapshot.
     pub fn allows_fork_action(&self) -> bool {
-        self.accepts_user_turns()
-            && self.role.owns_branch_changes()
-            && self.parent_session_id.is_none()
+        self.parent_session_id.is_none()
             && !self.is_draft_session()
             && self.status.allows_review_actions()
     }
@@ -420,13 +421,11 @@ impl Session {
     /// Returns whether the session can submit an agent reply for actionable
     /// forge review comments.
     pub fn allows_review_comment_reply(&self) -> bool {
-        self.accepts_user_turns()
-            && self.role.owns_branch_changes()
-            && (self.status.allows_review_actions()
-                || matches!(
-                    self.status,
-                    Status::Question | Status::InProgress | Status::Rebasing
-                ))
+        (self.status.allows_review_actions()
+            || matches!(
+                self.status,
+                Status::Question | Status::InProgress | Status::Rebasing
+            ))
             && self
                 .transient_messages
                 .get(TransientMessageSlot::ReviewCommentQueue)
@@ -447,31 +446,9 @@ impl Session {
             })
     }
 
-    /// Returns whether the session lifecycle and ownership role permit opening
-    /// its materialized worktree.
-    ///
-    /// Managed orchestration workers remain unavailable for direct user turns,
-    /// but a settled worker in `Review` may be opened for external inspection.
+    /// Returns whether the session lifecycle permits opening its worktree.
     pub fn allows_worktree_open_action(&self) -> bool {
         self.status.allows_session_actions()
-            && (self.accepts_user_turns()
-                || (self.role == SessionRole::OrchestrationWorker && self.status == Status::Review))
-    }
-
-    /// Returns whether this session exposes branch diff, merge, and publish
-    /// affordances.
-    pub fn owns_branch_changes(&self) -> bool {
-        self.role.owns_branch_changes()
-    }
-
-    /// Returns whether direct user turns and branch mutations are allowed.
-    pub fn accepts_user_turns(&self) -> bool {
-        self.role.accepts_user_turns()
-    }
-
-    /// Returns whether this session is owned by an orchestration campaign.
-    pub fn is_managed(&self) -> bool {
-        self.role.is_managed()
     }
 
     /// Returns whether this session is stacked beneath another session branch.
@@ -489,25 +466,22 @@ impl Session {
     /// Running sessions can be canceled from the list after their active turn
     /// is signaled to stop. Review-oriented sessions remain cancelable, and
     /// unstarted draft sessions can also be canceled before they materialize a
-    /// worktree. Draft orchestrators remain cancelable after their controller
-    /// worktree is materialized but before their first goal is submitted.
+    /// worktree.
     pub fn allows_cancel_action(&self) -> bool {
-        self.accepts_user_turns()
-            && (self.status == Status::InProgress
-                || self.status.allows_review_actions()
-                || (self.status == Status::Draft
-                    && (self.is_draft_session()
-                        || self.role == SessionRole::Orchestrator
-                        || self
-                            .transient_messages
-                            .get(TransientMessageSlot::WorkspacePreparation)
-                            .is_some())))
+        self.status == Status::InProgress
+            || self.status.allows_review_actions()
+            || (self.status == Status::Draft
+                && (self.is_draft_session()
+                    || self
+                        .transient_messages
+                        .get(TransientMessageSlot::WorkspacePreparation)
+                        .is_some()))
     }
 
     /// Returns whether this terminal session can launch a seeded follow-on
     /// session from view mode.
     pub fn allows_terminal_continuation(&self) -> bool {
-        self.role == SessionRole::Worker && self.status.allows_terminal_continuation()
+        self.status.allows_terminal_continuation()
     }
 
     /// Returns one seeded first-prompt body for a follow-on session launched
@@ -600,10 +574,8 @@ impl Session {
             .get(TransientMessageSlot::BranchPublish)
             .is_some_and(|message| message.body.is_pending_indicator());
 
-        (self.accepts_user_turns()
-            && self.owns_branch_changes()
-            && (self.status.allows_review_actions()
-                || matches!(self.status, Status::InProgress | Status::Rebasing))
+        ((self.status.allows_review_actions()
+            || matches!(self.status, Status::InProgress | Status::Rebasing))
             && !is_publish_active)
             .then_some(PublishBranchAction::PublishPullRequest)
     }
@@ -683,8 +655,6 @@ pub(crate) fn can_append_session_to_stack(
                 .as_deref()
                 .is_some_and(|parent_id| parent_id == session_id)
         })
-        && parent_session.accepts_user_turns()
-        && parent_session.owns_branch_changes()
         && parent_session.status.allows_review_actions()
         && can_create_stacked_child(sessions, parent_session_id)
         && can_rebase_session_branch_in_stack(sessions, parent_session_id)

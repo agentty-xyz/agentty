@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::model::{
     AgentResponse, ProtocolRequestProfile, ReviewMetadata, UtilityResponse,
-    questions_field_description, subtasks_field_description,
+    questions_field_description,
 };
 use super::review::FocusedReview;
 
@@ -143,19 +143,16 @@ fn inject_dynamic_schema_guidance(schema: &mut Value) {
         return;
     };
 
-    for (property_name, description) in [
-        ("questions", questions_field_description()),
-        ("subtasks", subtasks_field_description()),
-    ] {
-        let Some(property) = properties
-            .get_mut(property_name)
-            .and_then(Value::as_object_mut)
-        else {
-            continue;
-        };
-
-        property.insert("description".to_string(), Value::String(description));
-    }
+    let Some(property) = properties
+        .get_mut("questions")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    property.insert(
+        "description".to_string(),
+        Value::String(questions_field_description()),
+    );
 }
 
 /// Recursively injects `additionalProperties: false` into every schema object

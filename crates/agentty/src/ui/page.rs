@@ -3,8 +3,6 @@
 /// Scrollable session git-diff page.
 pub mod diff;
 pub mod fyi;
-/// Board-first orchestration campaign and controller conversation page.
-pub mod orchestration;
 /// Project selection and activity list page.
 pub mod project_list;
 /// Session-linked forge-review panels embedded in Diff mode.

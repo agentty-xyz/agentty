@@ -6,8 +6,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::question::QuestionItem;
-use super::subtask::SubtaskItem;
-use super::verification::VerificationVerdictItem;
 
 /// Protocol-owned request family preserved across prompt submission and repair
 /// retries.
@@ -137,29 +135,6 @@ pub struct AgentResponse {
                        IDs. Copy each reported `thread_id` exactly from the prompt."
     )]
     pub review_comment_outcomes: Vec<ReviewCommentOutcome>,
-    /// Proposed child-session subtasks for an orchestrator planning turn.
-    ///
-    /// The canonical JSON Schema description is produced by
-    /// [`subtasks_field_description`] and injected at schema generation time,
-    /// so the static `schemars` metadata here only sets the field title.
-    /// Ordinary session and utility turns leave this empty, and orchestration
-    /// consumers ignore it unless the turn prompt asked for a plan.
-    #[serde(default)]
-    #[schemars(title = "subtasks")]
-    pub subtasks: Vec<SubtaskItem>,
-    /// Per-task decisions emitted for an orchestration verification turn.
-    ///
-    /// Ordinary turns leave this empty. The controller must copy task keys
-    /// from the coordinator envelope so only explicit passes can proceed to
-    /// integration.
-    #[serde(default)]
-    #[schemars(
-        title = "verification_verdicts",
-        description = "Per-task decisions for an orchestration verification turn. Emit one item \
-                       for every task in the verification envelope, and use an empty array for \
-                       ordinary turns."
-    )]
-    pub verification_verdicts: Vec<VerificationVerdictItem>,
 }
 
 impl AgentResponse {
@@ -169,8 +144,6 @@ impl AgentResponse {
             answer: text.into(),
             questions: Vec::new(),
             review_comment_outcomes: Vec::new(),
-            subtasks: Vec::new(),
-            verification_verdicts: Vec::new(),
         }
     }
 
@@ -208,24 +181,6 @@ impl AgentResponse {
     pub fn question_items(&self) -> Vec<QuestionItem> {
         self.questions.iter().take(MAX_QUESTIONS).cloned().collect()
     }
-
-    /// Returns up to [`MAX_SUBTASKS`] proposed subtasks in response order.
-    ///
-    /// Callers must still reject plans whose keys collide; this only bounds how
-    /// much of a runaway plan is considered.
-    pub fn subtask_items(&self) -> Vec<SubtaskItem> {
-        self.subtasks.iter().take(MAX_SUBTASKS).cloned().collect()
-    }
-
-    /// Returns up to [`MAX_SUBTASKS`] verification decisions in response
-    /// order.
-    pub fn verification_verdict_items(&self) -> Vec<VerificationVerdictItem> {
-        self.verification_verdicts
-            .iter()
-            .take(MAX_SUBTASKS)
-            .cloned()
-            .collect()
-    }
 }
 
 /// Structured response parsing failure details.
@@ -262,11 +217,6 @@ impl std::error::Error for AgentResponseParseError {}
 /// templates so the prompt-level guidance and the server-side cap stay in
 /// sync automatically.
 pub(crate) const MAX_QUESTIONS: usize = 5;
-/// Hard cap on the number of subtasks accepted from one orchestrator planning
-/// turn. Bounds how many child sessions, worktrees, and agent CLI processes a
-/// single approved plan can create even when the agent ignores the
-/// prompt-level limit.
-pub(crate) const MAX_SUBTASKS: usize = 8;
 /// Returns the canonical JSON Schema description for the `questions` field.
 ///
 /// This is the single source of truth for the runtime-injected schema
@@ -283,24 +233,8 @@ pub(crate) fn questions_field_description() -> String {
     )
 }
 
-/// Returns the canonical JSON Schema description for the `subtasks` field.
-///
-/// This mirrors [`questions_field_description`]: the static `schemars`
-/// metadata on `AgentResponse::subtasks` carries only the field title, and
-/// `inject_dynamic_schema_guidance` overwrites the description with this
-/// helper's output before any consumer observes the schema.
-pub(crate) fn subtasks_field_description() -> String {
-    render_field_description_template(
-        SUBTASKS_FIELD_DESCRIPTION_TEMPLATE,
-        "{{ max_subtasks }}",
-        MAX_SUBTASKS,
-    )
-}
-
 const QUESTIONS_FIELD_DESCRIPTION_TEMPLATE: &str =
     include_str!("template/questions_field_description.md");
-const SUBTASKS_FIELD_DESCRIPTION_TEMPLATE: &str =
-    include_str!("template/subtasks_field_description.md");
 
 /// Appends one non-empty display message.
 fn push_display_message(display_messages: &mut Vec<String>, text: &str) {

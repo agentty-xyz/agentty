@@ -27,7 +27,7 @@ async fn seed_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
-response='{"answer":"Preserve pending worktree change","questions":[],"review_comment_outcomes":[],"subtasks":[],"verification_verdicts":[]}'
+response='{"answer":"Preserve pending worktree change","questions":[],"review_comment_outcomes":[]}'
 printf '%s\n' "$GIT_OPTIONAL_LOCKS" > "$AGENTTY_TEST_EVIDENCE/optional-locks"
 case "$prompt" in
   *"Generate the canonical session commit message"*)

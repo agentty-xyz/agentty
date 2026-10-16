@@ -18,9 +18,7 @@ use crate::app::{AppEvent, SessionState};
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::selection::SelectionState;
-use crate::domain::session::{
-    Session, SessionHandles, SessionRole, SessionSize, SessionStats, Status,
-};
+use crate::domain::session::{Session, SessionHandles, SessionSize, SessionStats, Status};
 use crate::domain::transient_message::TransientMessageStore;
 use crate::infra::clock::RealClock;
 use crate::presentation::prompt::PromptAtMentionState;
@@ -249,13 +247,11 @@ fn test_session_manager(session_id: &str) -> SessionManager {
             draft_attachments: Vec::new(),
             folder: PathBuf::from(format!("/tmp/{session_id}")),
             follow_up_tasks: Vec::new(),
+            has_archived_diff: false,
             id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
             agent: model_fixture::codex_selection(),
             parent_session_id: None,
             permission_mode: crate::domain::permission::PermissionMode::AutoEdit,

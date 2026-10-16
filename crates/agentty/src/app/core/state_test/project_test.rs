@@ -6,7 +6,10 @@ use ag_session::test_support as model_fixture;
 use tempfile::tempdir;
 
 use super::super::{AGENTTY_WT_DIR, App};
-use super::support::{create_git_repo_marker, project_list_row_fixture, seed_materialized_session};
+use super::support::{
+    create_git_repo_marker, install_mock_git_client, project_list_row_fixture,
+    seed_materialized_session,
+};
 use crate::app::{AppError, Tab};
 use crate::domain::agent::AgentModel;
 use crate::domain::session::{SESSION_DATA_DIR, Status};
@@ -96,6 +99,16 @@ async fn test_switch_project_rejects_missing_and_non_repository_paths() {
     )
     .await
     .expect("startup");
+    // Isolate repository discovery from the checkout containing temporary
+    // files.
+    let mut git_client = ag_git::MockGitClient::new();
+    let ordinary_path = ordinary.clone();
+    git_client
+        .expect_find_git_repo_root()
+        .once()
+        .withf(move |path| path == &ordinary_path)
+        .returning(|_| Box::pin(async { None }));
+    install_mock_git_client(&mut app, git_client);
     let active_id = app.active_project_id();
     for path in [ordinary, temp.path().join("missing")] {
         let id = database

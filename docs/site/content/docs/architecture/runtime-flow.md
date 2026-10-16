@@ -208,10 +208,6 @@ flowchart TD
 1. Ordered post-processing commits changes, coordinates publishing and stacked children,
    refreshes diff metadata, and enters `Review` or `Question`.
 
-Controllers skip branch mutation; researchers retain diff evidence but skip commits and
-integration. [Orchestrator Design](@/docs/architecture/orchestrator.md) owns campaign
-planning, remediation, verification, and integration details.
-
 ### Operation Lifecycle and Recovery
 
 <a id="architecture-session-operation-lifecycle"></a> Operations move from `queued` to
@@ -269,8 +265,8 @@ reused for read-only work. Provider-specific limits are described in
 
 <a id="architecture-agent-interaction-protocol"></a> `ag-protocol` defines shared
 responses, schemas, diagnostics, prompt envelopes, and repair requests. Session turns
-return `answer`, `questions`, `review_comment_outcomes`, `subtasks`, and
-`verification_verdicts`; utilities and reviews use narrower request-specific schemas.
+return `answer`, `questions`, and `review_comment_outcomes`; utilities and reviews use
+narrower request-specific schemas.
 
 Policy is delivered separately from user input and evidence. Workspace paths, history,
 malformed output, and diagnostics are encoded as data; quoted instructions never

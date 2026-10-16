@@ -9,7 +9,7 @@ use super::{
     previous_selected_index,
 };
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
-use crate::domain::session::{SessionId, SessionRole, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffReviewComments, DiffSidebarFocus,
     ReviewCommentSelection,
@@ -129,41 +129,6 @@ async fn test_handle_uses_space_as_only_comment_selection_key() {
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
     )
     .await;
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                ref selected_comments,
-                ..
-            }),
-            ..
-        } if selected_comments.is_empty()
-    ));
-}
-
-#[tokio::test]
-async fn managed_session_cannot_mark_review_comments() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("session-id")
-            .role(SessionRole::OrchestrationWorker)
-            .status(Status::Review)
-            .build(),
-    );
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
-
-    // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-    )
-    .await;
-
-    // Assert
     assert!(matches!(
         app.mode,
         AppMode::Diff {

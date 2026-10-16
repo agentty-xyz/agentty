@@ -669,14 +669,6 @@ impl AppClients {
 
         self
     }
-
-    /// Overrides whether the test app is treated as running inside `tmux`.
-    #[must_use]
-    pub(crate) fn with_tmux_session(mut self, is_tmux_session: bool) -> Self {
-        self.is_tmux_session = is_tmux_session;
-
-        self
-    }
 }
 
 impl AppClients {

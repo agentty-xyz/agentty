@@ -4,8 +4,8 @@ use ratatui::style::{Color, Modifier};
 use super::{
     AGENT_CLI_REQUIRED_DETAIL, APPEND_TO_STACK_DISABLED_PREVIEW_DETAIL,
     APPEND_TO_STACK_PREVIEW_DETAIL, HARNESS_OPTION_INDEX, HARNESS_SESSION_MISSING_KEY_DETAIL,
-    HARNESS_SESSION_PREVIEW_DETAIL, ORCHESTRATOR_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS,
-    STACKED_SESSION_DETAIL, SessionCreationOverlay,
+    HARNESS_SESSION_PREVIEW_DETAIL, OVERLAY_DIMENSIONS, STACKED_SESSION_DETAIL,
+    SessionCreationOverlay,
 };
 use crate::domain::agent::AgentModel;
 use crate::domain::harness::HarnessAvailability;
@@ -19,7 +19,7 @@ fn test_default_theme_disabled_options_remain_readable_and_unselected() {
     let _theme_scope = scoped_active_theme(ColorTheme::Current);
     let backend = ratatui::backend::TestBackend::new(80, 20);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
-    let overlay = SessionCreationOverlay::new(3, false, false, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(2, false, false, HarnessAvailability::Hidden, true);
 
     // Act
     terminal
@@ -74,9 +74,9 @@ fn test_session_creation_overlay_popup_area_uses_compact_minimum() {
 
     // Assert
     assert_eq!(popup_area.width, 53);
-    assert_eq!(popup_area.height, 13);
+    assert_eq!(popup_area.height, 12);
     assert_eq!(popup_area.x, 13);
-    assert_eq!(popup_area.y, 3);
+    assert_eq!(popup_area.y, 4);
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn test_session_creation_overlay_render_shows_session_options() {
         .collect::<String>();
     assert!(text.contains("Regular"));
     assert!(text.contains("Draft"));
-    assert!(text.contains(ORCHESTRATOR_SESSION_PREVIEW_DETAIL));
+    assert!(!text.contains("Orchestrator"));
     assert!(text.contains("Stacked"));
     assert!(text.contains(STACKED_SESSION_DETAIL));
     assert!(text.contains("Append to stack"));
@@ -170,7 +170,7 @@ fn test_session_creation_overlay_lines_disable_stacked_option() {
 
     // Act
     let lines = overlay.lines();
-    let stacked_line = &lines[5];
+    let stacked_line = &lines[4];
 
     // Assert
     assert!(
@@ -190,11 +190,11 @@ fn test_session_creation_overlay_lines_disable_stacked_option() {
 #[test]
 fn test_session_creation_overlay_lines_enable_stacked_option() {
     // Arrange
-    let overlay = SessionCreationOverlay::new(3, true, false, HarnessAvailability::Hidden, true);
+    let overlay = SessionCreationOverlay::new(2, true, false, HarnessAvailability::Hidden, true);
 
     // Act
     let lines = overlay.lines();
-    let stacked_line = &lines[5];
+    let stacked_line = &lines[4];
 
     // Assert
     assert!(
@@ -217,13 +217,13 @@ fn test_session_creation_overlay_lines_gate_append_to_stack_option() {
     let disabled_overlay =
         SessionCreationOverlay::new(2, true, false, HarnessAvailability::Hidden, true);
     let enabled_overlay =
-        SessionCreationOverlay::new(4, true, true, HarnessAvailability::Hidden, true);
+        SessionCreationOverlay::new(3, true, true, HarnessAvailability::Hidden, true);
 
     // Act
     let disabled_lines = disabled_overlay.lines();
     let enabled_lines = enabled_overlay.lines();
-    let disabled_line = &disabled_lines[6];
-    let enabled_line = &enabled_lines[6];
+    let disabled_line = &disabled_lines[5];
+    let enabled_line = &enabled_lines[5];
 
     // Assert
     assert!(disabled_line.spans.iter().any(|span| {

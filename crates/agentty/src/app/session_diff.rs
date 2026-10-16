@@ -11,7 +11,7 @@ use crate::app::task::{SessionDiffTaskInput, SessionDiffTaskSource, TaskService}
 use crate::app::{App, session};
 use crate::domain::agent::parse_persisted_session_agent_model;
 use crate::domain::review::FocusedReviewStatus;
-use crate::domain::session::{Session, SessionId, SessionRole, Status};
+use crate::domain::session::{Session, SessionId, Status};
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
@@ -381,7 +381,6 @@ impl App {
                 continue;
             };
             let current_status = session.status;
-            let session_role = session.role;
 
             if current_status == Status::InProgress {
                 self.discard_pending_review_action_diff_loads(session_id);
@@ -389,8 +388,7 @@ impl App {
 
                 continue;
             }
-            if session_role == SessionRole::Orchestrator
-                || !matches!(current_status, Status::Review | Status::AgentReview)
+            if !matches!(current_status, Status::Review | Status::AgentReview)
                 || matches!(
                     self.review_cache.get(session_id),
                     Some(ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed)
@@ -429,14 +427,7 @@ impl App {
             return false;
         };
         let status = row.status.parse::<Status>().ok();
-        let role = row
-            .role
-            .as_deref()
-            .and_then(|value| value.parse::<SessionRole>().ok())
-            .unwrap_or_default();
-        if role == SessionRole::Orchestrator
-            || !matches!(status, Some(Status::Review | Status::AgentReview))
-        {
+        if !matches!(status, Some(Status::Review | Status::AgentReview)) {
             return false;
         }
         let Some(project_id) = row.project_id else {
@@ -662,17 +653,13 @@ impl App {
     /// Captures one loaded session's folder and archive-or-worktree diff
     /// source.
     fn session_diff_task_target(&self, session: &Session) -> (PathBuf, SessionDiffTaskSource) {
-        let source = if session.is_managed()
-            && (session.status == Status::Done
-                || (session.role == SessionRole::OrchestrationResearcher
-                    && session.status == Status::Canceled))
-        {
+        let source = if matches!(session.status, Status::Done | Status::Canceled) {
             SessionDiffTaskSource::Archived {
                 repositories: self.services.db().clone(),
             }
         } else {
             SessionDiffTaskSource::Worktree {
-                archived_fallback: (session.is_managed() && session.status == Status::Merging)
+                archived_fallback: (session.status == Status::Merging)
                     .then(|| self.services.db().clone()),
                 base_branch: session.base_branch.clone(),
                 git_client: self.services.git_client(),

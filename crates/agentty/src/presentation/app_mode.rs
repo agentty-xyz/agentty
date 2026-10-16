@@ -440,13 +440,6 @@ pub enum ConfirmationIntent {
     MergeSession,
     /// Confirms regenerating the focused review for the active view session.
     RegenerateReview,
-    /// Confirms permanently detaching a coordinator-owned worker.
-    DetachManagedSession,
-    /// Acknowledges that a managed worker worktree opens with normal write
-    /// access.
-    OpenManagedWorktree,
-    /// Chooses between local merges and forge review requests for a campaign.
-    ChooseIntegrationApproach,
 }
 
 /// Stored view-mode values used to restore session view after session-scoped
@@ -714,7 +707,6 @@ pub(crate) fn allows_diff_line_comment_reply(
 ) -> bool {
     !matches!(restore, Some(DiffRestoreTarget::Question(_)))
         && session.status.allows_chat_composer()
-        && session.accepts_user_turns()
         && (session.status == Status::Draft
             || can_reply_to_session_in_stack(sessions, session.id.as_str()))
 }

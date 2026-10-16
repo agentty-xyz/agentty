@@ -1,7 +1,7 @@
 # ag-protocol
 
-Shared structured response, prompt-envelope, turn-payload, clarification, orchestration,
-and verification contracts.
+Shared structured response, prompt-envelope, turn-payload, clarification, and review
+contracts.
 
 ## Boundaries
 

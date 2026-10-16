@@ -21,8 +21,8 @@ use crate::app::{App, ReviewCacheEntry, SessionState};
 use crate::domain::agent::{ReasoningLevel, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{
-    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionRole, SessionSize,
-    SessionStats, Status,
+    ReviewRequest, SESSION_DATA_DIR, Session, SessionHandles, SessionId, SessionSize, SessionStats,
+    Status,
 };
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transient_message::{
@@ -695,13 +695,11 @@ pub(super) fn add_manual_session_with_status(
         draft_attachments: Vec::new(),
         folder,
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: id.into(),
         in_progress_started_at: None,
         in_progress_total_seconds: 0,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: crate::domain::agent::AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             crate::domain::agent::AgentModel::Gemini38Flash,
@@ -760,13 +758,11 @@ pub(super) fn test_session_manager_with_clock(
             draft_attachments: Vec::new(),
             folder: PathBuf::from(format!("/tmp/{session_id}")),
             follow_up_tasks: Vec::new(),
+            has_archived_diff: false,
             id: session_id.into(),
             in_progress_started_at: None,
             in_progress_total_seconds: 0,
             is_draft: false,
-            controller_session_id: None,
-            orchestration_progress: None,
-            role: SessionRole::default(),
             agent: model_fixture::codex_selection(),
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,

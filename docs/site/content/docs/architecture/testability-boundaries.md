@@ -58,12 +58,10 @@ isolate subprocess sequencing when a public client is too broad. Runtime renderi
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)
 identifies the owning crates and layers.
 
-Campaign tests inject repositories, `SessionBackend`, `OrchestrationEventSink`, and
-`OrchestrationSchedule`. They do not construct the TUI. Storage tests exercise real
-SQLite adapters with injected timestamps; test fixtures do not alter production
-contracts. Project catalog visibility loads in one settings batch, independent of
-catalog size. Session-list archive windows are bounded by the repository query; test
-pagination with real SQLite and selection behavior through the host and PTY.
+Storage tests exercise real SQLite adapters with injected timestamps; test fixtures do
+not alter production contracts. Project catalog visibility loads in one settings batch,
+independent of catalog size. Session-list archive windows are bounded by the repository
+query; test pagination with real SQLite and selection behavior through the host and PTY.
 
 Resource tests inject process identities and readings to cover PID reuse, stale data,
 and sensor stalls. Host tests separately verify native access. A stalled sensor must not

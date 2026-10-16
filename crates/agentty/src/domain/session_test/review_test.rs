@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use ag_contracts::{SessionStats, SpeedMode};
 use ag_session::{
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId, SessionRole,
+    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SessionId,
     SessionStatus as Status,
 };
 
@@ -170,27 +170,12 @@ fn test_status_transition_agent_review_to_done() {
 fn test_publish_pull_request_action_respects_review_session_capabilities() {
     // Arrange
     let worker = SessionFixtureBuilder::new().status(Status::Review).build();
-    let orchestrator = SessionFixtureBuilder::new()
-        .role(SessionRole::Orchestrator)
-        .status(Status::Review)
-        .build();
-    let managed_worker = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationWorker)
-        .status(Status::Review)
-        .build();
 
     // Act
-    let actions = [
-        worker.publish_pull_request_action(),
-        orchestrator.publish_pull_request_action(),
-        managed_worker.publish_pull_request_action(),
-    ];
+    let action = worker.publish_pull_request_action();
 
     // Assert
-    assert_eq!(
-        actions,
-        [Some(PublishBranchAction::PublishPullRequest), None, None]
-    );
+    assert_eq!(action, Some(PublishBranchAction::PublishPullRequest));
 }
 
 #[test]
@@ -202,13 +187,11 @@ fn test_publish_pull_request_action_returns_publish_for_agent_review_session() {
         draft_attachments: Vec::new(),
         folder: PathBuf::new(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: "session-id".into(),
         in_progress_started_at: None,
         in_progress_total_seconds: 0,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
@@ -293,13 +276,11 @@ fn test_publish_pull_request_action_returns_none_for_done_session() {
         draft_attachments: Vec::new(),
         folder: PathBuf::new(),
         follow_up_tasks: Vec::new(),
+        has_archived_diff: false,
         id: "session-id".into(),
         in_progress_started_at: None,
         in_progress_total_seconds: 180,
         is_draft: false,
-        controller_session_id: None,
-        orchestration_progress: None,
-        role: SessionRole::default(),
         agent: AgentSelection::new(
             crate::domain::agent::AgentKind::Antigravity,
             AgentModel::Gemini38Flash,
@@ -446,7 +427,13 @@ fn test_status_allows_review_actions_for_agent_review() {
 #[test]
 fn test_status_allows_diff_view_for_review_ready_and_read_only_states() {
     // Arrange
-    let expected_statuses = [Status::Review, Status::AgentReview, Status::Merged];
+    let expected_statuses = [
+        Status::Review,
+        Status::AgentReview,
+        Status::Merged,
+        Status::Done,
+        Status::Canceled,
+    ];
 
     // Act
     let allowed_statuses: Vec<Status> = Status::ALL
@@ -525,45 +512,15 @@ fn test_allows_review_comment_reply_accepts_review_question_and_busy_sessions() 
 }
 
 #[test]
-fn test_allows_review_comment_reply_rejects_non_reply_or_managed_session() {
+fn test_allows_review_comment_reply_rejects_non_reply_session() {
     // Arrange
     let session = SessionFixtureBuilder::new().status(Status::Merging).build();
-    let managed_session = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationWorker)
-        .status(Status::Review)
-        .build();
 
     // Act
     let allows_reply = session.allows_review_comment_reply();
-    let managed_allows_reply = managed_session.allows_review_comment_reply();
 
     // Assert
     assert!(!allows_reply);
-    assert!(!managed_allows_reply);
-}
-
-#[test]
-fn test_allows_worktree_open_action_accepts_managed_worker_only_in_review() {
-    // Arrange
-    let statuses = [Status::InProgress, Status::Review, Status::AgentReview];
-
-    // Act
-    let open_permissions = statuses.map(|status| {
-        SessionFixtureBuilder::new()
-            .role(SessionRole::OrchestrationWorker)
-            .status(status)
-            .build()
-            .allows_worktree_open_action()
-    });
-    let research_permission = SessionFixtureBuilder::new()
-        .role(SessionRole::OrchestrationResearcher)
-        .status(Status::Review)
-        .build()
-        .allows_worktree_open_action();
-
-    // Assert
-    assert_eq!(open_permissions, [false, true, false]);
-    assert!(!research_permission);
 }
 
 #[test]

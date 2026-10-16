@@ -3,8 +3,8 @@ use super::support::{
     test_services,
 };
 use crate::domain::agent::ResponseStyle;
-use crate::domain::setting::{MAX_ORCHESTRATION_PARALLELISM, SettingName};
-use crate::presentation::setting::{SettingsAction, SettingsOperation};
+use crate::domain::setting::SettingName;
+use crate::presentation::setting::SettingsAction;
 
 #[tokio::test]
 async fn move_selected_launch_configuration_down_persists_reordered_commands() {
@@ -16,7 +16,7 @@ async fn move_selected_launch_configuration_down_persists_reordered_commands() {
         "cargo test\nnpm run dev\nlazygit",
     )
     .await;
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 5);
     manager.handle_enter();
 
     // Act
@@ -47,7 +47,7 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
     // Arrange
     let (services, project_id) = test_services().await;
     let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 8);
+    select_row(&mut manager, 6);
 
     // Act
     manager.handle_enter();
@@ -71,67 +71,11 @@ async fn selector_dropdown_selects_default_response_style_and_persists_value() {
     );
 }
 
-#[tokio::test]
-async fn selector_dropdown_persists_bounded_orchestration_parallelism() {
-    // Arrange
-    let (services, project_id) = test_services().await;
-    let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 1);
-
-    // Act
-    manager.handle_enter();
-    manager.next_selector_dropdown_option();
-    manager.select_selector_dropdown_option().await;
-    manager
-        .persist_operation(SettingsOperation::OrchestrationParallelism(u8::MAX))
-        .await;
-
-    // Assert
-    assert_eq!(
-        manager.settings().orchestration_parallelism,
-        MAX_ORCHESTRATION_PARALLELISM
-    );
-    assert_eq!(
-        services
-            .db()
-            .settings()
-            .get_setting(SettingName::OrchestrationParallelism)
-            .await
-            .expect("failed to load orchestration parallelism"),
-        Some(MAX_ORCHESTRATION_PARALLELISM.to_string())
-    );
-}
-
-#[tokio::test]
-async fn selector_dropdown_persists_research_auto_approval() {
-    // Arrange
-    let (services, project_id) = test_services().await;
-    let mut manager = settings_manager(&services, project_id).await;
-    select_row(&mut manager, 2);
-
-    // Act
-    manager.handle_enter();
-    manager.next_selector_dropdown_option();
-    manager.select_selector_dropdown_option().await;
-
-    // Assert
-    assert!(!manager.settings().auto_approve_orchestration_research);
-    assert_eq!(
-        services
-            .db()
-            .settings()
-            .get_setting(SettingName::AutoApproveOrchestrationResearch)
-            .await
-            .expect("failed to load research auto-approval"),
-        Some("false".to_string())
-    );
-}
-
 #[test]
 fn navigation_actions_do_not_request_launch_configuration_persistence() {
     // Arrange
     let mut manager = new_settings_manager();
-    select_row(&mut manager, 7);
+    select_row(&mut manager, 5);
     manager.handle_enter();
 
     // Act

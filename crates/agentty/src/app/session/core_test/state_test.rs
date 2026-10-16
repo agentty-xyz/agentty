@@ -451,47 +451,6 @@ fn test_apply_session_permission_mode_updated_updates_only_matching_session() {
     );
 }
 
-#[test]
-fn test_update_orchestration_progress_replaces_and_clears_board_snapshot() {
-    // Arrange
-    let mut session_manager = test_session_manager("controller", None);
-
-    // Act
-    session_manager.update_orchestration_progress(
-        "controller",
-        Some("Working... Protocol: running".to_string()),
-    );
-    session_manager.update_orchestration_progress(
-        "controller",
-        Some("Working... Protocol: ready".to_string()),
-    );
-
-    // Assert
-    assert_eq!(
-        session_manager.sessions()[0]
-            .orchestration_progress
-            .as_deref(),
-        Some("Working... Protocol: ready")
-    );
-    assert!(
-        session_manager.sessions()[0]
-            .transient_messages
-            .get(TransientMessageSlot::Orchestration)
-            .is_none()
-    );
-
-    // Act
-    session_manager.update_orchestration_progress("controller", None);
-    session_manager.update_orchestration_progress("missing", Some("ignored".to_string()));
-
-    // Assert
-    assert!(
-        session_manager.sessions()[0]
-            .orchestration_progress
-            .is_none()
-    );
-}
-
 #[tokio::test]
 async fn test_reply_turn_completion_persists_session_size() {
     // Arrange

@@ -11,7 +11,7 @@ use super::support::{
     apply_next_prompt_image_paste, apply_next_session_diff, install_mock_clipboard_image_client,
     new_test_app_with_session,
 };
-use crate::domain::session::{SessionRole, Status};
+use crate::domain::session::Status;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::help_action;
@@ -102,7 +102,7 @@ fn test_view_session_state_maps_stacked_draft_status() {
 }
 
 #[tokio::test]
-async fn managed_done_session_loads_archived_diff_without_worktree() {
+async fn done_session_loads_archived_diff_without_worktree() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     let archived_diff = "diff --git a/worker.txt b/worker.txt\n+new work\n";
@@ -114,8 +114,8 @@ async fn managed_done_session_loads_archived_diff_without_worktree() {
         .expect("failed to persist archived diff");
     let session = &mut app.sessions.sessions_mut()[0];
     session.folder = PathBuf::from("missing-managed-worktree");
-    session.role = SessionRole::OrchestrationWorker;
     session.status = Status::Done;
+    session.has_archived_diff = true;
     let context = ViewContext {
         scroll_offset: Some(0),
         session_id: session_id.into(),
@@ -123,6 +123,8 @@ async fn managed_done_session_loads_archived_diff_without_worktree() {
     };
 
     // Act
+    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
+    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app).await;
 
@@ -149,7 +151,7 @@ async fn managed_done_session_loads_archived_diff_without_worktree() {
 }
 
 #[tokio::test]
-async fn managed_done_session_restores_view_after_archived_diff_load_failure() {
+async fn done_session_restores_view_after_archived_diff_load_failure() {
     // Arrange
     let (mut app, _base_dir, pool) = crate::test_support::new_git_test_app_with_pool().await;
     let session_id = app
@@ -157,8 +159,8 @@ async fn managed_done_session_restores_view_after_archived_diff_load_failure() {
         .await
         .expect("failed to create session");
     let session = &mut app.sessions.sessions_mut()[0];
-    session.role = SessionRole::OrchestrationWorker;
     session.status = Status::Done;
+    session.has_archived_diff = true;
     app.mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: Some(0),
@@ -171,6 +173,8 @@ async fn managed_done_session_restores_view_after_archived_diff_load_failure() {
     pool.close().await;
 
     // Act
+    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
+    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app)
         .with_subscriber(crate::test_support::TestSubscriber)
@@ -199,7 +203,7 @@ async fn managed_done_session_restores_view_after_archived_diff_load_failure() {
 }
 
 #[tokio::test]
-async fn canceled_research_session_loads_archived_diff_without_worktree() {
+async fn canceled_session_loads_archived_diff_without_worktree() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
     let archived_diff = "diff --git a/policy.txt b/policy.txt\n+unexpected write\n";
@@ -211,8 +215,8 @@ async fn canceled_research_session_loads_archived_diff_without_worktree() {
         .expect("failed to persist archived diff");
     let session = &mut app.sessions.sessions_mut()[0];
     session.folder = PathBuf::from("reclaimed-research-worktree");
-    session.role = SessionRole::OrchestrationResearcher;
     session.status = Status::Canceled;
+    session.has_archived_diff = true;
     let context = ViewContext {
         scroll_offset: Some(0),
         session_id: session_id.into(),
@@ -220,6 +224,8 @@ async fn canceled_research_session_loads_archived_diff_without_worktree() {
     };
 
     // Act
+    let snapshot = view_session_snapshot(&app, &context).expect("session snapshot");
+    assert!(snapshot.inspect_diff.is_enabled());
     let opened = show_diff_for_view_session(&mut app, &context);
     apply_next_session_diff(&mut app).await;
 

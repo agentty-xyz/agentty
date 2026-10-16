@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{AgentError, TurnResult};
 use ag_forge as forge;
 use ag_git::GitClient;
-use ag_orchestration as orchestration;
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
@@ -19,15 +18,13 @@ use uuid::Uuid;
 
 use super::task::{AutoCommitOutcome, SessionTranscriptMessageAppend};
 use super::worker::{SessionWorkerContext, TurnMetadata, has_unfinished_branch_operation};
-use super::{SessionTaskService, StatusTransition, published_branch, turn};
+use super::{SessionTaskService, StatusTransition, published_branch};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::session::{Clock, SessionError, TurnAppliedState};
 use crate::domain::agent::{AgentKind, AgentSelection};
-use crate::domain::session::{
-    QueuedMessage, SessionFollowUpTask, SessionId, SessionRole, SessionStats, Status,
-};
+use crate::domain::session::{QueuedMessage, SessionFollowUpTask, SessionId, SessionStats, Status};
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::{AppRepositories, NewSessionReviewCommentResolution, SessionTurnMetadata};
@@ -302,16 +299,14 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
-    let session_role = turn::load_session_role(&context.db, &context.session_id).await;
-    if session_role.tracks_worktree_changes()
-        && let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
-            &context.db,
-            context.fs_client.as_ref(),
-            context.git_client.as_ref(),
-            &context.session_id,
-            &context.folder,
-        )
-        .await
+    if let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
+        &context.db,
+        context.fs_client.as_ref(),
+        context.git_client.as_ref(),
+        &context.session_id,
+        &context.folder,
+    )
+    .await
     {
         // Fire-and-forget: receiver may be dropped during shutdown.
         let _ = context
@@ -321,25 +316,6 @@ pub(super) async fn finalize_channel_turn(
                 session_id: context.session_id.clone(),
             });
     }
-    if session_role.owns_branch_changes()
-        && let Err(error) = orchestration::persist_managed_child_area_compliance(
-            &context.db,
-            context.git_client.as_ref(),
-            &context.session_id,
-            &context.folder,
-        )
-        .await
-    {
-        warn!(
-            session_id = %context.session_id,
-            %error,
-            "Failed to refresh managed-child touched-area evidence"
-        );
-    }
-    if session_role == SessionRole::OrchestrationResearcher {
-        archive_research_diff(context).await;
-    }
-
     if let Some(target_status) = status_update_after_turn_result(result) {
         // Best-effort: status transition failure is non-critical.
         let status_transition = StatusTransition::from_parts(
@@ -351,61 +327,6 @@ pub(super) async fn finalize_channel_turn(
             Arc::clone(&context.status),
         );
         let _ = status_transition.apply(target_status).await;
-    }
-}
-
-/// Archives any observed researcher diff before its temporary worktree is
-/// reclaimed.
-///
-/// Research sessions are provider-enforced read-only, but preserving an
-/// unexpected diff makes a policy violation inspectable after cleanup.
-async fn archive_research_diff(context: &TurnFinalizerContext) {
-    let base_branch = match context
-        .db
-        .sessions()
-        .get_session_base_branch(&context.session_id)
-        .await
-    {
-        Ok(Some(base_branch)) => base_branch,
-        Ok(None) => return,
-        Err(error) => {
-            warn!(
-                session_id = %context.session_id,
-                %error,
-                "Failed to load research-session base branch before diff archival"
-            );
-
-            return;
-        }
-    };
-    let archived_diff = match context
-        .git_client
-        .diff(context.folder.clone(), base_branch)
-        .await
-    {
-        Ok(diff) => diff,
-        Err(error) => {
-            warn!(
-                session_id = %context.session_id,
-                %error,
-                "Failed to archive research-session diff before worktree cleanup"
-            );
-
-            return;
-        }
-    };
-
-    if let Err(error) = context
-        .db
-        .sessions()
-        .update_session_archived_diff(&context.session_id, Some(archived_diff))
-        .await
-    {
-        warn!(
-            session_id = %context.session_id,
-            %error,
-            "Failed to persist archived research-session diff"
-        );
     }
 }
 
@@ -496,16 +417,12 @@ async fn apply_successful_turn_result(
     activity: &super::activity::TurnActivity,
 ) -> Result<Status, SessionError> {
     let TurnResult {
-        mut assistant_message,
+        assistant_message,
         context_reset: _,
         input_tokens,
         output_tokens,
         provider_conversation_id,
     } = result;
-
-    let db = &context.db;
-    let session_id = &context.session_id;
-    orchestration::persist_controller_plan(db, session_id, &mut assistant_message).await?;
 
     if let Some(message) = build_assistant_message_content(&assistant_message) {
         SessionTaskService::append_session_transcript_message(
@@ -568,20 +485,14 @@ async fn apply_successful_turn_result(
         session_id: context.session_id.clone(),
         turn_applied_state,
     });
-    let owns_branch_changes = session_owns_branch_changes(&context.db, &context.session_id).await;
-    let (can_auto_push, review_request_commit_message) = if owns_branch_changes {
-        run_auto_commit(
-            context,
-            turn_metadata.session_agent,
-            !turn_metadata.review_comment_thread_ids.is_empty(),
-            &review_comment_resolutions,
-        )
-        .await?
-    } else {
-        (true, None)
-    };
-    if owns_branch_changes
-        && can_auto_push
+    let (can_auto_push, review_request_commit_message) = run_auto_commit(
+        context,
+        turn_metadata.session_agent,
+        !turn_metadata.review_comment_thread_ids.is_empty(),
+        &review_comment_resolutions,
+    )
+    .await?;
+    if can_auto_push
         && (turn_metadata.review_comment_thread_ids.is_empty() || target_status != Status::Question)
     {
         start_published_branch_auto_push(context, turn_metadata, review_request_commit_message)
@@ -690,12 +601,6 @@ async fn append_review_comment_persistence_failure_notice(context: &PostTurnCont
         &message,
     )
     .await;
-}
-
-async fn session_owns_branch_changes(db: &AppRepositories, session_id: &str) -> bool {
-    turn::load_session_role(db, session_id)
-        .await
-        .owns_branch_changes()
 }
 
 /// Runs the automatic commit and returns whether post-commit branch effects

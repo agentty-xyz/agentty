@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{cancel_confirmation_message, handle, settings_input_for_key};
+use super::{handle, settings_input_for_key};
 use crate::app::test_support::{MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
 use crate::app::{App, AppEvent, ProjectSyncPhase, Tab};
 use crate::domain::input::{InputCommand, InputState};
@@ -703,7 +703,7 @@ async fn test_settings_previous_key_wraps_to_default_response_style_row() {
         app.settings_presentation
             .snapshot(&app.settings.view())
             .selected_row_index,
-        Some(8)
+        Some(6)
     );
 }
 
@@ -1248,20 +1248,6 @@ async fn test_handle_cancel_key_opens_cancel_confirmation_for_running_session() 
             && confirmation_title == "Confirm Cancel"
             && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
     ));
-}
-
-#[test]
-fn cancel_confirmation_names_orchestration_child_count() {
-    // Arrange / Act
-    let orchestration_message = cancel_confirmation_message("Controller", 5);
-    let regular_message = cancel_confirmation_message("Worker", 0);
-
-    // Assert
-    assert_eq!(
-        orchestration_message,
-        "Cancel orchestration and its 5 running children?"
-    );
-    assert_eq!(regular_message, "Cancel session \"Worker\"?");
 }
 
 #[tokio::test]

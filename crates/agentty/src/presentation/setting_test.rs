@@ -13,7 +13,6 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::input::{InputCommand, InputState};
-use crate::domain::setting::MAX_ORCHESTRATION_PARALLELISM;
 use crate::domain::theme::ColorTheme;
 
 fn test_settings_view(launch_configuration: &str) -> SettingsView {
@@ -28,7 +27,6 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
             model_fixture::codex_selection(),
             AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
         ],
-        auto_approve_orchestration_research: true,
         default_fast_reasoning_level: ReasoningLevel::Low,
         default_fast_selection: model_fixture::codex_selection(),
         default_fast_speed_mode: SpeedMode::Fast,
@@ -41,7 +39,6 @@ fn test_settings_view(launch_configuration: &str) -> SettingsView {
         default_smart_speed_mode: SpeedMode::Normal,
         include_coauthored_by_agentty: false,
         launch_configuration: launch_configuration.to_string(),
-        orchestration_parallelism: 3,
         theme: ColorTheme::Current,
         use_last_used_model_as_default: false,
     }
@@ -218,7 +215,7 @@ fn activate_reuses_open_selector_and_launch_editor() {
     let empty_view = test_settings_view("");
     let mut selector_state = SettingsPresentationState::default();
     let mut editor_state = SettingsPresentationState::default();
-    select_row(&mut editor_state, &empty_view, 7);
+    select_row(&mut editor_state, &empty_view, 5);
 
     // Act
     let opened_selector = selector_state.apply(&empty_view, SettingsAction::Activate);
@@ -242,7 +239,7 @@ fn confirm_edits_and_saves_browse_editor() {
     // Arrange
     let view = test_settings_view("cargo test");
     let mut state = SettingsPresentationState::default();
-    select_row(&mut state, &view, 7);
+    select_row(&mut state, &view, 5);
     let _ = state.apply(&view, SettingsAction::Activate);
 
     // Act
@@ -264,11 +261,11 @@ fn launch_editor_rejects_invalid_delete_and_reorder_actions() {
     // Arrange
     let one_command_view = test_settings_view("cargo test");
     let mut one_command_state = SettingsPresentationState::default();
-    select_row(&mut one_command_state, &one_command_view, 7);
+    select_row(&mut one_command_state, &one_command_view, 5);
     let _ = one_command_state.apply(&one_command_view, SettingsAction::Activate);
     let two_command_view = test_settings_view("cargo test\nnpm run dev");
     let mut two_command_state = SettingsPresentationState::default();
-    select_row(&mut two_command_state, &two_command_view, 7);
+    select_row(&mut two_command_state, &two_command_view, 5);
     let _ = two_command_state.apply(&two_command_view, SettingsAction::Activate);
     let _ = two_command_state.apply(&two_command_view, SettingsAction::Next);
 
@@ -334,7 +331,7 @@ fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
     // Act
     let operations = [
         (
-            3,
+            1,
             SettingsOperation::DefaultSmartSelection {
                 reasoning_level: view.default_smart_reasoning_level,
                 selection: view.default_smart_selection,
@@ -343,7 +340,7 @@ fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
             },
         ),
         (
-            4,
+            2,
             SettingsOperation::DefaultFastSelection {
                 reasoning_level: view.default_fast_reasoning_level,
                 selection: view.default_fast_selection,
@@ -351,7 +348,7 @@ fn selectors_cover_role_reasoning_speed_and_invalid_pairs() {
             },
         ),
         (
-            5,
+            3,
             SettingsOperation::DefaultReviewSelection {
                 reasoning_level: view.default_review_reasoning_level,
                 selection: view.default_review_selection,
@@ -455,9 +452,6 @@ fn previous_launch_selection_wraps_and_all_row_options_are_available() {
     move_launch_configuration_list_editor_selection(&mut editor, false);
     let fast_options = selector_options_for_row(&view, SettingRow::DefaultFastModel);
     let launch_options = selector_options_for_row(&view, SettingRow::LaunchConfiguration);
-    let parallelism_options = selector_options_for_row(&view, SettingRow::OrchestrationParallelism);
-    let research_options =
-        selector_options_for_row(&view, SettingRow::AutoApproveOrchestrationResearch);
 
     // Assert
     assert_eq!(editor.selected_index, 1);
@@ -470,35 +464,6 @@ fn previous_launch_selection_wraps_and_all_row_options_are_available() {
     assert_eq!(
         launch_options,
         [] as [crate::presentation::setting::SettingSelectorOption; 0]
-    );
-    assert_eq!(
-        parallelism_options.len(),
-        usize::from(MAX_ORCHESTRATION_PARALLELISM)
-    );
-    assert!(parallelism_options[2].is_current_for(&view, SettingRow::OrchestrationParallelism));
-    assert_eq!(
-        research_options
-            .iter()
-            .map(|option| option.label.as_str())
-            .collect::<Vec<_>>(),
-        ["Disabled", "Enabled"]
-    );
-    assert!(
-        research_options[1].is_current_for(&view, SettingRow::AutoApproveOrchestrationResearch)
-    );
-    assert_eq!(
-        settings_operation_for_primary_selector(
-            SettingRow::OrchestrationParallelism,
-            SettingSelectorValue::Parallelism(4),
-        ),
-        Some(SettingsOperation::OrchestrationParallelism(4))
-    );
-    assert_eq!(
-        settings_operation_for_primary_selector(
-            SettingRow::AutoApproveOrchestrationResearch,
-            SettingSelectorValue::Bool(false),
-        ),
-        Some(SettingsOperation::AutoApproveOrchestrationResearch(false))
     );
 }
 
@@ -520,7 +485,7 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
     // Arrange
     let view = test_settings_view("");
     let mut model_state = SettingsPresentationState::default();
-    select_row(&mut model_state, &view, 3);
+    select_row(&mut model_state, &view, 1);
     let _ = model_state.apply(&view, SettingsAction::Activate);
     let model_footer_hint = model_state.footer_hint();
     let mut theme_state = SettingsPresentationState::default();
@@ -538,7 +503,7 @@ fn selector_snapshot_separates_model_reasoning_and_speed() {
         .expect("reasoning selector should be open");
     let reasoning_footer_hint = model_state.footer_hint();
     let mut speed_state = SettingsPresentationState::default();
-    select_row(&mut speed_state, &view, 4);
+    select_row(&mut speed_state, &view, 2);
     let _ = speed_state.apply(&view, SettingsAction::Activate);
     let _ = speed_state.apply(&view, SettingsAction::Confirm);
     let speed_capable_reasoning_footer_hint = speed_state.footer_hint();

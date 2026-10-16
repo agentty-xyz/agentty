@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nUPDATE session\nSET focused_review_status = 'Pending',\n    focused_review_diff_hash = NULL,\n    focused_review_text = NULL,\n    updated_at = ?\nWHERE id = ?\n  AND status IN ('InProgress', 'Review', 'AgentReview')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "04a3883f2a238b3349cc962ea8f0aa6d4b304c70bbcc91bafc90e896e44a8a2a"
+}

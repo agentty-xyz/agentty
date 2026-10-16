@@ -2,14 +2,12 @@ use std::path::{Path, PathBuf};
 
 use ag_git::{GitClient, RealGitClient};
 use testty::feature::{GifMode, GifStatus};
-use testty::frame::TerminalFrame;
 
 use super::{
     BuilderEnv, FeatureTest, NO_COLOR_ENV_VALUE, NO_COLOR_ENV_VAR, PINNED_CLOCK_ENV_VAR,
     PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR, PINNED_CLOCK_UTC_OFFSET_SECONDS,
-    PINNED_DISPLAY_VERSION_ENV_VAR, SESSION_VIEW_FOOTER_MARKER, STUB_AGENT_EXECUTABLES,
-    feature_gif_mode_for_artifacts, gif_exists_on_disk, match_session_view_texts, parse_gif_mode,
-    tab_page_marker,
+    PINNED_DISPLAY_VERSION_ENV_VAR, STUB_AGENT_EXECUTABLES, feature_gif_mode_for_artifacts,
+    gif_exists_on_disk, parse_gif_mode, tab_page_marker,
 };
 
 #[test]
@@ -34,67 +32,6 @@ fn tab_page_marker_maps_unsupported_tab_to_missing_content() {
 
     // Assert
     assert_eq!(marker, "<unsupported E2E tab>");
-}
-
-#[test]
-fn match_session_view_texts_accepts_footer_and_all_markers() {
-    // Arrange
-    let frame = TerminalFrame::new(
-        80,
-        4,
-        b"Campaign: Managed feature delivery\r\nremediation 1/3\r\n\r\nq: back",
-    );
-    let expected_texts = vec![
-        "Campaign: Managed feature delivery".to_string(),
-        "remediation 1/3".to_string(),
-    ];
-
-    // Act
-    let result = match_session_view_texts(&frame, &expected_texts);
-
-    // Assert
-    assert!(result.is_ok());
-}
-
-#[test]
-fn match_session_view_texts_reports_missing_content_with_frame() {
-    // Arrange
-    let frame = TerminalFrame::new(
-        80,
-        4,
-        b"Campaign: Managed feature delivery\r\nwaiting\r\n\r\nq: back",
-    );
-    let expected_texts = vec!["remediation 1/3".to_string()];
-
-    // Act
-    let failure = match_session_view_texts(&frame, &expected_texts)
-        .expect_err("missing campaign content should fail");
-
-    // Assert
-    assert!(failure.message.contains("remediation 1/3"));
-    assert!(
-        failure
-            .frame_excerpt
-            .contains("Campaign: Managed feature delivery")
-    );
-}
-
-#[test]
-fn match_session_view_texts_requires_session_footer() {
-    // Arrange
-    let frame = TerminalFrame::new(
-        80,
-        4,
-        b"Campaign: Managed feature delivery\r\nremediation 1/3",
-    );
-    let expected_texts = vec!["remediation 1/3".to_string()];
-
-    // Act
-    let failure = match_session_view_texts(&frame, &expected_texts)
-        .expect_err("campaign text outside a session view should fail");
-
-    // Assert
-    assert!(failure.message.contains(SESSION_VIEW_FOOTER_MARKER));
 }
 
 #[test]

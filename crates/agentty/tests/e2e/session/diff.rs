@@ -1331,3 +1331,54 @@ fn assert_diff_row_selection_comments(
     assertion::assert_text_in_region(frame, "Old line 2 · New line 2", &full);
     assertion::assert_text_in_region(frame, "Explain these lines.", &full);
 }
+
+/// Canceling a changed session disables diff inspection when cleanup leaves no
+/// archive.
+#[tokio::test]
+async fn canceled_session_without_archive_hides_diff_action() -> E2eResult {
+    // Arrange, Act, Assert
+    FeatureTest::new("canceled_session_without_archive_hides_diff_action")
+        .with_git()
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session(env).await?;
+                seed_linked_review_worktree_with_diff(env)?;
+                Ok(())
+            })
+        })
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("j/k: select file", 5000)
+                    .press_key("q")
+                    .compose(&common::return_to_session_list())
+                    .press_key("c")
+                    .wait_for_text("Confirm Cancel", 3000)
+                    .press_key("y")
+                    .wait_for_text("Canceled", 5000)
+                    .compose(&common::open_selected_session_view())
+                    .wait_for_text("c: continue", 5000)
+                    .press_key("d")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "canceled_chat",
+                        "Canceled session has no archived diff action",
+                    )
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "c: continue", &full);
+                    assertion::assert_not_visible(frame, "d: diff");
+                    assertion::assert_not_visible(frame, "Loading diff...");
+                    assertion::assert_not_visible(frame, "j/k: select file");
+                })
+            },
+        )
+        .await?;
+    Ok(())
+}

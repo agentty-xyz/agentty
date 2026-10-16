@@ -14,8 +14,6 @@ mod prompt;
 mod question;
 mod review;
 mod schema;
-mod subtask;
-mod verification;
 
 pub use envelope::{
     ProtocolSchemaInstructionMode, build_protocol_repair_prompt, prepend_protocol_instructions,
@@ -44,5 +42,3 @@ pub use schema::{
     agent_response_output_schema_json, focused_review_json_schema_json,
     focused_review_output_schema, protocol_output_schema,
 };
-pub use subtask::{SubtaskItem, SubtaskKind};
-pub use verification::{VerificationVerdict, VerificationVerdictItem};

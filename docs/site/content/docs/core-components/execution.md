@@ -21,7 +21,7 @@ flowchart TD
 
 | Component          | Crates                         | Responsibility                                    |
 | ------------------ | ------------------------------ | ------------------------------------------------- |
-| Scheduler          | `ag-scheduler`                 | Session admission and campaign task selection     |
+| Scheduler          | `ag-scheduler`                 | Session admission                                 |
 | Run Worker         | `ag-worker`                    | Admission, scheduling, cancellation, recovery     |
 | Agent Runtime      | `ag-runtime`                   | Adapter composition, dispatch, provider lifecycle |
 | Shared contracts   | `ag-contracts`, `ag-protocol`  | Requests, events, policy types, response schemas  |
@@ -36,8 +36,8 @@ flowchart TD
 restart recovery. Hosts supply workflow policy and persistence; the worker has no TUI,
 Git, or database implementation dependency.
 
-`ag-scheduler` supplies the shared session-turn capacity and pure campaign selection.
-The worker still owns per-session ordering and runtime cleanup; see
+`ag-scheduler` supplies the shared session-turn capacity. The worker still owns
+per-session ordering and runtime cleanup; see
 [Scheduler](@/docs/core-components/scheduler.md).
 
 One boundary does not mean one global queue. Session commands remain ordered through
@@ -72,7 +72,7 @@ The controls are distinct:
 - Worker capacity bounds concurrent utility runs; it does not count provider children.
 - `max_concurrent_subagents` requests a positive limit on provider-native children,
   excluding the parent. Provider exceptions still apply; this is not a global process
-  limit or the orchestration session cap.
+  limit.
 - `ToolPolicy` selects inherited behavior, unattended approvals, or a built-in tool
   allowlist. An empty allowlist disables built-ins. Tool names are provider-native;
   read-only permissions remain an independent restriction.

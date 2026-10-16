@@ -841,11 +841,10 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .is_some_and(|session| {
-                session.accepts_user_turns()
-                    && session
-                        .transient_messages
-                        .get(TransientMessageSlot::WorkspacePreparation)
-                        .is_some()
+                session
+                    .transient_messages
+                    .get(TransientMessageSlot::WorkspacePreparation)
+                    .is_some()
             })
         {
             return self.retry_workspace_preparation(session_id).await;
@@ -2035,7 +2034,7 @@ impl App {
         let Some(session) = self.sessions.session_at(session_index) else {
             return;
         };
-        if session.status == Status::Question && session.accepts_user_turns() {
+        if session.status == Status::Question {
             let questions = session.questions.clone();
             self.enter_question_mode(target_session_id, questions);
 
@@ -2123,12 +2122,10 @@ impl App {
         };
 
         let session_id = session_id.clone();
-        let is_pending_question =
-            self.sessions
-                .session_for_id(&session_id)
-                .is_some_and(|session| {
-                    session.status == Status::Question && session.accepts_user_turns()
-                });
+        let is_pending_question = self
+            .sessions
+            .session_for_id(&session_id)
+            .is_some_and(|session| session.status == Status::Question);
         if !is_pending_question {
             self.question_reconcile_reload_attempted = None;
 

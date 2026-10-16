@@ -5,10 +5,7 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
     SpeedMode,
 };
-use crate::domain::setting::{
-    DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH, DEFAULT_ORCHESTRATION_PARALLELISM,
-    MAX_ORCHESTRATION_PARALLELISM, SettingName,
-};
+use crate::domain::setting::SettingName;
 use crate::domain::theme::ColorTheme;
 use crate::infra::db::AppRepositories;
 use crate::presentation::setting::{SettingsOperation, SettingsView};
@@ -275,8 +272,6 @@ async fn load_model_role_defaults(
 
 /// Manages user-configurable application settings.
 pub struct SettingsManager {
-    /// Whether temporary research-only orchestration waves start immediately.
-    pub auto_approve_orchestration_research: bool,
     /// Default reasoning level used by fast-path workflows.
     pub default_fast_reasoning_level: ReasoningLevel,
     /// Default agent/model selection used by fast-path workflows.
@@ -299,8 +294,6 @@ pub struct SettingsManager {
     pub default_smart_speed_mode: SpeedMode,
     /// Optional command run in tmux when opening a session worktree.
     pub launch_configuration: String,
-    /// Maximum number of orchestration child sessions run concurrently.
-    pub orchestration_parallelism: u8,
     /// Active terminal color theme for the whole application.
     pub theme: ColorTheme,
     available_agent_kinds: Vec<AgentKind>,
@@ -398,13 +391,8 @@ impl SettingsManager {
         )
         .await;
         let theme = load_theme_setting_from_repositories(&repositories).await;
-        let orchestration_parallelism =
-            load_orchestration_parallelism_setting_from_repositories(&repositories).await;
-        let auto_approve_orchestration_research =
-            load_auto_approve_orchestration_research_setting_from_repositories(&repositories).await;
 
         Self {
-            auto_approve_orchestration_research,
             default_fast_reasoning_level: default_fast.reasoning_level,
             default_fast_selection: default_fast.selection,
             default_fast_speed_mode: default_fast.speed_mode,
@@ -419,7 +407,6 @@ impl SettingsManager {
             theme,
             available_agent_kinds,
             include_coauthored_by_agentty,
-            orchestration_parallelism,
             project_id,
             repositories,
             use_last_used_model_as_default,
@@ -441,7 +428,6 @@ impl SettingsManager {
                 .into_iter()
                 .map(ModelSelectorOption::selection)
                 .collect(),
-            auto_approve_orchestration_research: self.auto_approve_orchestration_research,
             default_fast_reasoning_level: self.default_fast_reasoning_level,
             default_fast_selection: self.default_fast_selection,
             default_fast_speed_mode: self.default_fast_speed_mode,
@@ -454,7 +440,6 @@ impl SettingsManager {
             default_smart_speed_mode: self.default_smart_speed_mode,
             include_coauthored_by_agentty: self.include_coauthored_by_agentty,
             launch_configuration: self.launch_configuration.clone(),
-            orchestration_parallelism: self.orchestration_parallelism,
             theme: self.theme,
             use_last_used_model_as_default: self.use_last_used_model_as_default,
         }
@@ -463,11 +448,6 @@ impl SettingsManager {
     /// Applies and persists one value change requested by the settings screen.
     pub(crate) async fn apply_operation(&mut self, operation: SettingsOperation) {
         match operation {
-            SettingsOperation::AutoApproveOrchestrationResearch(value) => {
-                self.auto_approve_orchestration_research = value;
-                self.persist_auto_approve_orchestration_research_setting()
-                    .await;
-            }
             SettingsOperation::DefaultFastSelection {
                 reasoning_level,
                 selection,
@@ -515,10 +495,6 @@ impl SettingsManager {
                 self.launch_configuration = value;
                 self.persist_launch_configuration_setting().await;
             }
-            SettingsOperation::OrchestrationParallelism(value) => {
-                self.orchestration_parallelism = value.clamp(1, MAX_ORCHESTRATION_PARALLELISM);
-                self.persist_orchestration_parallelism_setting().await;
-            }
             SettingsOperation::Theme(value) => {
                 self.theme = value;
                 self.persist_theme_setting().await;
@@ -549,29 +525,6 @@ impl SettingsManager {
                 SettingName::DefaultResponseStyle,
                 self.default_response_style.as_str(),
             )
-            .await;
-    }
-
-    /// Persists whether research-only orchestration waves start immediately.
-    async fn persist_auto_approve_orchestration_research_setting(&self) {
-        let value = self.auto_approve_orchestration_research.to_string();
-
-        let _ = self
-            .repositories
-            .settings()
-            .upsert_setting(SettingName::AutoApproveOrchestrationResearch, &value)
-            .await;
-    }
-
-    /// Persists the global orchestration concurrency cap.
-    async fn persist_orchestration_parallelism_setting(&self) {
-        let value = self.orchestration_parallelism.to_string();
-
-        // Best-effort: settings persistence failure is non-critical.
-        let _ = self
-            .repositories
-            .settings()
-            .upsert_setting(SettingName::OrchestrationParallelism, &value)
             .await;
     }
 
@@ -968,32 +921,6 @@ async fn load_default_response_style_setting_from_repositories(
         .load_project_response_style(project_id, SettingName::DefaultResponseStyle)
         .await
         .unwrap_or_default()
-}
-
-/// Loads and bounds the global orchestration concurrency cap.
-async fn load_orchestration_parallelism_setting_from_repositories(
-    repositories: &AppRepositories,
-) -> u8 {
-    repositories
-        .settings()
-        .get_setting(SettingName::OrchestrationParallelism)
-        .await
-        .unwrap_or(None)
-        .and_then(|setting_value| setting_value.parse::<u8>().ok())
-        .unwrap_or(DEFAULT_ORCHESTRATION_PARALLELISM)
-        .clamp(1, MAX_ORCHESTRATION_PARALLELISM)
-}
-
-async fn load_auto_approve_orchestration_research_setting_from_repositories(
-    repositories: &AppRepositories,
-) -> bool {
-    repositories
-        .settings()
-        .get_setting(SettingName::AutoApproveOrchestrationResearch)
-        .await
-        .unwrap_or(None)
-        .and_then(|setting_value| setting_value.parse::<bool>().ok())
-        .unwrap_or(DEFAULT_AUTO_APPROVE_ORCHESTRATION_RESEARCH)
 }
 
 #[cfg(test)]

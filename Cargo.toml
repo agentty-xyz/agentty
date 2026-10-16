@@ -20,7 +20,6 @@ ag-clipboard = { path = "crates/ag-clipboard", version = "0.17.0" }
 ag-forge = { path = "crates/ag-forge", version = "0.17.0" }
 ag-git = { path = "crates/ag-git", version = "0.17.0" }
 ag-harness = { path = "crates/ag-harness", version = "0.17.0" }
-ag-orchestration = { path = "crates/ag-orchestration", version = "0.17.0" }
 ag-protocol = { path = "crates/ag-protocol", version = "0.17.0" }
 ag-runtime = { path = "crates/ag-runtime", version = "0.17.0" }
 ag-router = { path = "crates/ag-router", version = "0.17.0" }

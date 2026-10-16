@@ -8,19 +8,13 @@ use super::model::{
 use super::review::FocusedReview;
 
 /// Top-level keys the protocol recognizes in a structured response payload.
-const PROTOCOL_KEYS: &[&str] = &[
-    "answer",
-    "questions",
-    "review_comment_outcomes",
-    "subtasks",
-    "verification_verdicts",
-];
+const PROTOCOL_KEYS: &[&str] = &["answer", "questions", "review_comment_outcomes"];
 
 /// Parses one raw assistant message strictly as protocol payload.
 ///
 /// The final assistant payload must match [`AgentResponse`] and contain at
 /// least one recognized protocol key (`answer`, `questions`,
-/// `review_comment_outcomes`, `subtasks`, or `verification_verdicts`).
+/// or `review_comment_outcomes`).
 ///
 /// When a provider prepends stray prose before the final schema object, this
 /// still recovers the trailing protocol payload as long as nothing except

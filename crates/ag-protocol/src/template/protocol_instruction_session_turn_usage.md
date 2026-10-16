@@ -4,8 +4,6 @@ For this session turn:
   `review_comment_outcomes` only for forge thread IDs explicitly supplied by the turn;
   otherwise use an empty array.
 - Do not create commits; do not suggest creating them at turn end.
-- Leave `subtasks` empty unless the turn explicitly requests a child-session
-  decomposition.
 - When a diagram clarifies the answer, put the diagram only in `answer` using an
   unindented ```` ```mermaid ```` opening fence and a closing fence of exactly three
   backticks.

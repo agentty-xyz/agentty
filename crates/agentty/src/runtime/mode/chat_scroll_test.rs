@@ -14,7 +14,7 @@ use super::{
 use crate::app::App;
 use crate::app::session_state::SessionGitStatus;
 use crate::domain::input::InputState;
-use crate::domain::session::{SessionId, SessionRole, Status};
+use crate::domain::session::{SessionId, Status};
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
@@ -305,54 +305,6 @@ async fn test_metrics_reserve_header_row_for_merge_conflict_alert() {
 
     // Assert
     assert_eq!(conflict_metrics.view_height + 1, normal_metrics.view_height);
-}
-
-#[tokio::test]
-async fn test_orchestrator_metrics_reserve_campaign_board_height() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    let mut session = SessionFixtureBuilder::new()
-        .role(SessionRole::Orchestrator)
-        .status(Status::Review)
-        .transcript(
-            (0..60)
-                .map(|index| format!("line {index}"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .build();
-    session.orchestration_progress =
-        Some("Phase: AwaitingApproval\nParallel workers: 3\n1. ui - awaiting approval".to_string());
-    let session_id = session.id.clone();
-    app.sessions.push_session(session);
-    app.mode = crate::presentation::app_mode::AppMode::View {
-        scroll_offset: None,
-        session_id: session_id.clone(),
-    };
-    let terminal_size = Rect::new(0, 0, 80, 24);
-
-    // Act
-    let orchestrator_metrics = ChatScrollMetrics::new(
-        &app,
-        &RenderCacheStore::default(),
-        &session_id,
-        0,
-        terminal_size,
-    );
-    app.sessions.sessions_mut()[0].role = SessionRole::Worker;
-    let regular_metrics = ChatScrollMetrics::new(
-        &app,
-        &RenderCacheStore::default(),
-        &session_id,
-        0,
-        terminal_size,
-    );
-
-    // Assert
-    assert_eq!(
-        orchestrator_metrics.view_height + 7,
-        regular_metrics.view_height
-    );
 }
 
 #[tokio::test]

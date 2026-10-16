@@ -411,7 +411,6 @@ async fn append_session_to_stack() -> E2eResult {
                     .press_key("Down")
                     .press_key("Down")
                     .press_key("Down")
-                    .press_key("Down")
                     .wait_for_text("[Preview] Move under parent", 5000)
                     .viewing_pause_ms(1500)
                     .capture_labeled(

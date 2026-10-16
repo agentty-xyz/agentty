@@ -13,6 +13,7 @@ use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
+use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
@@ -1070,4 +1071,30 @@ fn test_render_session_omits_started_label_when_rows_are_too_narrow() {
 
     // Assert
     assert!(rows.iter().all(|row| !row.contains("Started")));
+}
+
+#[test]
+fn terminal_diff_help_requires_retained_archive() {
+    // Arrange
+    for status in [Status::Done, Status::Canceled] {
+        for has_archived_diff in [false, true] {
+            let mut session = session_fixture();
+            session.status = status;
+            session.has_archived_diff = has_archived_diff;
+            let mode = AppMode::View {
+                session_id: session.id.clone(),
+                scroll_offset: None,
+            };
+            let page = test_session_chat_page(&session, &mode);
+
+            // Act
+            let actions = help_action::view_actions(page.view_help_state(&session));
+
+            // Assert
+            assert_eq!(
+                actions.iter().any(|action| action.key == "d"),
+                has_archived_diff
+            );
+        }
+    }
 }

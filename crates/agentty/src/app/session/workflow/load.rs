@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use ag_git::GitClient;
-use ag_orchestration as orchestration;
 use tracing::warn;
 
 use super::{draft, session_folder};
@@ -18,8 +17,8 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::question::QuestionItem;
 use crate::domain::session::{
     DailyActivity, QueuedMessage, ReviewRequest, ReviewRequestSummary, Session, SessionDiffState,
-    SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId, SessionRole, SessionSize,
-    SessionStats, Status, activity_day_key_with_offset,
+    SessionDiffStats, SessionFollowUpTask, SessionHandles, SessionId, SessionSize, SessionStats,
+    Status, activity_day_key_with_offset,
 };
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::transient_message::{
@@ -80,7 +79,6 @@ struct LoadSessionContext<'a> {
     db: &'a AppRepositories,
     fs_client: &'a dyn FsClient,
     handles: &'a mut HashMap<SessionId, SessionHandles>,
-    orchestration_metadata: &'a HashMap<String, orchestration::OrchestrationSessionMetadata>,
     preparations: &'a HashMap<String, SessionPreparationRow>,
     project_name: &'a str,
     session_worktree_availability: &'a mut HashMap<SessionId, bool>,
@@ -89,18 +87,15 @@ struct LoadSessionContext<'a> {
 
 /// Precomputed fields needed to assemble one loaded session snapshot.
 struct LoadedSessionInput {
-    controller_session_id: Option<SessionId>,
     draft_attachments: Vec<crate::domain::turn_prompt::TurnPromptAttachment>,
     folder: std::path::PathBuf,
     follow_up_tasks: Vec<SessionFollowUpTask>,
-    orchestration_progress: Option<String>,
     parent_session_id: Option<SessionId>,
     permission_mode: PermissionMode,
     project_name: String,
     reasoning_level_override: Option<ReasoningLevel>,
     response_style: ResponseStyle,
     review_request: Option<ReviewRequest>,
-    role: SessionRole,
     row: SessionListRow,
     session_agent: AgentSelection,
     session_id: SessionId,
@@ -189,11 +184,6 @@ impl SessionManager {
             .permission_mode
             .parse()
             .map_err(|_| SessionError::Workflow("Invalid session permission mode".to_string()))?;
-        let metadata = orchestration::session_metadata_for_project(
-            services.db(),
-            row.project_id.unwrap_or_default(),
-        )
-        .await;
         let preparation = services
             .db()
             .sessions()
@@ -213,7 +203,6 @@ impl SessionManager {
                 db: services.db(),
                 fs_client: fs_client.as_ref(),
                 handles: self.state.handles_mut(),
-                orchestration_metadata: &metadata,
                 preparations: &preparations,
                 project_name: working_dir
                     .file_name()
@@ -357,8 +346,6 @@ impl SessionManager {
             .await
             .unwrap_or_default();
         let stats_activity = Self::daily_activity_from_timestamps(activity_timestamps, clock);
-        let orchestration_metadata =
-            orchestration::session_metadata_for_project(db, active_project_id).await;
         let mut sessions: Vec<Session> = Vec::new();
         let mut session_worktree_availability = HashMap::new();
 
@@ -377,7 +364,6 @@ impl SessionManager {
             handles,
             fs_client,
             active_session_id,
-            orchestration_metadata: &orchestration_metadata,
             sessions: &mut sessions,
             session_worktree_availability: &mut session_worktree_availability,
         };
@@ -441,7 +427,6 @@ impl SessionManager {
             db,
             project_name,
             handles,
-            orchestration_metadata,
             fs_client,
             active_session_id,
             sessions,
@@ -499,22 +484,17 @@ impl SessionManager {
             .unwrap_or_default();
         let (session_queued_messages, session_queued_actions) =
             Self::loaded_queue_snapshots(handles.get(&session_id));
-        let (role, orchestration_metadata) =
-            Self::loaded_orchestration_metadata(&row, orchestration_metadata);
         let preparation = preparations.get(&row.id);
         let mut session = Self::build_loaded_session(LoadedSessionInput {
-            controller_session_id: orchestration_metadata.controller_session_id,
             draft_attachments,
             follow_up_tasks: Vec::new(),
             folder,
             parent_session_id: row.parent_session_id.clone().map(SessionId::from),
-            orchestration_progress: orchestration_metadata.progress,
             permission_mode,
             project_name: (*project_name).to_string(),
             reasoning_level_override,
             response_style,
             review_request: parse_review_request(&row),
-            role,
             row,
             session_agent,
             session_id,
@@ -582,20 +562,6 @@ impl SessionManager {
         })
     }
 
-    fn loaded_orchestration_metadata(
-        row: &SessionListRow,
-        metadata: &HashMap<String, orchestration::OrchestrationSessionMetadata>,
-    ) -> (SessionRole, orchestration::OrchestrationSessionMetadata) {
-        let role = row
-            .role
-            .as_deref()
-            .and_then(|value| value.parse::<SessionRole>().ok())
-            .unwrap_or_default();
-        let metadata = metadata.get(&row.id).cloned().unwrap_or_default();
-
-        (role, metadata)
-    }
-
     /// Computes diff-derived session metadata from one worktree folder using
     /// the injected filesystem and Git boundaries.
     ///
@@ -659,15 +625,14 @@ impl SessionManager {
             agent: input.session_agent,
             base_branch: input.row.base_branch,
             created_at: input.row.created_at,
-            controller_session_id: input.controller_session_id,
             draft_attachments: input.draft_attachments,
             folder: input.folder,
             follow_up_tasks: input.follow_up_tasks,
+            has_archived_diff: input.row.has_archived_diff,
             id: input.session_id,
             in_progress_started_at: input.row.in_progress_started_at,
             in_progress_total_seconds: input.row.in_progress_total_seconds,
             is_draft: input.row.is_draft,
-            orchestration_progress: input.orchestration_progress,
             parent_session_id: input.parent_session_id,
             permission_mode: input.permission_mode,
             personality_id: input.row.personality_id,
@@ -679,7 +644,6 @@ impl SessionManager {
             published_upstream_ref: input.row.published_upstream_ref,
             questions: input.session_questions,
             review_request: input.review_request,
-            role: input.role,
             size: input.size,
             speed_mode: input.speed_mode,
             stats: SessionStats {

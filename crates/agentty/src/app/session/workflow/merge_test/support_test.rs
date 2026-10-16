@@ -166,7 +166,6 @@ pub(super) async fn build_merge_task_input_for_test(
         MergeTaskInput {
             app_event_tx,
             available_agent_kinds: Arc::from(AgentKind::ALL),
-            archive_diff: false,
             base_branch: "main".to_string(),
             child_pid: Arc::new(Mutex::new(None)),
             clock: Arc::new(crate::infra::clock::RealClock),
@@ -186,10 +185,7 @@ pub(super) async fn build_merge_task_input_for_test(
     )
 }
 
-pub(super) async fn assert_managed_merge_metadata(
-    db: &AppRepositories,
-    expected_merged_commit_hash: &str,
-) {
+pub(super) async fn assert_merge_metadata(db: &AppRepositories, expected_merged_commit_hash: &str) {
     let merged_commit_hash = db
         .sessions()
         .load_session_merged_commit_hash("session-123")
@@ -205,7 +201,7 @@ pub(super) async fn assert_managed_merge_metadata(
         merged_commit_hash.as_deref(),
         Some(expected_merged_commit_hash)
     );
-    assert_eq!(archived_diff.as_deref(), Some("diff --git a/file b/file"));
+    assert_eq!(archived_diff, None);
 }
 
 /// Builds sync rebase assistance input with injected git and assistance

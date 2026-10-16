@@ -60,7 +60,7 @@ fn preferred_completed_assistant_message_accepts_any_recognized_protocol_payload
     // Arrange
     let assistant_messages = vec![
         "plain answer".to_string(),
-        r#"{"verification_verdicts":[]}"#.to_string(),
+        r#"{"questions":[]}"#.to_string(),
     ];
 
     // Act
@@ -70,7 +70,7 @@ fn preferred_completed_assistant_message_accepts_any_recognized_protocol_payload
     );
 
     // Assert
-    assert_eq!(preferred, r#"{"verification_verdicts":[]}"#);
+    assert_eq!(preferred, r#"{"questions":[]}"#);
 }
 
 #[test]

@@ -94,7 +94,6 @@ fn list_and_detail_mappings_preserve_all_shared_columns() {
         assert_eq!(row.reasoning_level_override, None);
         assert_eq!(row.response_style, "balanced");
         assert_eq!(row.review_request, Some(expected_review_request_row()));
-        assert_eq!(row.role.as_deref(), Some("Orchestrator"));
         assert_eq!(row.size, "M");
         assert_eq!(row.speed_mode, "normal");
         assert_eq!(row.status, "Review");
@@ -126,6 +125,7 @@ impl SessionJoinRow {
             base_branch: "main".to_string(),
             created_at: 100,
             deleted_lines: 6,
+            has_archived_diff: false,
             has_diff: Some(true),
             id: "session-a".to_string(),
             in_progress_started_at: None,
@@ -154,7 +154,6 @@ impl SessionJoinRow {
             review_request_web_url: Some(
                 "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
             ),
-            role: Some("Orchestrator".to_string()),
             size: "M".to_string(),
             speed_mode: "normal".to_string(),
             status: "Review".to_string(),

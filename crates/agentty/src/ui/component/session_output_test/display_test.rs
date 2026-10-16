@@ -658,46 +658,6 @@ fn test_output_lines_typed_assistant_notice_prefix_stays_in_answer() {
     assert!(text.contains("Assistant output.\n[Merge] this is literal assistant text."));
 }
 
-/// Verifies an orchestrator renders one animated child-status loader.
-#[test]
-fn test_output_lines_tracks_orchestration_loader() {
-    // Arrange
-    let mut session = session_fixture();
-    session.status = Status::Review;
-    session.transient_messages.upsert(TransientMessage {
-        anchor: TransientMessageAnchor::Tail,
-        body: TransientMessageBody::Loading(
-            "Orchestrating...\n- Protocol: running\n- UI: waiting".to_string(),
-        ),
-        lifecycle: crate::domain::transient_message::TransientMessageLifecycle::UntilResolved,
-        slot: TransientMessageSlot::Orchestration,
-        turn_position: None,
-    });
-
-    // Act
-    let lines = session_output_assembly::tests::output_lines(&session, 78, None, None);
-    let loader_line_index = lines
-        .transient_loader_line_index
-        .expect("orchestration loader should be tracked");
-
-    // Assert
-    assert!(
-        lines.lines[loader_line_index]
-            .to_string()
-            .contains("Orchestrating...")
-    );
-    assert!(
-        lines.lines[loader_line_index + 1]
-            .to_string()
-            .contains("- Protocol: running")
-    );
-    assert!(
-        lines.lines[loader_line_index + 2]
-            .to_string()
-            .contains("- UI: waiting")
-    );
-}
-
 /// Verifies persisted message padding cannot add extra rows to the
 /// canonical one-empty-line transcript gap.
 #[test]

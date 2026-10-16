@@ -7,10 +7,6 @@ fn test_as_str_returns_persisted_keys() {
     let settings = [
         (SettingName::ActiveProjectId, "ActiveProjectId"),
         (SettingName::ActiveTab, "ActiveTab"),
-        (
-            SettingName::AutoApproveOrchestrationResearch,
-            "AutoApproveOrchestrationResearch",
-        ),
         (SettingName::DefaultFastAgent, "DefaultFastAgent"),
         (SettingName::DefaultFastModel, "DefaultFastModel"),
         (
@@ -46,10 +42,6 @@ fn test_as_str_returns_persisted_keys() {
             "LastUsedModelAsDefault",
         ),
         (
-            SettingName::OrchestrationParallelism,
-            "OrchestrationParallelism",
-        ),
-        (
             SettingName::TelemetryInstallationId,
             "TelemetryInstallationId",
         ),
@@ -74,7 +66,6 @@ fn test_display_matches_as_str() {
     let settings = [
         SettingName::ActiveProjectId,
         SettingName::ActiveTab,
-        SettingName::AutoApproveOrchestrationResearch,
         SettingName::DefaultFastAgent,
         SettingName::DefaultFastModel,
         SettingName::DefaultFastReasoningLevel,
@@ -91,7 +82,6 @@ fn test_display_matches_as_str() {
         SettingName::IncludeCoauthoredByAgentty,
         SettingName::LaunchConfiguration,
         SettingName::LastUsedModelAsDefault,
-        SettingName::OrchestrationParallelism,
         SettingName::ProjectCatalogVisible,
         SettingName::TelemetryInstallationId,
         SettingName::Theme,

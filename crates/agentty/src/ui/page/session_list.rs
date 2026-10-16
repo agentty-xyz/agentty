@@ -663,18 +663,8 @@ fn session_detail_color(session: &Session, active_color: Color) -> Color {
 }
 
 /// Returns the one-line status shown in the Sessions table.
-///
-/// Orchestrator progress also carries the multiline campaign-board snapshot.
-/// Only its phase line is visible in a one-row table cell, so using the same
-/// line for width calculation prevents hidden board details from consuming the
-/// session-title column.
 fn session_list_status_label(session: &Session) -> Cow<'_, str> {
-    session
-        .orchestration_progress
-        .as_deref()
-        .and_then(|progress| progress.lines().next())
-        .filter(|label| !label.is_empty())
-        .map_or_else(|| Cow::Owned(session.status.to_string()), Cow::Borrowed)
+    Cow::Owned(session.status.to_string())
 }
 
 /// Returns the tree connector style with contrast on highlighted rows.

@@ -528,7 +528,7 @@ impl TaskService {
     }
 
     /// Requeues one failed focused-review persistence write after a bounded
-    /// delay so transient database errors cannot strand orchestration review.
+    /// delay so transient database errors cannot strand a pending review.
     pub(crate) fn spawn_focused_review_persistence_retry(
         app_event_tx: mpsc::UnboundedSender<AppEvent>,
         retry: FocusedReviewPersistenceRetry,
