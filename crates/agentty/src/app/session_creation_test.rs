@@ -9,6 +9,7 @@ use ratatui::backend::TestBackend;
 use tokio::sync::{Notify, oneshot};
 
 use super::PendingSessionCreation;
+use crate::app::command_gateway::{CommandInitiator, SessionCommand, SessionMutation};
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, SessionManager, SessionRuntimeCommand};
 use crate::domain::session::Status;
@@ -727,10 +728,13 @@ async fn delayed_api_creation_allows_other_commands_before_answering() {
     // Act
     tokio::time::timeout(
         Duration::from_secs(1),
-        app.apply_session_runtime_command(SessionRuntimeCommand::Create {
-            request,
-            response_tx,
-        }),
+        app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
+            CommandInitiator::SessionApi,
+            SessionMutation::Create {
+                request,
+                response_tx: Some(response_tx),
+            },
+        ))),
     )
     .await
     .expect("command must return before Git finishes");
@@ -785,10 +789,13 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
     let request = regular_request(&app);
 
     // Act
-    app.apply_session_runtime_command(SessionRuntimeCommand::Create {
-        request,
-        response_tx,
-    })
+    app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
+        CommandInitiator::SessionApi,
+        SessionMutation::Create {
+            request,
+            response_tx: Some(response_tx),
+        },
+    )))
     .await;
     release.notify_one();
     finish_creation(&mut app).await;
@@ -797,11 +804,14 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
         .expect("response")
         .expect("reserved session");
     let (response_tx, response_rx) = oneshot::channel();
-    app.apply_session_runtime_command(SessionRuntimeCommand::SendMessage {
-        message: "retry this session".to_string(),
-        response_tx,
-        session_id: session_id.clone(),
-    })
+    app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
+        CommandInitiator::SessionApi,
+        SessionMutation::SendMessage {
+            message: "retry this session".to_string(),
+            response_tx,
+            session_id: session_id.clone(),
+        },
+    )))
     .await;
     response_rx
         .await

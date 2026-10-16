@@ -305,7 +305,10 @@ async fn handle_primary_view_key(
             return Some(false);
         }
         KeyCode::Char('s') if view_session_snapshot.can_start_staged_session() => {
-            if let Err(error) = app.start_staged_session(&view_context.session_id).await {
+            if let Err(error) = app
+                .admit_staged_start(view_context.session_id.clone())
+                .await
+            {
                 app.append_output_for_session(
                     &view_context.session_id,
                     &TranscriptNotice::StartError.format(error),

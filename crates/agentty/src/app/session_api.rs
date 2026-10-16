@@ -12,16 +12,13 @@ use ag_session::{
     SessionSettings, SessionStatus, parse_persisted_session_agent_model,
 };
 use async_trait::async_trait;
-use tokio::sync::oneshot;
 
-use crate::app::branch_publish::{branch_publish_loading_label, review_request_queued_label};
 use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::{
     App, AppError, AppEvent, SessionError, SessionRuntimeCommand, SessionRuntimeHandle,
 };
 use crate::domain::agent::{AgentKind, AgentSelection};
-use crate::domain::session::PublishBranchAction;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
@@ -87,6 +84,15 @@ impl App {
         SessionService::new(Arc::new(self.sessions.handle()))
     }
 
+    /// Uses the same mailbox for terminal actions while retaining provenance.
+    pub(crate) fn session_view_service(&self) -> SessionService {
+        SessionService::new(Arc::new(
+            self.sessions
+                .handle()
+                .with_initiator(crate::app::command_gateway::CommandInitiator::SessionView),
+        ))
+    }
+
     /// Drives one local API request while processing the actor commands ahead
     /// of it.
     ///
@@ -129,118 +135,18 @@ impl App {
         }
     }
 
-    /// Executes one accepted session command and answers its response channel.
+    /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
-            SessionRuntimeCommand::Create {
-                request,
-                response_tx,
-            } => {
-                self.start_session_creation(request, Some(response_tx))
-                    .await;
-            }
             SessionRuntimeCommand::Get {
                 response_tx,
                 session_id,
             } => {
                 let _ = response_tx.send(self.get_api_session(&session_id).await);
             }
-            SessionRuntimeCommand::SendMessage {
-                message,
-                response_tx,
-                session_id,
-            } => {
-                let _ = response_tx.send(self.send_api_message(&session_id, message).await);
+            SessionRuntimeCommand::Mutation(command) => {
+                let _ = self.admit_session_command(command).await;
             }
-            SessionRuntimeCommand::SubmitDurableMessage {
-                request,
-                response_tx,
-                session_id,
-            } => {
-                let _ =
-                    response_tx.send(self.submit_api_durable_message(&session_id, request).await);
-            }
-            SessionRuntimeCommand::AnswerQuestions {
-                request,
-                response_tx,
-                session_id,
-            } => {
-                let _ = response_tx.send(self.answer_api_questions(&session_id, request).await);
-            }
-            SessionRuntimeCommand::Cancel {
-                response_tx,
-                session_id,
-            } => {
-                let result = self.cancel_api_session(&session_id).await;
-                let _ = response_tx.send(result);
-            }
-            SessionRuntimeCommand::Merge {
-                response_tx,
-                session_id,
-            } => {
-                let result = self.merge_api_session(&session_id).await;
-                let _ = response_tx.send(result);
-            }
-            SessionRuntimeCommand::CreateReviewRequest {
-                response_tx,
-                session_id,
-            } => {
-                self.start_api_review_request_publish(session_id, response_tx)
-                    .await;
-            }
-        }
-    }
-
-    /// Queues review-request publishing on the session worker and leaves the
-    /// foreground command loop available while the API caller awaits the
-    /// worker result.
-    async fn start_api_review_request_publish(
-        &mut self,
-        session_id: SessionId,
-        response_tx: oneshot::Sender<Result<ReviewRequest, ApiSessionError>>,
-    ) {
-        let Some(_) = self.sessions.session_for_id(&session_id) else {
-            let _ = response_tx.send(Err(ApiSessionError::NotFound));
-
-            return;
-        };
-        let Some(branch_publish_context) = self.branch_publish_task_context(&session_id) else {
-            let _ = response_tx.send(Err(ApiSessionError::NotFound));
-
-            return;
-        };
-        let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
-        // Reserve an idle branch before persistence. An existing owner
-        // already serializes worker execution, so the runtime actor never waits
-        // here.
-        let _branch_operation_guard = branch_operation_lock.try_lock_owned().ok();
-        let enqueue_result = self
-            .sessions
-            .enqueue_review_request_creation(
-                &self.services,
-                branch_publish_context.session,
-                None,
-                Some(response_tx),
-            )
-            .await;
-        match enqueue_result {
-            Err(error) => {
-                let _ = self.sessions.finish_branch_publish(
-                    &session_id,
-                    crate::domain::transient_message::TransientMessageBody::Markdown(format!(
-                        "**Review request publish failed**\n\n{error}"
-                    )),
-                );
-            }
-            Ok(Some(queued_order)) => self.sessions.queue_branch_publish(
-                &session_id,
-                queued_order,
-                review_request_queued_label(),
-            ),
-            Ok(None) => self.sessions.start_branch_publish(
-                &session_id,
-                branch_publish_loading_label(PublishBranchAction::PublishPullRequest),
-            ),
         }
     }
 
@@ -427,7 +333,7 @@ impl App {
     }
 
     /// Sends one validated API message through the existing session workflow.
-    async fn send_api_message(
+    pub(super) async fn send_api_message(
         &mut self,
         session_id: &SessionId,
         message: String,
@@ -480,7 +386,7 @@ impl App {
 
     /// Submits a durable turn only when it can bypass the lossy
     /// in-memory chat queue and enter the serialized session worker directly.
-    async fn submit_api_durable_message(
+    pub(super) async fn submit_api_durable_message(
         &mut self,
         session_id: &SessionId,
         request: DurableMessageRequest,
@@ -530,7 +436,10 @@ impl App {
     }
 
     /// Cancels a session through the ordinary lifecycle workflow.
-    async fn cancel_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+    pub(super) async fn cancel_api_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
         self.cancel_session(session_id)
             .await
             .map_err(api_error_from_app)
@@ -538,7 +447,7 @@ impl App {
 
     /// Claims structured question answers against the current persisted
     /// question set before resuming the session.
-    async fn answer_api_questions(
+    pub(super) async fn answer_api_questions(
         &mut self,
         session_id: &SessionId,
         request: AnswerQuestionsRequest,
@@ -594,7 +503,10 @@ impl App {
         Ok(())
     }
 
-    async fn merge_api_session(&mut self, session_id: &SessionId) -> Result<(), ApiSessionError> {
+    pub(super) async fn merge_api_session(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
         self.sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
@@ -887,7 +799,7 @@ fn api_review_request_from_row(
 }
 
 /// Preserves stable not-found semantics while translating host app errors.
-fn api_error_from_app(error: AppError) -> ApiSessionError {
+pub(super) fn api_error_from_app(error: AppError) -> ApiSessionError {
     match error {
         AppError::Session(error) => api_error_from_session(error),
         other => ApiSessionError::Operation(other.to_string()),

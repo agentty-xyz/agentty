@@ -165,7 +165,12 @@ cancellation.
 <a id="architecture-runtime-flow-turn"></a> `ag-session::SessionService` provides the
 frontend-neutral lifecycle API. Agentty's bounded session-runtime mailbox executes its
 requests against the foreground session manager without sharing `App` behind a mutex.
-User and coordinator handles have distinct managed-session permissions.
+The [Command Gateway](@/docs/core-components/command-gateway.md) routes terminal and
+programmatic mutations through shared foreground admission while preserving each
+workflow's queueing and acknowledgement contract. Reads remain separate queries.
+Accepted workflows update
+[messages](@/docs/core-components/durable-components/message.md) and operation records
+through persistence adapters; workers retain execution ordering through post-processing.
 
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients

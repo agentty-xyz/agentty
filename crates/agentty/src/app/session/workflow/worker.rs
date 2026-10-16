@@ -1958,6 +1958,7 @@ impl SessionManager {
         &mut self,
         services: &AppServices,
         branch_publish_session: BranchPublishTaskSession,
+        operation_id: String,
         remote_branch_name: Option<String>,
         response_tx: Option<oneshot::Sender<Result<ReviewRequest, ag_session::SessionError>>>,
     ) -> Result<Option<u64>, SessionError> {
@@ -1966,7 +1967,7 @@ impl SessionManager {
         let response = response_tx.map(|response_tx| Arc::new(Mutex::new(Some(response_tx))));
         let command = SessionCommand::CreateReviewRequest {
             branch_publish_session,
-            operation_id: Uuid::new_v4().to_string(),
+            operation_id,
             remote_branch_name,
             response: response.clone(),
         };

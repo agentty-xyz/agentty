@@ -869,7 +869,7 @@ async fn handle_cancel_session_confirmation(
     let Some(session_id) = confirmation_session_id else {
         return Ok(EventResult::Continue);
     };
-    let service = app.session_service();
+    let service = app.session_view_service();
     let request = service.cancel_session(&session_id);
     if let Err(error) = app.drive_session_request(request).await {
         warn!(
@@ -937,7 +937,7 @@ async fn handle_merge_confirmation(
     let Some(session_id) = confirmation_session_id else {
         return Ok(EventResult::Continue);
     };
-    let service = app.session_service();
+    let service = app.session_view_service();
     let request = service.merge_session(&session_id);
     if let Err(error) = app.drive_session_request(request).await {
         app.append_output_for_session(&session_id, &TranscriptNotice::MergeError.format(error))

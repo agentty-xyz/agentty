@@ -54,7 +54,9 @@ contracts.
 
 ## Layer Rules
 
-- Keep workflow changes in `app/` and external effects behind `infra/` traits.
+- Keep workflow changes and shared command admission in `app/`, with external effects
+  behind `infra/` traits. The session command gateway owns admission; the worker owns
+  execution ordering and settlement.
 - Keep frontend-neutral session models in `ag-session` and persistence in `ag-store`.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
