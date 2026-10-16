@@ -1,4 +1,5 @@
 use ag_contracts::{AgentRequestKind, ReasoningLevel};
+use ag_session::AgentModel;
 use tempfile::tempdir;
 
 use crate::agent::backend::{AgentBackend, BuildCommandRequest};
@@ -54,7 +55,7 @@ fn test_gemini_build_command_uses_acp_runtime_command() {
             folder: temp_directory.path(),
             main_checkout_root: None,
             replay_transcript: None,
-            model: "gemini-3.8-flash",
+            model: AgentModel::Gemini4Argon.provider_model_str(),
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
             personality_prompt: None,
             prompt: "Generate title",
@@ -70,7 +71,7 @@ fn test_gemini_build_command_uses_acp_runtime_command() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(args, vec!["--acp", "--model", "gemini-3.8-flash"]);
+    assert_eq!(args, vec!["--acp", "--model", "gemini-4-argon"]);
     assert_eq!(command.get_current_dir(), Some(temp_directory.path()));
 }
 

@@ -37,15 +37,17 @@ cargo install sccache --locked
 ```
 
 The Cargo wrapper uses `sccache` when its server is available and otherwise invokes the
-compiler directly. Worktrees retain separate `target/` directories. `SCCACHE_DIR` can
-select the cache location. Registry dependencies compile from the same paths in every
-worktree, so a fresh worktree reuses their cached results. Workspace crates do not:
-`sccache` 0.14.0 keys Rust compilations on absolute source paths, and `SCCACHE_BASEDIRS`
-does not normalize them, so identical workspace sources in two checkouts miss. Keep
-Cargo's default incremental compilation for workspace crates; disabling it makes them
-cacheable only for rebuilds within the same checkout. Before documenting cross-worktree
-reuse of workspace crates after an upstream change, confirm a cache hit for identical
-sources built from two checkout roots.
+compiler directly. It also retries directly when `sccache` returns status `254`,
+including when its server retains a deleted temporary directory. Other exit statuses are
+preserved. Worktrees retain separate `target/` directories. `SCCACHE_DIR` can select the
+cache location. Registry dependencies compile from the same paths in every worktree, so
+a fresh worktree reuses their cached results. Workspace crates do not: `sccache` 0.14.0
+keys Rust compilations on absolute source paths, and `SCCACHE_BASEDIRS` does not
+normalize them, so identical workspace sources in two checkouts miss. Keep Cargo's
+default incremental compilation for workspace crates; disabling it makes them cacheable
+only for rebuilds within the same checkout. Before documenting cross-worktree reuse of
+workspace crates after an upstream change, confirm a cache hit for identical sources
+built from two checkout roots.
 
 Cargo uses its CPU-based job default. When running several sessions, set
 `CARGO_BUILD_JOBS=2` (or another suitable budget) in each session's environment. To opt

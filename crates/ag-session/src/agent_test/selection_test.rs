@@ -102,6 +102,7 @@ fn test_selectable_models_for_agent_kinds_uses_provider_order() {
             AgentModel::Gpt6Luna,
             AgentModel::Gpt56Terra,
             AgentModel::Gpt53CodexSpark,
+            AgentModel::Gemini4Argon,
             AgentModel::Gemini31Pro,
             AgentModel::Gemini38Flash,
             AgentModel::Gemini35FlashLite,
@@ -123,6 +124,7 @@ fn test_selectable_models_for_agent_kinds_deduplicates_shared_models() {
     assert_eq!(
         selectable_models,
         vec![
+            AgentModel::Gemini4Argon,
             AgentModel::Gemini31Pro,
             AgentModel::Gemini38Flash,
             AgentModel::Gemini35FlashLite,

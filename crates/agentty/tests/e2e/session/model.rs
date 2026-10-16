@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use testty::assertion;
 use testty::region::Region;
 
-use super::fixture::E2eResult;
+use super::fixture::{E2eResult, seed_project_settings};
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 
@@ -100,7 +100,19 @@ async fn gemini_model_picker_lists_current_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("gemini_model_picker_lists_current_models")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_failing_gemini_cli_stub(env) }))
+        .setup(|env| {
+            Box::pin(async move {
+                seed_failing_gemini_cli_stub(env)?;
+                seed_project_settings(
+                    env,
+                    &[
+                        ("DefaultSmartAgent", "gemini"),
+                        ("DefaultSmartModel", "gemini-3.1-pro-preview"),
+                    ],
+                )
+                .await
+            })
+        })
         .run(
             |scenario| {
                 scenario
@@ -125,6 +137,14 @@ async fn gemini_model_picker_lists_current_models() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "gemini-4-argon", &full);
+                    let text = frame.all_text();
+                    assert!(
+                        text.rfind("gemini-4-argon").expect("Argon is visible")
+                            < text
+                                .rfind("gemini-3.1-pro-preview")
+                                .expect("Pro is visible")
+                    );
                     assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
                     assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
                 })
@@ -313,7 +333,19 @@ async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("antigravity_model_picker_includes_gemini_models")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_model_picker_cli_stubs(env) }))
+        .setup(|env| {
+            Box::pin(async move {
+                seed_model_picker_cli_stubs(env)?;
+                seed_project_settings(
+                    env,
+                    &[
+                        ("DefaultSmartAgent", "antigravity"),
+                        ("DefaultSmartModel", "gemini-3.1-pro-preview"),
+                    ],
+                )
+                .await
+            })
+        })
         .run(
             |scenario| {
                 scenario
@@ -338,6 +370,14 @@ async fn antigravity_model_picker_includes_gemini_models() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
+                    assertion::assert_text_in_region(frame, "gemini-4-argon", &full);
+                    let text = frame.all_text();
+                    assert!(
+                        text.rfind("gemini-4-argon").expect("Argon is visible")
+                            < text
+                                .rfind("gemini-3.1-pro-preview")
+                                .expect("Pro is visible")
+                    );
                     assertion::assert_text_in_region(frame, "gemini-3.1-pro-preview", &full);
                     assertion::assert_text_in_region(frame, "gemini-3.8-flash", &full);
                     assertion::assert_text_in_region(frame, "gemini-3.5-flash-lite", &full);
