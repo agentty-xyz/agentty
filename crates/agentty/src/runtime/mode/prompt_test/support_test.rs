@@ -53,7 +53,7 @@ pub(super) async fn apply_next_session_diff(app: &mut App) {
             .expect("session diff event should arrive")
             .expect("app event channel should remain open");
         let is_session_diff = matches!(event, crate::app::AppEvent::SessionDiffLoaded { .. });
-        app.apply_app_events(event).await;
+        app.apply_single_app_event(event).await;
         if is_session_diff {
             return;
         }
@@ -69,7 +69,7 @@ pub(super) async fn apply_next_prompt_image_paste(app: &mut App) {
             .expect("prompt image paste event should arrive")
             .expect("app event channel should remain open");
         let is_prompt_image_paste = matches!(event, crate::app::AppEvent::PromptImagePasted { .. });
-        app.apply_app_events(event).await;
+        app.apply_single_app_event(event).await;
         if is_prompt_image_paste {
             return;
         }

@@ -20,7 +20,8 @@ use super::support::{
     new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode, press_prompt_key,
     prompt_focus, session_replay_text, test_terminal,
 };
-use crate::app::prompt_intent::PromptApplyOutcome;
+use crate::app::AppEvent;
+use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -1671,6 +1672,42 @@ async fn test_prompt_image_paste_failure_after_leaving_prompt_reports_error() {
     install_mock_clipboard_image_client(&mut app, clipboard_image_client);
     handle_prompt_image_paste(&mut app, &prompt_context);
     app.mode = AppMode::List;
+
+    // Act
+    apply_next_prompt_image_paste(&mut app).await;
+
+    // Assert
+    app.sessions.sync_from_handles();
+    assert!(matches!(app.mode, AppMode::List));
+    assert!(
+        session_replay_text(&app.sessions.sessions()[0])
+            .contains("[Paste Image Error] Clipboard does not contain an image.")
+    );
+}
+
+/// Queues an unrelated event ahead of a paste completion to reproduce the
+/// ordering that previously let the wait helper drain its target unseen.
+#[tokio::test]
+async fn test_prompt_image_paste_completion_behind_unrelated_event_reports_error() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let session_id = app.sessions.sessions()[0].id.clone();
+    app.mode = AppMode::List;
+    let event_sender = app.services.event_sender();
+    event_sender
+        .send(AppEvent::VersionAvailabilityUpdated {
+            latest_available_version: None,
+        })
+        .expect("app event channel should remain open");
+    event_sender
+        .send(AppEvent::PromptImagePasted {
+            update: PromptImagePasteUpdate {
+                request_id: 1,
+                result: Err("Clipboard does not contain an image.".to_string()),
+                session_id,
+            },
+        })
+        .expect("app event channel should remain open");
 
     // Act
     apply_next_prompt_image_paste(&mut app).await;
