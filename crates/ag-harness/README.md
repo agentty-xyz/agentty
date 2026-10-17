@@ -279,7 +279,9 @@ harness owns the admission rules and every lease. The shared conformance suite i
 `Harness::with_lifecycle_observer` receives turn, model, and tool events that never
 contain prompts or output. `lifecycle::LifecycleMetrics` and
 `lifecycle::LifecycleTraceObserver` export them to OpenTelemetry. Turn spans nest under
-the caller's OpenTelemetry context, including for `.start()`ed turns.
+the caller's OpenTelemetry context, including for `.start()`ed turns. A failed turn's
+`LifecycleEventKind::TurnFailed` carries the `TurnReport` of what it did before failing:
+its accepted requests, tool calls, and counts.
 
 ## Where things live
 

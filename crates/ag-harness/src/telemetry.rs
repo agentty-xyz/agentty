@@ -222,6 +222,7 @@ impl LifecycleMetricState {
                 duration,
                 error_type,
                 turn_id,
+                ..
             } => self.complete_turn(*duration, Some(error_type.as_str()), *turn_id),
             LifecycleEventKind::ModelRequestStarted {
                 turn_id: Some(turn_id),

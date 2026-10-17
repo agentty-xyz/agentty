@@ -4,18 +4,25 @@ use std::collections::BTreeMap;
 
 use ag_harness::TurnOutcome;
 use ag_harness::lifecycle::LifecycleEventKind;
-use ag_harness::turn::{ContextActivity, ModelRequestPurpose, ToolActivity};
+use ag_harness::model::CompletionMetadata;
+use ag_harness::turn::{
+    ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnReport,
+};
 use serde_json::{Map, Value, json};
 
-/// Content-free activity summed over every accepted request of one turn.
+/// Content-free activity summed over every accepted request of one turn,
+/// with one record per request.
 pub(super) struct Activity {
-    context: [(&'static str, usize); 8],
+    context: [(&'static str, usize); 9],
+    context_overflow_recoveries: usize,
     duplicate_reads: usize,
     input_tokens: Option<u64>,
+    malformed_tool_calls: usize,
     model_calls: usize,
     output_corrections: usize,
     output_tokens: Option<u64>,
     repetition_nudges: usize,
+    requests: Vec<Value>,
     summary_calls: usize,
     summary_failures: usize,
     tool_calls: usize,
@@ -24,7 +31,12 @@ pub(super) struct Activity {
 impl Activity {
     /// Measures a finished turn from its public report.
     pub(super) fn from_outcome(outcome: &TurnOutcome) -> Self {
-        let report = outcome.report();
+        Self::from_report(outcome.report())
+    }
+
+    /// Measures a turn from its report, which a failed turn also carries on
+    /// its failure event.
+    pub(super) fn from_report(report: &TurnReport) -> Self {
         let mut context = ContextCounts::default();
         let mut input_tokens = None::<u64>;
         let mut output_tokens = None::<u64>;
@@ -43,12 +55,15 @@ impl Activity {
 
         Self {
             context: context.0,
+            context_overflow_recoveries: report.context_overflow_recoveries(),
             duplicate_reads: duplicate_reads(report.tool_calls()),
             input_tokens,
+            malformed_tool_calls: report.malformed_tool_calls(),
             model_calls: report.model_requests().len(),
             output_corrections: report.output_corrections(),
             output_tokens,
             repetition_nudges: report.repetition_nudges(),
+            requests: report.model_requests().iter().map(request_record).collect(),
             summary_calls: report
                 .model_requests()
                 .iter()
@@ -69,6 +84,15 @@ impl Activity {
         line.insert("repetition_nudges".into(), json!(self.repetition_nudges));
         line.insert("summary_calls".into(), json!(self.summary_calls));
         line.insert("summary_failures".into(), json!(self.summary_failures));
+        line.insert(
+            "malformed_tool_calls".into(),
+            json!(self.malformed_tool_calls),
+        );
+        line.insert(
+            "context_overflow_recoveries".into(),
+            json!(self.context_overflow_recoveries),
+        );
+        line.insert("requests".into(), json!(self.requests));
         for (name, count) in self.context {
             line.insert(name.into(), json!(count));
         }
@@ -76,9 +100,10 @@ impl Activity {
 }
 
 /// Summary outcomes and failed model requests seen as lifecycle events,
-/// kept even when the turn fails and has no report.
+/// kept even when the turn fails, with the report a failed turn carries.
 #[derive(Default)]
 pub(super) struct Observed {
+    failed_report: Option<Box<TurnReport>>,
     failed_requests: Vec<String>,
     summaries: Vec<(&'static str, u128)>,
 }
@@ -105,8 +130,14 @@ impl Observed {
             } => self
                 .summaries
                 .push((error_type.as_str(), duration.as_millis())),
+            LifecycleEventKind::TurnFailed { report, .. } => self.failed_report.clone_from(report),
             _ => {}
         }
+    }
+
+    /// Takes the report of the measured turn when it failed.
+    pub(super) fn take_failed_report(&mut self) -> Option<Box<TurnReport>> {
+        self.failed_report.take()
     }
 
     fn insert_into(&self, line: &mut Map<String, Value>) {
@@ -137,8 +168,8 @@ pub(super) struct RunRecord {
 }
 
 impl RunRecord {
-    /// Serializes the record; activity fields are `null` when the turn
-    /// failed, because the public report exists only for finished turns.
+    /// Serializes the record; activity fields are `null` when no report
+    /// exists: the turn timed out or failed before preparing its request.
     pub(super) fn to_json(&self) -> Value {
         let mut line = Map::new();
         line.insert("started_at".into(), json!(self.started_at));
@@ -168,7 +199,7 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 9] = [
+const ACTIVITY_FIELDS: [&str; 12] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
@@ -178,8 +209,11 @@ const ACTIVITY_FIELDS: [&str; 9] = [
     "repetition_nudges",
     "summary_calls",
     "summary_failures",
+    "malformed_tool_calls",
+    "context_overflow_recoveries",
+    "requests",
 ];
-const CONTEXT_FIELDS: [&str; 8] = [
+const CONTEXT_FIELDS: [&str; 9] = [
     "elided_results",
     "cleared_reasoning",
     "shrunk_write_calls",
@@ -188,9 +222,10 @@ const CONTEXT_FIELDS: [&str; 8] = [
     "truncated_results",
     "shrunk_latest_write_calls",
     "summarized_tool_calls",
+    "superseded_results",
 ];
 
-struct ContextCounts([(&'static str, usize); 8]);
+struct ContextCounts([(&'static str, usize); 9]);
 
 impl Default for ContextCounts {
     fn default() -> Self {
@@ -209,11 +244,43 @@ impl ContextCounts {
             activity.truncated_results(),
             activity.shrunk_latest_write_calls(),
             activity.summarized_tool_calls(),
+            activity.superseded_results(),
         ];
         for ((_, total), count) in self.0.iter_mut().zip(counts) {
             *total += count;
         }
     }
+}
+
+/// One accepted request: why it was sent, how long it took, what the
+/// provider reported, what the harness estimated, and how it was reduced.
+fn request_record(request: &ModelRequestActivity) -> Value {
+    let completion = request.completion();
+    let usage = completion.and_then(|completion| completion.usage());
+    let mut reductions = ContextCounts::default();
+    reductions.add(request.context());
+    let reductions: Map<String, Value> = reductions
+        .0
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(name, count)| (name.to_string(), json!(count)))
+        .collect();
+
+    json!({
+        "purpose": match request.purpose() {
+            ModelRequestPurpose::Turn => "turn",
+            ModelRequestPurpose::ContextSummary => "context_summary",
+        },
+        "ms": request.duration().as_millis(),
+        "input_tokens": usage.and_then(|usage| usage.input_tokens()),
+        "cache_hit_tokens": usage.and_then(|usage| usage.cache_hit_tokens()),
+        "output_tokens": usage.and_then(|usage| usage.output_tokens()),
+        "reasoning_tokens": usage.and_then(|usage| usage.reasoning_tokens()),
+        "finish_reason": completion.map(CompletionMetadata::finish_reason),
+        "estimated_weight": request.estimated_weight(),
+        "calibrated_weight": request.calibrated_weight(),
+        "reductions": reductions,
+    })
 }
 
 /// Counts reads that repeat an earlier read target in the same turn: a file

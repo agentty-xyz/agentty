@@ -89,9 +89,10 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 
 - `success` means every check passed; `correctness` is the passed fraction. Both are
   derived from the final output and worktree, never from the answer text alone.
-- `model_calls`, `output_corrections`, `repetition_nudges`, and `tool_calls` come from
-  the turn report; `model_calls` includes the `summary_calls` that summarized earlier
-  rounds, and `summary_failures` counts summaries that failed or were rejected.
+- `model_calls`, `output_corrections`, `malformed_tool_calls`, `repetition_nudges`,
+  `context_overflow_recoveries`, and `tool_calls` come from the turn report;
+  `model_calls` includes the `summary_calls` that summarized earlier rounds, and
+  `summary_failures` counts summaries that failed or were rejected.
 - `summary_outcomes` and `summary_ms` list each summary's outcome (`completed` or its
   `ContextSummaryErrorType` value) and duration, and `failed_requests` lists every
   failed model request as its error type with any HTTP status (`transport_error`,
@@ -100,14 +101,19 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
+- `requests` lists every accepted request in order: its `purpose` (`turn` or
+  `context_summary`), `ms`, provider-reported `input_tokens`, `cache_hit_tokens`,
+  `output_tokens`, `reasoning_tokens`, and `finish_reason`, the harness's
+  `estimated_weight` and `calibrated_weight`, and its non-zero `reductions`.
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
-  `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`, and
-  `summarized_tool_calls` sum `ContextActivity` over every accepted request. A reduction
-  carried into later requests is counted once per request, so these measure sustained
-  pressure rather than distinct items.
+  `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`,
+  `summarized_tool_calls`, and `superseded_results` sum `ContextActivity` over every
+  accepted request. A reduction carried into later requests is counted once per request,
+  so these measure sustained pressure rather than distinct items.
 - `revision`, `model`, `window`, `reserved_output`, and `context_summaries` identify the
-  configuration. Activity fields are `null` for failed turns because the public report
-  exists only after a turn finishes; `detail` holds the error or failed checks.
+  configuration. A failed turn's activity fields come from the report on its
+  `TurnFailed` event; they are `null` only when the turn failed before preparing its
+  first request or timed out. `detail` holds the error or failed checks.
 
 To compare runs, aggregate per scenario and model with `jq`:
 
