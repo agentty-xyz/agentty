@@ -4,7 +4,7 @@ use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
@@ -25,9 +25,9 @@ use crate::domain::session::{SessionHandles, Status};
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::infra::clock::Clock;
 use crate::presentation::app_mode::AppMode;
-use crate::runtime::PresentationState;
-use crate::test_support::SessionFixtureBuilder;
+use crate::runtime::{FRAME_INTERVAL, PresentationState};
 use crate::test_support::telemetry::capture_events;
+use crate::test_support::{FixedClock, SessionFixtureBuilder};
 
 /// Environment marker used to distinguish the nested PTY test process.
 const PRODUCTION_RUN_CHILD_ENV: &str = "AGENTTY_TEST_PRODUCTION_RUN_CHILD";
@@ -614,23 +614,40 @@ async fn run_with_backend_flushes_turn_telemetry_emitted_during_quit_cleanup() {
 }
 
 #[tokio::test]
-/// Verifies idle `run_with_backend` redraws stay throttled when no visible
-/// spinner or timer is active.
-async fn run_with_backend_skips_idle_redraws_without_tick_driven_ui() {
+/// Verifies idle runtime ticks do not redraw when no visible spinner or
+/// timer is active and the wall-clock minute is unchanged.
+async fn run_cycle_skips_idle_redraws_without_tick_driven_ui() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let (backend, _clear_count, draw_count) = CountingBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).expect("failed to create test terminal");
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    let run_future = run_with_backend(&mut app, &mut terminal, &mut event_rx);
-    tokio::pin!(run_future);
+    let clock: Arc<dyn Clock> = Arc::new(FixedClock::unix_epoch());
+    let last_draw = DrawStamp::now(clock.as_ref());
+    let mut tick = tokio::time::interval(FRAME_INTERVAL);
+    let mut main_loop_state = MainLoopState {
+        app: &mut app,
+        clock,
+        event_rx: &mut event_rx,
+        last_draw,
+        presentation: Rc::new(PresentationState::default()),
+        terminal: &mut terminal,
+        tick: &mut tick,
+    };
 
     // Act
-    tokio::select! {
-        result = &mut run_future => {
-            unreachable!("runtime exited before idle window elapsed: {result:?}");
-        }
-        () = tokio::time::sleep(Duration::from_millis(1100)) => {}
+    for _ in 0..60 {
+        // Exercise elapsed redraw deadlines without crossing a wall-clock
+        // minute.
+        main_loop_state.clock = Arc::new(FixedClock::new(
+            main_loop_state.clock.now_instant() + FRAME_INTERVAL,
+            SystemTime::UNIX_EPOCH,
+        ));
+        main_loop_state.tick.reset_immediately();
+        assert!(matches!(
+            main_loop_state.run_cycle().await,
+            Ok(EventResult::Continue)
+        ));
     }
     let idle_draw_count = draw_count.load(Ordering::Relaxed);
     event_tx
@@ -645,16 +662,14 @@ async fn run_with_backend_skips_idle_redraws_without_tick_driven_ui() {
             KeyModifiers::NONE,
         )))
         .expect("failed to send confirm key");
-    let result = run_future.await;
+    let result = main_loop_state.run_cycle().await;
 
     // Assert
+    assert!(matches!(result, Ok(EventResult::Quit)));
+    assert!(!main_loop_state.app.has_visible_tick_driven_ui());
     assert!(
-        result.is_ok(),
-        "run_with_backend should exit cleanly on quit"
-    );
-    assert!(
-        idle_draw_count <= 2,
-        "expected at most two idle draws per second, observed {idle_draw_count}"
+        (1..=2).contains(&idle_draw_count),
+        "expected only initial idle draws across 60 ticks, observed {idle_draw_count}"
     );
 }
 

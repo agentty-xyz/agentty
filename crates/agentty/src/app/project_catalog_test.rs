@@ -151,15 +151,16 @@ async fn unresolved_worktree_root_blocks_registration_and_discovery() {
 async fn non_repository_launches_stay_hidden_after_add_switch_reload_and_restart() {
     // Arrange
     let temp = tempdir().expect("fixture");
-    let launch = temp.path().join("ordinary-launch");
-    let later = temp.path().join("later-launch");
-    let repo = temp.path().join("repo");
+    let root = temp.path().canonicalize().expect("canonical fixture");
+    let launch = root.join("ordinary-launch");
+    let later = root.join("later-launch");
+    let repo = root.join("repo");
     fs::create_dir_all(&launch).expect("launch");
     fs::create_dir_all(&later).expect("later launch");
     fs::create_dir_all(repo.join(".git")).expect("repository");
     let database = AppRepositories::in_memory().await.expect("db");
     let mut app = App::new_with_clients(
-        temp.path().join("wt"),
+        root.join("wt"),
         launch,
         None,
         database.clone(),
@@ -190,7 +191,7 @@ async fn non_repository_launches_stay_hidden_after_add_switch_reload_and_restart
 
     // Act
     let app = App::new_with_clients(
-        temp.path().join("wt"),
+        root.join("wt"),
         later,
         None,
         database,
@@ -210,11 +211,12 @@ async fn non_repository_launches_stay_hidden_after_add_switch_reload_and_restart
 async fn explicit_registration_can_promote_a_non_repository_launch_context() {
     // Arrange
     let temp = tempdir().expect("fixture");
-    let launch = temp.path().join("launch");
+    let root = temp.path().canonicalize().expect("canonical fixture");
+    let launch = root.join("launch");
     fs::create_dir_all(&launch).expect("launch");
     let database = AppRepositories::in_memory().await.expect("db");
     let mut app = App::new_with_clients(
-        temp.path().join("wt"),
+        root.join("wt"),
         launch.clone(),
         None,
         database,
@@ -275,11 +277,11 @@ async fn suggestion_requires_consent_and_remembers_skip() {
 async fn consent_starts_one_scan_and_saving_requires_result_selection() {
     // Arrange
     let home = tempdir().expect("home");
-    let first = home.path().join("first");
-    let second = home.path().join("second");
+    let expected_home = home.path().canonicalize().expect("canonical home");
+    let first = expected_home.join("first");
+    let second = expected_home.join("second");
     fs::create_dir_all(first.join(".git")).expect("first");
     fs::create_dir_all(second.join(".git")).expect("second");
-    let expected_home = home.path().canonicalize().expect("canonical home");
     let found = vec![first.clone(), second.clone()];
     let mut client = MockProjectDiscoveryClient::new();
     client
@@ -480,6 +482,7 @@ async fn adding_project_accepts_absolute_relative_and_home_paths() {
     let home = tempdir().expect("home");
     let repo = home.path().join("repo");
     fs::create_dir_all(repo.join(".git")).expect("repo");
+    let repo = repo.canonicalize().expect("canonical repo");
     app.project_catalog.home = Some(home.path().to_owned());
     app.projects.update_active_project_context(
         app.active_project_id(),
