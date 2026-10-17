@@ -107,7 +107,7 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
         vec![KeyValue::new("agentty.operation.id", "turn-1")],
     );
     queued.attribute("agentty.session.id", "session-1");
-    std::thread::sleep(std::time::Duration::from_millis(5));
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let root = queued.selected();
     root.event("accepted");
     let root_context = root.context();
