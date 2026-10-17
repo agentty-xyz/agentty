@@ -117,6 +117,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-color-emoji \
     git \
     pkg-config \
+    zstd \
     && rm -rf /var/lib/apt/lists/* \
     && git config --system --add safe.directory /workspace
 

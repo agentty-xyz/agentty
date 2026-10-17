@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::future::{Future, pending};
+use std::future::{Future, pending, ready};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -10,13 +10,43 @@ use async_trait::async_trait;
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot, watch};
 
-use super::{Clock, Control, Running, Supervisor, Worker};
+use super::{Clock, Control, Running, Supervisor, Worker, interruptible};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, Execution, ExecutionCommand, ExecutionControl, ExecutionError,
     ExecutionPolicy, Executor, Grants, Limits, MainExit, OutputStream, PreparedExecution,
     ProcessEvent, RetainedStream, Termination,
 };
+use crate::execution::native::Monotonic;
+
+#[tokio::test(start_paused = true)]
+async fn expired_monotonic_deadline_preempts_continuously_ready_events() {
+    // Arrange
+    // Keep Tokio between timer ticks: a newly created zero-duration sleep
+    // can remain pending even though the system-clock deadline has passed.
+    tokio::time::advance(Duration::from_nanos(1)).await;
+    let (_cancel, mut cancellation) = watch::channel(false);
+    let now = Monotonic.now();
+    for overdue in [Duration::ZERO, Duration::from_secs(1)] {
+        let started_at = now
+            .checked_sub(Duration::from_secs(1) + overdue)
+            .expect("earlier start time");
+        let limits = Limits::new(started_at, Duration::from_secs(1), 0).expect("expired deadline");
+
+        // Act / Assert
+        // Each ready event recreates the wait, just as Worker::drain does.
+        for _ in 0..64 {
+            let result = interruptible(
+                &Monotonic,
+                limits,
+                &mut cancellation,
+                ready(ProcessEvent::Progress),
+            )
+            .await;
+            assert!(matches!(result, Err(Termination::Deadline)));
+        }
+    }
+}
 
 #[test]
 fn construction_without_a_runtime_rejects_before_binding() {

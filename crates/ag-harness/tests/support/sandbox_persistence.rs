@@ -231,10 +231,9 @@ async fn native_journal_failures_prevent_spawn_or_retain_observed_effects() {
 }
 
 /// Lease expiry cancelling execution and recording a late outcome is
-/// harness persistence logic shared by every executor; only the startup
-/// synchronization differs. One native case keeps this ~100s renewal wait
-/// from repeating per executor in the serialized sandbox group, whose
-/// per-test CI termination budget it already approaches.
+/// harness persistence logic shared by every executor. Keep real native
+/// execution and SQLite persistence, advancing only the renewal timer once
+/// the command is running and its stored lease has expired.
 #[tokio::test]
 async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
     // Arrange
@@ -267,7 +266,13 @@ async fn native_lease_loss_cancels_execution_and_records_late_outcome() {
         .execute(&pool)
         .await
         .expect("expire ownership");
-    let failure = tokio::time::timeout(Duration::from_secs(110), &mut turn)
+    // Cross the 100-second renewal interval without reaching the local
+    // lease deadline or command timeout. Resume before awaiting real I/O
+    // so automatic clock advancement cannot trigger unrelated timeouts.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(101)).await;
+    tokio::time::resume();
+    let failure = tokio::time::timeout(Duration::from_secs(10), &mut turn)
         .await
         .expect("renewal failure");
     drop(turn);

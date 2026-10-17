@@ -76,7 +76,16 @@ impl Clock for Monotonic {
     }
 
     async fn wait_until(&self, deadline: Instant) {
-        tokio::time::sleep_until(deadline.into()).await;
+        let now = self.now();
+        // An expired deadline must win over ready process events without
+        // waiting for Tokio's next timer tick.
+        if deadline <= now {
+            return;
+        }
+
+        // Convert using the same clock that supplied the deadline. Tokio's
+        // clock can have a different origin after controlled time advancement.
+        tokio::time::sleep(deadline.duration_since(now)).await;
     }
 }
 
