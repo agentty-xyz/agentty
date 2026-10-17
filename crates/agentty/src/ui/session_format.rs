@@ -322,9 +322,9 @@ pub(crate) fn format_review_markdown(review_markdown: &str) -> String {
 /// Returns borders used for the session output panel.
 ///
 /// Vertical borders stay hidden so terminal copy/select flows do not pick up
-/// extra gutter characters.
+/// extra gutter characters. The composer supplies the lower visual boundary.
 pub fn session_output_panel_borders() -> Borders {
-    Borders::TOP | Borders::BOTTOM
+    Borders::TOP
 }
 
 /// Returns the border style used for the session output panel.

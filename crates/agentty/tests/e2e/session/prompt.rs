@@ -78,6 +78,7 @@ async fn seed_nested_stacked_at_lookup_session(
 
 /// Verify that viewing a session collapses the composer and keeps help next to
 /// the bottom bar, while opening a reply restores the editable input row.
+/// The composer border separates the transcript without an extra rule above it.
 #[tokio::test]
 async fn session_collapsed_composer() -> E2eResult {
     // Arrange
@@ -105,8 +106,12 @@ async fn session_collapsed_composer() -> E2eResult {
                     assert!(collapsed.row_text(help_row).contains("q: back"));
                     assert!(collapsed.row_text(help_row - 1).contains("Started"));
                     assert!(collapsed.row_text(help_row - 2).contains("Auto Edit"));
+                    assert_eq!(collapsed.row_text(help_row - 3).trim(), "");
                     assertion::assert_not_visible(&collapsed, "›");
                     assert!(frame.row_text(frame.rows() - 2).contains("Enter: send"));
+                    assert!(frame.row_text(frame.rows() - 3).contains("Started"));
+                    assert!(frame.row_text(frame.rows() - 5).contains("Auto Edit"));
+                    assert_eq!(frame.row_text(frame.rows() - 6).trim(), "");
                     assert!(
                         frame
                             .row_text(frame.rows() - 4)

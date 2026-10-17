@@ -457,10 +457,10 @@ fn test_indicator_area_tracks_scrolled_row() {
     let output_area = Rect::new(2, 3, 80, 10);
 
     // Act
-    let loader_area = SessionOutput::indicator_area(output_area, 19, 12, TACHYON_LOADER_WIDTH);
+    let loader_area = SessionOutput::indicator_area(output_area, 20, 12, TACHYON_LOADER_WIDTH);
 
     // Assert
-    assert_eq!(loader_area, Some(Rect::new(2, 11, TACHYON_LOADER_WIDTH, 1)));
+    assert_eq!(loader_area, Some(Rect::new(2, 12, TACHYON_LOADER_WIDTH, 1)));
 }
 
 #[test]

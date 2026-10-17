@@ -29,7 +29,8 @@ title, followed by changed-line totals, active-work timer, token usage, and link
 review request. The composer’s bottom border shows how long ago the session started,
 such as `Started 4m ago`, and keeps it visible when you switch focus to the chat. The
 composer shows `agent/model [reasoning]`, response style, speed when supported, and
-permissions. While viewing an active session, the inactive composer collapses to its
+permissions. Its border separates the input from the transcript without an extra
+horizontal rule. While viewing an active session, the inactive composer collapses to its
 borders, hiding the empty input row. Press `Enter` to activate a reply when available.
 The help row sits directly above the bottom status bar. Archived sessions hide the
 composer and give its space to the transcript, keeping navigation and continuation

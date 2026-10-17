@@ -65,9 +65,10 @@ fn test_visible_paint_lines_skip_rows_outside_viewport() {
             Line::from("hidden before viewport"),
             Line::from("visible first row"),
             Line::from("visible second row"),
+            Line::from("visible bottom row"),
             Line::from("hidden after viewport"),
         ]),
-        body_line_count: 4,
+        body_line_count: 5,
         queued: Arc::from([]),
         tail: Vec::new(),
     };
@@ -80,7 +81,14 @@ fn test_visible_paint_lines_skip_rows_outside_viewport() {
         .collect::<Vec<_>>();
 
     // Assert
-    assert_eq!(rendered_text, ["visible first row", "visible second row"]);
+    assert_eq!(
+        rendered_text,
+        [
+            "visible first row",
+            "visible second row",
+            "visible bottom row"
+        ]
+    );
 }
 
 #[test]

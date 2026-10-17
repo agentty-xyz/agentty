@@ -855,12 +855,9 @@ impl<'a> SessionOutput<'a> {
 
     /// Returns the paragraph content area used by the session-output block.
     fn session_output_inner_area(output_area: Rect) -> Rect {
-        Rect::new(
-            output_area.x,
-            output_area.y.saturating_add(1),
-            output_area.width,
-            output_area.height.saturating_sub(2),
-        )
+        Block::default()
+            .borders(session_format::session_output_panel_borders())
+            .inner(output_area)
     }
 
     /// Builds borrowed paint lines only for transcript rows in the viewport.

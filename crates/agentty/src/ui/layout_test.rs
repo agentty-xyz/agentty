@@ -23,8 +23,8 @@ use crate::ui::icon::Icon;
 use crate::ui::input_layout::{
     bottom_pinned_scroll_offset, calculate_input_height, calculate_input_viewport,
     compute_input_layout, first_table_column_width, input_cursor_position, move_input_cursor_down,
-    move_input_cursor_up, overlay_area_above, panel_inner_width, placeholder_cursor_position,
-    suggestion_dropdown_height,
+    move_input_cursor_up, overlay_area_above, panel_inner_height, panel_inner_width,
+    placeholder_cursor_position, suggestion_dropdown_height,
 };
 use crate::ui::prompt_format::{
     file_lookup_suggestion_list, prompt_footer_line, prompt_suggestion_list,
@@ -890,13 +890,16 @@ fn test_question_help_footer_line_shows_sessions_in_answer_focus_when_navigating
 }
 
 #[test]
-fn test_session_output_panel_borders_leave_full_inner_width_without_vertical_edges() {
+fn test_session_output_panel_keeps_full_width_and_reclaims_bottom_row() {
     // Arrange & Act
     let inner_width = panel_inner_width(Rect::new(0, 0, 80, 5), session_output_panel_borders());
+    let inner_height = panel_inner_height(Rect::new(0, 0, 80, 5), session_output_panel_borders());
     let output_panel_borders = session_output_panel_borders();
 
     // Assert
     assert_eq!(inner_width, 80);
+    assert_eq!(inner_height, 4);
+    assert_eq!(output_panel_borders, Borders::TOP);
     assert!(!output_panel_borders.intersects(Borders::LEFT));
     assert!(!output_panel_borders.intersects(Borders::RIGHT));
 }
