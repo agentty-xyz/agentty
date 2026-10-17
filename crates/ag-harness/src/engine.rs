@@ -330,12 +330,12 @@ impl Engine<'_> {
         }
     }
 
-    /// Sends the tool-free summary request, re-requesting an invalid output
-    /// with corrective feedback at most [`MAX_OUTPUT_CORRECTIONS`] times, and
-    /// returns a summary that satisfies the summary schema, fits the job's
-    /// size limit, and is smaller than its source. Every answered request is
-    /// reported with [`ModelRequestPurpose::ContextSummary`] and calibrates
-    /// later estimates.
+    /// Sends the tool-free summary request at low reasoning effort,
+    /// re-requesting an invalid output with corrective feedback at most
+    /// [`MAX_OUTPUT_CORRECTIONS`] times, and returns a summary that satisfies
+    /// the summary schema, fits the job's size limit, and is smaller than its
+    /// source. Every answered request is reported with
+    /// [`ModelRequestPurpose::ContextSummary`] and calibrates later estimates.
     async fn request_summary(
         &self,
         job: &RoundSummaryJob,
@@ -346,9 +346,10 @@ impl Engine<'_> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
         }
-        if let Some(reasoning_effort) = self.model_reasoning_effort {
-            request = request.with_model_reasoning_effort(reasoning_effort);
-        }
+        // Summarizing restates what the rounds hold rather than reasoning
+        // about them; a reasoning model at the turn's effort can outlast the
+        // request timeout on a large source.
+        request = request.with_model_reasoning_effort(ReasoningEffort::Low);
         let mut corrections = 0;
         loop {
             let (_, calibration) = self
@@ -367,7 +368,7 @@ impl Engine<'_> {
                     error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
                 ) => {
                     if corrections == MAX_OUTPUT_CORRECTIONS {
-                        return Err(ContextSummaryErrorType::Model);
+                        return Err(ContextSummaryErrorType::InvalidOutput);
                     }
                     corrections += 1;
                     request.record_feedback(output_feedback(&error));
@@ -382,7 +383,7 @@ impl Engine<'_> {
                 calibration,
             ));
             let ModelResponse::Output(summary) = response else {
-                return Err(ContextSummaryErrorType::Model);
+                return Err(ContextSummaryErrorType::InvalidOutput);
             };
 
             return compaction::accept_summary(

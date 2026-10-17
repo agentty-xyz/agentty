@@ -112,18 +112,23 @@ source text is cut at shrinking levels, then its oldest rounds are left out, unt
 tool-free summary request fits the budget. A summary is requested only when the rounds
 not yet offered to one weigh a fifth of the capacity, so a turn summarizes again only
 after enough new rounds aged out. The engine sends that request as one of the turn's
-model requests, re-requesting invalid output like a final output, and accepts a summary
-that matches the checkpoint summary schema, fits 15% of the capacity, and is smaller
-than its source. The covered rounds then become one note carrying the summary as data
-beside the dropped-round ledger of their writes, commands, and read targets, and every
-reduction watermark moves past them. Like every reduction, the summary exists only in
-sent copies: canonical messages, the journal, and replayed history keep the rounds, and
-a resumed or later turn never sees it. A failed, rejected, or cancelled summary falls
-back to the steps above for that fit, and a turn stops asking after two failures.
-Summary requests are reported with `ModelRequestPurpose::ContextSummary`, calibrate
-later estimates, and emit `ContextSummaryStarted`/`Completed`/`Failed` lifecycle events
-that the trace observer projects as an `agent.compaction` span around their model
-requests.
+model requests at low reasoning effort, since restating rounds needs no deliberation and
+a reasoning model at the turn's effort can outlast the request timeout on a large
+source. It re-requests invalid output like a final output and accepts a summary that
+matches the checkpoint summary schema, fits 15% of the capacity, and is smaller than its
+source. The covered rounds then become one note carrying the summary as data beside the
+dropped-round ledger of their writes, commands, and read targets, and every reduction
+watermark moves past them. Like every reduction, the summary exists only in sent copies:
+canonical messages, the journal, and replayed history keep the rounds, and a resumed or
+later turn never sees it. A failed, rejected, or cancelled summary falls back to the
+steps above for that fit, and a turn stops asking after two failures. Summary requests
+are reported with `ModelRequestPurpose::ContextSummary`, calibrate later estimates, and
+emit `ContextSummaryStarted`/`Completed`/`Failed` lifecycle events that the trace
+observer projects as an `agent.compaction` span around their model requests. A failure
+is classified as `Model` when a request failed at the provider or in transport (its own
+`ModelRequestFailed` carries the class and HTTP status), `InvalidOutput` when
+corrections ran out or the model answered with a tool call, `Rejected` when a valid
+summary did not fit, or `Cancelled`.
 
 Before running a `read`, the engine compares its canonical arguments with the reads
 already run in the turn. When an identical read ran earlier, no `write` or `bash` call

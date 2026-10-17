@@ -262,10 +262,15 @@ impl ContextSummaryTrigger {
 pub enum ContextSummaryErrorType {
     /// The turn future was dropped while the summary was requested.
     Cancelled,
-    /// The summary request failed or never produced a valid summary.
-    Model,
     /// The summary was valid but too large to replace the rounds it covers.
     Rejected,
+    /// Every attempt answered with invalid output, or with a tool call
+    /// instead of a summary.
+    InvalidOutput,
+    /// A summary request failed at the provider or in transport; its
+    /// [`LifecycleEventKind::ModelRequestFailed`] carries the classification
+    /// and HTTP status.
+    Model,
 }
 
 impl ContextSummaryErrorType {
@@ -273,6 +278,7 @@ impl ContextSummaryErrorType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
+            Self::InvalidOutput => crate::telemetry::ERROR_CONTEXT_SUMMARY_INVALID_OUTPUT,
             Self::Model => crate::telemetry::ERROR_CONTEXT_SUMMARY_MODEL,
             Self::Rejected => crate::telemetry::ERROR_CONTEXT_SUMMARY_REJECTED,
         }

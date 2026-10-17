@@ -49,6 +49,7 @@ pub(crate) const ERROR_COMPARISON_REPOSITORY_MISMATCH: &str = "comparison_reposi
 pub(crate) const ERROR_CONTEXT_BUDGET: &str = "context_budget_exceeded";
 pub(crate) const ERROR_CONTEXT_OVERFLOW: &str = "context_overflow";
 pub(crate) const ERROR_REPEATED_TOOL_CALLS: &str = "repeated_tool_calls";
+pub(crate) const ERROR_CONTEXT_SUMMARY_INVALID_OUTPUT: &str = "context_summary_invalid_output";
 pub(crate) const ERROR_CONTEXT_SUMMARY_MODEL: &str = "context_summary_model_error";
 pub(crate) const ERROR_CONTEXT_SUMMARY_REJECTED: &str = "context_summary_rejected";
 pub(crate) const ERROR_SESSION: &str = "session_error";
