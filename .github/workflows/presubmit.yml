@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Match postsubmit: `rust-cache` hashes `CARGO_*` variables into its key, so a
+# difference here would stop pull requests from restoring caches saved on `main`.
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   coverage:
     name: SonarQube
