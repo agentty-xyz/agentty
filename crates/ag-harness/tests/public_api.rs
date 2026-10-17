@@ -46,11 +46,12 @@ use ag_harness::bash::{
     ProcessEvent, UnsandboxedExecutor,
 };
 use ag_harness::lifecycle::{
-    LifecycleEventKind, LifecycleMetrics, LifecycleObserverSet, LifecycleTraceObserver,
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEventKind, LifecycleMetrics,
+    LifecycleObserverSet, LifecycleTraceObserver,
 };
 use ag_harness::model::{
-    CompletionMetadata, CompletionUsage, ContextBudget, ModelCapabilities, ModelCompletion,
-    ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    CompletionMetadata, CompletionUsage, ContextBudget, ContextSummaryPolicy, ModelCapabilities,
+    ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
@@ -940,6 +941,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     };
     let directory = tempfile::tempdir()?;
     let harness = Harness::new(model, unbounded_context_budget())
+        .context_summaries(ContextSummaryPolicy::Enabled)
         .database(directory.path().join("options.db"))
         .repository(repository_fixture::repository_with_host_git(
             directory.path(),
@@ -973,6 +975,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     assert_eq!(once.report().malformed_tool_calls(), 0);
     assert_eq!(once.report().repetition_nudges(), 0);
     assert_eq!(once.report().context_overflow_recoveries(), 0);
+    assert_eq!(once.report().context_summary_failures(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(
@@ -985,10 +988,22 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
             context.dropped_tool_calls(),
             context.shrunk_latest_write_calls(),
             context.superseded_results(),
+            context.summarized_tool_calls(),
         ),
-        (0, 0, 0, 0, 0, 0, 0, 0)
+        (0, 0, 0, 0, 0, 0, 0, 0, 0)
     );
     let first_request = &once.report().model_requests()[0];
+    assert_eq!(
+        first_request.purpose(),
+        ag_harness::turn::ModelRequestPurpose::Turn
+    );
+    assert_eq!(
+        (
+            ContextSummaryTrigger::Proactive.as_str(),
+            ContextSummaryErrorType::Rejected.as_str()
+        ),
+        ("proactive", "context_summary_rejected")
+    );
     assert!(first_request.estimated_weight() > 0);
     assert_eq!(first_request.calibrated_weight(), None);
     let repeated = ag_harness::turn::ToolActivity::ReadRepeated {

@@ -124,6 +124,7 @@ pub mod recovery;
 mod repetition;
 mod repository;
 mod reservation;
+mod round_summary;
 mod schema_contract;
 mod session;
 mod session_model;

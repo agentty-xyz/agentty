@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 
 use crate::calibration::ContextCalibration;
-use crate::context::{ContextBudget, ContextEstimator, ContextFit, HeuristicContextEstimator};
+use crate::context::{
+    ContextBudget, ContextEstimator, ContextFit, ContextSummaryPolicy, HeuristicContextEstimator,
+};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::effect::Effects;
 use crate::engine::{Engine, MAX_OUTPUT_CORRECTIONS, RepeatedReads};
@@ -36,6 +38,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
         context_budget: unbounded_context_budget(),
         context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator,
+        context_summaries: ContextSummaryPolicy::Disabled,
         effects: Effects::default(),
         file_system: &file_system,
         lifecycle: &lifecycle,
@@ -91,6 +94,7 @@ async fn run_scripted(
         context_budget,
         context_calibration: &context_calibration,
         context_estimator: &HeuristicContextEstimator,
+        context_summaries: ContextSummaryPolicy::Disabled,
         effects: Effects::default(),
         file_system: &file_system,
         lifecycle: &lifecycle,
@@ -316,6 +320,7 @@ fn repeated_reads_run_again_once_the_earlier_result_was_reduced() {
         &HeuristicContextEstimator,
         ContextBudget::new(NonZeroU64::new(1000).expect("nonzero budget")),
         &request,
+        None,
     )
     .expect("fits after capping");
     let mut reads = RepeatedReads::default();

@@ -23,8 +23,8 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{
-    LifecycleEmitter, LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType,
-    TurnErrorType,
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleEvent,
+    LifecycleEventKind, ModelResponseType, ToolErrorType, TurnErrorType,
 };
 use crate::memory_store::MemoryStore;
 use crate::model::{
@@ -505,6 +505,79 @@ async fn projects_correlated_semantic_spans_for_every_lifecycle_outcome() {
     assert_interleaved_spans(&spans);
     assert_failure_spans(&spans);
     assert_optional_metadata(&spans);
+
+    provider.shutdown().expect("test provider should shut down");
+}
+
+#[tokio::test]
+async fn context_summaries_group_their_model_requests_under_a_compaction_span() {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let emitter = LifecycleEmitter::new(LifecycleTraceObserver::default());
+    let metadata = ModelMetadata::new("test_provider", "summary-model")
+        .expect("fixture metadata should be valid");
+
+    // Act
+    let turn = emitter.start_turn().expect("observer should enable turns");
+    let turn_id = turn.id();
+    let summary = emitter
+        .start_context_summary(ContextSummaryTrigger::Proactive, Some(turn_id))
+        .expect("observer should enable summaries");
+    emitter
+        .start_model_request(Some(metadata.clone()), 1, Some(turn_id))
+        .expect("observer should enable model calls")
+        .completed(None, ModelResponseType::Output);
+    summary.completed(3);
+    emitter
+        .start_model_request(Some(metadata.clone()), 2, Some(turn_id))
+        .expect("observer should enable model calls")
+        .completed(None, ModelResponseType::Output);
+    let unowned = emitter
+        .start_context_summary(ContextSummaryTrigger::ContextOverflow, None)
+        .expect("observer should enable summaries");
+    emitter
+        .start_model_request(Some(metadata), 0, None)
+        .expect("observer should enable model calls")
+        .completed(None, ModelResponseType::Output);
+    unowned.failed(ContextSummaryErrorType::Rejected);
+    turn.completed();
+    provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let completed = find_span(&spans, "agent.compaction", None);
+    assert_eq!(
+        attributes(completed)
+            .get("agentty.compaction.trigger")
+            .map(String::as_str),
+        Some("proactive")
+    );
+    let failed = find_span(&spans, "agent.compaction", Some("context_summary_rejected"));
+    assert_eq!(
+        attributes(failed)
+            .get("agentty.compaction.trigger")
+            .map(String::as_str),
+        Some("context_overflow")
+    );
+    let turn_span = find_span(&spans, "invoke_agent", None);
+    assert_eq!(completed.parent_span_id, turn_span.span_context.span_id());
+    let chats: Vec<&SpanData> = spans
+        .iter()
+        .filter(|span| span.name == "chat summary-model")
+        .collect();
+    assert_eq!(chats.len(), 3);
+    assert_eq!(chats[0].parent_span_id, completed.span_context.span_id());
+    assert_eq!(chats[1].parent_span_id, turn_span.span_context.span_id());
+    assert_ne!(chats[2].parent_span_id, failed.span_context.span_id());
 
     provider.shutdown().expect("test provider should shut down");
 }

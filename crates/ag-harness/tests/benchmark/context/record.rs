@@ -3,18 +3,20 @@
 use std::collections::BTreeMap;
 
 use ag_harness::TurnOutcome;
-use ag_harness::turn::{ContextActivity, ToolActivity};
+use ag_harness::turn::{ContextActivity, ModelRequestPurpose, ToolActivity};
 use serde_json::{Map, Value, json};
 
 /// Content-free activity summed over every accepted request of one turn.
 pub(super) struct Activity {
-    context: [(&'static str, usize); 7],
+    context: [(&'static str, usize); 8],
     duplicate_reads: usize,
     input_tokens: Option<u64>,
     model_calls: usize,
     output_corrections: usize,
     output_tokens: Option<u64>,
     repetition_nudges: usize,
+    summary_calls: usize,
+    summary_failures: usize,
     tool_calls: usize,
 }
 
@@ -46,6 +48,12 @@ impl Activity {
             output_corrections: report.output_corrections(),
             output_tokens,
             repetition_nudges: report.repetition_nudges(),
+            summary_calls: report
+                .model_requests()
+                .iter()
+                .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+                .count(),
+            summary_failures: report.context_summary_failures(),
             tool_calls: report.tool_calls().len(),
         }
     }
@@ -58,6 +66,8 @@ impl Activity {
         line.insert("input_tokens".into(), json!(self.input_tokens));
         line.insert("output_tokens".into(), json!(self.output_tokens));
         line.insert("repetition_nudges".into(), json!(self.repetition_nudges));
+        line.insert("summary_calls".into(), json!(self.summary_calls));
+        line.insert("summary_failures".into(), json!(self.summary_failures));
         for (name, count) in self.context {
             line.insert(name.into(), json!(count));
         }
@@ -67,6 +77,7 @@ impl Activity {
 /// One scenario run as written to the results file.
 pub(super) struct RunRecord {
     pub(super) activity: Option<Activity>,
+    pub(super) context_summaries: bool,
     pub(super) correctness: f64,
     pub(super) detail: Option<String>,
     pub(super) model: String,
@@ -94,6 +105,7 @@ impl RunRecord {
         line.insert("repetition".into(), json!(self.repetition));
         line.insert("window".into(), json!(self.window));
         line.insert("reserved_output".into(), json!(self.reserved_output));
+        line.insert("context_summaries".into(), json!(self.context_summaries));
         line.insert("success".into(), json!(self.success));
         line.insert("correctness".into(), json!(self.correctness));
         line.insert("wall_ms".into(), json!(self.wall_ms));
@@ -111,7 +123,7 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 7] = [
+const ACTIVITY_FIELDS: [&str; 9] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
@@ -119,8 +131,10 @@ const ACTIVITY_FIELDS: [&str; 7] = [
     "input_tokens",
     "output_tokens",
     "repetition_nudges",
+    "summary_calls",
+    "summary_failures",
 ];
-const CONTEXT_FIELDS: [&str; 7] = [
+const CONTEXT_FIELDS: [&str; 8] = [
     "elided_results",
     "cleared_reasoning",
     "shrunk_write_calls",
@@ -128,9 +142,10 @@ const CONTEXT_FIELDS: [&str; 7] = [
     "dropped_tool_calls",
     "truncated_results",
     "shrunk_latest_write_calls",
+    "summarized_tool_calls",
 ];
 
-struct ContextCounts([(&'static str, usize); 7]);
+struct ContextCounts([(&'static str, usize); 8]);
 
 impl Default for ContextCounts {
     fn default() -> Self {
@@ -148,6 +163,7 @@ impl ContextCounts {
             activity.dropped_tool_calls(),
             activity.truncated_results(),
             activity.shrunk_latest_write_calls(),
+            activity.summarized_tool_calls(),
         ];
         for ((_, total), count) in self.0.iter_mut().zip(counts) {
             *total += count;

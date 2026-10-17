@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::support::{
     ByteEstimator, FixedEstimator, bash_call, budget, read_call_of, record_read_round, request,
-    result_json, tool_result, write_call,
+    result_json, sent, tool_result, write_call,
 };
 use crate::context::{
     CallRecords, ContextFit, FitMessage, ReadSpan, Supersession, SupersessionCause, elided_result,
@@ -26,8 +26,8 @@ fn fit_owned(
     request: &ModelRequest,
 ) -> (ModelRequest, ContextActivity) {
     let (fitted, activity) = fit
-        .fit(&ByteEstimator, budget(budget_weight), request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(budget_weight), request, None)
+        .map(sent)
         .expect("request fits");
 
     (fitted.expect("reduced copy"), activity)
@@ -207,8 +207,8 @@ fn superseded_results_that_weigh_no_less_reduced_are_kept() {
 
     // Act
     let (fitted, activity) = fit
-        .fit(&FixedEstimator, budget(30), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&FixedEstimator, budget(30), &request, None)
+        .map(sent)
         .expect("fits after dropping rounds");
 
     // Assert
@@ -500,10 +500,10 @@ fn sends_whole_reports_results_the_last_request_did_not_reduce() {
     let mut request = request(Vec::new(), Vec::new(), "inspect");
     record_read_round(&mut request, "large", 5000);
     let mut fit = ContextFit::default();
-    let _ = fit.fit(&ByteEstimator, budget(4000), &request);
+    let _ = fit.fit(&ByteEstimator, budget(4000), &request, None);
     record_read_round(&mut request, "next", 10);
     let mut within = ContextFit::default();
-    let _ = within.fit(&ByteEstimator, budget(100_000), &request);
+    let _ = within.fit(&ByteEstimator, budget(100_000), &request, None);
 
     // Act
     let capped = fit.sends_whole(2);
@@ -528,7 +528,7 @@ fn sends_whole_is_false_for_cut_latest_and_dropped_results() {
     latest.record_tool_result(&calls[0], "x".repeat(5000));
     latest.record_tool_result(&calls[1], "y".repeat(500));
     let mut cut = ContextFit::default();
-    let _ = cut.fit(&ByteEstimator, budget(3000), &latest);
+    let _ = cut.fit(&ByteEstimator, budget(3000), &latest, None);
     let mut rounds = request(Vec::new(), Vec::new(), "loop");
     for index in 0..40 {
         record(
@@ -542,7 +542,8 @@ fn sends_whole_is_false_for_cut_latest_and_dropped_results() {
     }
     let mut dropped = ContextFit::default();
     let (_, activity) = dropped
-        .fit(&ByteEstimator, budget(1000), &rounds)
+        .fit(&ByteEstimator, budget(1000), &rounds, None)
+        .map(sent)
         .expect("fits after dropping rounds");
 
     // Act

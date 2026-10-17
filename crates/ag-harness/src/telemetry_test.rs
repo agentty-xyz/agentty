@@ -10,7 +10,10 @@ use super::{
     ERROR_REPOSITORY_REQUIRED, ERROR_REQUEST, LifecycleMetrics, RequestMetrics,
     TOOL_DURATION_DESCRIPTION, TOOL_DURATION_METRIC,
 };
-use crate::lifecycle::{LifecycleEmitter, ModelResponseType, ToolErrorType, TurnErrorType};
+use crate::lifecycle::{
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, ModelResponseType,
+    ToolErrorType, TurnErrorType,
+};
 use crate::model::{ModelErrorType, ModelMetadata};
 
 fn attributes<T>(point: &HistogramDataPoint<T>) -> Vec<(&str, String)> {
@@ -46,6 +49,15 @@ fn record_lifecycle_fixtures(lifecycle: &LifecycleEmitter) {
         .expect("observer should start a model request")
         .completed(None, ModelResponseType::Output);
     lifecycle.context_overflow_retried(1, 900, 600, Some(successful_turn_id));
+    // Summaries add no metric of their own.
+    lifecycle
+        .start_context_summary(ContextSummaryTrigger::Proactive, Some(successful_turn_id))
+        .expect("observer should start a summary")
+        .completed(2);
+    lifecycle
+        .start_context_summary(ContextSummaryTrigger::Proactive, Some(successful_turn_id))
+        .expect("observer should start a summary")
+        .failed(ContextSummaryErrorType::Model);
     successful_turn.completed();
 
     let denied_turn = lifecycle

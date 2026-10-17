@@ -13,7 +13,8 @@ use crate::calibration::ContextCalibration;
 use crate::cancellation::{ControlledTurn, TurnControl};
 use crate::compaction::{self, CompactionSource, MAX_SUMMARY_BYTES, SessionCheckpoint};
 use crate::context::{
-    self, ContextBudget, ContextEstimator, HeuristicContextEstimator, HistoryTurn,
+    self, ContextBudget, ContextEstimator, ContextSummaryPolicy, HeuristicContextEstimator,
+    HistoryTurn,
 };
 use crate::effect::Effects;
 use crate::engine::Engine;
@@ -874,6 +875,7 @@ pub struct Harness {
     context_budget: ContextBudget,
     context_calibration: ContextCalibration,
     context_estimator: Arc<dyn ContextEstimator>,
+    context_summaries: ContextSummaryPolicy,
     database: Arc<OnceCell<Database>>,
     database_path: Option<PathBuf>,
     execution_identity: Option<ExecutionIdentity>,
@@ -1035,6 +1037,21 @@ impl Harness {
         self
     }
 
+    /// Selects whether turns may summarize their earlier tool rounds with an
+    /// extra tool-free model request once a request outgrows the
+    /// [`ContextBudget`]; disabled by default.
+    ///
+    /// Summaries replace rounds only in the turn's later requests and count
+    /// toward any provider-call budget of the model, so hosts with a tight
+    /// per-run call budget should leave them disabled. Sessions keep the
+    /// policy of the harness that built them.
+    #[must_use]
+    pub fn context_summaries(mut self, policy: ContextSummaryPolicy) -> Self {
+        self.context_summaries = policy;
+
+        self
+    }
+
     /// Runs one turn with the harness defaults and no stored history.
     ///
     /// Plain strings are text input; use [`TurnInput`] for ordered text and
@@ -1113,6 +1130,7 @@ impl Harness {
             context_budget,
             context_calibration: ContextCalibration::default(),
             context_estimator: Arc::new(HeuristicContextEstimator),
+            context_summaries: ContextSummaryPolicy::Disabled,
             database: Arc::new(OnceCell::new()),
             database_path: None,
             execution_identity: None,
@@ -1212,6 +1230,7 @@ impl Harness {
             context_budget: self.context_budget,
             context_calibration: self.context_calibration.clone(),
             context_estimator: Arc::clone(&self.context_estimator),
+            context_summaries: self.context_summaries,
             database: Arc::clone(&self.database),
             database_path: self.database_path.clone(),
             execution_identity: self.execution_identity.clone(),
@@ -1306,6 +1325,7 @@ impl Harness {
             context_budget: self.context_budget,
             context_calibration: &self.context_calibration,
             context_estimator: self.context_estimator.as_ref(),
+            context_summaries: self.context_summaries,
             effects: Effects::default(),
             file_system: &self.file_system,
             lifecycle: &self.lifecycle,

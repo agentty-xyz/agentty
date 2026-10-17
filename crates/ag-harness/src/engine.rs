@@ -2,14 +2,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::bash::{BashArguments, BashError};
-use crate::calibration::ContextCalibration;
+use crate::calibration::{Calibration, ContextCalibration};
+use crate::context::{ContextSummaryPolicy, FitStep};
 use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
-use crate::lifecycle::{LifecycleEmitter, LifecycleId, ToolErrorType, ToolLifecycle};
+use crate::lifecycle::{
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleId, ToolErrorType,
+    ToolLifecycle,
+};
 use crate::model::{
     Model, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
     ensure_unique_tool_call_ids,
@@ -18,16 +22,17 @@ use crate::read::{self, ReadError, ReadTool};
 use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
+use crate::round_summary::RoundSummaryJob;
 use crate::tool::{
     MalformedArguments, ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments,
     ToolDefinition, WriteArguments,
 };
 use crate::turn::{
-    ModelRequestActivity, ToolActivity, TurnError, TurnOptions, TurnOutcome, TurnReport,
-    sanitize_report_text, sanitized_completion_metadata,
+    ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError, TurnOptions, TurnOutcome,
+    TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
-use crate::{context, schema_contract};
+use crate::{compaction, context, schema_contract};
 
 /// Final outputs a turn may have rejected for invalid JSON or a schema
 /// violation and re-requested with corrective feedback before failing.
@@ -54,6 +59,7 @@ pub(crate) struct Engine<'a> {
     pub(crate) context_budget: context::ContextBudget,
     pub(crate) context_calibration: &'a ContextCalibration,
     pub(crate) context_estimator: &'a dyn context::ContextEstimator,
+    pub(crate) context_summaries: ContextSummaryPolicy,
     pub(crate) effects: Effects,
     pub(crate) file_system: &'a Arc<dyn FileSystem>,
     pub(crate) lifecycle: &'a LifecycleEmitter,
@@ -82,17 +88,20 @@ impl Engine<'_> {
         let mut malformed_tool_calls = 0;
         let mut repetition_nudges = 0;
         let mut overflow = OverflowRecovery::default();
+        let summary_trigger = (self.context_summaries == ContextSummaryPolicy::Enabled)
+            .then_some(ContextSummaryTrigger::Proactive);
 
         loop {
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits the calibrated budget is sent as a
-            // reduced copy, and one that cannot be reduced enough fails
-            // typed here instead of overflowing the provider context.
+            // reduced copy, possibly after summarizing earlier rounds, and
+            // one that cannot be reduced enough fails typed here instead of
+            // overflowing the provider context.
             let (budget, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
-            let (fitted, context_activity) = context_fit
-                .fit(self.context_estimator, budget, &request)
+            let step = context_fit
+                .fit(self.context_estimator, budget, &request, summary_trigger)
                 .map_err(|error| {
                     overflow.rejection_or(ContextCalibration::declared_failure(
                         self.context_budget,
@@ -100,6 +109,20 @@ impl Engine<'_> {
                         error,
                     ))
                 })?;
+            let (fitted, context_activity) = match step {
+                FitStep::Send(fitted, context_activity) => (fitted, context_activity),
+                FitStep::Summarize(job) => {
+                    self.summarize_rounds(
+                        &job,
+                        (&request, &mut context_fit),
+                        turn_id,
+                        (&mut model_request_index, &mut model_requests),
+                    )
+                    .await;
+
+                    continue;
+                }
+            };
             let completed = self
                 .complete_model_request(fitted.unwrap_or(&request), model_request_index, turn_id)
                 .await;
@@ -129,19 +152,11 @@ impl Engine<'_> {
                 }
                 completed => completed?,
             };
-            self.context_calibration.observe(
-                self.context_budget,
+            model_requests.push(self.accepted_request(
+                activity.with_context(context_activity),
                 estimated_weight,
-                activity.completion(),
-            );
-            model_requests.push(
-                activity.with_context(context_activity).with_estimate(
-                    estimated_weight,
-                    calibration
-                        .envelope()
-                        .map(|envelope| envelope.tokens(estimated_weight)),
-                ),
-            );
+                calibration,
+            ));
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
@@ -150,7 +165,8 @@ impl Engine<'_> {
                         TurnReport::new(started_at.elapsed(), model_requests, rounds.activity)
                             .with_corrections(output_corrections, malformed_tool_calls)
                             .with_repetition_nudges(repetition_nudges)
-                            .with_context_overflow_recoveries(overflow.recoveries);
+                            .with_context_overflow_recoveries(overflow.recoveries)
+                            .with_context_summary_failures(context_fit.summary_failures());
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
@@ -177,6 +193,29 @@ impl Engine<'_> {
                 .await?;
             repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Calibrates later estimates against an answered request of
+    /// `estimated_weight` and returns its activity with that estimate and
+    /// the token count `calibration` predicted for it.
+    fn accepted_request(
+        &self,
+        activity: ModelRequestActivity,
+        estimated_weight: u64,
+        calibration: Calibration,
+    ) -> ModelRequestActivity {
+        self.context_calibration.observe(
+            self.context_budget,
+            estimated_weight,
+            activity.completion(),
+        );
+
+        activity.with_estimate(
+            estimated_weight,
+            calibration
+                .envelope()
+                .map(|envelope| envelope.tokens(estimated_weight)),
+        )
     }
 
     /// Journals one response's `calls`, then executes them in order and
@@ -256,6 +295,104 @@ impl Engine<'_> {
         request.record_feedback(repetition::repetition_feedback(tool, repeats));
 
         Ok(1)
+    }
+
+    /// Requests the summary `job` describes and installs it in
+    /// `context_fit`, or records its failure so the turn falls back to
+    /// removing the rounds behind a deterministic note. A cancelled turn
+    /// drops this future, which reports the summary as cancelled.
+    async fn summarize_rounds(
+        &self,
+        job: &RoundSummaryJob,
+        (request, context_fit): (&ModelRequest, &mut context::ContextFit),
+        turn_id: Option<LifecycleId>,
+        requests: (&mut u64, &mut Vec<ModelRequestActivity>),
+    ) {
+        let lifecycle = self.lifecycle.start_context_summary(job.trigger(), turn_id);
+        let installed = match self.request_summary(job, turn_id, requests).await {
+            Ok(summary) => context_fit
+                .install_summary(self.context_estimator, request, job, summary)
+                .ok_or(ContextSummaryErrorType::Rejected),
+            Err(error_type) => Err(error_type),
+        };
+        match installed {
+            Ok(summarized_tool_calls) => {
+                if let Some(lifecycle) = lifecycle {
+                    lifecycle.completed(summarized_tool_calls);
+                }
+            }
+            Err(error_type) => {
+                context_fit.summary_failed();
+                if let Some(lifecycle) = lifecycle {
+                    lifecycle.failed(error_type);
+                }
+            }
+        }
+    }
+
+    /// Sends the tool-free summary request, re-requesting an invalid output
+    /// with corrective feedback at most [`MAX_OUTPUT_CORRECTIONS`] times, and
+    /// returns a summary that satisfies the summary schema, fits the job's
+    /// size limit, and is smaller than its source. Every answered request is
+    /// reported with [`ModelRequestPurpose::ContextSummary`] and calibrates
+    /// later estimates.
+    async fn request_summary(
+        &self,
+        job: &RoundSummaryJob,
+        turn_id: Option<LifecycleId>,
+        (model_request_index, model_requests): (&mut u64, &mut Vec<ModelRequestActivity>),
+    ) -> Result<Value, ContextSummaryErrorType> {
+        let mut request = job.request().clone();
+        if self.lifecycle.is_enabled() {
+            request.mark_lifecycle_observed();
+        }
+        if let Some(reasoning_effort) = self.model_reasoning_effort {
+            request = request.with_model_reasoning_effort(reasoning_effort);
+        }
+        let mut corrections = 0;
+        loop {
+            let (_, calibration) = self
+                .context_calibration
+                .effective_budget(self.context_budget);
+            let estimated_weight = request.messages().iter().fold(0_u64, |weight, message| {
+                weight.saturating_add(self.context_estimator.message_weight(message))
+            });
+            let completed = self
+                .complete_model_request(&request, *model_request_index, turn_id)
+                .await;
+            *model_request_index = model_request_index.saturating_add(1);
+            let (response, activity, _) = match completed {
+                Ok(completed) => completed,
+                Err(
+                    error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
+                ) => {
+                    if corrections == MAX_OUTPUT_CORRECTIONS {
+                        return Err(ContextSummaryErrorType::Model);
+                    }
+                    corrections += 1;
+                    request.record_feedback(output_feedback(&error));
+
+                    continue;
+                }
+                Err(_) => return Err(ContextSummaryErrorType::Model),
+            };
+            model_requests.push(self.accepted_request(
+                activity.with_purpose(ModelRequestPurpose::ContextSummary),
+                estimated_weight,
+                calibration,
+            ));
+            let ModelResponse::Output(summary) = response else {
+                return Err(ContextSummaryErrorType::Model);
+            };
+
+            return compaction::accept_summary(
+                &summary,
+                job.max_summary_bytes(),
+                job.source_bytes(),
+            )
+            .map(|_| summary)
+            .map_err(|_| ContextSummaryErrorType::Rejected);
+        }
     }
 
     /// Appends one finished model response or tool result to a durable

@@ -4,8 +4,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{
-    LifecycleEmitter, LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver,
-    LifecycleObserverSet, LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleEvent,
+    LifecycleEventKind, LifecycleId, LifecycleObserver, LifecycleObserverSet,
+    LifecycleOperationGuard, ModelResponseType, ToolErrorType, TurnErrorType,
 };
 use crate::model::{CompletionMetadata, ModelErrorType};
 
@@ -528,4 +529,95 @@ fn starts_tool_execution_timer_after_started_observer() {
         .unwrap_or_else(PoisonError::into_inner)
         .expect("started observer should record its time");
     assert!(execution_started_at >= observer_time);
+}
+
+#[test]
+fn context_summaries_emit_one_terminal_event_each() {
+    // Arrange
+    let (emitter, events) = recording_emitter();
+    let turn_id = Some(LifecycleId(7));
+
+    // Act
+    emitter
+        .start_context_summary(ContextSummaryTrigger::Proactive, turn_id)
+        .expect("summary should be observed")
+        .completed(4);
+    emitter
+        .start_context_summary(ContextSummaryTrigger::ContextOverflow, turn_id)
+        .expect("summary should be observed")
+        .failed(ContextSummaryErrorType::Rejected);
+    drop(
+        emitter
+            .start_context_summary(ContextSummaryTrigger::Proactive, None)
+            .expect("summary should be observed"),
+    );
+    let disabled = LifecycleEmitter::default()
+        .start_context_summary(ContextSummaryTrigger::Proactive, turn_id)
+        .is_none();
+
+    // Assert
+    let events = events
+        .lock()
+        .expect("event recorder should not be poisoned");
+    assert!(matches!(
+        events[0].kind(),
+        LifecycleEventKind::ContextSummaryStarted {
+            trigger: ContextSummaryTrigger::Proactive,
+            turn_id: Some(LifecycleId(7)),
+            ..
+        }
+    ));
+    assert!(matches!(
+        events[1].kind(),
+        LifecycleEventKind::ContextSummaryCompleted {
+            summarized_tool_calls: 4,
+            ..
+        }
+    ));
+    assert!(matches!(
+        events[3].kind(),
+        LifecycleEventKind::ContextSummaryFailed {
+            error_type: ContextSummaryErrorType::Rejected,
+            ..
+        }
+    ));
+    assert!(matches!(
+        events[5].kind(),
+        LifecycleEventKind::ContextSummaryFailed {
+            error_type: ContextSummaryErrorType::Cancelled,
+            turn_id: None,
+            ..
+        }
+    ));
+    assert_eq!(events.len(), 6);
+    assert!(disabled);
+}
+
+#[test]
+fn context_summary_kinds_have_stable_telemetry_values() {
+    // Arrange
+    let triggers = [
+        ContextSummaryTrigger::Proactive,
+        ContextSummaryTrigger::ContextOverflow,
+    ];
+    let errors = [
+        ContextSummaryErrorType::Cancelled,
+        ContextSummaryErrorType::Model,
+        ContextSummaryErrorType::Rejected,
+    ];
+
+    // Act
+    let trigger_values = triggers.map(ContextSummaryTrigger::as_str);
+    let error_values = errors.map(ContextSummaryErrorType::as_str);
+
+    // Assert
+    assert_eq!(trigger_values, ["proactive", "context_overflow"]);
+    assert_eq!(
+        error_values,
+        [
+            "cancelled",
+            "context_summary_model_error",
+            "context_summary_rejected"
+        ]
+    );
 }

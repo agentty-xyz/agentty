@@ -16,7 +16,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use crate::context::{
-    ContextBudget, ContextBudgetError, ContextEstimator, HeuristicContextEstimator,
+    ContextBudget, ContextBudgetError, ContextEstimator, ContextSummaryPolicy,
+    HeuristicContextEstimator,
 };
 use crate::input::TurnInput;
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};

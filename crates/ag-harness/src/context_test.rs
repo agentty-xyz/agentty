@@ -8,5 +8,7 @@ mod fit;
 mod history;
 #[path = "context_test/stale_test.rs"]
 mod stale;
+#[path = "context_test/summary_test.rs"]
+mod summary;
 #[path = "context_test/support_test.rs"]
 mod support;

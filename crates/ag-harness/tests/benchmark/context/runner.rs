@@ -7,7 +7,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ag_harness::model::ContextBudget;
+use ag_harness::model::{ContextBudget, ContextSummaryPolicy};
 use ag_harness::{Harness, OutputSchema, Tool};
 use tempfile::TempDir;
 
@@ -80,6 +80,7 @@ pub(crate) async fn run() -> Result<(), DynError> {
 
 struct Config {
     case: Option<String>,
+    context_summaries: bool,
     provider: Provider,
     repetitions: usize,
     reserved_output: u64,
@@ -111,6 +112,8 @@ impl Config {
 
         Ok(Self {
             case: std::env::var("AG_HARNESS_BENCHMARK_CASE").ok(),
+            context_summaries: std::env::var("AG_HARNESS_CONTEXT_SUMMARIES")
+                .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on")),
             provider,
             repetitions: number_env("AG_HARNESS_BENCHMARK_REPETITIONS", 1)?,
             reserved_output: number_env(
@@ -137,7 +140,12 @@ impl Config {
             NonZeroU64::new(self.window).ok_or("AG_HARNESS_CONTEXT_WINDOW must be positive")?,
         )
         .with_reserved_output(self.reserved_output)?;
-        let harness = Harness::new(self.provider.client()?, budget);
+        let policy = if self.context_summaries {
+            ContextSummaryPolicy::Enabled
+        } else {
+            ContextSummaryPolicy::Disabled
+        };
+        let harness = Harness::new(self.provider.client()?, budget).context_summaries(policy);
         let started_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
@@ -164,6 +172,7 @@ impl Config {
 
         Ok(RunRecord {
             activity,
+            context_summaries: self.context_summaries,
             correctness: score.correctness(),
             detail,
             model: self.provider.model(),

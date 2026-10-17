@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{
-    ContextActivity, HistoryActivity, ModelRequestActivity, ToolActivity, TurnError, TurnOutcome,
-    TurnReport,
+    ContextActivity, HistoryActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity,
+    TurnError, TurnOutcome, TurnReport,
 };
 use crate::lifecycle::{ModelResponseType, TurnErrorType};
 use crate::model::{CompletionMetadata, CompletionUsage};
@@ -129,6 +129,39 @@ fn corrections_and_superseded_results_default_in_legacy_reports() {
     assert_eq!(decoded_context.elided_results(), 4);
     assert_eq!(decoded_context.superseded_results(), 0);
     assert_eq!(context.superseded_results(), 2);
+}
+
+#[test]
+fn context_summary_fields_default_in_legacy_reports() {
+    // Arrange
+    let report = TurnReport::new(Duration::from_millis(1), Vec::new(), Vec::new())
+        .with_context_summary_failures(2);
+    let legacy_report = json!({
+        "duration": {"secs": 0, "nanos": 1_000_000},
+        "model_requests": [{
+            "completion": null,
+            "duration": {"secs": 0, "nanos": 1_000_000},
+            "response_type": "Output"
+        }],
+        "tool_calls": []
+    });
+    let summary_request =
+        ModelRequestActivity::new(None, Duration::ZERO, ModelResponseType::Output)
+            .with_purpose(ModelRequestPurpose::ContextSummary)
+            .with_context(ContextActivity::default().with_summarized_tool_calls(3));
+
+    // Act
+    let decoded: TurnReport = serde_json::from_value(legacy_report).expect("report");
+    let encoded = serde_json::to_value(&summary_request).expect("encoded request");
+
+    // Assert
+    assert_eq!(report.context_summary_failures(), 2);
+    assert_eq!(decoded.context_summary_failures(), 0);
+    let legacy_request = &decoded.model_requests()[0];
+    assert_eq!(legacy_request.purpose(), ModelRequestPurpose::Turn);
+    assert_eq!(legacy_request.context().summarized_tool_calls(), 0);
+    assert_eq!(encoded["purpose"], "ContextSummary");
+    assert_eq!(encoded["context"]["summarized_tool_calls"], 3);
 }
 
 #[test]
