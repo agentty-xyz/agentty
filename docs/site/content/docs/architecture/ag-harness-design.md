@@ -160,10 +160,10 @@ proved wrong until `switch_model` or estimator replacement resets it; a budget f
 it causes restates the required weight scaled by how far the cap cut the declared
 capacity, so it still exceeds the declared budget. `TurnReport` counts the re-sends, and
 `LifecycleEventKind::ContextOverflowRetried` follows each re-sent request's outcome,
-traced as a `ag_harness.context_overflow.retried` event on the turn span. Compaction requests run
-through the same engine, but their source is mandatory input that a refit cannot shrink,
-so a rejected one fails with the provider's error without a second request and leaves
-the lowered cap for later requests.
+traced as a `ag_harness.context_overflow.retried` event on the turn span. Compaction
+requests run through the same engine, but their source is mandatory input that a refit
+cannot shrink, so a rejected one fails with the provider's error without a second
+request and leaves the lowered cap for later requests.
 
 ```mermaid
 flowchart TD
