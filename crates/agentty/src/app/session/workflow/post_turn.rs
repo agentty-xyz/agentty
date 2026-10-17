@@ -196,6 +196,7 @@ impl TurnPersistence<'_> {
     async fn apply(
         &self,
         assistant_message: &AgentResponse,
+        harness_report: Option<String>,
         input_tokens: u64,
         output_tokens: u64,
         provider_conversation_id: Option<&str>,
@@ -236,6 +237,7 @@ impl TurnPersistence<'_> {
                         .personality
                         .applied_personality_prompt_hash
                         .clone(),
+                    harness_turn_report: harness_report,
                     instruction_conversation_id,
                     model: session_model.as_str().to_string(),
                     provider_conversation_id: provider_conversation_id.map(str::to_string),
@@ -419,6 +421,7 @@ async fn apply_successful_turn_result(
     let TurnResult {
         assistant_message,
         context_reset: _,
+        harness_report,
         input_tokens,
         output_tokens,
         provider_conversation_id,
@@ -458,6 +461,7 @@ async fn apply_successful_turn_result(
     }
     .apply(
         &assistant_message,
+        harness_report,
         input_tokens,
         output_tokens,
         provider_conversation_id.as_deref(),

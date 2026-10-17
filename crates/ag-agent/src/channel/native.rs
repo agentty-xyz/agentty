@@ -198,6 +198,7 @@ async fn run_session_turn(
     Ok(TurnResult {
         assistant_message,
         context_reset: false,
+        harness_report: serde_json::to_string(outcome.report()).ok(),
         input_tokens,
         output_tokens,
         provider_conversation_id,

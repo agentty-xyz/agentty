@@ -102,6 +102,7 @@ async fn returns_runtime_output_and_errors() {
             Ok(TurnResult {
                 assistant_message: ag_protocol::AgentResponse::plain("done"),
                 context_reset: false,
+                harness_report: None,
                 input_tokens: 3,
                 output_tokens: 5,
                 provider_conversation_id: None,
@@ -625,6 +626,7 @@ fn completed_turn() -> TurnResult {
     TurnResult {
         assistant_message: ag_protocol::AgentResponse::plain("done"),
         context_reset: false,
+        harness_report: None,
         input_tokens: 3,
         output_tokens: 5,
         provider_conversation_id: None,

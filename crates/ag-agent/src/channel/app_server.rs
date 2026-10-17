@@ -182,6 +182,7 @@ impl AgentChannel for AppServerAgentChannel {
                     Ok(TurnResult {
                         assistant_message: parsed.assistant_message,
                         context_reset: response.context_reset,
+                        harness_report: None,
                         input_tokens: response.input_tokens + parsed.repair_input_tokens,
                         output_tokens: response.output_tokens + parsed.repair_output_tokens,
                         provider_conversation_id: parsed.provider_conversation_id,

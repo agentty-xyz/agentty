@@ -26,6 +26,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
             &SessionTurnMetadata {
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
+                harness_turn_report: None,
                 instruction_conversation_id: None,
                 model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: None,
@@ -54,6 +55,7 @@ async fn test_load_projects_with_stats_returns_session_counts_tokens_and_last_up
             &SessionTurnMetadata {
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
+                harness_turn_report: None,
                 instruction_conversation_id: None,
                 model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: None,

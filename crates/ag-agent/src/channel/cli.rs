@@ -253,6 +253,7 @@ impl AgentChannel for CliAgentChannel {
                 Ok(TurnResult {
                     assistant_message,
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: parsed.stats.input_tokens,
                     output_tokens: parsed.stats.output_tokens,
                     provider_conversation_id: None,

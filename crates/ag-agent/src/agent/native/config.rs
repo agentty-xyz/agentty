@@ -11,7 +11,7 @@ use std::{env, io};
 
 use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
-use ag_harness::lifecycle::LifecycleObserver;
+use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
     ContextBudget, ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelRegistry,
     ModelRequest, ReasoningEffort,
@@ -24,6 +24,7 @@ use ag_harness::{
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
 use ag_session::{AgentKind, AgentModel, ModelContextLimits};
+use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
@@ -301,6 +302,10 @@ impl ModelSelection {
     }
 
     /// Builds a harness over this selection's registration in `registry`.
+    ///
+    /// A turn built inside a recording trace also exports the harness's
+    /// `invoke_agent`, `chat`, and `execute_tool` spans beneath the current
+    /// span; an untraced turn skips that projection.
     fn harness_from(
         &self,
         registry: &ModelRegistry,
@@ -311,7 +316,7 @@ impl ModelSelection {
             .map_err(failure("Invalid harness model registration"))?
             .repository(context.repository.clone())
             .model_reasoning_effort(reasoning_effort(context.reasoning_level))
-            .with_lifecycle_observer(observer))
+            .with_lifecycle_observer(traced(observer)))
     }
 
     /// Returns the declared context budget for this model.
@@ -463,6 +468,17 @@ fn reasoning_effort(reasoning_level: ReasoningLevel) -> ReasoningEffort {
         ReasoningLevel::XHigh => ReasoningEffort::XHigh,
         ReasoningLevel::Max => ReasoningEffort::Max,
     }
+}
+
+/// Adds the harness's OpenTelemetry span projection after `observer` when
+/// the current execution span is recording.
+fn traced(observer: impl LifecycleObserver + 'static) -> LifecycleObserverSet {
+    let observers = LifecycleObserverSet::new(observer);
+    if !Context::current().span().is_recording() {
+        return observers;
+    }
+
+    observers.with_observer(LifecycleTraceObserver::new())
 }
 
 /// Model wrapper that charges one provider call before every request.

@@ -174,6 +174,7 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
             &SessionTurnMetadata {
                 applied_personality_id: Some("reviewer".to_string()),
                 applied_personality_prompt_hash: Some("personality-hash".to_string()),
+                harness_turn_report: None,
                 instruction_conversation_id: None,
                 model: "gpt-5.6-sol".to_string(),
                 provider_conversation_id: None,

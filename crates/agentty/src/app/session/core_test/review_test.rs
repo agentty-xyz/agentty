@@ -373,6 +373,7 @@ async fn test_resolve_session_review_comments_enqueues_turn_and_clears_focused_r
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain("Resolved the review comment."),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,
@@ -897,6 +898,7 @@ fn review_comment_question_channel(
                 Ok(TurnResult {
                     assistant_message: response,
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,
@@ -940,6 +942,7 @@ fn review_comment_queue_channel(
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain("Completed queued work"),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,

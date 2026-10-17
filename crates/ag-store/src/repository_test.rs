@@ -124,6 +124,7 @@ async fn fixed_clock_drives_session_metadata_status_and_usage_writes() {
     let turn_metadata = crate::SessionTurnMetadata {
         applied_personality_id: None,
         applied_personality_prompt_hash: None,
+        harness_turn_report: None,
         instruction_conversation_id: None,
         model: "gpt-5.6-sol".to_string(),
         provider_conversation_id: Some("conversation-a".to_string()),

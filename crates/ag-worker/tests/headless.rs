@@ -95,6 +95,7 @@ async fn host_submits_observes_cancels_and_recovers_without_a_frontend() {
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain("done"),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 1,
                     output_tokens: 2,
                     provider_conversation_id: None,
@@ -453,6 +454,7 @@ async fn session_worker_forwards_structured_activity_unchanged() {
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain("done"),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,

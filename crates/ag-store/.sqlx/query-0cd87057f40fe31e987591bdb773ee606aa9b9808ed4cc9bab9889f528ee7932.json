@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\nINSERT INTO harness_turn_report (session_id, model, created_at, report)\nVALUES (?, ?, ?, ?)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "0cd87057f40fe31e987591bdb773ee606aa9b9808ed4cc9bab9889f528ee7932"
+}

@@ -345,6 +345,7 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
             &SessionTurnMetadata {
                 applied_personality_id: None,
                 applied_personality_prompt_hash: None,
+                harness_turn_report: None,
                 instruction_conversation_id: Some("instruction-thread".to_string()),
                 model: model_fixture::CODEX_MODEL.as_str().to_string(),
                 provider_conversation_id: Some("thread-123".to_string()),
@@ -380,4 +381,80 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
     assert_eq!(session.input_tokens, 0);
     assert_eq!(session.output_tokens, 0);
     assert_eq!(provider_conversation_id.as_deref(), None);
+}
+
+/// Verifies a harness turn report is stored with its turn and outlives the
+/// session for later analysis.
+#[tokio::test]
+async fn test_persist_session_turn_metadata_keeps_harness_turn_report_after_session_deletion() {
+    // Arrange
+    let database = Database::open_in_memory()
+        .await
+        .expect("failed to open in-memory db");
+    let project_id = database
+        .projects()
+        .upsert_project("/tmp/project", Some("main".to_string()))
+        .await
+        .expect("failed to insert project");
+    database
+        .sessions()
+        .insert_session("session-a", "muse-spark-1.3", "main", "Review", project_id)
+        .await
+        .expect("failed to insert session");
+    let report = r#"{"model_requests":[]}"#;
+
+    // Act
+    database
+        .sessions()
+        .persist_session_turn_metadata(
+            "session-a",
+            &SessionTurnMetadata {
+                applied_personality_id: None,
+                applied_personality_prompt_hash: None,
+                harness_turn_report: Some(report.to_string()),
+                instruction_conversation_id: None,
+                model: "muse-spark-1.3".to_string(),
+                provider_conversation_id: None,
+                questions_json: String::new(),
+                review_comment_resolutions: Vec::new(),
+                token_usage_delta: SessionStats {
+                    added_lines: 0,
+                    deleted_lines: 0,
+                    diff_state: SessionDiffState::Unknown,
+                    input_tokens: 30,
+                    output_tokens: 7,
+                },
+            },
+        )
+        .await
+        .expect("failed to persist turn metadata");
+    let stored = load_harness_turn_reports(&database).await;
+    database
+        .sessions()
+        .delete_session("session-a")
+        .await
+        .expect("failed to delete session");
+    let retained = load_harness_turn_reports(&database).await;
+
+    // Assert
+    assert_eq!(
+        stored,
+        [(
+            Some("session-a".to_string()),
+            "muse-spark-1.3".to_string(),
+            report.to_string()
+        )]
+    );
+    assert_eq!(
+        retained,
+        [(None, "muse-spark-1.3".to_string(), report.to_string())]
+    );
+}
+
+/// Loads every stored harness turn report as `(session_id, model, report)`.
+async fn load_harness_turn_reports(database: &Database) -> Vec<(Option<String>, String, String)> {
+    sqlx::query_as("SELECT session_id, model, report FROM harness_turn_report ORDER BY id")
+        .fetch_all(database.pool())
+        .await
+        .expect("failed to load harness turn reports")
 }
