@@ -200,6 +200,7 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .viewing_pause_ms(2000)
+                    .capture_labeled("projects", "Projects tab selected")
                     .compose(&common::switch_to_tab("Sessions"))
                     .viewing_pause_ms(2000)
                     .capture_labeled("sessions", "Sessions tab selected")
@@ -214,11 +215,19 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
 
                     assert_eq!(
                         report.captures.len(),
-                        2,
-                        "Expected 2 captures (sessions, settings)"
+                        3,
+                        "Expected 3 captures (projects, sessions, settings)"
                     );
 
-                    let sessions_frame = common::frame_from_capture(&report.captures[0]);
+                    for capture in &report.captures {
+                        let captured_frame = common::frame_from_capture(capture);
+                        assert!(captured_frame.row_text(0).contains("Agentty"));
+                        assert!(captured_frame.row_text(1).contains("Projects"));
+                        assert!(captured_frame.row_text(1).contains("Sessions"));
+                        assert!(captured_frame.row_text(1).contains("Settings"));
+                    }
+
+                    let sessions_frame = common::frame_from_capture(&report.captures[1]);
                     let sessions_full = Region::full(sessions_frame.cols(), sessions_frame.rows());
                     assertion::assert_text_in_region(
                         &sessions_frame,
@@ -226,7 +235,7 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                         &sessions_full,
                     );
 
-                    let settings_frame = common::frame_from_capture(&report.captures[1]);
+                    let settings_frame = common::frame_from_capture(&report.captures[2]);
                     let settings_full = Region::full(settings_frame.cols(), settings_frame.rows());
                     assertion::assert_text_in_region(
                         &settings_frame,

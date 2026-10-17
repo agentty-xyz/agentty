@@ -110,7 +110,7 @@ fn test_app_frame_areas_reserve_status_and_footer_bars() {
 }
 
 #[test]
-fn test_session_chat_areas_reserve_margin_header_and_bottom_panel() {
+fn test_session_chat_areas_reserve_side_margins_header_and_bottom_panel() {
     // Arrange
     let area = Rect::new(0, 0, 80, 24);
 
@@ -118,8 +118,8 @@ fn test_session_chat_areas_reserve_margin_header_and_bottom_panel() {
     let chat_areas = session_chat_areas(area, 5, 2);
 
     // Assert
-    assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 2));
-    assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 16));
+    assert_eq!(chat_areas.header_area, Rect::new(1, 0, 78, 2));
+    assert_eq!(chat_areas.output_area, Rect::new(1, 2, 78, 17));
     assert_eq!(chat_areas.bottom_area, Rect::new(1, 19, 78, 5));
 }
 
@@ -132,8 +132,8 @@ fn test_session_chat_areas_expand_for_three_line_header() {
     let chat_areas = session_chat_areas(area, 5, 3);
 
     // Assert
-    assert_eq!(chat_areas.header_area, Rect::new(1, 1, 78, 3));
-    assert_eq!(chat_areas.output_area, Rect::new(1, 4, 78, 15));
+    assert_eq!(chat_areas.header_area, Rect::new(1, 0, 78, 3));
+    assert_eq!(chat_areas.output_area, Rect::new(1, 3, 78, 16));
     assert_eq!(chat_areas.bottom_area, Rect::new(1, 19, 78, 5));
 }
 

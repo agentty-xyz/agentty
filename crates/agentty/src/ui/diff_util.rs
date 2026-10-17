@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 
-use crate::ui::style;
+use crate::ui::{layout, style};
 
 const BORDER_HORIZONTAL_WIDTH: u16 = 2;
 
@@ -9,13 +9,9 @@ const DIFF_GIT_FILE_HEADER_PREFIX: &str = "diff --git";
 
 const DIFF_GIT_HEADER_PREFIX: &str = "diff --git ";
 
-const FOOTER_HEIGHT: u16 = 1;
-
 const GUTTER_EXTRA_WIDTH: usize = 2;
 
 const LINE_NUMBER_COLUMN_COUNT: usize = 2;
-
-const LAYOUT_MARGIN: u16 = 1;
 
 const MIN_GUTTER_WIDTH: usize = 1;
 
@@ -312,22 +308,19 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
-/// Returns the shared diff-page areas after applying the page margin, footer,
-/// and file-list split used by the diff view.
+/// Returns the diff-page areas with the same top alignment, side insets, and
+/// footer spacing as tab pages, plus the file-list split.
 pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
-    let page_chunks = Layout::default()
-        .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
-        .margin(LAYOUT_MARGIN)
-        .split(terminal_area);
+    let page_areas = layout::tab_page_areas(terminal_area);
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-        .split(page_chunks[0]);
+        .split(page_areas.main_area);
 
     DiffPageAreas {
         diff_area: content_layout[1],
         file_list_area: content_layout[0],
-        footer_area: page_chunks[1],
+        footer_area: page_areas.footer_area,
     }
 }
 

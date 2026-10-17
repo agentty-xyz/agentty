@@ -3,8 +3,8 @@ use ratatui::layout::Rect;
 use super::{
     DEFAULT_REVIEW_COMMENT, DiffLine, DiffLineKind, FileTreeItem, build_review_text,
     diff_header_new_path, diff_header_paths, diff_line_change_totals, diff_line_gutter_width,
-    diff_view_max_scroll_offset, filter_diff_lines, max_diff_line_number, parse_diff_lines,
-    parse_git_path_token, parse_hunk_header, wrap_diff_content,
+    diff_page_areas, diff_view_max_scroll_offset, filter_diff_lines, max_diff_line_number,
+    parse_diff_lines, parse_git_path_token, parse_hunk_header, wrap_diff_content,
 };
 
 const DIFF_MAIN_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -388,6 +388,24 @@ fn test_wrap_diff_content_exact() {
 
     // Assert
     assert_eq!(chunks, vec!["abcd"]);
+}
+
+#[test]
+fn test_diff_page_areas_start_at_top_and_preserve_side_and_bottom_insets() {
+    for area in [Rect::new(0, 0, 100, 24), Rect::new(5, 7, 100, 24)] {
+        // Arrange, Act
+        let areas = diff_page_areas(area);
+
+        // Assert
+        assert_eq!(areas.file_list_area.x, area.x + 1);
+        assert_eq!(areas.file_list_area.y, area.y);
+        assert_eq!(areas.diff_area.y, area.y);
+        assert_eq!(areas.file_list_area.height, 22);
+        assert_eq!(areas.diff_area.height, 22);
+        assert_eq!(areas.file_list_area.right(), areas.diff_area.x);
+        assert_eq!(areas.diff_area.right(), area.right() - 1);
+        assert_eq!(areas.footer_area, Rect::new(area.x + 1, area.y + 22, 98, 1));
+    }
 }
 
 #[test]

@@ -453,6 +453,9 @@ async fn diff_preview_opens_from_session() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
 
                     assert_diff_file_tree_change_totals(frame);
+                    assert!(frame.row_text(0).contains("Agentty"));
+                    assert!(frame.row_text(1).contains("Files"));
+                    assert!(frame.row_text(1).contains("Diff"));
                     assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
                     assertion::assert_text_in_region(frame, "j/k: select file", &full);
                 })
