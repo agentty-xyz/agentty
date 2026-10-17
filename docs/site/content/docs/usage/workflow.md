@@ -569,10 +569,12 @@ endpoints, set `OTEL_EXPORTER_OTLP_TRACES_HEADERS`, falling back to
 
 Each turn has a separate trace correlated by session and operation identifiers. Spans
 measure queue and capacity waits, workspace and context preparation, agent startup and
-attempts, response validation, persistence, and post-processing. Utility calls inherit
-their initiating context; work started after its parent finishes uses a linked trace.
-Provider operations appear beneath `agent.attempt`, including tool calls and supported
-response, reasoning, compaction, checkpoint, and subagent phases:
+attempts, response validation, persistence, and post-processing. A turn queued behind
+earlier work starts its trace when submitted; `agentty.queue.wait_ms` on the root span
+records that wait. Utility calls inherit their initiating context and record their
+`agentty.purpose`, such as `commit message`; work started after its parent finishes uses
+a linked trace. Provider operations appear beneath `agent.attempt`, including tool calls
+and supported response, reasoning, compaction, checkpoint, and subagent phases:
 
 | Provider    | Operations exposed                                              |
 | ----------- | --------------------------------------------------------------- |
@@ -595,19 +597,20 @@ and output byte counts. Command arguments, tool output, and project paths are ex
 by default.
 
 Add `--otlp-capture-content` alongside `--otlp-endpoint` to export tool commands,
-arguments, and results as previews of at most 4 KiB per attribute. Separate stdout and
-stderr are included when present in Gemini's raw output; Codex supplies combined output.
-Original output sizes and truncation flags distinguish previews from complete results.
-Oversized structured arguments and results use the text attributes
-`agentty.tool.input.preview` and `agentty.tool.output.preview` instead of incomplete
-JSON in `gen_ai.tool.call.arguments` or `gen_ai.tool.call.result`. Complete structured
-values, including their redaction replacements, remain valid JSON. Exact output sizes
-still require walking the values, but metadata-only tracing does not serialize them.
-Larger payloads are not retained by tracing. Values containing common credential markers
-or URL credentials are replaced entirely with `[REDACTED]` before export, but arbitrary
-secrets and project paths may still appear. Enable this option only for content you
-intend to send to the configured receiver. Turn prompts, transcripts, reasoning, and
-subagent prompts remain excluded.
+arguments, and results as previews of at most 4 KiB per attribute. Longer values keep
+their beginning and end around an omitted-byte count, so failure summaries at the end of
+command output stay visible. Separate stdout and stderr are included when present in
+Gemini's raw output; Codex supplies combined output. Original output sizes and
+truncation flags distinguish previews from complete results. Oversized structured
+arguments and results use the text attributes `agentty.tool.input.preview` and
+`agentty.tool.output.preview` instead of incomplete JSON in `gen_ai.tool.call.arguments`
+or `gen_ai.tool.call.result`. Complete structured values, including their redaction
+replacements, remain valid JSON. Exact output sizes still require walking the values,
+but metadata-only tracing does not serialize them. Larger payloads are not retained by
+tracing. Values containing common credential markers or URL credentials are replaced
+entirely with `[REDACTED]` before export, but arbitrary secrets and project paths may
+still appear. Enable this option only for content you intend to send to the configured
+receiver. Turn prompts, transcripts, reasoning, and subagent prompts remain excluded.
 
 Content previews are supported for Codex command, MCP, and dynamic-tool items, Claude
 tool messages, and Gemini ACP tool input/output. Antigravity exports tool identities;

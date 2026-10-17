@@ -1147,20 +1147,26 @@ impl SessionTaskService {
         );
         let submission = generation
             .run(
-                run_client.submit(ag_contracts::OneShotRequest {
-                    activity_tx: None,
-                    execution_policy: ag_contracts::ExecutionPolicy::default(),
-                    provider_call_budget: Some(call_budget.clone()),
-                    harness: (session_agent.kind()).to_string(),
-                    child_pid: None,
-                    folder: folder.to_path_buf(),
-                    model: (session_agent.model()).as_str().to_string(),
-                    permission_mode: ag_contracts::PermissionMode::ReadOnly,
-                    prompt,
-                    request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
-                    reasoning_level,
-                    speed_mode,
-                }),
+                ag_worker::in_scope(
+                    ag_worker::RunScope {
+                        purpose: Some("commit message".to_string()),
+                        ..ag_worker::RunScope::default()
+                    },
+                    run_client.submit(ag_contracts::OneShotRequest {
+                        activity_tx: None,
+                        execution_policy: ag_contracts::ExecutionPolicy::default(),
+                        provider_call_budget: Some(call_budget.clone()),
+                        harness: (session_agent.kind()).to_string(),
+                        child_pid: None,
+                        folder: folder.to_path_buf(),
+                        model: (session_agent.model()).as_str().to_string(),
+                        permission_mode: ag_contracts::PermissionMode::ReadOnly,
+                        prompt,
+                        request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
+                        reasoning_level,
+                        speed_mode,
+                    }),
+                ),
                 |_| Outcome::Failed,
             )
             .await?;

@@ -31,6 +31,7 @@ use super::support::{
 use crate::app::session::workflow::merge::SyncAssistClient;
 use crate::app::session::{Clock, SessionError};
 use crate::app::sync::SyncMainEventContext;
+use crate::app::test_support::purpose_recording_run_worker;
 use crate::app::{AppEvent, SessionManager};
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
@@ -1748,6 +1749,43 @@ async fn test_real_sync_assist_client_submits_utility_prompt() {
 
     // Assert
     assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_real_sync_assist_client_labels_rebase_assistance_unless_scoped() {
+    // Arrange
+    let cases = [
+        (None, "rebase conflict assistance"),
+        (Some("sync conflict assistance"), "sync conflict assistance"),
+    ];
+
+    for (scoped_purpose, expected_purpose) in cases {
+        let (worker, purposes) = purpose_recording_run_worker("resolved");
+        let run_client = ag_worker::scoped_client(
+            Arc::new(worker),
+            ag_worker::RunScope {
+                purpose: scoped_purpose.map(str::to_string),
+                ..ag_worker::RunScope::default()
+            },
+        );
+        let sync_assist_client = RealSyncAssistClient { run_client };
+
+        // Act
+        let result = sync_assist_client
+            .resolve_rebase_conflicts(
+                PathBuf::from("/tmp/sync-assist"),
+                "Resolve sync conflicts".to_string(),
+                AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeSonnet55),
+            )
+            .await;
+
+        // Assert
+        assert!(result.is_ok());
+        assert_eq!(
+            *purposes.lock().expect("recorded purposes"),
+            [expected_purpose]
+        );
+    }
 }
 
 #[tokio::test]
