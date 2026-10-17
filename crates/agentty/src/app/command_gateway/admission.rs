@@ -4,10 +4,10 @@ use ag_session::{CreateSessionRequest, SessionError, SessionId};
 use tokio::sync::oneshot;
 
 use super::{CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation};
-use crate::app::App;
+use crate::app::message_admission::MessagePlan;
 use crate::app::prompt_intent::PromptSessionMode;
 use crate::app::session_api::api_error_from_app;
-use crate::domain::session::Status;
+use crate::app::{App, AppError};
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 
@@ -154,36 +154,43 @@ impl App {
         session_mode: PromptSessionMode,
         prompt: TurnPrompt,
     ) {
-        if session_mode == PromptSessionMode::NewDraft {
-            if let Err(error) = self.stage_draft_message(&session_id, prompt).await {
-                self.append_output_for_session(&session_id, &TranscriptNotice::Error.format(error))
-                    .await;
-            }
-        } else if session_mode != PromptSessionMode::Existing {
-            if let Err(error) = self.start_session(&session_id, prompt).await {
-                self.append_output_for_session(&session_id, &TranscriptNotice::Error.format(error))
-                    .await;
-            }
-        } else if self.session_queues_messages(&session_id) {
-            if let Err(error) = self.enqueue_message(&session_id, prompt) {
-                self.append_output_for_session(
-                    &session_id,
-                    &TranscriptNotice::QueueError.format(error),
-                )
+        let status = self
+            .sessions
+            .session_for_id(&session_id)
+            .map(|session| session.status);
+        let plan = MessagePlan::for_prompt(session_mode, status);
+
+        if let Err(error) = self.execute_message_plan(&session_id, prompt, plan).await {
+            let notice = if plan == MessagePlan::Queue {
+                TranscriptNotice::QueueError
+            } else {
+                TranscriptNotice::Error
+            };
+            self.append_output_for_session(&session_id, &notice.format(error))
                 .await;
-            }
-        } else {
-            self.reply(&session_id, prompt).await;
         }
     }
 
-    /// Returns whether the targeted session is running a turn or rebase, used
-    /// to route submissions into the in-memory message queue.
-    fn session_queues_messages(&self, session_id: &str) -> bool {
-        self.sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| matches!(session.status, Status::InProgress | Status::Rebasing))
+    /// Applies a pure routing decision through existing workflow boundaries.
+    /// Returns whether the workflow accepted the prompt, without waiting for
+    /// worker completion or changing the caller's acknowledgement policy.
+    pub(in crate::app) async fn execute_message_plan(
+        &mut self,
+        session_id: &SessionId,
+        prompt: TurnPrompt,
+        plan: MessagePlan,
+    ) -> Result<bool, AppError> {
+        match plan {
+            MessagePlan::Stage => self.stage_draft_message(session_id, prompt).await?,
+            MessagePlan::StageAndStart => {
+                self.stage_draft_message(session_id, prompt).await?;
+                self.start_staged_session(session_id).await?;
+            }
+            MessagePlan::Start => self.start_session(session_id, prompt).await?,
+            MessagePlan::Queue => self.enqueue_message(session_id, prompt)?,
+            MessagePlan::Resume => return Ok(self.reply(session_id, prompt).await),
+        }
+
+        Ok(true)
     }
 }

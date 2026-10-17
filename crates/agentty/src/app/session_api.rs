@@ -13,6 +13,7 @@ use ag_session::{
 };
 use async_trait::async_trait;
 
+use crate::app::message_admission::MessagePlan;
 use crate::app::session::{SessionCreationSettings, migrate_session_off_retired_model};
 use crate::app::session_creation::PreparedSessionCreation;
 use crate::app::{
@@ -348,34 +349,15 @@ impl App {
             .sessions
             .session_for_id(session_id)
             .ok_or(ApiSessionError::NotFound)?;
-        let is_draft = session.is_draft_session();
         let status = session.status;
+        let plan = MessagePlan::for_api(status, session.is_draft_session());
         let prompt = TurnPrompt::from_text(message);
 
-        if status == SessionStatus::Draft {
-            if is_draft {
-                self.stage_draft_message(session_id, prompt)
-                    .await
-                    .map_err(api_error_from_app)?;
-                self.start_staged_session(session_id)
-                    .await
-                    .map_err(api_error_from_app)?;
-            } else {
-                self.start_session(session_id, prompt)
-                    .await
-                    .map_err(api_error_from_app)?;
-            }
-
-            return Ok(());
-        }
-
-        if matches!(status, SessionStatus::InProgress | SessionStatus::Rebasing) {
-            return self
-                .enqueue_message(session_id, prompt)
-                .map_err(api_error_from_session);
-        }
-
-        if App::reply(self, session_id, prompt).await {
+        if self
+            .execute_message_plan(session_id, prompt, plan)
+            .await
+            .map_err(api_error_from_app)?
+        {
             return Ok(());
         }
 
