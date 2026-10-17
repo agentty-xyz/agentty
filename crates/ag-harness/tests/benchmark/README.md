@@ -79,8 +79,10 @@ AG_HARNESS_BENCHMARK_REPETITIONS=2 \
 `AG_HARNESS_BENCHMARK_CASE` selects one scenario. `AG_HARNESS_CONTEXT_WINDOW` (default
 `32000`) and `AG_HARNESS_CONTEXT_RESERVED_OUTPUT` (default `16384`) set the budget.
 `AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`) bounds each run; a run that exceeds it
-is recorded as failed. Kimi is not paced in this suite, so its three-request-per-minute
-limit makes it unsuitable without a higher quota.
+is recorded as failed. `AG_HARNESS_CONTEXT_SUMMARIES=1` enables
+`ContextSummaryPolicy::Enabled`, so outgrown requests summarize earlier tool rounds.
+Kimi is not paced in this suite, so its three-request-per-minute limit makes it
+unsuitable without a higher quota.
 
 Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 `target/ag-harness-context-benchmark.jsonl`) and prints it after `CONTEXT`:
@@ -88,31 +90,33 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 - `success` means every check passed; `correctness` is the passed fraction. Both are
   derived from the final output and worktree, never from the answer text alone.
 - `model_calls`, `output_corrections`, `repetition_nudges`, and `tool_calls` come from
-  the turn report.
+  the turn report; `model_calls` includes the `summary_calls` that summarized earlier
+  rounds, and `summary_failures` counts summaries that failed or were rejected.
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
-  `dropped_tool_calls`, `truncated_results`, and `shrunk_latest_write_calls` sum
-  `ContextActivity` over every accepted request. A reduction carried into later requests
-  is counted once per request, so these measure sustained pressure rather than distinct
-  items.
-- `revision`, `model`, `window`, and `reserved_output` identify the configuration.
-  Activity fields are `null` for failed turns because the public report exists only
-  after a turn finishes; `detail` holds the error or failed checks.
+  `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`, and
+  `summarized_tool_calls` sum `ContextActivity` over every accepted request. A reduction
+  carried into later requests is counted once per request, so these measure sustained
+  pressure rather than distinct items.
+- `revision`, `model`, `window`, `reserved_output`, and `context_summaries` identify the
+  configuration. Activity fields are `null` for failed turns because the public report
+  exists only after a turn finishes; `detail` holds the error or failed checks.
 
 To compare runs, aggregate per scenario and model with `jq`:
 
 ```sh
-jq -s -r 'group_by([.scenario, .model])[] | {
+jq -s -r 'group_by([.scenario, .model, .context_summaries])[] | {
     scenario: .[0].scenario, model: .[0].model, runs: length,
+    summaries: .[0].context_summaries,
     success: (map(select(.success)) | length),
     calls: (map(.model_calls // empty) | add / length),
     duplicates: (map(.duplicate_reads // empty) | add / length),
     input_tokens: (map(.input_tokens // empty) | add / length),
     wall_s: (map(.wall_ms) | add / length / 1000)
-  } | [.scenario, .model, "\(.success)/\(.runs)", .calls, .duplicates,
+  } | [.scenario, .model, .summaries, "\(.success)/\(.runs)", .calls, .duplicates,
        .input_tokens, .wall_s] | @tsv' results.jsonl
 ```
 

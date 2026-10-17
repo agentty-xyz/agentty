@@ -102,6 +102,29 @@ resort its `write` patches are replaced by their recorded outcome; only when eve
 fails does the turn fail typed. Each `ModelRequestActivity` reports the reductions its
 request carried.
 
+With `ContextSummaryPolicy::Enabled`, a request that still exceeds 70% of its capacity
+after superseded results are cleared and oversized results capped first summarizes the
+current turn's earlier tool rounds. The latest round and the rounds before it within a
+quarter of the capacity stay whole; the rounds before them that no summary or note
+covers yet form the source, which carries the task, any earlier summary to carry
+forward, and each round as bounded JSON with superseded results as their notices. The
+source text is cut at shrinking levels, then its oldest rounds are left out, until the
+tool-free summary request fits the budget. A summary is requested only when the rounds
+not yet offered to one weigh a fifth of the capacity, so a turn summarizes again only
+after enough new rounds aged out. The engine sends that request as one of the turn's
+model requests, re-requesting invalid output like a final output, and accepts a summary
+that matches the checkpoint summary schema, fits 15% of the capacity, and is smaller
+than its source. The covered rounds then become one note carrying the summary as data
+beside the dropped-round ledger of their writes, commands, and read targets, and every
+reduction watermark moves past them. Like every reduction, the summary exists only in
+sent copies: canonical messages, the journal, and replayed history keep the rounds, and
+a resumed or later turn never sees it. A failed, rejected, or cancelled summary falls
+back to the steps above for that fit, and a turn stops asking after two failures.
+Summary requests are reported with `ModelRequestPurpose::ContextSummary`, calibrate
+later estimates, and emit `ContextSummaryStarted`/`Completed`/`Failed` lifecycle events
+that the trace observer projects as an `agent.compaction` span around their model
+requests.
+
 Before running a `read`, the engine compares its canonical arguments with the reads
 already run in the turn. When an identical read ran earlier, no `write` or `bash` call
 was handled since, the last request carried that result whole (neither reduced, cut, nor

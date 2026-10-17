@@ -116,6 +116,20 @@ let outcome = session
   results cut further and its `write` patches replaced by their recorded outcome. Stored
   messages are never changed; `ModelRequestActivity::context` reports each reduction. A
   request that still cannot fit fails with `TurnError::ContextBudgetExceeded`.
+- **Earlier rounds can be summarized instead.** `Harness::context_summaries` with
+  `ContextSummaryPolicy::Enabled` lets a request that still exceeds 70% of the budget
+  after superseded results are cleared and oversized results capped first ask the model,
+  in one tool-free request, to summarize the current turn's earlier tool rounds. The
+  latest round and the rounds before it within a quarter of the budget stay whole; the
+  rest are sent as one note carrying the summary and naming their writes, commands, and
+  reads, in this and later requests only. A summary is requested only when the rounds
+  not yet offered to one weigh a fifth of the budget, and is accepted when it matches
+  the summary schema, fits 15% of the budget, and is smaller than its source; invalid
+  output is corrected like a final output. Otherwise the turn falls back to the steps
+  above and stops asking after two failures. Summary requests count toward the turn's
+  model requests (`ModelRequestPurpose::ContextSummary`);
+  `ContextActivity::summarized_tool_calls`, `TurnReport::context_summary_failures`, and
+  `ContextSummary*` lifecycle events report them. Summaries are disabled by default.
 - **Provider usage calibrates the estimate.** Each response's reported input tokens
   calibrate later requests: a line through the first reported request, sloped by the
   steepest token growth since and lifted over every report, so providers' fixed

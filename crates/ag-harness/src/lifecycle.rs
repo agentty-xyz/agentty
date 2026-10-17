@@ -198,6 +198,85 @@ pub enum LifecycleEventKind {
         /// Owning turn.
         turn_id: LifecycleId,
     },
+    /// The harness started summarizing earlier tool rounds of a turn to fit
+    /// its context budget. The summary's model requests follow with the same
+    /// turn identifier.
+    ContextSummaryStarted {
+        /// Identifier shared by this summary's lifecycle events.
+        summary_id: LifecycleId,
+        /// Why the summary was requested.
+        trigger: ContextSummaryTrigger,
+        /// Owning turn, or `None` for an unobserved turn.
+        turn_id: Option<LifecycleId>,
+    },
+    /// A summary replaced earlier tool rounds in the turn's later requests.
+    ContextSummaryCompleted {
+        /// Elapsed summary time, including its model requests.
+        duration: Duration,
+        /// Identifier shared by this summary's lifecycle events.
+        summary_id: LifecycleId,
+        /// Tool calls the summary stands in for, with their results.
+        summarized_tool_calls: usize,
+        /// Owning turn, or `None` for an unobserved turn.
+        turn_id: Option<LifecycleId>,
+    },
+    /// A summary failed or was cancelled; the turn falls back to removing
+    /// earlier tool rounds behind a deterministic note.
+    ContextSummaryFailed {
+        /// Elapsed summary time, including its model requests.
+        duration: Duration,
+        /// Stable failure classification.
+        error_type: ContextSummaryErrorType,
+        /// Identifier shared by this summary's lifecycle events.
+        summary_id: LifecycleId,
+        /// Owning turn, or `None` for an unobserved turn.
+        turn_id: Option<LifecycleId>,
+    },
+}
+
+/// Why the harness summarized earlier tool rounds of a turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ContextSummaryTrigger {
+    /// A request outgrew the context budget while earlier rounds of the turn
+    /// held enough content to be worth summarizing.
+    Proactive,
+    /// The provider rejected a request as too long for its context window,
+    /// so every round before the latest one is summarized.
+    ContextOverflow,
+}
+
+impl ContextSummaryTrigger {
+    /// Returns the stable value intended for telemetry attributes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Proactive => "proactive",
+            Self::ContextOverflow => "context_overflow",
+        }
+    }
+}
+
+/// Stable, low-cardinality reason that a context summary failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ContextSummaryErrorType {
+    /// The turn future was dropped while the summary was requested.
+    Cancelled,
+    /// The summary request failed or never produced a valid summary.
+    Model,
+    /// The summary was valid but too large to replace the rounds it covers.
+    Rejected,
+}
+
+impl ContextSummaryErrorType {
+    /// Returns the stable value intended for telemetry attributes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => crate::telemetry::ERROR_CANCELLED,
+            Self::Model => crate::telemetry::ERROR_CONTEXT_SUMMARY_MODEL,
+            Self::Rejected => crate::telemetry::ERROR_CONTEXT_SUMMARY_REJECTED,
+        }
+    }
 }
 
 /// Observable outcome of one provider-neutral model request.
@@ -538,6 +617,27 @@ impl LifecycleEmitter {
         })
     }
 
+    pub(crate) fn start_context_summary(
+        &self,
+        trigger: ContextSummaryTrigger,
+        turn_id: Option<LifecycleId>,
+    ) -> Option<ContextSummaryLifecycle> {
+        let summary_id = self.next_id()?;
+        self.emit(LifecycleEventKind::ContextSummaryStarted {
+            summary_id,
+            trigger,
+            turn_id,
+        });
+
+        Some(ContextSummaryLifecycle {
+            active: true,
+            emitter: self.clone(),
+            started_at: Instant::now(),
+            summary_id,
+            turn_id,
+        })
+    }
+
     fn next_id(&self) -> Option<LifecycleId> {
         self.state
             .as_ref()
@@ -849,6 +949,49 @@ impl Drop for ToolLifecycle {
                 tool_call_id: self.tool_call_id,
                 turn_id: self.turn_id,
             });
+        }
+    }
+}
+
+pub(crate) struct ContextSummaryLifecycle {
+    active: bool,
+    emitter: LifecycleEmitter,
+    started_at: Instant,
+    summary_id: LifecycleId,
+    turn_id: Option<LifecycleId>,
+}
+
+impl ContextSummaryLifecycle {
+    pub(crate) fn completed(mut self, summarized_tool_calls: usize) {
+        self.active = false;
+        self.emitter
+            .emit(LifecycleEventKind::ContextSummaryCompleted {
+                duration: self.started_at.elapsed(),
+                summary_id: self.summary_id,
+                summarized_tool_calls,
+                turn_id: self.turn_id,
+            });
+    }
+
+    pub(crate) fn failed(mut self, error_type: ContextSummaryErrorType) {
+        self.active = false;
+        self.emit_failed(error_type);
+    }
+
+    fn emit_failed(&self, error_type: ContextSummaryErrorType) {
+        self.emitter.emit(LifecycleEventKind::ContextSummaryFailed {
+            duration: self.started_at.elapsed(),
+            error_type,
+            summary_id: self.summary_id,
+            turn_id: self.turn_id,
+        });
+    }
+}
+
+impl Drop for ContextSummaryLifecycle {
+    fn drop(&mut self) {
+        if self.active {
+            self.emit_failed(ContextSummaryErrorType::Cancelled);
         }
     }
 }

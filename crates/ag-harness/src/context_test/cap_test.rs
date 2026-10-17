@@ -4,7 +4,7 @@ use serde_json::json;
 
 use super::support::{
     ByteEstimator, bash_command_call, budget, read_call, record_read_round, request, result_json,
-    tool_result, write_call,
+    sent, tool_result, write_call,
 };
 use crate::context::{
     ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT, HeuristicContextEstimator,
@@ -65,8 +65,8 @@ fn fit_caps_the_latest_round_to_half_the_budget_at_one_common_size() {
 
     // Act
     let (fitted, activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(budget_weight), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(budget_weight), &request, None)
+        .map(sent)
         .expect("fits after capping");
 
     // Assert
@@ -93,23 +93,23 @@ fn capped_results_stay_capped_identically_and_are_later_elided_from_the_original
     let budget_weight = 4000;
     let mut fit = ContextFit::default();
     let (first, _) = fit
-        .fit(&ByteEstimator, budget(budget_weight), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(budget_weight), &request, None)
+        .map(sent)
         .expect("first fit");
     let first = first.expect("capped copy");
 
     // Act
     record_read_round(&mut request, "next", 10);
     let (second, second_activity) = fit
-        .fit(&ByteEstimator, budget(budget_weight), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(budget_weight), &request, None)
+        .map(sent)
         .expect("second fit");
     for index in 0..4 {
         record_read_round(&mut request, &format!("more{index}"), 900);
     }
     let (third, third_activity) = fit
-        .fit(&ByteEstimator, budget(budget_weight), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(budget_weight), &request, None)
+        .map(sent)
         .expect("third fit");
 
     // Assert
@@ -141,12 +141,12 @@ fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
 
     // Act
     let (capped_fit, capped_activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(2000), &capped)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(2000), &capped, None)
+        .map(sent)
         .expect("fits after cutting the capped result further");
     let (whole_fit, whole_activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(2000), &whole)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(2000), &whole, None)
+        .map(sent)
         .expect("fits after cutting the uncapped result");
 
     // Assert
@@ -206,7 +206,8 @@ fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
             json!({"content": part, "path": format!("part{index}.txt")}).to_string(),
         );
         let (_, activity) = fit
-            .fit(&estimator, budget, &request)
+            .fit(&estimator, budget, &request, None)
+            .map(sent)
             .expect("each part fits");
         activities.push(activity);
     }
@@ -220,8 +221,8 @@ fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
 
     // Act
     let (fitted, activity) = fit
-        .fit(&estimator, budget, &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&estimator, budget, &request, None)
+        .map(sent)
         .expect("fits after capping the large result");
 
     // Assert
@@ -270,8 +271,8 @@ fn dropping_a_round_releases_its_capped_result() {
 
     // Act
     let (fitted, activity) = ContextFit::default()
-        .fit(&ByteEstimator, budget(4000), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(4000), &request, None)
+        .map(sent)
         .expect("fits after dropping rounds");
 
     // Assert
@@ -302,8 +303,8 @@ fn dropped_round_note_lists_distinct_read_targets_within_a_bound() {
 
     // Act
     let (fitted, activity) = fit
-        .fit(&ByteEstimator, budget(1500), &request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+        .fit(&ByteEstimator, budget(1500), &request, None)
+        .map(sent)
         .expect("fits after dropping rounds");
 
     // Assert

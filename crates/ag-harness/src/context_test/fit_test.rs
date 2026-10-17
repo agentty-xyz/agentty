@@ -2,7 +2,7 @@ use serde_json::json;
 
 use super::support::{
     ByteEstimator, FixedEstimator, bash_call, budget, read_call, reasoned_read_call,
-    record_read_round, request, result_json, tool_result, write_call,
+    record_read_round, request, result_json, sent, tool_result, write_call,
 };
 use crate::context::{
     CLEARED_REASONING, ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT,
@@ -38,8 +38,7 @@ fn fit_owned(
     budget: ContextBudget,
     request: &ModelRequest,
 ) -> Result<(Option<ModelRequest>, ContextActivity), TurnError> {
-    fit.fit(&ByteEstimator, budget, request)
-        .map(|(fitted, activity)| (fitted.cloned(), activity))
+    fit.fit(&ByteEstimator, budget, request, None).map(sent)
 }
 
 fn call_of(message: &ModelMessage) -> &ToolCall {
@@ -557,7 +556,7 @@ fn fit_fails_typed_when_the_latest_round_cannot_shrink_enough() {
     // Act
     let reads_rejected = fit_owned(&mut ContextFit::default(), budget(100), &reads);
     let mut fixed_fit = ContextFit::default();
-    let writes_rejected = fixed_fit.fit(&FixedEstimator, budget(20), &writes);
+    let writes_rejected = fixed_fit.fit(&FixedEstimator, budget(20), &writes, None);
 
     // Assert
     assert!(matches!(

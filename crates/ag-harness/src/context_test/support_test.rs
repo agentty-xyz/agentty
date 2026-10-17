@@ -2,10 +2,11 @@ use std::num::NonZeroU64;
 
 use serde_json::{Value, json};
 
-use crate::context::{ContextBudget, ContextEstimator};
+use crate::context::{ContextBudget, ContextEstimator, FitStep};
 use crate::model::{ModelMessage, ModelRequest};
 use crate::schema_contract::OutputSchema;
 use crate::tool::{ToolCall, ToolDefinition};
+use crate::turn::ContextActivity;
 
 /// Flat weights for admission arithmetic that ignores content size.
 pub(super) struct FixedEstimator;
@@ -132,4 +133,15 @@ pub(super) fn record_read_round(request: &mut ModelRequest, id: &str, bytes: usi
     let call = read_call_of(id, &format!("{id}.txt"));
     request.record_tool_call(call.clone());
     request.record_tool_result(&call, "x".repeat(bytes));
+}
+
+/// Returns an owned copy of the request a fit step sends, with its
+/// reductions; a summary step fails the test.
+pub(super) fn sent(step: FitStep<'_>) -> (Option<ModelRequest>, ContextActivity) {
+    match step {
+        FitStep::Send(fitted, activity) => (fitted.cloned(), activity),
+        FitStep::Summarize(job) => {
+            std::panic::resume_unwind(Box::new(format!("send step expected, got {job:?}")))
+        }
+    }
 }

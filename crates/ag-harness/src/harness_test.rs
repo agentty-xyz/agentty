@@ -10,6 +10,8 @@ mod policy;
 mod read;
 #[path = "harness_test/session_test.rs"]
 mod session;
+#[path = "harness_test/summary_test.rs"]
+mod summary;
 #[path = "harness_test/support_test.rs"]
 mod support;
 #[path = "harness_test/tool_loop_test.rs"]

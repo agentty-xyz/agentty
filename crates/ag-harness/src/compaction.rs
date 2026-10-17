@@ -325,31 +325,35 @@ pub(crate) fn render_source(
     for (position, messages) in turns {
         source.push('\n');
         source.push_str(
-            &json!({ "turn": position, "messages": render_messages(messages) }).to_string(),
+            &json!({
+                "turn": position,
+                "messages": render_messages(messages, MAX_SOURCE_TEXT_BYTES),
+            })
+            .to_string(),
         );
     }
 
     source
 }
 
-/// Renders messages as bounded JSON values. Tool calls keep their bounded
-/// arguments and are numbered in order, and each tool result names the
-/// number of its call. Image content is identified by digest and provider
-/// reasoning is never carried forward.
-pub(crate) fn render_messages(messages: &[ModelMessage]) -> Vec<Value> {
+/// Renders messages as bounded JSON values, each text cut to
+/// `max_text_bytes`. Tool calls keep their bounded arguments and are numbered
+/// in order, and each tool result names the number of its call. Image content
+/// is identified by digest and provider reasoning is never carried forward.
+pub(crate) fn render_messages(messages: &[ModelMessage], max_text_bytes: usize) -> Vec<Value> {
     let mut call_numbers: HashMap<&str, usize> = HashMap::new();
     let mut rendered = Vec::with_capacity(messages.len());
     for message in messages {
         let value = match message {
             ModelMessage::Assistant(content) | ModelMessage::AssistantReasoning { content, .. } => {
-                json!({ "role": "assistant", "text": bounded_text(content, MAX_SOURCE_TEXT_BYTES) })
+                json!({ "role": "assistant", "text": bounded_text(content, max_text_bytes) })
             }
             ModelMessage::AssistantToolCall(call) => {
                 render_calls(std::slice::from_ref(call), &mut call_numbers)
             }
             ModelMessage::AssistantToolCalls(calls) => render_calls(calls, &mut call_numbers),
             ModelMessage::System(content) => {
-                json!({ "role": "system", "text": bounded_text(content, MAX_SOURCE_TEXT_BYTES) })
+                json!({ "role": "system", "text": bounded_text(content, max_text_bytes) })
             }
             ModelMessage::ToolResult {
                 call_id,
@@ -359,10 +363,10 @@ pub(crate) fn render_messages(messages: &[ModelMessage]) -> Vec<Value> {
                 "role": "tool",
                 "call": call_numbers.get(call_id.as_str()),
                 "tool": name,
-                "result": bounded_text(content, MAX_SOURCE_TEXT_BYTES),
+                "result": bounded_text(content, max_text_bytes),
             }),
             ModelMessage::User(content) => {
-                json!({ "role": "user", "text": bounded_text(content, MAX_SOURCE_TEXT_BYTES) })
+                json!({ "role": "user", "text": bounded_text(content, max_text_bytes) })
             }
             ModelMessage::UserInput(input) => {
                 let blocks: Vec<String> = input
@@ -380,7 +384,7 @@ pub(crate) fn render_messages(messages: &[ModelMessage]) -> Vec<Value> {
 
                 json!({
                     "role": "user",
-                    "text": bounded_text(&blocks.join(" "), MAX_SOURCE_TEXT_BYTES),
+                    "text": bounded_text(&blocks.join(" "), max_text_bytes),
                 })
             }
         };

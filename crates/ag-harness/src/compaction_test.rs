@@ -317,7 +317,7 @@ fn render_messages_bounds_text_results_and_arguments() {
     ];
 
     // Act
-    let rendered = render_messages(&messages);
+    let rendered = render_messages(&messages, MAX_SOURCE_TEXT_BYTES);
 
     // Assert
     let text = rendered[0]["text"].as_str().expect("text");
@@ -349,10 +349,13 @@ fn render_messages_keeps_malformed_arguments_as_bounded_raw_text() {
         ToolCall::from_json("call-2".to_string(), "bash", "{\"command\": ls", None).expect("call");
 
     // Act
-    let rendered = render_messages(&[ModelMessage::AssistantToolCalls(vec![
-        unknown_field,
-        not_json,
-    ])]);
+    let rendered = render_messages(
+        &[ModelMessage::AssistantToolCalls(vec![
+            unknown_field,
+            not_json,
+        ])],
+        MAX_SOURCE_TEXT_BYTES,
+    );
 
     // Assert
     assert_eq!(

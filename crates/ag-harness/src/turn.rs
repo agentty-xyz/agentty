@@ -140,6 +140,8 @@ pub struct TurnReport {
     repetition_nudges: usize,
     #[serde(default)]
     context_overflow_recoveries: usize,
+    #[serde(default)]
+    context_summary_failures: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -160,8 +162,9 @@ impl TurnReport {
     }
 
     /// Returns one entry for every provider request whose response the turn
-    /// accepted; rejected final outputs are counted by
-    /// [`Self::output_corrections`].
+    /// accepted, including requests that summarized earlier tool rounds
+    /// ([`ModelRequestPurpose::ContextSummary`]); rejected final outputs are
+    /// counted by [`Self::output_corrections`].
     pub fn model_requests(&self) -> &[ModelRequestActivity] {
         &self.model_requests
     }
@@ -198,6 +201,13 @@ impl TurnReport {
         self.context_overflow_recoveries
     }
 
+    /// Returns how many attempts to summarize earlier tool rounds failed,
+    /// each followed by removing those rounds behind a deterministic note.
+    /// Reports recorded before this field existed report none.
+    pub fn context_summary_failures(&self) -> usize {
+        self.context_summary_failures
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -216,6 +226,7 @@ impl TurnReport {
             malformed_tool_calls: 0,
             repetition_nudges: 0,
             context_overflow_recoveries: 0,
+            context_summary_failures: 0,
             tool_calls,
         }
     }
@@ -239,6 +250,12 @@ impl TurnReport {
 
     pub(crate) fn with_context_overflow_recoveries(mut self, recoveries: usize) -> Self {
         self.context_overflow_recoveries = recoveries;
+
+        self
+    }
+
+    pub(crate) fn with_context_summary_failures(mut self, context_summary_failures: usize) -> Self {
+        self.context_summary_failures = context_summary_failures;
 
         self
     }
@@ -297,6 +314,8 @@ pub struct ModelRequestActivity {
     duration: Duration,
     #[serde(default)]
     estimated_weight: u64,
+    #[serde(default)]
+    purpose: ModelRequestPurpose,
     response_type: ModelResponseType,
 }
 
@@ -334,6 +353,12 @@ impl ModelRequestActivity {
         self.estimated_weight
     }
 
+    /// Returns why the harness sent the request. Reports recorded before
+    /// this field existed report [`ModelRequestPurpose::Turn`].
+    pub fn purpose(&self) -> ModelRequestPurpose {
+        self.purpose
+    }
+
     /// Returns whether the request produced output or a tool call.
     pub fn response_type(&self) -> ModelResponseType {
         self.response_type
@@ -350,6 +375,7 @@ impl ModelRequestActivity {
             context: ContextActivity::default(),
             duration,
             estimated_weight: 0,
+            purpose: ModelRequestPurpose::Turn,
             response_type,
         }
     }
@@ -370,6 +396,23 @@ impl ModelRequestActivity {
 
         self
     }
+
+    pub(crate) fn with_purpose(mut self, purpose: ModelRequestPurpose) -> Self {
+        self.purpose = purpose;
+
+        self
+    }
+}
+
+/// Why the harness sent one provider request of a turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub enum ModelRequestPurpose {
+    /// A request of the turn's own conversation.
+    #[default]
+    Turn,
+    /// A tool-free request that summarized earlier tool rounds of the turn,
+    /// so later requests carry the summary in their place.
+    ContextSummary,
 }
 
 /// Content-free counts of how one provider request was reduced to fit the
@@ -389,6 +432,8 @@ pub struct ContextActivity {
     shrunk_latest_write_calls: usize,
     shrunk_write_calls: usize,
     #[serde(default)]
+    summarized_tool_calls: usize,
+    #[serde(default)]
     superseded_results: usize,
     truncated_results: usize,
 }
@@ -407,7 +452,8 @@ impl ContextActivity {
 
     /// Earlier tool calls of the current turn left out of the request, with
     /// their results, behind one note naming their applied writes and
-    /// commands.
+    /// commands, without a summary of what they established. Calls a summary
+    /// stands in for are counted by [`Self::summarized_tool_calls`].
     pub fn dropped_tool_calls(self) -> usize {
         self.dropped_tool_calls
     }
@@ -427,6 +473,13 @@ impl ContextActivity {
     /// Earlier `write` calls whose patch was replaced by a short notice.
     pub fn shrunk_write_calls(self) -> usize {
         self.shrunk_write_calls
+    }
+
+    /// Earlier tool calls of the current turn left out of the request, with
+    /// their results, behind a model-written summary of what they
+    /// established. Reports recorded before this field existed report none.
+    pub fn summarized_tool_calls(self) -> usize {
+        self.summarized_tool_calls
     }
 
     /// Elided results cleared ahead of older ones because a later call of
@@ -459,6 +512,7 @@ impl ContextActivity {
             elided_results,
             shrunk_latest_write_calls,
             shrunk_write_calls,
+            summarized_tool_calls: 0,
             superseded_results: 0,
             truncated_results,
         }
@@ -466,6 +520,12 @@ impl ContextActivity {
 
     pub(crate) fn with_superseded_results(mut self, superseded_results: usize) -> Self {
         self.superseded_results = superseded_results;
+
+        self
+    }
+
+    pub(crate) fn with_summarized_tool_calls(mut self, summarized_tool_calls: usize) -> Self {
+        self.summarized_tool_calls = summarized_tool_calls;
 
         self
     }

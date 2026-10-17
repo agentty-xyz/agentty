@@ -12,6 +12,13 @@ use crate::telemetry;
 
 const TOOL_CALL_ID_ATTRIBUTE_LIMIT_BYTES: usize = 128;
 
+/// Span grouping one context summary's model requests, named like the
+/// compaction span of app-server agents.
+const SPAN_CONTEXT_SUMMARY: &str = "agent.compaction";
+
+/// Why a context summary was requested.
+const ATTRIBUTE_SUMMARY_TRIGGER: &str = "agentty.compaction.trigger";
+
 /// Projects one ordered harness lifecycle stream to OpenTelemetry `GenAI`
 /// spans.
 ///
@@ -72,6 +79,8 @@ impl LifecycleOperationGuard for TraceOperationGuard {}
 struct TraceState {
     model_spans: HashMap<LifecycleId, Context>,
     pending_tools: HashMap<LifecycleId, PendingTool>,
+    /// Open context-summary spans by summary, with their owning turn.
+    summary_spans: HashMap<LifecycleId, (Option<LifecycleId>, Context)>,
     tool_spans: HashMap<LifecycleId, Context>,
     turn_spans: HashMap<LifecycleId, Context>,
 }
@@ -94,13 +103,7 @@ impl TraceState {
                 error_type,
                 turn_id,
                 ..
-            } => {
-                finish_span(
-                    self.turn_spans.remove(turn_id),
-                    Some(error_type.as_str().to_string()),
-                    Vec::new(),
-                );
-            }
+            } => self.fail_turn(*turn_id, error_type.as_str()),
             LifecycleEventKind::ModelRequestStarted {
                 model,
                 model_call_id,
@@ -166,21 +169,47 @@ impl TraceState {
                 error_type,
                 tool_call_id,
                 ..
-            } => {
-                self.pending_tools.remove(tool_call_id);
-                finish_span(
-                    self.tool_spans.remove(tool_call_id),
-                    Some(error_type.as_str().to_string()),
-                    Vec::new(),
-                );
-            }
+            } => self.fail_tool(*tool_call_id, error_type.as_str()),
             LifecycleEventKind::ToolCallsRepeated {
                 repeats,
                 stopped,
                 tool_name,
                 turn_id,
             } => self.record_repetition(*turn_id, tool_name, *repeats, *stopped),
+            LifecycleEventKind::ContextSummaryStarted {
+                summary_id,
+                trigger,
+                turn_id,
+            } => self.start_summary(*summary_id, trigger.as_str(), *turn_id),
+            LifecycleEventKind::ContextSummaryCompleted { summary_id, .. } => {
+                self.finish_summary(*summary_id, None);
+            }
+            LifecycleEventKind::ContextSummaryFailed {
+                error_type,
+                summary_id,
+                ..
+            } => self.finish_summary(*summary_id, Some(error_type.as_str())),
         }
+    }
+
+    /// Closes a failed turn's span with `error_type`.
+    fn fail_turn(&mut self, turn_id: LifecycleId, error_type: &str) {
+        finish_span(
+            self.turn_spans.remove(&turn_id),
+            Some(error_type.to_string()),
+            Vec::new(),
+        );
+    }
+
+    /// Forgets a failed tool call and closes its span, if it started, with
+    /// `error_type`.
+    fn fail_tool(&mut self, tool_call_id: LifecycleId, error_type: &str) {
+        self.pending_tools.remove(&tool_call_id);
+        finish_span(
+            self.tool_spans.remove(&tool_call_id),
+            Some(error_type.to_string()),
+            Vec::new(),
+        );
     }
 
     /// Adds a context-overflow retry event to the turn's span.
@@ -218,6 +247,33 @@ impl TraceState {
                 KeyValue::new(telemetry::ATTRIBUTE_STOPPED, stopped),
             ],
         );
+    }
+
+    /// Closes one context summary's span, with `error_type` when it failed.
+    fn finish_summary(&mut self, summary_id: LifecycleId, error_type: Option<&str>) {
+        let context = self
+            .summary_spans
+            .remove(&summary_id)
+            .map(|(_, context)| context);
+        finish_span(context, error_type.map(str::to_string), Vec::new());
+    }
+
+    /// Opens the span that groups one context summary's model requests
+    /// under its turn.
+    fn start_summary(
+        &mut self,
+        summary_id: LifecycleId,
+        trigger: &'static str,
+        turn_id: Option<LifecycleId>,
+    ) {
+        let parent = turn_id.and_then(|turn_id| self.turn_spans.get(&turn_id));
+        let context = start_span(
+            SPAN_CONTEXT_SUMMARY,
+            SpanKind::Internal,
+            vec![KeyValue::new(ATTRIBUTE_SUMMARY_TRIGGER, trigger)],
+            parent,
+        );
+        self.summary_spans.insert(summary_id, (turn_id, context));
     }
 
     fn start_turn(&mut self, turn_id: LifecycleId) {
@@ -258,14 +314,23 @@ impl TraceState {
             ),
             KeyValue::new(telemetry::ATTRIBUTE_OUTPUT_TYPE, telemetry::OUTPUT_JSON),
         ];
-        let context = match turn_id {
-            Some(turn_id) => {
+        // A turn summarizes at most once at a time, so its open summary span
+        // parents its requests; requests outside a turn never nest.
+        let summary = turn_id.and_then(|turn_id| {
+            self.summary_spans
+                .values()
+                .find(|(summary_turn, _)| *summary_turn == Some(turn_id))
+                .map(|(_, context)| context)
+        });
+        let context = match (summary, turn_id) {
+            (Some(parent), _) => start_span(name, SpanKind::Client, attributes, Some(parent)),
+            (None, Some(turn_id)) => {
                 let Some(parent) = self.turn_spans.get(&turn_id) else {
                     return;
                 };
                 start_span(name, SpanKind::Client, attributes, Some(parent))
             }
-            None => start_span(name, SpanKind::Client, attributes, None),
+            (None, None) => start_span(name, SpanKind::Client, attributes, None),
         };
         self.model_spans.insert(model_call_id, context);
     }
