@@ -20,6 +20,8 @@ Agentty is a Rust workspace for an agent-management TUI and reusable support cra
   repository hooks.
 - Follow `crates/AGENTS.md` for Rust conventions, including workspace dependency rules
   when editing the root `Cargo.toml`.
+- Edit files with the harness's edit or patch tool. Do not write ad hoc scripts, such as
+  Python heredocs, to edit sources or inspect processes.
 
 ## Product vs Repository Scope
 
@@ -65,11 +67,20 @@ recording commands in `docs/contributing/feature-test/` are explicit exceptions 
 the E2E hook runs the complete suite. Keep those commands there; do not duplicate hook
 implementations elsewhere.
 
-- While iterating, run the relevant formatter or fixer on touched paths and focused
-  tests for the changed behavior. Use `test-focused` with an explicit
+- While iterating, first run the relevant formatter or fixer on touched paths, then
+  focused tests for the changed behavior. Use `test-focused` with an explicit
   `AGENTTY_TEST_FILTER`; use `docs/contributing/validation.md` for selection recipes and
   `docs/contributing/setup.md` for environment setup. Keep gate policy here and
   executable definitions in the hook catalog.
+- Run hooks in the session's inherited environment. Do not override `CARGO_HOME`,
+  `PREK_HOME`, `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, and do not copy
+  registries, toolchains, or caches into the worktree; relocated caches force cold
+  rebuilds. When the environment itself blocks a check, report the exact failure instead
+  of building a replacement environment.
+- Before any container work, read `docs/contributing/feature-test/recording.md`. Run
+  containers only through cataloged hooks and the commands in
+  `docs/contributing/feature-test/`; do not compose ad hoc `podman run` invocations,
+  images, or wrapper scripts.
 - Handoff means the task's final state, not each reply in a multi-turn session. Before
   handoff, run one impact-based validation rung covering every touched file and all
   affected dependencies and dependents:
@@ -88,17 +99,22 @@ implementations elsewhere.
   hooks and coverage do not replace them; use `test-focused` without a test-name
   restriction for affected packages, dependencies, and dependents, or `test-workspace`.
 - For cross-cutting changes, run `prek run --all-files` and `test-focused` for the
-  affected dependency graph. Run `test-workspace` locally when the impact cannot be
-  bounded confidently.
-- Run mutating fixers one at a time and inspect their diffs before continuing.
+  affected dependency graph, only after the touched paths pass their formatters and
+  focused tests. Run `test-workspace` locally when the impact cannot be bounded
+  confidently.
+- Run mutating fixers one at a time and inspect their diffs before continuing. When a
+  fixer reports that it modified files, rerun only that hook, not the whole hook set.
 - Pull-request CI runs `cargo-check`, `coverage`, `test-workspace`, and the full
   `test-agentty-e2e` suite. Do not run them locally by default; run one with
-  `--hook-stage manual` only to diagnose its CI failure or when the user asks.
-- Let the runner's configured timeouts govern individual tests. After five minutes
-  without output, inspect build and process activity; terminate and report a confirmed
-  stall rather than treating silence alone as failure. After three failed repair
-  attempts, stop and report the test, output, and attempted fixes; never skip, ignore,
-  or delete the test.
+  `--hook-stage manual` only to diagnose its CI failure or when the user asks. Diagnose
+  with the single failing hook, not a rerun of every gate after each edit.
+- Let the runner's configured timeouts govern individual tests. Run long checks in the
+  foreground; redirect large output to a log and read its summary once the command
+  exits. Do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes
+  without output, inspect build and process activity once; terminate and report a
+  confirmed stall rather than treating silence alone as failure. After three failed
+  repair attempts, stop and report the test, output, and attempted fixes; never skip,
+  ignore, or delete the test.
 
 ## Documentation
 
