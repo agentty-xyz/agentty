@@ -204,7 +204,7 @@ fn repeated_reads_point_only_to_an_identical_earlier_read() {
     reads.record(
         &read_of("r1", &json!({"path": "a.txt", "limit": 20})),
         2,
-        5000,
+        (5000, 7),
         false,
     );
 
@@ -230,8 +230,8 @@ fn repeated_reads_point_only_to_an_identical_earlier_read() {
     );
 
     // Assert
-    assert_eq!(identical.as_deref(), Some("r1"));
-    assert_eq!(equivalent.as_deref(), Some("r1"));
+    assert_eq!(identical, Some(("r1".to_string(), 7)));
+    assert_eq!(equivalent, Some(("r1".to_string(), 7)));
     assert_eq!(narrower, None);
     assert_eq!(other, None);
     assert_eq!(bash, None);
@@ -253,30 +253,35 @@ fn repeated_reads_run_again_after_a_write_or_command() {
     ];
 
     // Act
-    let after_effect: Vec<Option<String>> = effects
+    let after_effect: Vec<Option<(String, u64)>> = effects
         .iter()
         .map(|effect| {
             let mut reads = RepeatedReads::default();
-            reads.record(&read, 2, 5000, false);
-            reads.record(effect, 4, 10, false);
+            reads.record(&read, 2, (5000, 2), false);
+            reads.record(effect, 4, (10, 4), false);
 
             reads.repeat_of(&read, &fit)
         })
         .collect();
     let mut reads = RepeatedReads::default();
-    reads.record(&read, 2, 5000, false);
-    reads.record(&effects[0], 4, 10, false);
-    reads.record(&read_of("r2", &json!({"path": "a.txt"})), 6, 5000, false);
+    reads.record(&read, 2, (5000, 2), false);
+    reads.record(&effects[0], 4, (10, 4), false);
+    reads.record(
+        &read_of("r2", &json!({"path": "a.txt"})),
+        6,
+        (5000, 6),
+        false,
+    );
     let read_again = reads.repeat_of(&read, &fit);
     let malformed = ToolCall::from_json("m1".to_string(), "write", r#"{"path":"#, None)
         .expect("malformed write");
-    reads.record(&malformed, 8, 10, false);
+    reads.record(&malformed, 8, (10, 8), false);
     let after_malformed = reads.repeat_of(&read, &fit);
 
     // Assert
     assert_eq!(after_effect, [None, None]);
-    assert_eq!(read_again.as_deref(), Some("r2"));
-    assert_eq!(after_malformed.as_deref(), Some("r2"));
+    assert_eq!(read_again, Some(("r2".to_string(), 6)));
+    assert_eq!(after_malformed, Some(("r2".to_string(), 6)));
 }
 
 #[test]
@@ -286,16 +291,16 @@ fn repeated_reads_keep_pointing_to_the_executed_read_and_skip_small_results() {
     let read = read_of("r1", &json!({"path": "a.txt"}));
     let small = read_of("s1", &json!({"path": "small.txt"}));
     let mut reads = RepeatedReads::default();
-    reads.record(&read, 2, 5000, false);
-    reads.record(&read_of("r2", &json!({"path": "a.txt"})), 4, 300, true);
-    reads.record(&small, 6, 40, false);
+    reads.record(&read, 2, (5000, 2), false);
+    reads.record(&read_of("r2", &json!({"path": "a.txt"})), 4, (300, 4), true);
+    reads.record(&small, 6, (40, 6), false);
 
     // Act
     let repeated = reads.repeat_of(&read, &fit);
     let small_repeat = reads.repeat_of(&small, &fit);
 
     // Assert
-    assert_eq!(repeated.as_deref(), Some("r1"));
+    assert_eq!(repeated, Some(("r1".to_string(), 2)));
     assert_eq!(small_repeat, None);
 }
 
@@ -314,7 +319,7 @@ fn repeated_reads_run_again_once_the_earlier_result_was_reduced() {
     )
     .expect("fits after capping");
     let mut reads = RepeatedReads::default();
-    reads.record(&read, 2, 5000, false);
+    reads.record(&read, 2, (5000, 2), false);
 
     // Act
     let repeated = reads.repeat_of(&read, &fit);

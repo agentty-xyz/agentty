@@ -23,7 +23,8 @@ use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::{FileSystem, MockFileSystem};
 use crate::harness::Harness;
 use crate::lifecycle::{
-    LifecycleEmitter, LifecycleEvent, ModelResponseType, ToolErrorType, TurnErrorType,
+    LifecycleEmitter, LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType,
+    TurnErrorType,
 };
 use crate::memory_store::MemoryStore;
 use crate::model::{
@@ -625,6 +626,86 @@ async fn omits_oversized_tool_call_id_attribute() {
     provider.shutdown().expect("test provider should shut down");
 }
 
+#[tokio::test]
+async fn records_repeated_tool_calls_as_turn_span_events() {
+    // Arrange
+    let _trace_provider_guard = TRACE_PROVIDER_LOCK.lock().await;
+    let exporter = InMemorySpanExporter::default();
+    let provider = SdkTracerProvider::builder()
+        .with_simple_exporter(exporter.clone())
+        .build();
+    global::set_tracer_provider(provider.clone());
+    let emitter = LifecycleEmitter::new(LifecycleTraceObserver::new());
+    let turn = emitter.start_turn().expect("observer should enable turns");
+    let turn_id = turn.id();
+
+    // Act
+    emitter.repeated_tool_calls("read", 3, false, Some(turn_id));
+    emitter.repeated_tool_calls("read", 5, true, Some(turn_id));
+    emitter.repeated_tool_calls("read", 5, true, None);
+    turn.failed(TurnErrorType::RepeatedToolCalls);
+    provider
+        .force_flush()
+        .expect("finished spans should flush to memory");
+    let spans = exporter
+        .get_finished_spans()
+        .expect("finished spans should be readable");
+
+    // Assert
+    let turn_span = find_span(
+        &spans,
+        telemetry::OPERATION_INVOKE_AGENT,
+        Some("repeated_tool_calls"),
+    );
+    let events = turn_span
+        .events
+        .iter()
+        .map(|event| {
+            let attributes = event
+                .attributes
+                .iter()
+                .map(|attribute| (attribute.key.as_str(), attribute.value.to_string()))
+                .collect::<BTreeMap<_, _>>();
+
+            (event.name.to_string(), attributes)
+        })
+        .collect::<Vec<_>>();
+    let expected = |repeats: &str, stopped: &str| {
+        (
+            telemetry::EVENT_TOOL_CALLS_REPEATED.to_string(),
+            BTreeMap::from([
+                (telemetry::ATTRIBUTE_REPEATS, repeats.to_string()),
+                (telemetry::ATTRIBUTE_STOPPED, stopped.to_string()),
+                (telemetry::ATTRIBUTE_TOOL_NAME, "read".to_string()),
+            ]),
+        )
+    };
+    assert_eq!(events, [expected("3", "false"), expected("5", "true")]);
+
+    provider.shutdown().expect("test provider should shut down");
+}
+
+#[test]
+fn repeated_tool_calls_without_a_turn_span_are_ignored() {
+    // Arrange
+    let mut state = TraceState::default();
+    let emitter = LifecycleEmitter::new(|_event: LifecycleEvent| {});
+    let ended_turn = emitter.start_turn().expect("observer should enable turns");
+    let ended_id = ended_turn.id();
+    ended_turn.completed();
+
+    // Act
+    state.observe(&LifecycleEventKind::ToolCallsRepeated {
+        repeats: 3,
+        stopped: false,
+        tool_name: "read".to_string(),
+        turn_id: ended_id,
+    });
+
+    // Assert
+    assert!(state.turn_spans.is_empty());
+}
+
 #[test]
 fn lifecycle_error_types_are_bounded_and_documentable() {
     // Arrange
@@ -634,6 +715,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
         TurnErrorType::Tool,
         TurnErrorType::ToolDenied,
         TurnErrorType::ContextBudget,
+        TurnErrorType::RepeatedToolCalls,
         TurnErrorType::RepositoryRequired,
         TurnErrorType::Session,
     ];
@@ -652,6 +734,7 @@ fn lifecycle_error_types_are_bounded_and_documentable() {
             "tool_execution_error",
             "tool_denied",
             "context_budget_exceeded",
+            "repeated_tool_calls",
             "repository_required",
             "session_error",
         ]

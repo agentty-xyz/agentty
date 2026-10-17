@@ -741,6 +741,70 @@ async fn external_observer_set_fans_out_lifecycle_events() -> Result<(), Box<dyn
     Ok(())
 }
 
+/// Requests the same `read` of `name.txt` on every response.
+struct LoopingReadModel;
+
+#[async_trait]
+impl Model for LoopingReadModel {
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let call = ToolCall::from_json(
+            format!("read-{}", request.messages().len()),
+            "read",
+            r#"{"path":"name.txt"}"#,
+            None,
+        )?;
+
+        Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
+            call,
+        )))
+    }
+}
+
+#[tokio::test]
+async fn external_consumer_observes_a_repeated_call_nudge_then_stop() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&events);
+    let directory = tempfile::tempdir()?;
+    let harness = Harness::new(LoopingReadModel, unbounded_context_budget())
+        .repository(repository_fixture::repository_with_host_git(
+            directory.path(),
+        ))
+        .file_system(NameFileSystem)
+        .allow(Tool::Read)
+        .with_lifecycle_observer(move |event: ag_harness::lifecycle::LifecycleEvent| {
+            if let LifecycleEventKind::ToolCallsRepeated {
+                repeats, stopped, ..
+            } = event.kind()
+            {
+                observed
+                    .lock()
+                    .expect("event recorder should not be poisoned")
+                    .push((*repeats, *stopped));
+            }
+        });
+
+    // Act
+    let result = harness
+        .run_once("Read the name", request()?.schema().clone())
+        .await;
+
+    // Assert
+    assert!(matches!(
+        result,
+        Err(TurnError::RepeatedToolCalls { repeats: 5, ref tool }) if tool == "read"
+    ));
+    assert_eq!(
+        *events
+            .lock()
+            .expect("event recorder should not be poisoned"),
+        [(3, false), (5, true)]
+    );
+
+    Ok(())
+}
+
 struct FailingAfterWriteModel;
 
 #[async_trait]
@@ -907,6 +971,7 @@ async fn explicit_options_support_both_entry_points_and_retain_history_after_rev
     );
     assert_eq!(once.report().output_corrections(), 0);
     assert_eq!(once.report().malformed_tool_calls(), 0);
+    assert_eq!(once.report().repetition_nudges(), 0);
     let context = once.report().model_requests()[0].context();
     assert_eq!(context, ag_harness::turn::ContextActivity::default());
     assert_eq!(

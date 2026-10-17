@@ -121,6 +121,7 @@ mod policy;
 pub mod provider;
 mod read;
 pub mod recovery;
+mod repetition;
 mod repository;
 mod reservation;
 mod schema_contract;

@@ -15,6 +15,7 @@ use crate::model::{
     ensure_unique_tool_call_ids,
 };
 use crate::read::{self, ReadError, ReadTool};
+use crate::repetition::{self, RepeatedCalls, Repetition};
 use crate::repository::Repository;
 use crate::reservation::WriteJournal;
 use crate::tool::{
@@ -71,6 +72,8 @@ impl Engine<'_> {
         let mut consecutive_malformed_responses = 0;
         let mut malformed_tool_calls = 0;
         let mut reads = RepeatedReads::default();
+        let mut repeated_calls = RepeatedCalls::default();
+        let mut repetition_nudges = 0;
         let mut tool_calls = Vec::new();
 
         loop {
@@ -99,7 +102,7 @@ impl Engine<'_> {
                     error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
                 ) if output_corrections < MAX_OUTPUT_CORRECTIONS => {
                     output_corrections += 1;
-                    request.record_output_feedback(output_feedback(&error));
+                    request.record_feedback(output_feedback(&error));
 
                     continue;
                 }
@@ -119,7 +122,8 @@ impl Engine<'_> {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
                     let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
-                        .with_corrections(output_corrections, malformed_tool_calls);
+                        .with_corrections(output_corrections, malformed_tool_calls)
+                        .with_repetition_nudges(repetition_nudges);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
@@ -133,46 +137,69 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
-            // A malformed call is journaled and answered with an error result
-            // like any other call; only a model that sends nothing else for
-            // several responses in a row fails the turn, unjournaled.
-            let malformed = calls
-                .iter()
-                .filter_map(ToolCall::malformed_arguments)
-                .collect::<Vec<_>>();
-            if malformed.len() < calls.len() {
-                consecutive_malformed_responses = 0;
-            } else {
-                consecutive_malformed_responses += 1;
-                if consecutive_malformed_responses == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
-                    return Err(ModelError::InvalidToolArguments {
-                        reason: schema_contract::bounded_diagnostic(format!(
-                            "`{}`: {}",
-                            malformed[0].tool().name(),
-                            malformed[0].reason()
-                        )),
-                    }
-                    .into());
-                }
-            }
-            malformed_tool_calls += malformed.len();
+            malformed_tool_calls += count_malformed(&calls, &mut consecutive_malformed_responses)?;
             let call_message = match (batched, calls.as_slice()) {
                 (false, [call]) => request.record_tool_call(call.clone()),
                 _ => request.record_tool_calls(calls.clone()),
             };
             Self::persist(recorder.as_ref(), call_message).await?;
+            let mut repetition = Repetition::None;
             for call in &calls {
                 let repeated = reads.repeat_of(call, &context_fit);
                 let (result, activity) = self
-                    .execute_tool_call(call, &tools, turn_id, repeated.as_deref())
+                    .execute_tool_call(
+                        call,
+                        &tools,
+                        turn_id,
+                        repeated.as_ref().map(|(call_id, _)| call_id.as_str()),
+                    )
                     .await?;
                 let result_bytes = result.len();
+                // A read answered as a repeat returned the earlier result.
+                let digest = repeated
+                    .as_ref()
+                    .map_or_else(|| repetition::result_digest(&result), |(_, digest)| *digest);
                 Self::persist(recorder.as_ref(), request.record_tool_result(call, result)).await?;
                 let result_index = request.messages().len() - 1;
-                reads.record(call, result_index, result_bytes, repeated.is_some());
+                reads.record(
+                    call,
+                    result_index,
+                    (result_bytes, digest),
+                    repeated.is_some(),
+                );
+                repetition = repetition.max(repeated_calls.record(call, digest));
                 tool_calls.push(activity);
             }
+            repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Fails the turn when the latest response's calls reached
+    /// [`repetition::REPETITION_STOP_AT`] identical calls, or appends a
+    /// request-only nudge, never journaled, when they first reached
+    /// [`repetition::REPETITION_NUDGE_AT`]; returns the nudges added.
+    fn act_on_repetition(
+        &self,
+        repetition: Repetition,
+        request: &mut ModelRequest,
+        turn_id: Option<LifecycleId>,
+    ) -> Result<usize, TurnError> {
+        let (repeats, tool, stopped) = match repetition {
+            Repetition::None => return Ok(0),
+            Repetition::Nudge { repeats, tool } => (repeats, tool, false),
+            Repetition::Stop { repeats, tool } => (repeats, tool, true),
+        };
+        self.lifecycle
+            .repeated_tool_calls(tool, repeats, stopped, turn_id);
+        if stopped {
+            return Err(TurnError::RepeatedToolCalls {
+                repeats,
+                tool: tool.to_string(),
+            });
+        }
+        request.record_feedback(repetition::repetition_feedback(tool, repeats));
+
+        Ok(1)
     }
 
     /// Appends one finished model response or tool result to a durable
@@ -416,17 +443,22 @@ impl RepeatedReads {
     /// the last request sent that call's result whole, and the result is
     /// larger than the note that would point to it; `None` otherwise,
     /// including for any other tool.
-    fn repeat_of(&self, call: &ToolCall, context_fit: &context::ContextFit) -> Option<String> {
+    fn repeat_of(
+        &self,
+        call: &ToolCall,
+        context_fit: &context::ContextFit,
+    ) -> Option<(String, u64)> {
         let executed = self.executed.get(&Self::key(call)?)?;
 
         (executed.effects == self.effects
             && context_fit.sends_whole(executed.result_index)
             && context::repeated_read_result(&executed.call_id).len() < executed.result_bytes)
-            .then(|| executed.call_id.clone())
+            .then(|| (executed.call_id.clone(), executed.result_digest))
     }
 
-    /// Remembers a handled call whose result of `result_bytes` is the
-    /// request message at `result_index`: an executed `read` as the latest
+    /// Remembers a handled call whose result of `result_bytes` with digest
+    /// `result_digest` is the request message at `result_index`: an
+    /// executed `read` as the latest
     /// for its arguments, and any `write` or `bash` call as a possible
     /// change. A `read` answered as a repeat and a malformed call change
     /// nothing.
@@ -434,7 +466,7 @@ impl RepeatedReads {
         &mut self,
         call: &ToolCall,
         result_index: usize,
-        result_bytes: usize,
+        (result_bytes, result_digest): (usize, u64),
         repeated: bool,
     ) {
         match Self::key(call) {
@@ -446,6 +478,7 @@ impl RepeatedReads {
                         call_id: call.id().to_string(),
                         effects: self.effects,
                         result_bytes,
+                        result_digest,
                         result_index,
                     },
                 );
@@ -469,6 +502,9 @@ struct ExecutedRead {
     /// `write` and `bash` calls handled before it.
     effects: usize,
     result_bytes: usize,
+    /// Digest of the result, which a repeat answered without running
+    /// returns again.
+    result_digest: u64,
     result_index: usize,
 }
 
@@ -702,6 +738,36 @@ async fn execute_write_tool(
 
 /// Returns the bounded report summary of a `read`: its path, else its
 /// query, else the tool name.
+/// Counts the malformed calls of one response and the run of responses
+/// made only of malformed calls, and fails the turn when that run reaches
+/// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`]. A malformed call is
+/// journaled and answered with an error result like any other call; only a
+/// model that sends nothing else for several responses in a row fails the
+/// turn, unjournaled.
+fn count_malformed(calls: &[ToolCall], consecutive: &mut usize) -> Result<usize, TurnError> {
+    let malformed = calls
+        .iter()
+        .filter_map(ToolCall::malformed_arguments)
+        .collect::<Vec<_>>();
+    if malformed.len() < calls.len() {
+        *consecutive = 0;
+    } else {
+        *consecutive += 1;
+        if *consecutive == MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES {
+            return Err(ModelError::InvalidToolArguments {
+                reason: schema_contract::bounded_diagnostic(format!(
+                    "`{}`: {}",
+                    malformed[0].tool().name(),
+                    malformed[0].reason()
+                )),
+            }
+            .into());
+        }
+    }
+
+    Ok(malformed.len())
+}
+
 fn read_summary(arguments: &ReadArguments) -> &str {
     arguments
         .path_filter()

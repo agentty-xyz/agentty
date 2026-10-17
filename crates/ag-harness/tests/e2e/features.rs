@@ -7,7 +7,7 @@
 use std::io::{self, Write as _};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1018,6 +1018,164 @@ async fn test_context_overflow_classification() -> Result<(), DynError> {
                 provider.name(),
                 round,
                 context_overflow(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
+// Repeated tool calls
+// ---------------------------------------------------------------------------
+
+/// Answers the first [`INJECTED_REPEATS`] requests with the same `read` of
+/// `notes.txt`, as a looping model would, and forwards every later request,
+/// which carries the harness nudge, to the live provider.
+struct RepeatingFirstCalls {
+    inner: ModelClient,
+    injected: AtomicUsize,
+}
+
+/// Identical calls injected before the live model takes over; the last one
+/// reaches the nudge threshold.
+const INJECTED_REPEATS: usize = 3;
+
+#[async_trait::async_trait]
+impl Model for RepeatingFirstCalls {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        Model::metadata(&self.inner)
+    }
+
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        self.inner.validate_schema(schema)
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let injected = self.injected.fetch_add(1, Ordering::SeqCst);
+        if injected >= INJECTED_REPEATS {
+            return self.inner.complete(request).await;
+        }
+        let call = ToolCall::from_json(
+            format!("repeated_read_{injected}"),
+            "read",
+            r#"{"path":"notes.txt"}"#,
+            None,
+        )?;
+
+        Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
+            call,
+        )))
+    }
+}
+
+/// Creates a Git repository whose `notes.txt` names a code word.
+fn notes_repository() -> Result<(tempfile::TempDir, Repository), DynError> {
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = std::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    std::fs::write(root.join("notes.txt"), "The code word is lantern-58.\n")?;
+    let repository = Repository::new(&root, GIT_EXECUTABLE)?;
+
+    Ok((workspace, repository))
+}
+
+/// Injects three identical reads; the live provider must accept the nudge
+/// that follows their results and answer from what it already read.
+async fn injected_repetition(provider: Provider) -> Result<String, DynError> {
+    let (_workspace, repository) = notes_repository()?;
+    let model = RepeatingFirstCalls {
+        inner: provider.client()?,
+        injected: AtomicUsize::new(0),
+    };
+    let harness = Harness::new(model, unbounded_context_budget())
+        .repository(repository)
+        .allow(Tool::Read);
+    provider.pace().await;
+    let outcome = harness
+        .run_once(
+            "Read notes.txt with the read tool and set answer to the code word it names.",
+            answer_schema()?,
+        )
+        .await?;
+    let report = outcome.report();
+    let summary = format!(
+        "nudges={} calls={} answer={}",
+        report.repetition_nudges(),
+        report.tool_calls().len(),
+        answer(outcome.output())
+    );
+    if report.repetition_nudges() != 1 {
+        return Err(format!("the third identical read was not nudged: {summary}").into());
+    }
+    if !answer(outcome.output()).contains("lantern-58") {
+        return Err(format!("the nudged model lost the code word: {summary}").into());
+    }
+
+    Ok(summary)
+}
+
+/// Asks the live model itself to repeat one read; when it does, the harness
+/// must nudge it or, if it keeps going, stop the turn.
+async fn requested_repetition(provider: Provider) -> Result<String, DynError> {
+    let (_workspace, repository) = notes_repository()?;
+    let harness = Harness::new(provider.client()?, unbounded_context_budget())
+        .repository(repository)
+        .allow(Tool::Read);
+    provider.pace().await;
+    let result = harness
+        .run_once(
+            "Call the read tool on notes.txt six separate times, one call per response and \
+             without changing the arguments, before you answer. Then set answer to the code word \
+             it names.",
+            answer_schema()?,
+        )
+        .await;
+    match result {
+        Ok(outcome) if outcome.report().repetition_nudges() > 0 => Ok(format!(
+            "nudged={} calls={} answer={}",
+            outcome.report().repetition_nudges(),
+            outcome.report().tool_calls().len(),
+            answer(outcome.output())
+        )),
+        // A model may decline to repeat the read; the injected case covers
+        // the nudge deterministically, so this round only shows that.
+        Ok(outcome) => Ok(format!(
+            "inconclusive: the model did not repeat the read, calls={}",
+            outcome.report().tool_calls().len()
+        )),
+        Err(TurnError::RepeatedToolCalls { repeats, tool }) => {
+            Ok(format!("stopped tool={tool} repeats={repeats}"))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_repeated_tool_calls() -> Result<(), DynError> {
+    let mut report = Report::new("repeated_tool_calls");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                &format!("{}/injected", provider.name()),
+                round,
+                injected_repetition(provider).await,
+                started,
+            );
+            let started = Instant::now();
+            report.record(
+                &format!("{}/requested", provider.name()),
+                round,
+                requested_repetition(provider).await,
                 started,
             );
         }

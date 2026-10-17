@@ -136,6 +136,8 @@ pub struct TurnReport {
     output_corrections: usize,
     #[serde(default)]
     malformed_tool_calls: usize,
+    #[serde(default)]
+    repetition_nudges: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -178,6 +180,13 @@ impl TurnReport {
         self.malformed_tool_calls
     }
 
+    /// Returns how many times the turn asked the model to stop repeating an
+    /// identical tool call, one with the same arguments that returned the
+    /// same result. Reports recorded before this field existed report none.
+    pub fn repetition_nudges(&self) -> usize {
+        self.repetition_nudges
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -194,6 +203,7 @@ impl TurnReport {
             model_requests,
             output_corrections: 0,
             malformed_tool_calls: 0,
+            repetition_nudges: 0,
             tool_calls,
         }
     }
@@ -205,6 +215,12 @@ impl TurnReport {
     ) -> Self {
         self.output_corrections = output_corrections;
         self.malformed_tool_calls = malformed_tool_calls;
+
+        self
+    }
+
+    pub(crate) fn with_repetition_nudges(mut self, repetition_nudges: usize) -> Self {
+        self.repetition_nudges = repetition_nudges;
 
         self
     }
@@ -736,6 +752,16 @@ pub enum TurnError {
         /// any usage report.
         required: u64,
     },
+    /// The model kept repeating one tool call, with the same arguments and
+    /// the same result, after a nudge to stop; the turn stops instead of
+    /// spending further requests on it.
+    #[error("tool `{tool}` was called {repeats} times with the same arguments and result")]
+    RepeatedToolCalls {
+        /// Identical calls within the recent-call window that stopped the turn.
+        repeats: usize,
+        /// Native function name of the repeated call.
+        tool: String,
+    },
 }
 
 impl TurnError {
@@ -753,6 +779,7 @@ impl TurnError {
             Self::RepositoryRequired => TurnErrorType::RepositoryRequired,
             Self::ComparisonRepositoryMismatch => TurnErrorType::ComparisonRepositoryMismatch,
             Self::ContextBudgetExceeded { .. } => TurnErrorType::ContextBudget,
+            Self::RepeatedToolCalls { .. } => TurnErrorType::RepeatedToolCalls,
             Self::MessageJournal { .. } => TurnErrorType::Session,
         }
     }

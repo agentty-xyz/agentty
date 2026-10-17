@@ -170,6 +170,19 @@ pub enum LifecycleEventKind {
         /// Owning turn.
         turn_id: LifecycleId,
     },
+    /// The model repeated one tool call, with the same arguments and the
+    /// same result, often enough that the turn nudged it to stop or, when
+    /// `stopped`, failed.
+    ToolCallsRepeated {
+        /// Identical calls within the recent-call window.
+        repeats: usize,
+        /// Whether the repetition failed the turn rather than nudging it.
+        stopped: bool,
+        /// Bounded built-in tool name.
+        tool_name: String,
+        /// Owning turn.
+        turn_id: LifecycleId,
+    },
 }
 
 /// Observable outcome of one provider-neutral model request.
@@ -205,6 +218,8 @@ pub enum TurnErrorType {
     ToolDenied,
     /// Mandatory request content exceeded the model's context budget.
     ContextBudget,
+    /// The model kept repeating an identical tool call after a nudge.
+    RepeatedToolCalls,
     /// A repository-scoped tool was enabled without a repository root.
     RepositoryRequired,
     /// The comparison base belongs to a different repository scope.
@@ -222,6 +237,7 @@ impl TurnErrorType {
             Self::Tool => crate::telemetry::ERROR_TOOL_EXECUTION,
             Self::ToolDenied => crate::telemetry::ERROR_TOOL_DENIED,
             Self::ContextBudget => crate::telemetry::ERROR_CONTEXT_BUDGET,
+            Self::RepeatedToolCalls => crate::telemetry::ERROR_REPEATED_TOOL_CALLS,
             Self::RepositoryRequired => crate::telemetry::ERROR_REPOSITORY_REQUIRED,
             Self::ComparisonRepositoryMismatch => {
                 crate::telemetry::ERROR_COMPARISON_REPOSITORY_MISMATCH
@@ -496,6 +512,26 @@ impl LifecycleEmitter {
         self.state
             .as_ref()
             .map(|state| LifecycleId(state.next_id.fetch_add(1, Ordering::Relaxed)))
+    }
+
+    /// Emits that the model repeated a `tool_name` call `repeats` times
+    /// within `turn_id`, nudged or, when `stopped`, failing the turn.
+    pub(crate) fn repeated_tool_calls(
+        &self,
+        tool_name: &str,
+        repeats: usize,
+        stopped: bool,
+        turn_id: Option<LifecycleId>,
+    ) {
+        let Some(turn_id) = turn_id else {
+            return;
+        };
+        self.emit(LifecycleEventKind::ToolCallsRepeated {
+            repeats,
+            stopped,
+            tool_name: tool_name.to_string(),
+            turn_id,
+        });
     }
 
     fn emit(&self, kind: LifecycleEventKind) {

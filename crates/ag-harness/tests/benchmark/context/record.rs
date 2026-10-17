@@ -14,6 +14,7 @@ pub(super) struct Activity {
     model_calls: usize,
     output_corrections: usize,
     output_tokens: Option<u64>,
+    repetition_nudges: usize,
     tool_calls: usize,
 }
 
@@ -44,6 +45,7 @@ impl Activity {
             model_calls: report.model_requests().len(),
             output_corrections: report.output_corrections(),
             output_tokens,
+            repetition_nudges: report.repetition_nudges(),
             tool_calls: report.tool_calls().len(),
         }
     }
@@ -55,6 +57,7 @@ impl Activity {
         line.insert("duplicate_reads".into(), json!(self.duplicate_reads));
         line.insert("input_tokens".into(), json!(self.input_tokens));
         line.insert("output_tokens".into(), json!(self.output_tokens));
+        line.insert("repetition_nudges".into(), json!(self.repetition_nudges));
         for (name, count) in self.context {
             line.insert(name.into(), json!(count));
         }
@@ -108,13 +111,14 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 6] = [
+const ACTIVITY_FIELDS: [&str; 7] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
     "duplicate_reads",
     "input_tokens",
     "output_tokens",
+    "repetition_nudges",
 ];
 const CONTEXT_FIELDS: [&str; 7] = [
     "elided_results",
