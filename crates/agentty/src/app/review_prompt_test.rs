@@ -397,7 +397,7 @@ async fn partial_boundary_pass_keeps_both_original_and_new_findings() {
 
 /// Seeds an older completed audit before a replacement review starts.
 async fn completed_boundary_review_database() -> Result<Database, ag_store::DbError> {
-    let database = Database::open_in_memory().await?;
+    let database = Database::in_memory().await?;
     let project = database.projects().upsert_project("project", None).await?;
     let sessions = database.sessions();
     sessions

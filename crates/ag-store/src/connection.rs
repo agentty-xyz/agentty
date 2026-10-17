@@ -18,6 +18,9 @@ use crate::{AppRepositories, DbError, TimestampSource};
 /// queued writer contenders.
 pub(crate) const DB_POOL_MAX_CONNECTIONS: u32 = 4;
 
+/// Embedded schema migrations applied to every database.
+pub(crate) static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 /// Thin wrapper around a `SQLite` connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -68,12 +71,9 @@ impl Database {
             .connect_with(options)
             .await?;
 
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        MIGRATOR.run(&pool).await?;
 
-        let repositories =
-            AppRepositories::from_pool_and_timestamp_source(pool.clone(), timestamp_source);
-
-        Ok(Self { pool, repositories })
+        Ok(Self::from_pool(pool, timestamp_source))
     }
 
     /// Opens an in-memory `SQLite` database and runs migrations.
@@ -99,10 +99,15 @@ impl Database {
     ) -> Result<Self, DbError> {
         let pool = open_in_memory_pool(1).await?;
 
+        Ok(Self::from_pool(pool, timestamp_source))
+    }
+
+    /// Wraps an initialized pool with repositories using `timestamp_source`.
+    pub(crate) fn from_pool(pool: SqlitePool, timestamp_source: Arc<dyn TimestampSource>) -> Self {
         let repositories =
             AppRepositories::from_pool_and_timestamp_source(pool.clone(), timestamp_source);
 
-        Ok(Self { pool, repositories })
+        Self { pool, repositories }
     }
 
     /// Returns the shared `SQLite` connection pool for lower-level query
@@ -136,21 +141,25 @@ impl From<Database> for AppRepositories {
 /// # Errors
 /// Returns an error if the in-memory database connection or migrations fail.
 pub(crate) async fn open_in_memory_pool(max_connections: u32) -> Result<SqlitePool, DbError> {
-    let options = SqliteConnectOptions::new()
+    let pool = SqlitePoolOptions::new()
+        .max_connections(max_connections)
+        .connect_with(in_memory_connect_options())
+        .await?;
+
+    MIGRATOR.run(&pool).await?;
+
+    Ok(pool)
+}
+
+/// Returns in-memory connection settings matching the on-disk busy timeout,
+/// durability, and foreign-key policy.
+pub(crate) fn in_memory_connect_options() -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
         .filename(":memory:")
         .busy_timeout(Duration::from_secs(2))
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .foreign_keys(true);
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(max_connections)
-        .connect_with(options)
-        .await?;
-
-    sqlx::migrate!("./migrations").run(&pool).await?;
-
-    Ok(pool)
+        .foreign_keys(true)
 }
 
 #[cfg(test)]

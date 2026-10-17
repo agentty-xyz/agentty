@@ -3,8 +3,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use ag_session::{SessionDiffState, SessionMessageKind, SessionStats};
 use ag_worker::MockOperationRepository;
+use sqlx::SqlitePool;
 
-use crate::connection::open_in_memory_pool;
+use crate::connection::{Database, MIGRATOR, open_in_memory_pool};
 use crate::repository::AppRepositories;
 use crate::timestamp::TimestampSource;
 
@@ -216,4 +217,57 @@ async fn repository_parts_support_focused_adapter_injection() {
 
     // Assert
     assert!(is_cancel_requested);
+}
+
+#[tokio::test]
+async fn snapshot_fixtures_match_the_migrated_schema_and_stay_isolated() {
+    // Arrange
+    let migrated = open_in_memory_pool(1)
+        .await
+        .expect("failed to open migrated db");
+    let database = Database::in_memory()
+        .await
+        .expect("failed to open snapshot db");
+    let (_repositories, sibling) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("failed to open sibling snapshot db");
+
+    // Act
+    sqlx::query("CREATE TABLE isolation_probe (value INTEGER)")
+        .execute(database.pool())
+        .await
+        .expect("failed to change snapshot schema");
+    let foreign_keys = sqlx::query_scalar::<_, i64>("PRAGMA foreign_keys")
+        .fetch_one(database.pool())
+        .await
+        .expect("failed to read foreign-key pragma");
+    let applied = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _sqlx_migrations")
+        .fetch_one(&sibling)
+        .await
+        .expect("failed to count applied migrations");
+
+    // Assert
+    assert_eq!(schema(&sibling).await, schema(&migrated).await);
+    assert!(
+        schema(database.pool())
+            .await
+            .iter()
+            .any(|object| object.starts_with("table:isolation_probe:"))
+    );
+    assert_eq!(foreign_keys, 1);
+    assert_eq!(
+        applied,
+        i64::try_from(MIGRATOR.iter().count()).expect("bounded count")
+    );
+}
+
+/// Lists schema objects with their definitions in a stable order.
+async fn schema(pool: &SqlitePool) -> Vec<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT type || ':' || name || COALESCE(':' || sql, '') FROM sqlite_master ORDER BY type, \
+         name",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("failed to read schema")
 }

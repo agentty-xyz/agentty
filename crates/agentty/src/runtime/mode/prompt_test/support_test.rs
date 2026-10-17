@@ -1,5 +1,4 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event;
@@ -18,6 +17,7 @@ use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
+use crate::test_support::setup_test_git_repo;
 use crate::ui::RenderCacheStore;
 
 pub(super) trait PromptTestAppExt {
@@ -97,40 +97,6 @@ pub(super) fn install_mock_fs_client(app: &mut App, mock_fs_client: fs::MockFsCl
     app.services.set_fs_client(Arc::new(mock_fs_client));
 }
 
-pub(super) fn setup_test_git_repo(path: &Path) {
-    Command::new("git")
-        .args(["init"])
-        .current_dir(path)
-        .output()
-        .expect("git init failed");
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(path)
-        .output()
-        .expect("git config failed");
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(path)
-        .output()
-        .expect("git config failed");
-    std::fs::write(path.join("README.md"), "test").expect("write failed");
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(path)
-        .output()
-        .expect("git add failed");
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(path)
-        .output()
-        .expect("git commit failed");
-    Command::new("git")
-        .args(["branch", "-M", "main"])
-        .current_dir(path)
-        .output()
-        .expect("git branch failed");
-}
-
 /// Builds prompt state without application startup, persistence, or a worktree.
 pub(super) fn new_test_prompt_mode(input_text: &str) -> AppMode {
     AppMode::Prompt {
@@ -165,7 +131,7 @@ pub(super) async fn new_test_prompt_app_with_session_mode(
     let base_dir = tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     setup_test_git_repo(base_dir.path());
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let pool = database.pool().clone();

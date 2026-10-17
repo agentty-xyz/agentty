@@ -27,7 +27,8 @@ Pick the first level that can observe the behavior:
 1. **Boundary unit**. Workflow orchestration through injected traits with `mockall`
    mocks or scripted worker facilities. Add an in-memory database only when persisted
    state is the subject, and a real Git repository only when Git behavior is the
-   subject. Each costs about 0.2 s; a full `App` with a session costs 0.5 to 2 s.
+   subject. A full `App` with a session still costs about 0.1 to 1 s under parallel
+   load.
 1. **Crate contract** (`crates/*/tests/`). One test per public contract rule, using the
    crate's public API. Leave argument permutations and error branches to levels 1–2.
 1. **PTY scenario** (`crates/agentty/tests/e2e/`, `FeatureTest`). One scenario per
@@ -52,6 +53,11 @@ Pick the first level that can observe the behavior:
 
 - Never start an `App`, create a session, or initialize Git to test a transformation of
   in-memory state.
+- Use the cached fixtures: `Database::in_memory` and `AppRepositories::in_memory` load a
+  migrated-schema snapshot, and `setup_test_git_repo` in `crates/agentty/src/` copies a
+  committed template repository. Keep `Database::open_in_memory` for tests of migrations
+  or production construction, and run Git commands directly only when Git behavior is
+  the subject.
 - Do not sleep on the wall clock to order events. Inject `Clock` or another time
   boundary; use `tokio::time::pause` where the code runs on Tokio time.
 - Keep timeouts as failure guards only; a passing test must not wait for them.

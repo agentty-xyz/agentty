@@ -1,9 +1,48 @@
 use std::path::Path;
+use std::process::Command;
 
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Style};
 
-use super::{TestSubscriber, rendered_text_start_cell, rendered_text_start_cells};
+use super::{
+    TestSubscriber, rendered_text_start_cell, rendered_text_start_cells, setup_test_git_repo,
+};
+
+#[test]
+fn git_repo_fixtures_are_independent_committed_main_checkouts() {
+    // Arrange
+    let first = tempfile::tempdir().expect("failed to create first fixture dir");
+    let second = tempfile::tempdir().expect("failed to create second fixture dir");
+    let git = |path: &Path, args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to run git");
+
+        String::from_utf8(output.stdout).expect("git output should be UTF-8")
+    };
+
+    // Act
+    setup_test_git_repo(first.path());
+    setup_test_git_repo(second.path());
+    std::fs::write(first.path().join("README.md"), "changed").expect("failed to edit fixture");
+
+    // Assert
+    assert_eq!(
+        git(second.path(), &["branch", "--show-current"]).trim(),
+        "main"
+    );
+    assert_eq!(
+        git(second.path(), &["log", "--format=%s"]).trim(),
+        "Initial commit"
+    );
+    assert_eq!(git(second.path(), &["status", "--porcelain"]), "");
+    assert_eq!(
+        git(first.path(), &["status", "--porcelain"]).trim(),
+        "M README.md"
+    );
+}
 
 #[test]
 fn test_subscriber_records_span_and_event_fields() {

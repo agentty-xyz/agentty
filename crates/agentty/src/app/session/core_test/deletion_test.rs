@@ -21,7 +21,7 @@ async fn deleting_or_canceling_sessions_waits_for_utilities_before_removing_reso
         let stopped = CancellationToken::new();
         let finish = CancellationToken::new();
         let provider = blocking_provider(&started, &stopped, &finish);
-        let db = Database::open_in_memory().await.expect("database");
+        let db = Database::in_memory().await.expect("database");
         let clients = crate::test_support::test_app_clients()
             .with_app_server_client_override(Arc::new(provider));
         let mut app = App::new_with_clients(
