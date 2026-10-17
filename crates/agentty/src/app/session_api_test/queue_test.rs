@@ -12,6 +12,10 @@ use super::support::{
     request_message, request_question_answers, request_session, request_session_creation,
 };
 
+/// Failure guard for awaited turn starts; passing runs never wait this long,
+/// but a loaded test host can take over a second to start a worker turn.
+const TURN_START_GUARD: std::time::Duration = std::time::Duration::from_secs(10);
+
 #[tokio::test]
 async fn runtime_backend_queues_one_question_resume_behind_turn_entering_question_state() {
     // Arrange
@@ -41,7 +45,7 @@ async fn runtime_backend_queues_one_question_resume_behind_turn_entering_questio
         .expect("initial turn should start");
     crate::test_support::finish_session_creation_tasks(&mut app).await;
     assert_eq!(
-        tokio::time::timeout(std::time::Duration::from_secs(1), turn_started_rx.recv())
+        tokio::time::timeout(TURN_START_GUARD, turn_started_rx.recv())
             .await
             .expect("initial turn should start")
             .expect("initial turn kind should be available"),
@@ -91,11 +95,10 @@ async fn runtime_backend_queues_one_question_resume_behind_turn_entering_questio
         .queued_messages
         .clone();
     first_turn_release.notify_one();
-    let resumed_turn_kind =
-        tokio::time::timeout(std::time::Duration::from_secs(1), turn_started_rx.recv())
-            .await
-            .expect("question answer should resume")
-            .expect("resumed turn kind should be available");
+    let resumed_turn_kind = tokio::time::timeout(TURN_START_GUARD, turn_started_rx.recv())
+        .await
+        .expect("question answer should resume")
+        .expect("resumed turn kind should be available");
     let session = request_session(&mut app, session_id)
         .await
         .expect("session should load")
