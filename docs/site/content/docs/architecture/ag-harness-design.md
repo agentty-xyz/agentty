@@ -148,6 +148,23 @@ estimator replacement, and needs no schema change. Budget failures still name th
 declared budget, with the required weight restated in calibrated tokens, and
 `ModelRequestActivity` reports each request's estimated and calibrated weight.
 
+A provider rejection of a request as exceeding its context window reports no usage, so
+it instead caps later requests at 75% of the rejected request's estimated weight, the
+same shrink Roo Code retries an overflow at; a later rejection only lowers the cap. The
+engine then refits the turn's request under the lowered budget and re-sends it, at most
+twice per turn, so two rejections reach about 56% of the first rejected weight. A refit
+that cannot shrink below the cap fails the turn with the provider's
+`ModelErrorType::ContextOverflow` rather than a budget error, as does a third rejection.
+The cap lives with the calibration, so later turns stay below a window the provider
+proved wrong until `switch_model` or estimator replacement resets it; a budget failure
+it causes restates the required weight scaled by how far the cap cut the declared
+capacity, so it still exceeds the declared budget. `TurnReport` counts the re-sends, and
+`LifecycleEventKind::ContextOverflowRetried` follows each re-sent request's outcome,
+traced as a `ag_harness.context_overflow.retried` event on the turn span. Compaction
+requests run through the same engine, but their source is mandatory input that a refit
+cannot shrink, so a rejected one fails with the provider's error without a second
+request and leaves the lowered cap for later requests.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]
@@ -264,22 +281,22 @@ once. A `429` response is retried up to five times with exponential backoff capp
 five seconds, and a provider `Retry-After` is honored up to sixty seconds so a
 per-minute quota can be waited out. A provider rejection of input beyond the model's
 context window is classified as `ErrorClass::ContextOverflow` in `ag-router` and
-`ModelErrorType::ContextOverflow` in the harness, so callers can shrink and retry
-instead of failing: any `413`, or a `400` or `422` whose body carries a known marker.
-Shared markers are OpenAI's `context_length_exceeded` code and "maximum context length"
-message; each provider policy adds its own, captured live: Kimi's "exceeded model token
-limit", Qwen's "Range of input length", and the Meta Model API's generic "The request
-contains invalid parameters" message, which it returns only for an overflow while every
-other validation failure names its parameter. Model content is parsed as one JSON
-object; content that wraps the object in Markdown fences or surrounding prose is
-accepted when the embedded object parses, and every accepted value is still validated
-against the requested schema. Invalid content is reported with the parser diagnostic,
-the leading character, and the length, never the content itself. A final output rejected
-as invalid JSON or for violating the schema is re-requested up to twice in the same
-turn: the engine appends a request-only feedback message carrying that bounded
-diagnostic and asking for a single JSON value, and the follow-up request goes through
-the same context fitting. Neither the rejected output nor the feedback is journaled,
-because only finished, accepted exchanges belong in replayed history;
+`ModelErrorType::ContextOverflow` in the harness, so the engine can shrink and retry
+instead of failing (see the calibration above): any `413`, or a `400` or `422` whose
+body carries a known marker. Shared markers are OpenAI's `context_length_exceeded` code
+and "maximum context length" message; each provider policy adds its own, captured live:
+Kimi's "exceeded model token limit", Qwen's "Range of input length", and the Meta Model
+API's generic "The request contains invalid parameters" message, which it returns only
+for an overflow while every other validation failure names its parameter. Model content
+is parsed as one JSON object; content that wraps the object in Markdown fences or
+surrounding prose is accepted when the embedded object parses, and every accepted value
+is still validated against the requested schema. Invalid content is reported with the
+parser diagnostic, the leading character, and the length, never the content itself. A
+final output rejected as invalid JSON or for violating the schema is re-requested up to
+twice in the same turn: the engine appends a request-only feedback message carrying that
+bounded diagnostic and asking for a single JSON value, and the follow-up request goes
+through the same context fitting. Neither the rejected output nor the feedback is
+journaled, because only finished, accepted exchanges belong in replayed history;
 `TurnReport::output_corrections` counts the retries, and a third rejection fails the
 turn with the original error type.
 

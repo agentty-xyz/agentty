@@ -114,6 +114,21 @@ pub enum LifecycleEventKind {
         /// Owning turn, or `None` for a standalone model request.
         turn_id: Option<LifecycleId>,
     },
+    /// A request the provider rejected as exceeding its context window was
+    /// re-sent reduced. The rejected request was reported as
+    /// [`Self::ModelRequestFailed`] with [`ModelErrorType::ContextOverflow`];
+    /// this event follows the re-sent request's own outcome event.
+    ContextOverflowRetried {
+        /// One-based recovery within the turn.
+        attempt: u64,
+        /// Estimated weight, without reserved output, of the rejected
+        /// request.
+        rejected_weight: u64,
+        /// Estimated weight, without reserved output, of the reduced request.
+        retry_weight: u64,
+        /// Owning turn, or `None` for a standalone request.
+        turn_id: Option<LifecycleId>,
+    },
     /// One in-flight provider-neutral model request was cancelled.
     ModelRequestCancelled {
         /// Elapsed model-request time before cancellation.
@@ -459,6 +474,21 @@ impl LifecycleEmitter {
             started_at: Instant::now(),
             turn_id,
         })
+    }
+
+    pub(crate) fn context_overflow_retried(
+        &self,
+        attempt: u64,
+        rejected_weight: u64,
+        retry_weight: u64,
+        turn_id: Option<LifecycleId>,
+    ) {
+        self.emit(LifecycleEventKind::ContextOverflowRetried {
+            attempt,
+            rejected_weight,
+            retry_weight,
+            turn_id,
+        });
     }
 
     pub(crate) fn start_model_request(

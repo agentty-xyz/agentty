@@ -1185,6 +1185,188 @@ async fn test_repeated_tool_calls() -> Result<(), DynError> {
 }
 
 // ---------------------------------------------------------------------------
+// Context overflow recovery
+// ---------------------------------------------------------------------------
+
+/// Bytes of random words in one part file, below the read tool's 50 KiB
+/// limit so each read returns a whole file.
+const OVERFLOW_PART_BYTES: usize = 48 * 1024;
+
+impl Provider {
+    /// Input tokens the provider accepts, from the overflow bodies captured
+    /// live: Kimi names 262,144, Qwen-Plus a range up to 1,000,000, and Muse
+    /// accepted 1,024,291 tokens but not about 1.08 million.
+    fn window_tokens(self) -> usize {
+        match self {
+            Self::Kimi => 262_144,
+            Self::Muse => 1_048_576,
+            Self::Qwen => 1_000_000,
+        }
+    }
+
+    /// Part files whose reads together exceed the window by about a third:
+    /// one megabyte of random words was 422,274 Kimi tokens, so a part file
+    /// is roughly 19,000 tokens.
+    fn overflow_parts(self) -> usize {
+        self.window_tokens() * 4 / 3 / 19_000 + 1
+    }
+}
+
+/// Answers its first `reads` requests with one scripted `read` of the next
+/// part file each, so the turn's request grows past the provider window
+/// without depending on the model's batching, then delegates to `inner`.
+struct ScriptedPartReads {
+    inner: ModelClient,
+    reads: usize,
+    served: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl Model for ScriptedPartReads {
+    fn metadata(&self) -> Option<ModelMetadata> {
+        Model::metadata(&self.inner)
+    }
+
+    fn validate_schema(&self, schema: &OutputSchema) -> Result<(), ModelError> {
+        self.inner.validate_schema(schema)
+    }
+
+    async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
+        let index = self.served.fetch_add(1, Ordering::SeqCst);
+        if index >= self.reads {
+            return self.inner.complete(request).await;
+        }
+        let arguments = json!({"path": format!("part{}.txt", index + 1)}).to_string();
+        let call = ToolCall::from_json(format!("read_{index}"), "read", &arguments, None)?;
+
+        Ok(ModelCompletion::from_response(ModelResponse::ToolCall(
+            call,
+        )))
+    }
+}
+
+async fn context_overflow_recovery(provider: Provider) -> Result<String, DynError> {
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    let parts = provider.overflow_parts();
+    let words = incompressible_text(parts * OVERFLOW_PART_BYTES);
+    let mut remaining = words.as_str();
+    for part in 1..=parts {
+        let (chunk, rest) = remaining.split_at(remaining.floor_char_boundary(OVERFLOW_PART_BYTES));
+        remaining = rest;
+        let lines = chunk
+            .as_bytes()
+            .chunks(120)
+            .map(|line| String::from_utf8_lossy(line).into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            root.join(format!("part{part}.txt")),
+            format!("The code word of part {part} is quill-{part}{part}.\n{lines}\n"),
+        )?;
+    }
+    // The declared window is twice the real one in estimate units, so the
+    // uncalibrated budget admits a request the provider rejects, as a
+    // catalog entry that overstates a model's window would.
+    let budget = ContextBudget::new(
+        NonZeroU64::new(u64::try_from(provider.window_tokens() * 2)?).ok_or("budget")?,
+    )
+    .with_reserved_output(8_192)?;
+    let model = ScriptedPartReads {
+        inner: provider.client()?,
+        reads: parts,
+        served: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let retries = Arc::new(Mutex::new(Vec::new()));
+    let observed = Arc::clone(&retries);
+    let harness = Harness::new(model, budget)
+        .repository(Repository::new(&root, GIT_EXECUTABLE)?)
+        .allow(Tool::Read)
+        .with_lifecycle_observer(move |event: ag_harness::lifecycle::LifecycleEvent| {
+            if let ag_harness::lifecycle::LifecycleEventKind::ContextOverflowRetried {
+                rejected_weight,
+                retry_weight,
+                ..
+            } = event.kind()
+            {
+                observed
+                    .lock()
+                    .expect("retries lock")
+                    .push((*rejected_weight, *retry_weight));
+            }
+        });
+    provider.pace().await;
+    let outcome = harness
+        .run_once(
+            format!(
+                "Read part1.txt through part{parts}.txt with the read tool, one file per call. \
+                 Each file opens with a sentence naming its code word. After the last read, set \
+                 answer to the code word of part{parts}.txt."
+            ),
+            answer_schema()?,
+        )
+        .await
+        .map_err(|error| {
+            format!(
+                "{error} (retries={:?})",
+                retries.lock().expect("retries lock")
+            )
+        })?;
+    let report = outcome.report();
+    let input_tokens = report
+        .model_requests()
+        .iter()
+        .filter_map(|request| {
+            request
+                .completion()
+                .and_then(|completion| completion.usage())
+                .and_then(|usage| usage.input_tokens())
+        })
+        .collect::<Vec<_>>();
+    let summary = format!(
+        "parts={parts} recoveries={} retries={:?} live_input_tokens={input_tokens:?} answer={}",
+        report.context_overflow_recoveries(),
+        retries.lock().expect("retries lock"),
+        answer(outcome.output())
+    );
+    if report.context_overflow_recoveries() == 0 {
+        return Err(format!("the provider accepted the oversized request: {summary}").into());
+    }
+    if answer(outcome.output()) != format!("quill-{parts}{parts}") {
+        return Err(format!("wrong code word after recovery: {summary}").into());
+    }
+
+    Ok(summary)
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_context_overflow_recovery() -> Result<(), DynError> {
+    let mut report = Report::new("context_overflow_recovery");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                provider.name(),
+                round,
+                context_overflow_recovery(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
 // Sandboxed Bash (#662), executor contract (#674, #675)
 // ---------------------------------------------------------------------------
 

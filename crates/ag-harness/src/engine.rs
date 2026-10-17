@@ -41,6 +41,14 @@ pub(crate) const MAX_OUTPUT_CORRECTIONS: usize = 2;
 /// of wasted requests.
 pub(crate) const MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES: usize = 3;
 
+/// Requests of one turn the provider may reject as exceeding its context
+/// window and the harness re-send reduced before the rejection fails the
+/// turn. Each rejection lowers the calibration's overflow ceiling, so two
+/// recoveries already shrink a request to about 56% of the first rejected
+/// one, while a provider whose window cannot hold even the mandatory content
+/// stops after a bounded number of wasted requests.
+pub(crate) const MAX_CONTEXT_OVERFLOW_RECOVERIES: usize = 2;
+
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
     pub(crate) context_budget: context::ContextBudget,
@@ -65,34 +73,38 @@ impl Engine<'_> {
         let started_at = Instant::now();
         let recorder = journal.clone();
         let (mut request, tools) = self.prepare_request(request, journal)?;
+        let mut rounds = ToolRounds::new(tools, recorder);
         let mut context_fit = context::ContextFit::default();
         let mut model_request_index = 0_u64;
         let mut model_requests = Vec::new();
         let mut output_corrections = 0;
         let mut consecutive_malformed_responses = 0;
         let mut malformed_tool_calls = 0;
-        let mut reads = RepeatedReads::default();
-        let mut repeated_calls = RepeatedCalls::default();
         let mut repetition_nudges = 0;
-        let mut tool_calls = Vec::new();
+        let mut overflow = OverflowRecovery::default();
 
         loop {
             // Tool traffic grows the request between model calls; a grown
             // request that no longer fits the calibrated budget is sent as a
             // reduced copy, and one that cannot be reduced enough fails
             // typed here instead of overflowing the provider context.
-            let (budget, envelope) = self
+            let (budget, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
             let (fitted, context_activity) = context_fit
                 .fit(self.context_estimator, budget, &request)
                 .map_err(|error| {
-                    ContextCalibration::declared_failure(self.context_budget, envelope, error)
+                    overflow.rejection_or(ContextCalibration::declared_failure(
+                        self.context_budget,
+                        calibration,
+                        error,
+                    ))
                 })?;
             let completed = self
                 .complete_model_request(fitted.unwrap_or(&request), model_request_index, turn_id)
                 .await;
             let estimated_weight = context_fit.sent_weight();
+            overflow.retried(self.lifecycle, turn_id, estimated_weight);
             model_request_index = model_request_index.saturating_add(1);
             let (response, activity, reasoning_content) = match completed {
                 // An invalid final output is re-requested with request-only
@@ -106,6 +118,15 @@ impl Engine<'_> {
 
                     continue;
                 }
+                // A request the provider rejected as exceeding its context
+                // window is refitted under a lower calibrated ceiling and
+                // re-sent; the rejection fails the turn only once the
+                // recoveries are spent or the refit cannot shrink it.
+                Err(error) if error.is_context_overflow() => {
+                    overflow.reject(self.context_calibration, error, estimated_weight)?;
+
+                    continue;
+                }
                 completed => completed?,
             };
             self.context_calibration.observe(
@@ -113,17 +134,23 @@ impl Engine<'_> {
                 estimated_weight,
                 activity.completion(),
             );
-            model_requests.push(activity.with_context(context_activity).with_estimate(
-                estimated_weight,
-                envelope.map(|envelope| envelope.tokens(estimated_weight)),
-            ));
+            model_requests.push(
+                activity.with_context(context_activity).with_estimate(
+                    estimated_weight,
+                    calibration
+                        .envelope()
+                        .map(|envelope| envelope.tokens(estimated_weight)),
+                ),
+            );
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
-                    let report = TurnReport::new(started_at.elapsed(), model_requests, tool_calls)
-                        .with_corrections(output_corrections, malformed_tool_calls)
-                        .with_repetition_nudges(repetition_nudges);
+                    let report =
+                        TurnReport::new(started_at.elapsed(), model_requests, rounds.activity)
+                            .with_corrections(output_corrections, malformed_tool_calls)
+                            .with_repetition_nudges(repetition_nudges)
+                            .with_context_overflow_recoveries(overflow.recoveries);
 
                     return Ok((TurnOutcome::new(output, report), request.into_messages()));
                 }
@@ -138,40 +165,69 @@ impl Engine<'_> {
                 }
             };
             malformed_tool_calls += count_malformed(&calls, &mut consecutive_malformed_responses)?;
-            let call_message = match (batched, calls.as_slice()) {
-                (false, [call]) => request.record_tool_call(call.clone()),
-                _ => request.record_tool_calls(calls.clone()),
-            };
-            Self::persist(recorder.as_ref(), call_message).await?;
-            let mut repetition = Repetition::None;
-            for call in &calls {
-                let repeated = reads.repeat_of(call, &context_fit);
-                let (result, activity) = self
-                    .execute_tool_call(
-                        call,
-                        &tools,
-                        turn_id,
-                        repeated.as_ref().map(|(call_id, _)| call_id.as_str()),
-                    )
-                    .await?;
-                let result_bytes = result.len();
-                // A read answered as a repeat returned the earlier result.
-                let digest = repeated
-                    .as_ref()
-                    .map_or_else(|| repetition::result_digest(&result), |(_, digest)| *digest);
-                Self::persist(recorder.as_ref(), request.record_tool_result(call, result)).await?;
-                let result_index = request.messages().len() - 1;
-                reads.record(
-                    call,
-                    result_index,
-                    (result_bytes, digest),
-                    repeated.is_some(),
-                );
-                repetition = repetition.max(repeated_calls.record(call, digest));
-                tool_calls.push(activity);
-            }
+            let repetition = self
+                .execute_tool_calls(
+                    &calls,
+                    batched,
+                    turn_id,
+                    &mut request,
+                    &context_fit,
+                    &mut rounds,
+                )
+                .await?;
             repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Journals one response's `calls`, then executes them in order and
+    /// journals each result, returning the strongest repetition among them.
+    async fn execute_tool_calls(
+        &self,
+        calls: &[ToolCall],
+        batched: bool,
+        turn_id: Option<LifecycleId>,
+        request: &mut ModelRequest,
+        context_fit: &context::ContextFit,
+        rounds: &mut ToolRounds,
+    ) -> Result<Repetition, TurnError> {
+        let call_message = match (batched, calls) {
+            (false, [call]) => request.record_tool_call(call.clone()),
+            _ => request.record_tool_calls(calls.to_vec()),
+        };
+        Self::persist(rounds.recorder.as_ref(), call_message).await?;
+        let mut repetition = Repetition::None;
+        for call in calls {
+            let repeated = rounds.reads.repeat_of(call, context_fit);
+            let (result, activity) = self
+                .execute_tool_call(
+                    call,
+                    &rounds.tools,
+                    turn_id,
+                    repeated.as_ref().map(|(call_id, _)| call_id.as_str()),
+                )
+                .await?;
+            let result_bytes = result.len();
+            // A read answered as a repeat returned the earlier result.
+            let digest = repeated
+                .as_ref()
+                .map_or_else(|| repetition::result_digest(&result), |(_, digest)| *digest);
+            Self::persist(
+                rounds.recorder.as_ref(),
+                request.record_tool_result(call, result),
+            )
+            .await?;
+            let result_index = request.messages().len() - 1;
+            rounds.reads.record(
+                call,
+                result_index,
+                (result_bytes, digest),
+                repeated.is_some(),
+            );
+            repetition = repetition.max(rounds.repeated_calls.record(call, digest));
+            rounds.activity.push(activity);
+        }
+
+        Ok(repetition)
     }
 
     /// Fails the turn when the latest response's calls reached
@@ -423,6 +479,90 @@ impl Engine<'_> {
 
                 Err(error)
             }
+        }
+    }
+}
+
+/// The turn's tools and journal, and what its tool rounds did so far:
+/// the reads a repeat may reuse, the window of recent identical calls, and
+/// the activity the report lists.
+struct ToolRounds {
+    tools: Tools,
+    recorder: Option<WriteJournal>,
+    reads: RepeatedReads,
+    repeated_calls: RepeatedCalls,
+    activity: Vec<ToolActivity>,
+}
+
+impl ToolRounds {
+    fn new(tools: Tools, recorder: Option<WriteJournal>) -> Self {
+        Self {
+            tools,
+            recorder,
+            reads: RepeatedReads::default(),
+            repeated_calls: RepeatedCalls::default(),
+            activity: Vec::new(),
+        }
+    }
+}
+
+/// Context-window rejections of one turn: how many the turn re-sent
+/// reduced, and the latest one while its reduced re-send is pending. While
+/// a rejection is pending, the next fit refits the rejected request under
+/// the lowered ceiling; a stronger reduction for that refit, such as a
+/// forced summary of earlier rounds, belongs there.
+#[derive(Default)]
+struct OverflowRecovery {
+    pending: Option<(ModelError, u64)>,
+    recoveries: usize,
+}
+
+impl OverflowRecovery {
+    /// Lowers `calibration`'s overflow ceiling below the provider's rejected
+    /// request of `rejected_weight`, without reserved output, and holds the
+    /// rejection until the refit re-sends it reduced; returns the rejection
+    /// instead once the turn spent [`MAX_CONTEXT_OVERFLOW_RECOVERIES`].
+    fn reject(
+        &mut self,
+        calibration: &ContextCalibration,
+        error: ModelError,
+        rejected_weight: u64,
+    ) -> Result<(), ModelError> {
+        if self.recoveries == MAX_CONTEXT_OVERFLOW_RECOVERIES {
+            return Err(error);
+        }
+        calibration.observe_overflow(rejected_weight);
+        self.recoveries += 1;
+        self.pending = Some((error, rejected_weight));
+
+        Ok(())
+    }
+
+    /// Returns the pending rejection in place of the refit's `error`: the
+    /// rejected request could not shrink below the lowered ceiling, so the
+    /// turn fails with the provider's verdict. Returns any other failure
+    /// unchanged.
+    fn rejection_or(&mut self, error: TurnError) -> TurnError {
+        self.pending
+            .take()
+            .map_or(error, |(rejection, _)| rejection.into())
+    }
+
+    /// Reports that the pending rejection was re-sent as a reduced request
+    /// of `retry_weight`, without reserved output.
+    fn retried(
+        &mut self,
+        lifecycle: &LifecycleEmitter,
+        turn_id: Option<LifecycleId>,
+        retry_weight: u64,
+    ) {
+        if let Some((_, rejected_weight)) = self.pending.take() {
+            lifecycle.context_overflow_retried(
+                u64::try_from(self.recoveries).unwrap_or(u64::MAX),
+                rejected_weight,
+                retry_weight,
+                turn_id,
+            );
         }
     }
 }
@@ -736,8 +876,6 @@ async fn execute_write_tool(
     }
 }
 
-/// Returns the bounded report summary of a `read`: its path, else its
-/// query, else the tool name.
 /// Counts the malformed calls of one response and the run of responses
 /// made only of malformed calls, and fails the turn when that run reaches
 /// [`MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES`]. A malformed call is
@@ -768,6 +906,8 @@ fn count_malformed(calls: &[ToolCall], consecutive: &mut usize) -> Result<usize,
     Ok(malformed.len())
 }
 
+/// Returns the bounded report summary of a `read`: its path, else its
+/// query, else the tool name.
 fn read_summary(arguments: &ReadArguments) -> &str {
     arguments
         .path_filter()

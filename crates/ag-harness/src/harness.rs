@@ -1163,7 +1163,7 @@ impl Harness {
         input: &TurnInput,
         options: &TurnOptions,
     ) -> Result<u64, TurnError> {
-        let (budget, envelope) = self
+        let (budget, calibration) = self
             .context_calibration
             .effective_budget(self.context_budget);
 
@@ -1174,7 +1174,9 @@ impl Harness {
             input,
             options,
         )
-        .map_err(|error| ContextCalibration::declared_failure(self.context_budget, envelope, error))
+        .map_err(|error| {
+            ContextCalibration::declared_failure(self.context_budget, calibration, error)
+        })
     }
 
     /// Runs one bounded, tool-free summarization turn for checkpoint

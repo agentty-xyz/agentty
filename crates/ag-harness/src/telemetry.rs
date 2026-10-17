@@ -8,6 +8,7 @@ use opentelemetry::{KeyValue, global};
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, LifecycleId, LifecycleObserver};
 use crate::model::{CompletionMetadata, ModelError, ModelMetadata};
 
+pub(crate) const ATTRIBUTE_CONTEXT_OVERFLOW_ATTEMPT: &str = "ag_harness.context_overflow.attempt";
 pub(crate) const ATTRIBUTE_ERROR_TYPE: &str = "error.type";
 pub(crate) const ATTRIBUTE_OUTPUT_TYPE: &str = "gen_ai.output.type";
 pub(crate) const ATTRIBUTE_OPERATION_NAME: &str = "gen_ai.operation.name";
@@ -54,6 +55,7 @@ pub(crate) const ERROR_UNSUPPORTED_OUTPUT: &str = "unsupported_output";
 pub(crate) const EVENT_TOOL_CALLS_REPEATED: &str = "ag_harness.tool_calls.repeated";
 pub(crate) const ATTRIBUTE_REPEATS: &str = "ag_harness.tool_calls.repeats";
 pub(crate) const ATTRIBUTE_STOPPED: &str = "ag_harness.tool_calls.stopped";
+pub(crate) const EVENT_CONTEXT_OVERFLOW_RETRY: &str = "ag_harness.context_overflow.retried";
 pub(crate) const INSTRUMENTATION_SCOPE: &str = "ag-harness";
 pub(crate) const OPERATION_CHAT: &str = "chat";
 pub(crate) const OPERATION_EXECUTE_TOOL: &str = "execute_tool";
@@ -273,6 +275,7 @@ impl LifecycleMetricState {
             } => self.complete_tool(*duration, Some(error_type.as_str()), *tool_call_id),
             LifecycleEventKind::ModelRequestStarted { turn_id: None, .. }
             | LifecycleEventKind::ToolCallsRepeated { .. }
+            | LifecycleEventKind::ContextOverflowRetried { .. }
             | LifecycleEventKind::ModelRequestCompleted { .. }
             | LifecycleEventKind::ModelRequestFailed { .. }
             | LifecycleEventKind::ModelRequestCancelled { .. } => None,

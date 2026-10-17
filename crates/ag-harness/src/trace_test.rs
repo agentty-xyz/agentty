@@ -202,6 +202,12 @@ fn project_failures(emitter: &LifecycleEmitter, metadata: &ModelMetadata) {
     emitter
         .start_model_request(Some(metadata.clone()), 0, Some(failed_turn_id))
         .expect("observer should enable model calls")
+        .failed(ModelErrorType::ContextOverflow, Some(400));
+    emitter.context_overflow_retried(1, 900, 600, Some(failed_turn_id));
+    emitter.context_overflow_retried(1, 900, 600, None);
+    emitter
+        .start_model_request(Some(metadata.clone()), 1, Some(failed_turn_id))
+        .expect("observer should enable model calls")
         .failed(ModelErrorType::Transport, None);
     failed_turn.failed(TurnErrorType::Model(ModelErrorType::Transport));
 
@@ -415,6 +421,31 @@ fn assert_interleaved_spans(spans: &[SpanData]) {
 fn assert_failure_spans(spans: &[SpanData]) {
     let failed_model = find_span(spans, "chat test-model", Some("transport_error"));
     assert_eq!(failed_model.status, Status::error(""));
+    let overflowed_turn = spans
+        .iter()
+        .find(|span| span.span_context.span_id() == failed_model.parent_span_id)
+        .expect("failed model call should have its turn span");
+    let retries = overflowed_turn
+        .events
+        .iter()
+        .map(|event| {
+            let attempt = event
+                .attributes
+                .iter()
+                .find(|attribute| {
+                    attribute.key.as_str() == telemetry::ATTRIBUTE_CONTEXT_OVERFLOW_ATTEMPT
+                })
+                .map(|attribute| attribute.value.to_string());
+            (event.name.to_string(), attempt)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        retries,
+        [(
+            telemetry::EVENT_CONTEXT_OVERFLOW_RETRY.to_string(),
+            Some("1".to_string())
+        )]
+    );
     find_span(spans, "chat test-model", Some("429"));
     let standalone_cancelled =
         find_span(spans, "chat test-model", Some(telemetry::ERROR_CANCELLED));
@@ -469,7 +500,7 @@ async fn projects_correlated_semantic_spans_for_every_lifecycle_outcome() {
         .expect("finished spans should be readable");
 
     // Assert
-    assert_eq!(spans.len(), 22);
+    assert_eq!(spans.len(), 23);
     assert_success_spans(&spans);
     assert_interleaved_spans(&spans);
     assert_failure_spans(&spans);

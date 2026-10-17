@@ -138,6 +138,8 @@ pub struct TurnReport {
     malformed_tool_calls: usize,
     #[serde(default)]
     repetition_nudges: usize,
+    #[serde(default)]
+    context_overflow_recoveries: usize,
     tool_calls: Vec<ToolActivity>,
 }
 
@@ -187,6 +189,15 @@ impl TurnReport {
         self.repetition_nudges
     }
 
+    /// Returns how many requests the provider rejected as exceeding its
+    /// context window that the turn re-sent reduced under a lowered
+    /// calibrated ceiling; each rejected request is absent from
+    /// [`Self::model_requests`]. Reports recorded before this field existed
+    /// report none.
+    pub fn context_overflow_recoveries(&self) -> usize {
+        self.context_overflow_recoveries
+    }
+
     /// Returns successful repository tool activity without file contents.
     pub fn tool_calls(&self) -> &[ToolActivity] {
         &self.tool_calls
@@ -204,6 +215,7 @@ impl TurnReport {
             output_corrections: 0,
             malformed_tool_calls: 0,
             repetition_nudges: 0,
+            context_overflow_recoveries: 0,
             tool_calls,
         }
     }
@@ -221,6 +233,12 @@ impl TurnReport {
 
     pub(crate) fn with_repetition_nudges(mut self, repetition_nudges: usize) -> Self {
         self.repetition_nudges = repetition_nudges;
+
+        self
+    }
+
+    pub(crate) fn with_context_overflow_recoveries(mut self, recoveries: usize) -> Self {
+        self.context_overflow_recoveries = recoveries;
 
         self
     }
