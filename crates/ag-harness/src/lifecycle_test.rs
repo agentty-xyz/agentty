@@ -602,6 +602,7 @@ fn context_summary_kinds_have_stable_telemetry_values() {
     ];
     let errors = [
         ContextSummaryErrorType::Cancelled,
+        ContextSummaryErrorType::InvalidOutput,
         ContextSummaryErrorType::Model,
         ContextSummaryErrorType::Rejected,
     ];
@@ -616,6 +617,7 @@ fn context_summary_kinds_have_stable_telemetry_values() {
         error_values,
         [
             "cancelled",
+            "context_summary_invalid_output",
             "context_summary_model_error",
             "context_summary_rejected"
         ]

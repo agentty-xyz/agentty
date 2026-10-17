@@ -92,6 +92,10 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 - `model_calls`, `output_corrections`, `repetition_nudges`, and `tool_calls` come from
   the turn report; `model_calls` includes the `summary_calls` that summarized earlier
   rounds, and `summary_failures` counts summaries that failed or were rejected.
+- `summary_outcomes` and `summary_ms` list each summary's outcome (`completed` or its
+  `ContextSummaryErrorType` value) and duration, and `failed_requests` lists every
+  failed model request as its error type with any HTTP status (`transport_error`,
+  `provider_error:429`). These come from lifecycle events, so a failed run keeps them.
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the

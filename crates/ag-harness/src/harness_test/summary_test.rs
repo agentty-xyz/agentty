@@ -191,7 +191,7 @@ async fn turns_send_earlier_rounds_as_a_summary_once_they_outgrow_the_budget() {
     // Arrange
     let (model, requests) = SummarizingModel::new(Vec::new());
     let (harness, events) = observed(
-        harness(model, ContextSummaryPolicy::Enabled).model_reasoning_effort(ReasoningEffort::Low),
+        harness(model, ContextSummaryPolicy::Enabled).model_reasoning_effort(ReasoningEffort::High),
     );
 
     // Act
@@ -280,6 +280,30 @@ async fn invalid_summaries_are_corrected_like_final_outputs() {
 }
 
 #[tokio::test]
+async fn summaries_still_invalid_after_corrections_fail_as_invalid_output() {
+    // Arrange
+    let invalid = || Ok(ModelResponse::Output(json!({"context": "missing fields"})));
+    let (model, requests) = SummarizingModel::new(vec![invalid(), invalid(), invalid()]);
+    let (harness, events) = observed(harness(model, ContextSummaryPolicy::Enabled));
+
+    // Act
+    let outcome = read_files(&harness).await;
+
+    // Assert
+    assert!(summary_requests(&requests).len() >= 3);
+    assert!(outcome.report().context_summary_failures() >= 1);
+    assert!(matches!(
+        summary_events(&events)
+            .into_iter()
+            .find(|event| matches!(event, LifecycleEventKind::ContextSummaryFailed { .. })),
+        Some(LifecycleEventKind::ContextSummaryFailed {
+            error_type: ContextSummaryErrorType::InvalidOutput,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
 async fn failed_summaries_fall_back_and_stop_after_the_limit() {
     // Arrange
     let failures = (0..4).map(|_| Err(ModelError::InvalidResponse)).collect();
@@ -354,7 +378,7 @@ async fn summaries_that_do_not_fit_or_answer_with_a_tool_call_are_rejected() {
         failures,
         [
             ContextSummaryErrorType::Rejected,
-            ContextSummaryErrorType::Model
+            ContextSummaryErrorType::InvalidOutput
         ]
     );
 }

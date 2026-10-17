@@ -5,8 +5,10 @@ use std::fs::OpenOptions;
 use std::io::{self, Write as _};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ag_harness::lifecycle::LifecycleEvent;
 use ag_harness::model::{ContextBudget, ContextSummaryPolicy};
 use ag_harness::{Harness, OutputSchema, Tool};
 use tempfile::TempDir;
@@ -14,7 +16,7 @@ use tempfile::TempDir;
 use super::fixture::{
     FixtureFile, HugeResultFixture, ReadLoopFixture, Score, WriteFixture, answer_schema,
 };
-use super::record::{Activity, RunRecord};
+use super::record::{Activity, Observed, RunRecord};
 use crate::{DynError, GIT_EXECUTABLE_ENV, Provider, benchmark_repository, summary};
 
 const DEFAULT_WINDOW: u64 = 32_000;
@@ -145,7 +147,16 @@ impl Config {
         } else {
             ContextSummaryPolicy::Disabled
         };
-        let harness = Harness::new(self.provider.client()?, budget).context_summaries(policy);
+        let observed = Arc::new(Mutex::new(Observed::default()));
+        let recorder = Arc::clone(&observed);
+        let harness = Harness::new(self.provider.client()?, budget)
+            .context_summaries(policy)
+            .with_lifecycle_observer(move |event: LifecycleEvent| {
+                recorder
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .observe(event.kind());
+            });
         let started_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
@@ -176,6 +187,7 @@ impl Config {
             correctness: score.correctness(),
             detail,
             model: self.provider.model(),
+            observed: std::mem::take(&mut *observed.lock().unwrap_or_else(PoisonError::into_inner)),
             provider: self.provider.as_str(),
             repetition,
             reserved_output: self.reserved_output,

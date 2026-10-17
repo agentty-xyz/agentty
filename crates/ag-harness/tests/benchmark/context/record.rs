@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use ag_harness::TurnOutcome;
+use ag_harness::lifecycle::LifecycleEventKind;
 use ag_harness::turn::{ContextActivity, ModelRequestPurpose, ToolActivity};
 use serde_json::{Map, Value, json};
 
@@ -74,6 +75,48 @@ impl Activity {
     }
 }
 
+/// Summary outcomes and failed model requests seen as lifecycle events,
+/// kept even when the turn fails and has no report.
+#[derive(Default)]
+pub(super) struct Observed {
+    failed_requests: Vec<String>,
+    summaries: Vec<(&'static str, u128)>,
+}
+
+impl Observed {
+    /// Records one lifecycle event of the measured turn.
+    pub(super) fn observe(&mut self, event: &LifecycleEventKind) {
+        match event {
+            LifecycleEventKind::ModelRequestFailed {
+                error_type,
+                http_status,
+                ..
+            } => self.failed_requests.push(http_status.map_or_else(
+                || error_type.as_str().to_string(),
+                |status| format!("{}:{status}", error_type.as_str()),
+            )),
+            LifecycleEventKind::ContextSummaryCompleted { duration, .. } => {
+                self.summaries.push(("completed", duration.as_millis()));
+            }
+            LifecycleEventKind::ContextSummaryFailed {
+                duration,
+                error_type,
+                ..
+            } => self
+                .summaries
+                .push((error_type.as_str(), duration.as_millis())),
+            _ => {}
+        }
+    }
+
+    fn insert_into(&self, line: &mut Map<String, Value>) {
+        let (outcomes, durations): (Vec<_>, Vec<_>) = self.summaries.iter().copied().unzip();
+        line.insert("summary_outcomes".into(), json!(outcomes));
+        line.insert("summary_ms".into(), json!(durations));
+        line.insert("failed_requests".into(), json!(self.failed_requests));
+    }
+}
+
 /// One scenario run as written to the results file.
 pub(super) struct RunRecord {
     pub(super) activity: Option<Activity>,
@@ -81,6 +124,7 @@ pub(super) struct RunRecord {
     pub(super) correctness: f64,
     pub(super) detail: Option<String>,
     pub(super) model: String,
+    pub(super) observed: Observed,
     pub(super) provider: &'static str,
     pub(super) repetition: usize,
     pub(super) reserved_output: u64,
@@ -117,6 +161,7 @@ impl RunRecord {
                 }
             }
         }
+        self.observed.insert_into(&mut line);
         line.insert("detail".into(), json!(self.detail));
 
         Value::Object(line)
