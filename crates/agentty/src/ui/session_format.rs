@@ -4,9 +4,7 @@ use ag_tui_text::text_util;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Borders;
-use unicode_width::UnicodeWidthStr;
 
-use crate::domain::agent::ReasoningLevel;
 use crate::domain::resource::SessionResources;
 use crate::domain::review;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, Status};
@@ -57,6 +55,22 @@ pub(crate) fn session_resources_line(
     )
 }
 
+/// Formats active-work duration alongside the session age, omitting the age
+/// when the combined label exceeds the available footer width.
+pub(crate) fn session_timing_label(session: &Session, frame_time: FrameTime, width: u16) -> String {
+    let timer = text_util::format_duration_compact(
+        session.in_progress_duration_seconds(frame_time.unix_seconds()),
+    );
+    let started = session_started_label(session.created_at, frame_time);
+
+    let label = format!("Timer: {timer} · {started}");
+    if Line::raw(label.as_str()).width() <= usize::from(width) {
+        label
+    } else {
+        format!("Timer: {timer}")
+    }
+}
+
 /// Formats how long ago a session started, for example `Started 2d 4h ago`.
 pub(crate) fn session_started_label(created_at: i64, frame_time: FrameTime) -> String {
     let age_seconds = frame_time.unix_seconds().saturating_sub(created_at);
@@ -87,17 +101,11 @@ fn session_age_text(age_seconds: i64) -> String {
     format!("{minute_count}m")
 }
 
-/// Formats the size-prefixed session title and metadata lines rendered above
-/// the output panel.
-///
-/// When a linked review-request URL is available, the URL shares the metadata
-/// row when the full row fits and otherwise wraps to the row directly above
-/// the transcript border.
+/// Formats the size-prefixed title with right-aligned, color-coded change
+/// totals, followed by any merge conflict and linked review-request URL.
 pub fn session_header_lines(
     session: &Session,
     header_width: u16,
-    default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
     has_merge_conflict: bool,
 ) -> Vec<Line<'static>> {
     let title_width = usize::from(header_width);
@@ -107,15 +115,31 @@ pub fn session_header_lines(
         .add_modifier(Modifier::BOLD);
     let mut title_spans = markdown::parse_inline_spans(&title_text, base_style);
     title_spans.insert(0, Span::styled(format!("[{}] ", session.size), base_style));
-    let title_spans = text_util::truncate_spans_with_ellipsis(title_spans, title_width);
-    let metadata_lines = session_header_metadata_lines(
-        session,
-        header_width,
-        default_reasoning_level,
-        wall_clock_unix_seconds,
+    let totals = vec![
+        Span::styled("(", Style::default().fg(style::palette::warning())),
+        Span::styled(
+            format!("+{}", session.stats.added_lines),
+            Style::default().fg(style::palette::success()),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("-{}", session.stats.deleted_lines),
+            Style::default().fg(style::palette::danger()),
+        ),
+        Span::styled(")", Style::default().fg(style::palette::warning())),
+    ];
+    let totals_width: usize = totals.iter().map(Span::width).sum();
+    let mut title_spans = text_util::truncate_spans_with_ellipsis(
+        title_spans,
+        title_width.saturating_sub(totals_width + 1),
     );
+    let used_width: usize = title_spans.iter().map(Span::width).sum();
+    title_spans.push(Span::raw(
+        " ".repeat(title_width.saturating_sub(used_width + totals_width)),
+    ));
+    title_spans.extend(text_util::truncate_spans_with_ellipsis(totals, title_width));
 
-    let mut lines = Vec::with_capacity(1 + metadata_lines.len());
+    let mut lines = Vec::with_capacity(3);
     lines.push(Line::from(title_spans));
 
     if has_merge_conflict {
@@ -127,126 +151,19 @@ pub fn session_header_lines(
         )));
     }
 
-    for metadata_text in metadata_lines {
-        lines.push(Line::from(Span::styled(
-            metadata_text,
+    if let Some(url) = session
+        .review_request
+        .as_ref()
+        .map(|request| request.summary.web_url.trim())
+        .filter(|url| !url.is_empty())
+    {
+        lines.push(Line::styled(
+            text_util::truncate_with_ellipsis(url, title_width),
             Style::default().fg(style::palette::text_muted()),
-        )));
+        ));
     }
 
     lines
-}
-
-/// Formats the metadata row, reserving space for token usage before
-/// truncating other fields. Omits the chat-header-only URL.
-pub fn session_metadata_text(
-    session: &Session,
-    header_width: u16,
-    default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
-) -> String {
-    session_metadata_base_text(
-        session,
-        header_width,
-        default_reasoning_level,
-        wall_clock_unix_seconds,
-    )
-}
-
-/// Formats the chat header metadata rows, including the linked review-request
-/// URL when one is available.
-///
-/// When a PR/MR URL is available, it is placed on the same row as the
-/// left-side metadata when space allows; otherwise it is moved to the next
-/// metadata row.
-fn session_header_metadata_lines(
-    session: &Session,
-    header_width: u16,
-    default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
-) -> Vec<String> {
-    let metadata = session_metadata_base_text(
-        session,
-        header_width,
-        default_reasoning_level,
-        wall_clock_unix_seconds,
-    );
-    let available_width = usize::from(header_width);
-
-    let review_request_url = session
-        .review_request
-        .as_ref()
-        .map(|request| request.summary.web_url.as_str())
-        .filter(|url| !url.is_empty())
-        .map(str::trim)
-        .filter(|url| !url.is_empty());
-
-    let Some(review_request_url) = review_request_url else {
-        return vec![text_util::truncate_with_ellipsis(
-            &metadata,
-            available_width,
-        )];
-    };
-
-    let metadata_width = metadata.width();
-    let url_width = review_request_url.width();
-    let separator_width = 2;
-    let total_required_width = metadata_width
-        .saturating_add(separator_width)
-        .saturating_add(url_width);
-    let mut metadata_lines = Vec::with_capacity(2);
-
-    if total_required_width <= available_width {
-        let separator = " ".repeat(
-            available_width
-                .saturating_sub(metadata_width)
-                .saturating_sub(url_width),
-        );
-        metadata_lines.push(format!("{metadata}{separator}{review_request_url}"));
-
-        return metadata_lines;
-    }
-
-    metadata_lines.push(text_util::truncate_with_ellipsis(
-        &metadata,
-        available_width,
-    ));
-    metadata_lines.push(text_util::truncate_with_ellipsis(
-        review_request_url,
-        available_width,
-    ));
-
-    metadata_lines
-}
-
-/// Builds width-bounded metadata shared by session header and single-line
-/// renderers, keeping token usage visible at constrained widths.
-fn session_metadata_base_text(
-    session: &Session,
-    header_width: u16,
-    _default_reasoning_level: ReasoningLevel,
-    wall_clock_unix_seconds: i64,
-) -> String {
-    let added_lines = session.stats.added_lines;
-    let deleted_lines = session.stats.deleted_lines;
-    let timer = text_util::format_duration_compact(
-        session.in_progress_duration_seconds(wall_clock_unix_seconds),
-    );
-    let input_tokens = text_util::format_token_count(session.stats.input_tokens);
-    let output_tokens = text_util::format_token_count(session.stats.output_tokens);
-    let details = format!("Timer: {timer}  Lines: +{added_lines} / -{deleted_lines}");
-    let tokens = format!("Tokens: {input_tokens}/{output_tokens}");
-    let available_width = usize::from(header_width);
-    let details_width = available_width.saturating_sub(tokens.width() + 2);
-
-    if details_width == 0 {
-        return text_util::truncate_with_ellipsis(&tokens, available_width);
-    }
-
-    format!(
-        "{}  {tokens}",
-        text_util::truncate_with_ellipsis(&details, details_width)
-    )
 }
 
 /// Returns the display name of a session's response speed, or `None` when its

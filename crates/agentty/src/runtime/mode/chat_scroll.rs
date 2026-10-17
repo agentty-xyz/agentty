@@ -157,12 +157,10 @@ impl ChatScrollMetrics {
             |session| {
                 session_chat::transcript_view_height(SessionChatLayoutInput {
                     area: page_area,
-                    default_reasoning_level: app.settings.default_smart_reasoning_level,
                     has_merge_conflict,
                     mode: &app.mode,
                     review_text,
                     session,
-                    wall_clock_unix_seconds: app.wall_clock_unix_seconds(),
                 })
             },
         );

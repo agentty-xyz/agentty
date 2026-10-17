@@ -48,6 +48,10 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
   under `crates/agentty/tests/e2e/`; follow `crates/agentty/tests/e2e/AGENTS.md`. For
   behavior requiring live backends or unavailable infrastructure, report the exact
   coverage gap and test the supported boundaries deterministically.
+- When changes affect published feature captures or recording settings, use
+  `skills/refresh-feature-recordings/SKILL.md`. Refresh each affected GIF, hash sidecar,
+  and PNG poster together; passing behavioral assertions alone does not establish
+  artifact freshness.
 - Use integration tests appropriate to the public surface for other CLI, library, or
   backend features.
 - Every code change requires automated tests covering 100% of its coverable changed

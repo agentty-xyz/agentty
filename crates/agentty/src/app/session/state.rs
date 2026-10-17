@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 
 use crate::app::session::{Clock, SESSION_REFRESH_INTERVAL};
 use crate::domain::selection::SelectionState;
@@ -174,11 +174,6 @@ impl SessionState {
         {
             *handle_status = next_status;
         }
-    }
-
-    /// Returns the current wall-clock value from the injected clock.
-    pub(crate) fn now_system_time(&self) -> SystemTime {
-        self.clock.now_system_time()
     }
 
     /// Returns one immutable session snapshot by identifier.

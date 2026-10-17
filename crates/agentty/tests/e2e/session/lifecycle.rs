@@ -525,6 +525,12 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
                         let full = Region::full(captured_frame.cols(), captured_frame.rows());
                         assertion::assert_text_in_region(captured_frame, &settings, &full);
                         assertion::assert_not_visible(captured_frame, "zzzz");
+                        assertion::assert_not_visible(captured_frame, "Tokens:");
+                        let title_row = (0..captured_frame.rows())
+                            .map(|row| captured_frame.row_text(row))
+                            .find(|row| row.contains("[M] Review-ready session shortcuts"))
+                            .expect("session title should be visible");
+                        assert!(title_row.trim_end().ends_with("(+12 -3)"));
                     }
                     for inactive in [&inactive_frame, frame] {
                         assertion::assert_not_visible(inactive, "Type your message");
@@ -578,8 +584,8 @@ async fn seed_aged_review_ready_session(
     Ok(())
 }
 
-/// Verify that session age stays in the footer while viewing, composing,
-/// and focusing the chat transcript.
+/// Verify that session age and active-work timer stay in the footer while
+/// viewing, composing, and focusing the chat transcript.
 #[tokio::test]
 async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
     // Arrange, Act, Assert
@@ -593,7 +599,7 @@ async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
                     .press_key("Enter")
-                    .wait_for_text("Started 3d 4h ago", 5000)
+                    .wait_for_text("Timer: 0s · Started 3d 4h ago", 5000)
                     .capture_labeled("view", "Session age while viewing")
                     .press_key("Enter")
                     .wait_for_text("Type your message", 5000)
@@ -622,6 +628,7 @@ async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
                             .collect();
                         assert_eq!(label_rows.len(), 1, "label rows: {label_rows:#?}");
                         assert!(label_rows[0].contains("╰"));
+                        assert!(label_rows[0].contains("Timer: 0s · Started 3d 4h ago"));
                         assert!(label_rows[0].trim_end().ends_with("╯"));
                         assert!(
                             (0..captured_frame.rows())

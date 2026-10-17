@@ -206,7 +206,6 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                 &mut shared,
                 FrameResources {
                     active_prompt_outputs: &active_prompt_outputs,
-                    default_reasoning_level: ReasoningLevel::High,
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
@@ -228,7 +227,6 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
                 &shared,
                 FrameResources {
                     active_prompt_outputs: &active_prompt_outputs,
-                    default_reasoning_level: ReasoningLevel::High,
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
@@ -560,7 +558,6 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
                 &mut shared,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
@@ -582,7 +579,6 @@ fn render_help_mode_restores_markdown_diff_preview_background() {
                 &shared,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
@@ -807,7 +803,6 @@ fn render_session_surface_renders_view_session_content() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: false,
                     markdown_render_cache: &cache,
@@ -866,7 +861,6 @@ fn render_session_surface_keeps_background_when_session_is_missing() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &cache,
@@ -927,7 +921,6 @@ fn render_diff_surface_renders_page_for_matching_session() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &cache,
@@ -984,7 +977,6 @@ fn render_diff_surface_preserves_frame_for_missing_session() {
                 &[],
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &markdown_render_cache,
@@ -1046,7 +1038,6 @@ fn render_diff_surface_renders_linked_comments_for_matching_session() {
                 &sessions,
                 FrameResources {
                     active_prompt_outputs: &HashMap::new(),
-                    default_reasoning_level: ReasoningLevel::default(),
                     diff_layout_cache: &diff_layout_cache,
                     is_tmux_session: true,
                     markdown_render_cache: &cache,

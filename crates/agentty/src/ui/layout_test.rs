@@ -10,12 +10,13 @@ use super::{
     question_at_mention_max_visible, question_options_height, question_panel_areas,
     question_panel_layout, question_panel_reserved_height, session_chat_areas, tab_page_areas,
 };
-use crate::domain::agent::{AgentKind, ReasoningLevel};
+use crate::domain::agent::AgentKind;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputState;
 use crate::domain::session::{COMMITTING_PROGRESS_LABEL, Session, SessionDiffState, Status};
 use crate::domain::theme::ColorTheme;
 use crate::presentation::app_mode::ChatFocus;
+use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action;
 use crate::presentation::help_action::{ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::{PromptAtMentionState, PromptSlashStage, PromptSlashState};
@@ -33,8 +34,9 @@ use crate::ui::question_format::{
     QuestionLookupState, question_help_footer_line, question_option_lines, question_panel_lines,
 };
 use crate::ui::session_format::{
-    format_review_markdown, session_header_lines, session_metadata_text, session_output_done_line,
-    session_output_panel_borders, session_output_status_lines, session_view_footer_line,
+    format_review_markdown, session_header_lines, session_output_done_line,
+    session_output_panel_borders, session_output_status_lines, session_timing_label,
+    session_view_footer_line,
 };
 use crate::ui::style;
 
@@ -164,7 +166,7 @@ fn test_prompt_panel_areas_collapse_footer_when_only_one_row_fits() {
 }
 
 #[test]
-fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
+fn test_session_header_lines_truncate_long_titles_and_keep_totals() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::InProgress;
@@ -173,10 +175,10 @@ fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
     session.in_progress_started_at = Some(0);
 
     // Act
-    let header_lines = session_header_lines(&session, 50, ReasoningLevel::default(), 3_660, false);
+    let header_lines = session_header_lines(&session, 50, false);
 
     // Assert
-    assert_eq!(header_lines.len(), 2);
+    assert_eq!(header_lines.len(), 1);
     assert!(
         header_lines[0]
             .to_string()
@@ -184,7 +186,7 @@ fn test_session_header_lines_truncate_long_titles_and_keep_metadata() {
     );
     assert!(header_lines[0].to_string().contains("..."));
     assert!(header_lines[0].width() <= 50);
-    assert!(header_lines[1].to_string().contains("Timer: 1h 1m 0s"));
+    assert!(header_lines[0].to_string().ends_with("(+0 -0)"));
 }
 
 #[test]
@@ -196,7 +198,7 @@ fn test_session_header_lines_use_theme_status_color() {
     session.title = Some("Canceled session".to_string());
 
     // Act
-    let header_lines = session_header_lines(&session, 80, ReasoningLevel::default(), 0, false);
+    let header_lines = session_header_lines(&session, 80, false);
 
     // Assert
     assert_eq!(
@@ -206,7 +208,7 @@ fn test_session_header_lines_use_theme_status_color() {
 }
 
 #[test]
-fn test_session_metadata_text_ticks_live_in_progress_timer() {
+fn test_session_timing_label_ticks_live_in_progress_timer() {
     // Arrange
     let mut session = session_fixture();
     session.agent = model_fixture::codex_selection();
@@ -216,30 +218,28 @@ fn test_session_metadata_text_ticks_live_in_progress_timer() {
     session.in_progress_started_at = Some(60);
 
     // Act
-    let early_metadata = session_metadata_text(&session, 120, ReasoningLevel::default(), 90);
-    let later_metadata = session_metadata_text(&session, 120, ReasoningLevel::default(), 3_720);
+    let early_metadata = session_timing_label(&session, FrameTime::new(90, 0, 0), 80);
+    let later_metadata = session_timing_label(&session, FrameTime::new(3_720, 0, 0), 80);
 
     // Assert
-    assert!(early_metadata.contains("Lines: +9 / -3"));
-    assert!(early_metadata.contains("Timer: 30s"));
-    assert!(early_metadata.contains("Tokens: 0/0"));
-    assert!(later_metadata.contains("Timer: 1h 1m 0s"));
+    assert!(early_metadata.starts_with("Timer: 30s · Started "));
+    assert!(later_metadata.starts_with("Timer: 1h 1m 0s · Started "));
 }
 
 #[test]
-fn test_session_metadata_text_freezes_timer_after_in_progress_ends() {
+fn test_session_timing_label_freezes_timer_after_in_progress_ends() {
     // Arrange
     let mut session = session_fixture();
     session.status = Status::Review;
     session.in_progress_total_seconds = 3_660;
 
     // Act
-    let earlier_metadata = session_metadata_text(&session, 80, ReasoningLevel::default(), 4_000);
-    let later_metadata = session_metadata_text(&session, 80, ReasoningLevel::default(), 40_000);
+    let earlier_metadata = session_timing_label(&session, FrameTime::new(4_000, 0, 0), 80);
+    let later_metadata = session_timing_label(&session, FrameTime::new(40_000, 0, 0), 80);
 
     // Assert
-    assert_eq!(earlier_metadata, later_metadata);
-    assert!(earlier_metadata.contains("Timer: 1h 1m 0s"));
+    assert!(earlier_metadata.starts_with("Timer: 1h 1m 0s · Started "));
+    assert!(later_metadata.starts_with("Timer: 1h 1m 0s · Started "));
 }
 
 #[test]

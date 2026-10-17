@@ -949,11 +949,6 @@ impl App {
         Ok(())
     }
 
-    /// Returns the current wall-clock time used for render-time timers.
-    pub(crate) fn wall_clock_unix_seconds(&self) -> i64 {
-        session::unix_timestamp_from_system_time(self.sessions.state().now_system_time())
-    }
-
     /// Returns the active agent profile used for focused review generation.
     pub(crate) fn review_agent(&self) -> app::review::ReviewAgent {
         (
