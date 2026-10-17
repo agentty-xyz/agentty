@@ -40,6 +40,8 @@ before dependents in the publish plan.
 
 ### Tests and Boundaries
 
+- Choose each test's level and fixture with `skills/test-pyramid/SKILL.md`; the rules
+  below govern how test files are written.
 - In `*_test.rs` files, explicitly import the modules, items, traits, and fixtures each
   file uses at file scope. Use `crate::` paths to the owning production module, or named
   `super::` imports for private items in the parent module. Import sibling fixtures

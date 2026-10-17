@@ -18,6 +18,9 @@ Reusable persistence contracts, SQLite adapters, and embedded migrations.
   exposes `AppRepositories`. Inject narrow repository traits into workflows.
 - Inject `TimestampSource` when the host controls time. Use in-memory SQLite and
   injected timestamps for deterministic repository tests.
+- The `test-utils` constructors load a migrated-schema snapshot cached in the temporary
+  directory and keyed by every migration checksum; keep migration and constructor tests
+  on `Database::open_in_memory`, which replays migrations.
 - Consult `crates/ag-store/src/connection.rs` for initialization and
   `crates/ag-store/tests/repository.rs` for consumer examples.
 

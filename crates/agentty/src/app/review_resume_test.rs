@@ -33,7 +33,7 @@ fn request() -> OneShotRequest {
 #[tokio::test]
 async fn resumes_successful_calls_across_clients_and_invalidates_changed_input() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -186,7 +186,7 @@ async fn invalid_dispositions_are_not_replayed_from_checkpoints() {
 
 async fn invalid_disposition_is_not_cached(answer: &'static str) {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -236,7 +236,7 @@ async fn invalid_disposition_is_not_cached(answer: &'static str) {
 #[tokio::test]
 async fn previously_cached_omitted_dispositions_are_replaced_with_a_valid_fresh_response() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -312,7 +312,7 @@ async fn previously_cached_omitted_dispositions_are_replaced_with_a_valid_fresh_
 #[tokio::test]
 async fn completed_audit_preserves_discovery_and_group_scoped_rejection_reasons_after_retry() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -415,7 +415,7 @@ async fn completed_audit_preserves_discovery_and_group_scoped_rejection_reasons_
 #[tokio::test]
 async fn budget_retries_advance_past_cached_size_rejections_and_completed_batches() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -497,7 +497,7 @@ async fn budget_retries_advance_past_cached_size_rejections_and_completed_batche
 #[tokio::test]
 async fn checkpoint_failures_are_reported_and_invalid_answers_are_not_reused() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let mut worker = MockRunClient::new();
     worker.expect_submit().times(2).returning(|_| {
         Ok(OneShotSubmission {
@@ -544,7 +544,7 @@ async fn checkpoint_failures_are_reported_and_invalid_answers_are_not_reused() {
 #[tokio::test]
 async fn corrupted_checkpoints_and_failed_saves_surface_errors() {
     // Arrange
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)
@@ -602,7 +602,7 @@ async fn corrupted_checkpoints_and_failed_saves_surface_errors() {
 async fn delayed_older_submission_cannot_supersede_newer_checkpoints() {
     for (new_diff, new_history) in [(2, "history"), (1, "changed history")] {
         // Arrange: creation order differs from provider submission order.
-        let database = Database::open_in_memory().await.expect("database");
+        let database = Database::in_memory().await.expect("database");
         let project = database
             .projects()
             .upsert_project("project", None)
@@ -690,7 +690,7 @@ async fn delayed_older_submission_cannot_supersede_newer_checkpoints() {
 async fn invalidation_prevents_identical_inputs_from_reusing_or_restoring_old_evidence() {
     // Arrange: rebase can change worktree context without changing
     // diff/history.
-    let database = Database::open_in_memory().await.expect("database");
+    let database = Database::in_memory().await.expect("database");
     let project = database
         .projects()
         .upsert_project("project", None)

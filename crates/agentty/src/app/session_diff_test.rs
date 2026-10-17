@@ -806,7 +806,7 @@ async fn restart_after_review_claim_recovers_before_worker_starts() {
 async fn review_diff_baseline_tolerates_invalid_hash_and_database_failure() {
     // Arrange
     let base_dir = tempfile::tempdir().expect("temporary directory should exist");
-    let database = crate::infra::db::Database::open_in_memory()
+    let database = crate::infra::db::Database::in_memory()
         .await
         .expect("database should open");
     let base_path = base_dir.path().to_path_buf();

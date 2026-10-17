@@ -504,7 +504,7 @@ async fn shutdown_deadline_forces_stuck_harnesses_and_all_background_tasks() {
                 })
             }
         });
-        let db = Database::open_in_memory().await.expect("database");
+        let db = Database::in_memory().await.expect("database");
         app.services.run_worker = Arc::new(RunWorker::with_client(
             Arc::new(RealOneShotClient::new(Some(Arc::new(provider)))),
             db.runs(),

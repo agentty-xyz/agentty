@@ -370,7 +370,7 @@ pub(crate) async fn new_test_app_with_clients(
 ) -> (App, tempfile::TempDir) {
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let app = App::new_with_clients(base_path.clone(), base_path, None, database, clients)
@@ -419,14 +419,69 @@ pub(crate) async fn new_test_app_without_retained_base_dir() -> App {
     app
 }
 
-/// Initializes a minimal git repository for retained-tempdir app fixtures.
+/// Copies a minimal committed git repository into `path` for retained-tempdir
+/// app fixtures.
+///
+/// Test runners such as `cargo-nextest` start one process per test, so the
+/// repository is built once into a shared temporary directory and copied,
+/// avoiding six git subprocesses per fixture.
+pub(crate) fn setup_test_git_repo(path: &Path) {
+    copy_directory(&shared_git_repo_template(), path);
+}
+
+/// Returns the shared committed repository, publishing it atomically so
+/// concurrent test processes see either no template or a complete one.
+fn shared_git_repo_template() -> PathBuf {
+    let template = std::env::temp_dir().join(format!(
+        "agentty-test-git-template-v{GIT_REPO_TEMPLATE_REVISION}"
+    ));
+    if template.join(".git").join("HEAD").is_file() {
+        return template;
+    }
+    let staging = tempfile::Builder::new()
+        .prefix("agentty-test-git-template-")
+        .tempdir_in(std::env::temp_dir())
+        .expect("failed to create git template staging dir");
+    build_git_repo(staging.path());
+    let staging = staging.keep();
+    if std::fs::rename(&staging, &template).is_err() {
+        // Another test process published the template first.
+        std::fs::remove_dir_all(&staging).expect("failed to remove git template staging dir");
+    }
+
+    template
+}
+
+/// Revision of the shared repository layout; bump it when
+/// `build_git_repo` changes so stale templates are not reused.
+const GIT_REPO_TEMPLATE_REVISION: u32 = 1;
+
+/// Recursively copies a fixture directory tree.
+fn copy_directory(source: &Path, destination: &Path) {
+    std::fs::create_dir_all(destination).expect("failed to create fixture dir");
+    for entry in std::fs::read_dir(source).expect("failed to read fixture dir") {
+        let entry = entry.expect("failed to read fixture entry");
+        let target = destination.join(entry.file_name());
+        if entry
+            .file_type()
+            .expect("failed to read fixture type")
+            .is_dir()
+        {
+            copy_directory(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("failed to copy fixture file");
+        }
+    }
+}
+
+/// Initializes a minimal committed git repository.
 ///
 /// Every git invocation is checked for success because a silently failing
 /// setup command leaves a commit-less repository behind. Host git settings
 /// such as `commit.gpgsign`, `core.hooksPath`, or `init.templateDir` can break
 /// the initial commit, and an unchecked failure only resurfaces much later as
 /// an opaque session-creation panic inside an unrelated test.
-pub(crate) fn setup_test_git_repo(path: &Path) {
+fn build_git_repo(path: &Path) {
     run_fixture_git_command(path, &["init"]);
     run_fixture_git_command(path, &["config", "user.name", "Test"]);
     run_fixture_git_command(path, &["config", "user.email", "test@test.com"]);
@@ -484,7 +539,7 @@ async fn new_git_test_app_with_clients_and_pool(
     let base_dir = tempfile::tempdir().expect("failed to create temp dir");
     let base_path = base_dir.path().to_path_buf();
     setup_test_git_repo(base_dir.path());
-    let database = Database::open_in_memory()
+    let database = Database::in_memory()
         .await
         .expect("failed to open in-memory db");
     let pool = database.pool().clone();

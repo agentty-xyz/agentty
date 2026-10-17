@@ -939,7 +939,7 @@ async fn spawn_review_assist_task_with_client_emits_completed_review() {
     let input = ReviewAssistTaskInput {
         fs_client: Arc::new(crate::infra::fs::RealFsClient),
         request_id,
-        repositories: crate::infra::db::Database::open_in_memory()
+        repositories: crate::infra::db::Database::in_memory()
             .await
             .expect("database")
             .into(),
@@ -1531,7 +1531,7 @@ pub(crate) fn mock_version_task_runner() -> Arc<dyn super::VersionTaskRunner> {
 #[tokio::test]
 async fn completed_review_retains_checkpoints_until_persistence() {
     // Arrange
-    let database = crate::infra::db::Database::open_in_memory()
+    let database = crate::infra::db::Database::in_memory()
         .await
         .expect("database");
     let project = database
@@ -1612,7 +1612,7 @@ async fn completed_review_retains_checkpoints_until_persistence() {
 async fn review_admission_failure_emits_failure_without_submitting_provider_work() {
     // Arrange
     let request_id = uuid::Uuid::new_v4();
-    let database = crate::infra::db::Database::open_in_memory()
+    let database = crate::infra::db::Database::in_memory()
         .await
         .expect("database");
     database.pool().close().await;
@@ -1670,7 +1670,7 @@ async fn invalid_project_rules_fail_before_submitting_model_work() {
         let input = ReviewAssistTaskInput {
             fs_client: Arc::new(fs),
             request_id: uuid::Uuid::nil(),
-            repositories: crate::infra::db::Database::open_in_memory()
+            repositories: crate::infra::db::Database::in_memory()
                 .await
                 .expect("database")
                 .into(),
