@@ -34,6 +34,9 @@ pub struct SessionTurnMetadata {
     /// Fingerprint of the personality prompt successfully delivered for this
     /// turn.
     pub applied_personality_prompt_hash: Option<String>,
+    /// Content-free JSON report of an in-process harness turn, kept in
+    /// `harness_turn_report` for later analysis; `None` for other agents.
+    pub harness_turn_report: Option<String>,
     /// Session-scoped instruction bootstrap marker for app-server providers.
     pub instruction_conversation_id: Option<String>,
     /// Model identifier used for per-model usage aggregation.
@@ -1979,6 +1982,21 @@ ON CONFLICT(session_id, model) DO UPDATE SET
                 now,
                 turn_metadata.token_usage_delta.input_tokens.cast_signed(),
                 turn_metadata.token_usage_delta.output_tokens.cast_signed()
+            )
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        if let Some(report) = turn_metadata.harness_turn_report.as_deref() {
+            sqlx::query!(
+                r"
+INSERT INTO harness_turn_report (session_id, model, created_at, report)
+VALUES (?, ?, ?, ?)
+",
+                session_id,
+                turn_metadata.model.as_str(),
+                now,
+                report
             )
             .execute(&mut *transaction)
             .await?;

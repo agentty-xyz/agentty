@@ -85,6 +85,10 @@ never list them. Choosing a harness model never changes the project's default mo
 - History is stored per session under `~/.agentty/harness/` and removed with the
   session. Image attachments are not supported yet; a prompt with pasted images fails
   before reaching the model.
+- Each completed turn's content-free harness report, with per-request token usage,
+  context fitting, corrections, and tool activity, is kept in the `harness_turn_report`
+  table of Agentty's database for later analysis, including after the session is
+  deleted.
 - Switching away from `kimi-k3`, `kimi-k2.6`, or `qwen3.8-max` is rejected once the
   session has their reasoning history. Switching to another provider needs only that
   provider's key.

@@ -631,6 +631,7 @@ async fn test_spawn_integration() {
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain(&delta_text),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,

@@ -178,6 +178,7 @@ async fn test_reply_replays_history_once_after_model_switch() {
             Ok(TurnResult {
                 assistant_message: AgentResponse::plain(""),
                 context_reset: false,
+                harness_report: None,
                 input_tokens: 0,
                 output_tokens: 0,
                 provider_conversation_id: None,

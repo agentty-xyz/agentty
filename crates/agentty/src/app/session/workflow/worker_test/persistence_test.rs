@@ -90,6 +90,7 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
             review_comment_outcomes: Vec::new(),
         },
         context_reset: false,
+        harness_report: None,
         input_tokens: 2,
         output_tokens: 3,
         provider_conversation_id: None,
@@ -195,6 +196,7 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
             review_comment_outcomes: Vec::new(),
         },
         context_reset: false,
+        harness_report: None,
         input_tokens: 0,
         output_tokens: 0,
         provider_conversation_id: None,
@@ -221,6 +223,84 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
     );
     assert!(!output.contains("[Commit] No changes to commit."));
     assert!(!output.contains("## Change Summary"));
+}
+
+#[tokio::test]
+/// Stores a native harness turn's report with the completed turn so its
+/// per-request telemetry can be analyzed later.
+async fn test_apply_turn_result_persists_harness_turn_report() {
+    // Arrange
+    let base_dir = tempdir().expect("failed to create temp dir");
+    let (db, pool) = AppRepositories::in_memory_with_pool()
+        .await
+        .expect("db should open");
+    insert_in_progress_test_session(&db).await;
+    let mut mock_git_client = MockGitClient::new();
+    mock_git_client
+        .expect_is_worktree_clean()
+        .times(1)
+        .returning(|_| Box::pin(async { Ok(true) }));
+    let session_agent = AgentSelection::new(AgentKind::Harness, AgentModel::MuseSpark13);
+    let context = SessionWorkerContext {
+        app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        session_run: SessionRunClient::from_channel(
+            "sess1".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
+        child_pid: Arc::new(Mutex::new(None)),
+        clock: Arc::new(crate::infra::clock::RealClock),
+        db: db.clone(),
+        folder: base_dir.path().to_path_buf(),
+        fs_client: Arc::new(fs::MockFsClient::new()),
+        git_client: Arc::new(mock_git_client),
+        transcript: empty_transcript(),
+        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+        session_update_versions: Arc::default(),
+        session_id: "sess1".into(),
+        session_agent,
+        status: Arc::new(Mutex::new(Status::InProgress)),
+    };
+    let report = r#"{"model_requests":[]}"#;
+    let turn_result = Ok(TurnResult {
+        assistant_message: AgentResponse {
+            answer: "Done.".to_string(),
+            questions: Vec::new(),
+            review_comment_outcomes: Vec::new(),
+        },
+        context_reset: false,
+        harness_report: Some(report.to_string()),
+        input_tokens: 30,
+        output_tokens: 7,
+        provider_conversation_id: None,
+    });
+    let turn_metadata = TurnMetadata {
+        session_agent,
+        ..default_turn_metadata()
+    };
+
+    // Act
+    apply_worker_turn_result(&context, turn_metadata, turn_result)
+        .await
+        .expect("turn result should succeed");
+    let stored: Vec<(String, String)> =
+        sqlx::query_as("SELECT model, report FROM harness_turn_report WHERE session_id = 'sess1'")
+            .fetch_all(&pool)
+            .await
+            .expect("reports should load");
+
+    // Assert
+    assert_eq!(
+        stored,
+        [(
+            AgentModel::MuseSpark13.as_str().to_string(),
+            report.to_string()
+        )]
+    );
 }
 
 #[tokio::test]
@@ -286,6 +366,7 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
             review_comment_outcomes: Vec::new(),
         },
         context_reset: true,
+        harness_report: None,
         input_tokens: 0,
         output_tokens: 0,
         provider_conversation_id: Some("thread-123".to_string()),

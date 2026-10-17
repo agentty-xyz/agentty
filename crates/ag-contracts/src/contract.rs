@@ -340,6 +340,10 @@ pub struct TurnResult {
     pub assistant_message: AgentResponse,
     /// Whether the provider reset its context to complete this turn.
     pub context_reset: bool,
+    /// Content-free JSON report of an in-process harness turn: per-request
+    /// usage, context fitting, corrections, and tool activity. Other agents
+    /// return `None`.
+    pub harness_report: Option<String>,
     /// Input token count for the turn.
     pub input_tokens: u64,
     /// Output token count for the turn.

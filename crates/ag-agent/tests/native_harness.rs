@@ -17,6 +17,9 @@ use ag_contracts::{
 };
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::AgentKind;
+use ag_telemetry::Span;
+use opentelemetry::global;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -212,6 +215,10 @@ async fn session_turn_answers_and_resumes_with_stored_history() {
     // Assert
     assert_eq!(first.assistant_message.answer, "First answer");
     assert_eq!((first.input_tokens, first.output_tokens), (30, 7));
+    let report: Value =
+        serde_json::from_str(first.harness_report.as_deref().expect("harness report"))
+            .expect("report JSON");
+    assert_eq!(report["model_requests"].as_array().map(Vec::len), Some(1));
     let bootstrap_key = instruction_bootstrap_key(Some("session-a")).expect("bootstrap key");
     assert!(
         first
@@ -243,6 +250,61 @@ async fn session_turn_answers_and_resumes_with_stored_history() {
             .await
             .is_ok()
     );
+}
+
+#[tokio::test]
+async fn traced_session_turn_exports_harness_spans_beneath_the_run() {
+    // Arrange
+    let exporter = InMemorySpanExporter::default();
+    global::set_tracer_provider(
+        SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build(),
+    );
+    let server = MockServer::start().await;
+    respond(&server, "Traced question", answer("Traced answer"), 1).await;
+    respond(&server, "Untraced question", answer("Untraced answer"), 2).await;
+    let data_root = tempfile::tempdir().expect("data root");
+    let worktree = tempfile::tempdir().expect("worktree");
+    let config = config(data_root.path(), environment(&server));
+    let channel = create_agent_channel(AgentKind::Harness, None, Some(&config));
+
+    // Act
+    let (untraced, _) = run_turn(
+        &channel,
+        "session-untraced",
+        turn_request(worktree.path(), MUSE_MODEL, "Untraced question"),
+    )
+    .await;
+    let untraced_spans = exporter.get_finished_spans().expect("spans").len();
+    let run = Span::root("agent.run", Vec::new());
+    let (traced, _) = run
+        .scope(run_turn(
+            &channel,
+            "session-traced",
+            turn_request(worktree.path(), MUSE_MODEL, "Traced question"),
+        ))
+        .await;
+
+    // Assert
+    untraced.expect("untraced turn should succeed");
+    traced.expect("traced turn should succeed");
+    assert_eq!(untraced_spans, 0);
+    let spans = exporter.get_finished_spans().expect("spans");
+    let run = spans
+        .iter()
+        .find(|span| span.name == "agent.run")
+        .expect("run span");
+    let turn = spans
+        .iter()
+        .find(|span| span.name == "invoke_agent")
+        .expect("harness turn span");
+    assert_eq!(turn.parent_span_id, run.span_context.span_id());
+    let chat = spans
+        .iter()
+        .find(|span| span.name == format!("chat {MUSE_MODEL}"))
+        .expect("model request span");
+    assert_eq!(chat.parent_span_id, turn.span_context.span_id());
 }
 
 #[tokio::test]

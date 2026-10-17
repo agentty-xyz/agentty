@@ -73,6 +73,7 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
                     return Ok(TurnResult {
                         assistant_message: AgentResponse::plain("Initial turn completed"),
                         context_reset: false,
+                        harness_report: None,
                         input_tokens: 0,
                         output_tokens: 0,
                         provider_conversation_id: None,
@@ -84,6 +85,7 @@ async fn test_running_turn_finishes_before_queued_sync_and_later_chat() {
                 Ok(TurnResult {
                     assistant_message: AgentResponse::plain("Queued turn completed"),
                     context_reset: false,
+                    harness_report: None,
                     input_tokens: 0,
                     output_tokens: 0,
                     provider_conversation_id: None,

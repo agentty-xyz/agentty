@@ -583,6 +583,7 @@ and supported response, reasoning, compaction, checkpoint, and subagent phases:
 | Claude      | Tools, subagents                                                |
 | Gemini      | Tools                                                           |
 | Antigravity | Tools, responses, reasoning, compaction, checkpoints, subagents |
+| Harness     | Turns, model requests with token usage, tools                   |
 
 Operation categories and outcomes are exported by default without their content. Timing
 comes from observed lifecycle events; when only a completion arrives, a reported
@@ -590,7 +591,9 @@ duration can reconstruct an interval within the attempt. `agentty.timing.source`
 `lifecycle` for paired events, `provider` for reconstructed intervals, and `completion`
 for observations without a start or duration. Available operations depend on the
 provider and CLI version; they do not necessarily represent individual model requests.
-First activity is not a time-to-first-token measurement.
+First activity is not a time-to-first-token measurement. Harness sessions run in
+process, so their `invoke_agent`, `chat <model>`, and `execute_tool <tool>` spans nest
+beneath `agent.run` and time each model request exactly.
 
 Traces contain execution identifiers, provider/model selections, token counts, bounded
 outcomes, and available tool names, call identifiers, executable basenames, exit codes,
