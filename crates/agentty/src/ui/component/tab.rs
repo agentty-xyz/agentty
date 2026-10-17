@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::app::Tab;
 use crate::domain::project::ProjectListItem;
@@ -37,8 +37,7 @@ impl Component for Tabs<'_> {
         let paragraph = Paragraph::new(line).block(
             Block::default()
                 .borders(Borders::BOTTOM)
-                .border_style(style::border_style())
-                .padding(Padding::top(1)),
+                .border_style(style::border_style()),
         );
         f.render_widget(paragraph, area);
     }

@@ -474,6 +474,31 @@ fn surface_for_mode_classifies_primary_page_modes() {
 }
 
 #[test]
+fn render_list_background_starts_tabs_and_page_content_without_blank_rows() {
+    for (tab, title) in [
+        (Tab::Projects, "Activity"),
+        (Tab::Sessions, "Sessions"),
+        (Tab::Settings, "Global settings"),
+    ] {
+        // Arrange
+        let mut settings_screen = settings_screen_with_overlays();
+        settings_screen.launch_configuration_list_editor = None;
+        settings_screen.selector_dropdown = None;
+
+        // Act
+        let (text, _) = render_list_tab(tab, Some(&settings_screen));
+        let tab_row: String = text.chars().take(120).collect();
+        let border_row: String = text.chars().skip(120).take(120).collect();
+        let page_row: String = text.chars().skip(240).take(120).collect();
+
+        // Assert
+        assert!(tab_row.contains("Projects | Project: None | Sessions | Settings"));
+        assert_eq!(border_row, "─".repeat(120));
+        assert!(page_row.contains(title), "{tab:?}: {page_row}");
+    }
+}
+
+#[test]
 fn render_list_background_renders_settings_snapshot_and_overlays() {
     // Arrange
     let settings_screen = settings_screen_with_overlays();

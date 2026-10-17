@@ -578,8 +578,8 @@ async fn seed_aged_review_ready_session(
     Ok(())
 }
 
-/// Verify that session age stays in the footer while viewing, composing,
-/// and focusing the chat transcript.
+/// Verify that the header stays directly below the status bar and session age
+/// stays in the footer while viewing, composing, and focusing the transcript.
 #[tokio::test]
 async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
     // Arrange, Act, Assert
@@ -616,6 +616,12 @@ async fn session_chat_keeps_session_age_across_focus_changes() -> E2eResult {
                         (&chat_frame, "j/k: scroll"),
                         (frame, "Enter: send"),
                     ] {
+                        assert!(captured_frame.row_text(0).contains("Agentty"));
+                        assert!(
+                            captured_frame
+                                .row_text(1)
+                                .contains("Review-ready session shortcuts")
+                        );
                         let label_rows: Vec<String> = (0..captured_frame.rows())
                             .map(|row| captured_frame.row_text(row))
                             .filter(|row| row.contains("Started 3d 4h ago"))

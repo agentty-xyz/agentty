@@ -71,7 +71,7 @@ pub struct AppFrameAreas {
     pub status_bar_area: Rect,
 }
 
-/// Content and footer areas used by top-level tab pages.
+/// Content and footer areas shared by tab pages and the diff workspace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TabPageAreas {
     /// Area used for the one-line footer below the tab page content.
@@ -125,12 +125,11 @@ pub fn app_frame_areas(area: Rect) -> AppFrameAreas {
     }
 }
 
-/// Splits a tab page area so content starts directly below the tab header.
+/// Splits a page area so content starts directly below the preceding header.
 ///
-/// The tab header already provides the vertical separation through its bottom
-/// border, so tab pages keep only side and bottom insets. This prevents a
-/// blank row between the header border and the first table or panel while
-/// preserving the one-line footer convention.
+/// Tab pages and the diff workspace keep only side and bottom insets. This
+/// prevents a blank row below the tab header or app status bar while preserving
+/// the one-line footer convention.
 pub fn tab_page_areas(area: Rect) -> TabPageAreas {
     let horizontal_inset = TAB_PAGE_INSET.min(area.width / 2);
     let content_x = area.x.saturating_add(horizontal_inset);
@@ -150,15 +149,10 @@ pub fn tab_page_areas(area: Rect) -> TabPageAreas {
 
 /// Splits one session chat page into header, transcript, and bottom panel.
 ///
-/// The outer frame keeps one-cell top and side margins, reserves
-/// `bottom_height` for the prompt/help region flush with the page bottom, and
-/// dedicates the requested header rows above the bordered session output panel.
+/// The header starts at the page top with one-cell side margins. The layout
+/// reserves `bottom_height` for the prompt/help region flush with the page
+/// bottom and places the requested header rows above the session output panel.
 pub fn session_chat_areas(area: Rect, bottom_height: u16, header_height: u16) -> SessionChatAreas {
-    let area = Rect {
-        y: area.y.saturating_add(1.min(area.height)),
-        height: area.height.saturating_sub(1),
-        ..area
-    };
     let header_height = header_height.max(SESSION_HEADER_HEIGHT_MIN);
     let vertical_chunks = Layout::default()
         .constraints([Constraint::Min(0), Constraint::Length(bottom_height)])
