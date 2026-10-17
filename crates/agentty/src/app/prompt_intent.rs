@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
+use crate::app::command_gateway::{CommandInitiator, SessionCommand, SessionMutation};
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
 use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
@@ -741,45 +742,22 @@ impl App {
         }
     }
 
-    /// Routes one prepared turn prompt through the lifecycle path for the
-    /// active prompt session.
+    /// Sends prepared terminal intent through shared command admission.
     async fn submit_turn_prompt(
         &mut self,
         session_id: SessionId,
         session_mode: PromptSessionMode,
         prompt: TurnPrompt,
     ) {
-        if session_mode == PromptSessionMode::NewDraft {
-            if let Err(error) = self.stage_draft_message(&session_id, prompt).await {
-                self.append_output_for_session(&session_id, &TranscriptNotice::Error.format(error))
-                    .await;
-            }
-        } else if session_mode != PromptSessionMode::Existing {
-            if let Err(error) = self.start_session(&session_id, prompt).await {
-                self.append_output_for_session(&session_id, &TranscriptNotice::Error.format(error))
-                    .await;
-            }
-        } else if self.session_queues_messages(&session_id) {
-            if let Err(error) = self.enqueue_message(&session_id, prompt) {
-                self.append_output_for_session(
-                    &session_id,
-                    &TranscriptNotice::QueueError.format(error),
-                )
-                .await;
-            }
-        } else {
-            self.reply(&session_id, prompt).await;
-        }
-    }
-
-    /// Returns whether the targeted session is running a turn or rebase, used
-    /// to route submissions into the in-memory message queue.
-    fn session_queues_messages(&self, session_id: &str) -> bool {
-        self.sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| matches!(session.status, Status::InProgress | Status::Rebasing))
+        let command = SessionCommand::new(
+            CommandInitiator::SessionView,
+            SessionMutation::Prompt {
+                session_id,
+                session_mode,
+                prompt,
+            },
+        );
+        let _ = self.admit_session_command(command).await;
     }
 
     /// Appends one prompt-workflow status line to the target session

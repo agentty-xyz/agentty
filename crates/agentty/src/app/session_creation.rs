@@ -33,7 +33,7 @@ pub(crate) struct PendingSessionCreation {
 impl App {
     /// Opens the composer after reserving metadata; checkout runs
     /// independently.
-    pub(crate) async fn start_session_creation(
+    pub(crate) async fn begin_session_creation(
         &mut self,
         request: CreateSessionRequest,
         response_tx: Option<oneshot::Sender<Result<SessionId, SessionError>>>,

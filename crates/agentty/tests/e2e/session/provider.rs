@@ -32,9 +32,6 @@ printf '%s\n' "$GIT_OPTIONAL_LOCKS" > "$AGENTTY_TEST_EVIDENCE/optional-locks"
 case "$prompt" in
   *"Generate the canonical session commit message"*)
     response='{"answer":"Preserve pending worktree change"}'
-    if [ "$AGENTTY_TEST_RELEASE_LOCK" = "1" ]; then
-      printf 'release requested\n' > "$AGENTTY_TEST_EVIDENCE/release-lock"
-    fi
     ;;
   *"Review the Git diff for display in a terminal UI."*)
     response='{"project_impact":[],"suggestions":[]}'
@@ -42,6 +39,11 @@ case "$prompt" in
   *"Repair a failed git commit"*)
     printf 'unexpected assistance\n' > "$AGENTTY_TEST_EVIDENCE/assist"
     exit 91
+    ;;
+  *"Generate a concise, commit-style title"*)
+    # Title generation can overlap the editing turn; it must not recreate
+    # the file or lock owned by that turn.
+    response='{"answer":"Preserve pending worktree change"}'
     ;;
   *)
     printf 'pending change\n' > generated.txt
@@ -70,6 +72,46 @@ printf '{"type":"result","subtype":"success","result":"","structured_output":%s,
         ],
     )
     .await
+}
+
+/// Releases the fixture-owned lock after Git reports real staging contention.
+/// The failed command still reaches the application, so success requires a
+/// production retry without depending on trace timing or wall-clock sleeps.
+async fn seed_recovering_commit_index_lock_project(env: &BuilderEnv) -> E2eResult {
+    seed_commit_index_lock_project(env).await?;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("git"))
+        .find(|path| path.is_file())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "git not found"))?;
+    let real_git = real_git.to_string_lossy().replace('\'', "'\"'\"'");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = "add" ] && [ "$2" = "-A" ] &&
+   [ -f "$AGENTTY_TEST_EVIDENCE/lock-path" ] &&
+   [ ! -f "$AGENTTY_TEST_EVIDENCE/lock-released" ]; then
+  '{real_git}' "$@" 2> "$AGENTTY_TEST_EVIDENCE/staging-error"
+  result=$?
+  cat "$AGENTTY_TEST_EVIDENCE/staging-error" >&2
+  if [ "$result" -ne 0 ]; then
+    case "$(cat "$AGENTTY_TEST_EVIDENCE/staging-error")" in
+      *index.lock*)
+        lock_path=$(cat "$AGENTTY_TEST_EVIDENCE/lock-path") || exit 92
+        rm -- "$lock_path" || exit 93
+        printf 'writer finished\n' > "$AGENTTY_TEST_EVIDENCE/lock-released"
+        ;;
+    esac
+  fi
+  exit "$result"
+fi
+exec '{real_git}' "$@"
+"#
+    );
+    let git_path = env.stub_bin.join("git");
+    std::fs::write(&git_path, script)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
 }
 
 /// Seeds configured pre-commit validation without installing its Git hook.
@@ -601,50 +643,13 @@ async fn test_session_commit_index_lock() -> E2eResult {
 async fn test_session_commit_index_lock_recovers() -> E2eResult {
     // Arrange
     let evidence = tempfile::tempdir()?;
-    let git_trace = evidence.path().join("git-trace");
-    // Model an independent writer owned by the test, outside the provider's
-    // process group. A provider descendant must not survive turn completion.
-    // Releasing on the traced staging attempt instead of a fixed sleep keeps
-    // the writer inside auto-commit's bounded retry window even when a
-    // loaded CI host stretches wall-clock timing.
-    let release_evidence = evidence.path().to_path_buf();
-    let release_trace = git_trace.clone();
-    let release_lock = async move {
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while !release_evidence.join("release-lock").exists() {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            // `GIT_TRACE` records the staging command the moment auto-commit
-            // starts contending for the index, with the retry budget still
-            // nearly full. The quoted form covers older Git trace output.
-            loop {
-                let trace = std::fs::read_to_string(&release_trace).unwrap_or_default();
-                if trace.contains("git add -A") || trace.contains("'add' '-A'") {
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await?;
-        // Give the traced staging attempt a beat to hit the lock so recovery
-        // exercises a real retry rather than a clean first try.
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        let lock_path = std::fs::read_to_string(release_evidence.join("lock-path"))?;
-        std::fs::remove_file(lock_path.trim())?;
-
-        Ok(())
-    };
-
     // Act / Assert
-    let scenario = FeatureTest::new("session_commit_index_lock_recovers")
+    FeatureTest::new("session_commit_index_lock_recovers")
         .with_git()
         .with_terminal_size(100, 40)
         .env("AGENTTY_TEST_EVIDENCE", evidence.path().to_string_lossy())
-        .env("AGENTTY_TEST_RELEASE_LOCK", "1")
         .env("GIT_OPTIONAL_LOCKS", "1")
-        .env("GIT_TRACE", git_trace.to_string_lossy())
-        .setup(|env| Box::pin(async move { seed_commit_index_lock_project(env).await }))
+        .setup(|env| Box::pin(async move { seed_recovering_commit_index_lock_project(env).await }))
         .run(
             |scenario| {
                 scenario
@@ -666,6 +671,14 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
                     assertion::assert_not_visible(frame, "[Commit Error]");
                     assertion::assert_not_visible(frame, "[Commit Assist]");
                     assert!(!evidence.path().join("assist").exists());
+                    let staging_error =
+                        std::fs::read_to_string(evidence.path().join("staging-error"))
+                            .expect("the first staging attempt should hit the real lock");
+                    assert!(staging_error.contains("index.lock"), "{staging_error}");
+                    assert!(evidence.path().join("lock-released").exists());
+                    let lock_path = std::fs::read_to_string(evidence.path().join("lock-path"))
+                        .expect("fixture lock path");
+                    assert!(!Path::new(lock_path.trim()).exists());
                     assert_eq!(
                         std::fs::read_to_string(evidence.path().join("optional-locks"))
                             .expect("agent should record the inherited Git environment"),
@@ -686,9 +699,8 @@ async fn test_session_commit_index_lock_recovers() -> E2eResult {
                     assert_eq!(committed.stdout, b"pending change\n");
                 })
             },
-        );
-    // Joining keeps lock release scoped to this test, including failures.
-    tokio::try_join!(scenario, release_lock)?;
+        )
+        .await?;
 
     Ok(())
 }

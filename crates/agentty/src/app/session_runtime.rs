@@ -20,58 +20,22 @@ use ag_session::{
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::SessionManager;
+use crate::app::command_gateway::{
+    CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+};
 
 /// Maximum number of accepted API commands waiting for foreground execution.
 const SESSION_RUNTIME_COMMAND_CAPACITY: usize = 32;
 /// Stable error returned after the foreground session runtime has stopped.
 const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
-/// One command accepted by the session runtime actor.
+/// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
-    /// Creates one session from an explicit API request.
-    Create {
-        request: CreateSessionRequest,
-        response_tx: oneshot::Sender<Result<SessionId, SessionError>>,
-    },
-    /// Loads one complete session aggregate.
     Get {
         response_tx: oneshot::Sender<Result<Option<Session>, SessionError>>,
         session_id: SessionId,
     },
-    /// Sends one user message.
-    SendMessage {
-        message: String,
-        response_tx: oneshot::Sender<Result<(), SessionError>>,
-        session_id: SessionId,
-    },
-    /// Submits one durable turn directly on the session worker.
-    SubmitDurableMessage {
-        request: DurableMessageRequest,
-        response_tx: oneshot::Sender<Result<(), SessionError>>,
-        session_id: SessionId,
-    },
-    /// Answers one complete clarification-question set.
-    AnswerQuestions {
-        request: AnswerQuestionsRequest,
-        response_tx: oneshot::Sender<Result<(), SessionError>>,
-        session_id: SessionId,
-    },
-    /// Cancels one session.
-    Cancel {
-        response_tx: oneshot::Sender<Result<(), SessionError>>,
-        session_id: SessionId,
-    },
-    /// Enqueues one session for merge.
-    Merge {
-        response_tx: oneshot::Sender<Result<(), SessionError>>,
-        session_id: SessionId,
-    },
-    /// Queues publication of one session branch and creates or refreshes its
-    /// review request.
-    CreateReviewRequest {
-        response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
-        session_id: SessionId,
-    },
+    Mutation(SessionCommand),
 }
 
 /// Cloneable control capability for the foreground session runtime.
@@ -79,17 +43,25 @@ pub(crate) enum SessionRuntimeCommand {
 pub(crate) struct SessionRuntimeHandle {
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
+    initiator: CommandInitiator,
 }
 
 impl SessionRuntimeHandle {
+    /// Selects caller provenance without changing mailbox ordering or replies.
+    pub(crate) fn with_initiator(mut self, initiator: CommandInitiator) -> Self {
+        self.initiator = initiator;
+
+        self
+    }
+
     /// Creates one session through the runtime actor.
     pub(crate) async fn create_session(
         &self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
-        self.request(|response_tx| SessionRuntimeCommand::Create {
+        self.request_mutation(|response_tx| SessionMutation::Create {
             request,
-            response_tx,
+            response_tx: Some(response_tx),
         })
         .await
     }
@@ -116,7 +88,7 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::SendMessage {
+        self.request_mutation(|response_tx| SessionMutation::SendMessage {
             message,
             response_tx,
             session_id,
@@ -132,7 +104,7 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::SubmitDurableMessage {
+        self.request_mutation(|response_tx| SessionMutation::SubmitDurableMessage {
             request,
             response_tx,
             session_id,
@@ -149,7 +121,7 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::AnswerQuestions {
+        self.request_mutation(|response_tx| SessionMutation::AnswerQuestions {
             request,
             response_tx,
             session_id,
@@ -161,7 +133,7 @@ impl SessionRuntimeHandle {
     pub(crate) async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::Cancel {
+        self.request_mutation(|response_tx| SessionMutation::Cancel {
             response_tx,
             session_id,
         })
@@ -172,7 +144,7 @@ impl SessionRuntimeHandle {
     pub(crate) async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::Merge {
+        self.request_mutation(|response_tx| SessionMutation::Merge {
             response_tx,
             session_id,
         })
@@ -187,9 +159,25 @@ impl SessionRuntimeHandle {
     ) -> Result<ReviewRequest, SessionError> {
         let session_id = session_id.clone();
 
-        self.request(|response_tx| SessionRuntimeCommand::CreateReviewRequest {
-            response_tx,
-            session_id,
+        self.request_mutation(|response_tx| {
+            SessionMutation::CreateReviewRequest(ReviewRequestCommand::from_session_api(
+                session_id,
+                response_tx,
+            ))
+        })
+        .await
+    }
+
+    /// Attaches identity before a mutation enters the bounded mailbox.
+    async fn request_mutation<ResultValue>(
+        &self,
+        request: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> SessionMutation,
+    ) -> Result<ResultValue, SessionError> {
+        self.request(|response_tx| {
+            SessionRuntimeCommand::Mutation(SessionCommand::new(
+                self.initiator,
+                request(response_tx),
+            ))
         })
         .await
     }
@@ -311,6 +299,7 @@ impl SessionRuntime {
     /// Returns a cloneable control handle for background or frontend callers.
     pub(crate) fn handle(&self) -> SessionRuntimeHandle {
         SessionRuntimeHandle {
+            initiator: CommandInitiator::SessionApi,
             command_tx: self.command_tx.clone(),
             consumer_state: Arc::clone(&self.consumer_state),
         }

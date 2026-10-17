@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tracing::instrument::WithSubscriber;
 
 use super::super::{
-    ViewContext, open_draft_prompt_with_pasted_image, show_diff_for_view_session, view_context,
+    ViewContext, ViewKeyContext, ViewPendingUpdate, handle_view_key,
+    open_draft_prompt_with_pasted_image, show_diff_for_view_session, view_context,
     view_session_snapshot,
 };
 use super::support::{
@@ -16,6 +18,76 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::help_action;
 use crate::presentation::help_action::ViewSessionState;
+
+#[tokio::test]
+async fn start_key_rechecks_parent_readiness_and_preserves_staged_draft() {
+    // Arrange
+    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
+    crate::test_support::set_session_status_for_test(&mut app, &parent_session_id, Status::Review);
+    let session_id = app
+        .create_stacked_draft_session(&parent_session_id)
+        .await
+        .expect("draft");
+    app.stage_draft_message(&session_id, "saved draft")
+        .await
+        .expect("stage prompt");
+    app.mode = AppMode::View {
+        session_id: session_id.clone().into(),
+        scroll_offset: Some(1),
+    };
+    let context = view_context(&mut app).expect("view context");
+    let snapshot = view_session_snapshot(&app, &context).expect("view snapshot");
+    assert!(snapshot.can_start_staged_session());
+    let mut pending_update = ViewPendingUpdate::from_context(&context);
+    // The view's eligibility snapshot must not bypass admission when the
+    // parent has since started another turn.
+    crate::test_support::set_session_status_for_test(
+        &mut app,
+        &parent_session_id,
+        Status::InProgress,
+    );
+
+    // Act
+    let should_apply = handle_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
+        ViewKeyContext {
+            context: &context,
+            session_snapshot: &snapshot,
+        },
+        &mut pending_update,
+    )
+    .await;
+
+    // Assert
+    let messages = app
+        .services
+        .db()
+        .sessions()
+        .load_session_messages(&session_id)
+        .await
+        .expect("transcript");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.content.contains("[Start Error]")
+                && message.content.contains("parent is in review"))
+    );
+    let session = app.sessions.session_for_id(&session_id).expect("draft");
+    assert_eq!(session.status, Status::Draft);
+    assert_eq!(session.prompt, "saved draft");
+    assert!(!should_apply);
+    assert!(matches!(app.mode, AppMode::View { .. }));
+    assert!(
+        app.services
+            .db()
+            .sessions()
+            .load_session_preparation(&session_id)
+            .await
+            .expect("preparation")
+            .is_none()
+    );
+}
 
 #[tokio::test]
 async fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() {

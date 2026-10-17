@@ -10,9 +10,9 @@ use ag_git::{GitClient, GitError, RealGitClient};
 use ag_session::AgentAvailabilityProbe;
 use ag_worker::{RealAgentAvailabilityProbe, RuntimeConfig};
 use app::branch_publish::{
-    BranchPublishTaskContext, BranchPublishTaskSession, review_request_queued_label,
-    run_branch_publish_action,
+    BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
 };
+use app::command_gateway::ReviewRequestCommand;
 use app::merge_queue::{MergeQueue, MergeQueueProgress};
 use app::project::ProjectManager;
 use app::review::{
@@ -1451,6 +1451,27 @@ impl App {
         publish_branch_action: PublishBranchAction,
         remote_branch_name: Option<String>,
     ) {
+        if publish_branch_action == PublishBranchAction::PublishPullRequest {
+            let command =
+                ReviewRequestCommand::from_session_view(session_id.into(), remote_branch_name);
+            if matches!(
+                self.admit_review_request(command).await,
+                Err(ag_session::SessionError::NotFound)
+            ) {
+                self.mode = Self::view_info_popup_mode(
+                    "Branch push failed".to_string(),
+                    "Session is no longer available.".to_string(),
+                    false,
+                    String::new(),
+                    restore_view,
+                );
+            } else {
+                self.mode = restore_view.into_view_mode();
+            }
+
+            return;
+        }
+
         let Some(branch_publish_context) = self.branch_publish_task_context(session_id) else {
             self.mode = Self::view_info_popup_mode(
                 "Branch push failed".to_string(),
@@ -1462,44 +1483,6 @@ impl App {
 
             return;
         };
-
-        if publish_branch_action == PublishBranchAction::PublishPullRequest {
-            let branch_operation_lock = Arc::clone(&branch_publish_context.branch_operation_lock);
-            // Reserve an idle branch before persistence. An existing owner
-            // already serializes worker execution, so the UI never waits here.
-            let _branch_operation_guard = branch_operation_lock.try_lock_owned().ok();
-            let enqueue_result = self
-                .sessions
-                .enqueue_review_request_creation(
-                    &self.services,
-                    branch_publish_context.session,
-                    remote_branch_name,
-                    None,
-                )
-                .await;
-            match enqueue_result {
-                Err(error) => {
-                    let _ = self.sessions.finish_branch_publish(
-                        session_id,
-                        TransientMessageBody::Markdown(format!(
-                            "**Review request publish failed**\n\n{error}"
-                        )),
-                    );
-                }
-                Ok(Some(queued_order)) => self.sessions.queue_branch_publish(
-                    session_id,
-                    queued_order,
-                    review_request_queued_label(),
-                ),
-                Ok(None) => self.sessions.start_branch_publish(
-                    session_id,
-                    Self::branch_publish_loading_label(publish_branch_action),
-                ),
-            }
-            self.mode = restore_view.into_view_mode();
-
-            return;
-        }
 
         let loading_label = Self::branch_publish_loading_label(publish_branch_action);
         let clock = self.services.clock();

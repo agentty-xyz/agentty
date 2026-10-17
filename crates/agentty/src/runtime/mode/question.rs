@@ -624,7 +624,7 @@ async fn submit_response(app: &mut App, response: String) {
         session_id: session_id.clone(),
         scroll_offset: None,
     };
-    let service = app.session_service();
+    let service = app.session_view_service();
     let request = service.answer_questions(&session_id, AnswerQuestionsRequest { answers });
     let reply_enqueued = match app.drive_session_request(request).await {
         Ok(()) => true,
