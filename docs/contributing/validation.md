@@ -50,9 +50,9 @@ overrides are honored. The check subprocesses clear `SKIP` and `PREK_SKIP` so re
 checks execute before their successes are recorded. Other invocations of the coordinator
 using that directory wait; direct Cargo commands still use Cargo's own build lock. Keep
 target directories inside the checkout, with downloaded registry and compiler caches
-managed separately. The target must not contain tracked source files. Target artifacts,
-including paths linked into that directory, are excluded from input fingerprints even
-when the target is not Git-ignored.
+left in their default shared locations. The target must not contain tracked source
+files. Target artifacts, including paths linked into that directory, are excluded from
+input fingerprints even when the target is not Git-ignored.
 
 Direct `ag-xtask validate` invocation accepts `--packages`, ordered `--hook` IDs, and
 optional `--reuse`. Fresh execution is the default. Reuse applies only to allowlisted

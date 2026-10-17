@@ -50,8 +50,11 @@ workspace crates after an upstream change, confirm a cache hit for identical sou
 built from two checkout roots.
 
 Cargo uses its CPU-based job default. When running several sessions, set
-`CARGO_BUILD_JOBS=2` (or another suitable budget) in each session's environment. To opt
-out of caching, set `RUSTC_WRAPPER=`.
+`CARGO_BUILD_JOBS=2` (or another suitable budget) in each session's environment. Because
+the wrapper already falls back to direct compilation, keep it enabled for routine and
+agent sessions; set `RUSTC_WRAPPER=` only to diagnose the cache itself. Keep the default
+`CARGO_HOME` and `PREK_HOME` so sessions share downloaded registries and hook
+environments.
 
 Coverage hooks explicitly use `target/llvm-cov-target`, separate from ordinary builds,
 even when `CARGO_TARGET_DIR` is set. Override `CARGO_LLVM_COV_TARGET_DIR` to relocate
