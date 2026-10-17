@@ -577,9 +577,14 @@ impl RealSyncAssistClient {
         prompt: String,
         session_agent: AgentSelection,
     ) -> Result<(), SessionError> {
-        // Success payload unused; run for side effects only.
-        let _ = run_client
-            .submit(ag_contracts::OneShotRequest {
+        // Success payload unused; run for side effects only. A purpose
+        // captured by a scoped client, such as project sync, takes precedence.
+        let _ = ag_worker::in_scope(
+            ag_worker::RunScope {
+                purpose: Some("rebase conflict assistance".to_string()),
+                ..ag_worker::RunScope::default()
+            },
+            run_client.submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
                 provider_call_budget: None,
@@ -592,8 +597,9 @@ impl RealSyncAssistClient {
                 request_kind: ag_contracts::AgentRequestKind::UtilityPrompt,
                 reasoning_level: ReasoningLevel::default(),
                 speed_mode: crate::domain::agent::SpeedMode::Normal,
-            })
-            .await?;
+            }),
+        )
+        .await?;
 
         Ok(())
     }

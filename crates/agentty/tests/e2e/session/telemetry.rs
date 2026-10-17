@@ -340,9 +340,15 @@ fn assert_tool_content(spans: &[Span], capture: bool) -> io::Result<()> {
         capture.then_some("[REDACTED]")
     );
     let large = tool_span(spans, "trace-large")?;
+    // The 6000-byte result keeps its first 1 KiB and last bytes within 4 KiB.
+    let large_excerpt = format!(
+        "{}\n[... 1968 bytes omitted ...]\n{}",
+        "é".repeat(512),
+        "é".repeat(1504)
+    );
     assert_eq!(
-        string_attribute(large, "gen_ai.tool.call.result").map(str::len),
-        capture.then_some(4096)
+        string_attribute(large, "gen_ai.tool.call.result"),
+        capture.then_some(large_excerpt.as_str())
     );
     assert_eq!(
         large

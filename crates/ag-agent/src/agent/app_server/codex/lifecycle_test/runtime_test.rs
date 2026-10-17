@@ -633,7 +633,8 @@ async fn completed_turns_never_rebill_fallback_usage_after_a_counter_gap() {
                 .contains(&KeyValue::new("agentty.usage.aggregate_known", true))
         })
         .collect::<Vec<_>>();
-    assert_eq!(known, [true, false, false, true, true, false, false, true]);
+    // A fresh snapshot with its latest response reconstructs the baseline.
+    assert_eq!(known, [true, false, false, true, true, false, true, true]);
 }
 
 #[tokio::test]

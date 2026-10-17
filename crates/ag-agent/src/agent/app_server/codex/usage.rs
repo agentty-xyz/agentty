@@ -15,7 +15,8 @@ pub(super) struct UsageTracker {
 }
 
 impl UsageTracker {
-    /// Resumed threads have no trustworthy cumulative baseline yet.
+    /// Resumed threads have no trustworthy cumulative baseline yet. The next
+    /// complete snapshot reconstructs it by subtracting its latest response.
     pub(super) fn resumed(&mut self) {
         self.previous = None;
         self.previous_cached = None;
@@ -82,6 +83,16 @@ impl UsageTracker {
             );
             if let (Some(input), Some(output)) = current {
                 self.baseline_observed = true;
+                if self.previous.is_none() {
+                    self.previous = preceding_total(
+                        input,
+                        last_counter(last_breakdown, "inputTokens", "input_tokens"),
+                    )
+                    .zip(preceding_total(
+                        output,
+                        last_counter(last_breakdown, "outputTokens", "output_tokens"),
+                    ));
+                }
                 let delta = self.previous.map(|previous| {
                     if input < previous.0 || output < previous.1 {
                         (input, output)
@@ -104,6 +115,14 @@ impl UsageTracker {
                 .get("cachedInputTokens")
                 .or_else(|| total.get("cached_input_tokens"))
                 .and_then(Value::as_u64);
+            if self.previous_cached.is_none() {
+                self.previous_cached = cached.and_then(|cached| {
+                    preceding_total(
+                        cached,
+                        last_counter(last_breakdown, "cachedInputTokens", "cached_input_tokens"),
+                    )
+                });
+            }
             self.turn_cached = self.turn_cached.zip(self.previous_cached).zip(cached).map(
                 |((turn, previous), current)| {
                     turn.saturating_add(if current < previous {
@@ -286,6 +305,19 @@ fn thread_token_usage_for_turn<'response>(
     params
         .get("tokenUsage")
         .or_else(|| params.get("token_usage"))
+}
+
+/// Reads one counter from a snapshot's latest-response breakdown.
+fn last_counter(breakdown: Option<&Value>, camel_case: &str, snake_case: &str) -> Option<u64> {
+    breakdown
+        .and_then(|last| last.get(camel_case).or_else(|| last.get(snake_case)))
+        .and_then(Value::as_u64)
+}
+
+/// Returns the cumulative counter before a snapshot's latest response. Codex
+/// adds exactly that response to the previous total for every snapshot.
+fn preceding_total(total: u64, last: Option<u64>) -> Option<u64> {
+    last.and_then(|last| total.checked_sub(last))
 }
 
 #[cfg(test)]

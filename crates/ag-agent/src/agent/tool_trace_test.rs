@@ -171,7 +171,8 @@ fn metadata_only_counts_compact_json_without_retaining_serialized_content() {
             .map_or_else(|| value.to_string().len(), str::len);
         let preview = Preview::new(value, false);
         assert_eq!(preview.bytes, expected);
-        assert_eq!(preview.content, [] as [u8; 0]);
+        assert_eq!(preview.head, [] as [u8; 0]);
+        assert!(preview.tail.is_empty());
         assert!(!preview.retain);
     }
 }
@@ -333,5 +334,82 @@ fn writer_counts_without_retaining_disabled_content_and_flushes() {
 
     // Assert
     assert_eq!(preview.bytes, initial_bytes + 3);
-    assert_eq!(preview.content, [] as [u8; 0]);
+    assert_eq!(preview.head, [] as [u8; 0]);
+    assert!(preview.tail.is_empty());
+}
+
+#[test]
+fn long_output_previews_keep_the_beginning_and_the_final_failure_summary() {
+    // Arrange
+    let output = json!(format!(
+        "Compiling agentty\n{}\nFAILED: 2 tests failed",
+        "warning: noisy build line\n".repeat(1_000)
+    ));
+    let total = output.as_str().expect("text fixture").len();
+
+    // Act
+    let attributes = ToolMetadata {
+        output: Some(&output),
+        ..ToolMetadata::default()
+    }
+    .attributes(true);
+
+    // Assert
+    let preview = attributes
+        .iter()
+        .find(|attribute| attribute.key.as_str() == "gen_ai.tool.call.result")
+        .expect("preview")
+        .value
+        .to_string();
+    let (head, tail, omitted) = excerpt_parts(&preview);
+    assert!(head.starts_with("Compiling agentty\n"));
+    assert!(tail.ends_with("\nFAILED: 2 tests failed"));
+    assert_eq!(head.len() + omitted + tail.len(), total);
+    assert!(preview.len() <= PREVIEW_BYTES);
+    assert!(attributes.contains(&KeyValue::new("agentty.tool.output.truncated", true)));
+    assert!(attributes.contains(&KeyValue::new(
+        "agentty.tool.output.bytes",
+        i64::try_from(total).expect("bounded fixture")
+    )));
+}
+
+#[test]
+fn excerpts_split_multibyte_characters_only_at_utf8_boundaries() {
+    // Arrange
+    let output = json!(format!("x{}x", "é".repeat(PREVIEW_BYTES)));
+
+    // Act
+    let attributes = ToolMetadata {
+        output: Some(&output),
+        ..ToolMetadata::default()
+    }
+    .attributes(true);
+
+    // Assert
+    let preview = attributes
+        .iter()
+        .find(|attribute| attribute.key.as_str() == "gen_ai.tool.call.result")
+        .expect("preview")
+        .value
+        .to_string();
+    let (head, tail, omitted) = excerpt_parts(&preview);
+    assert!(!preview.contains('�'));
+    assert_eq!(head.len(), 1_023);
+    assert!(tail.starts_with('é') && tail.ends_with('x'));
+    assert_eq!(
+        head.len() + omitted + tail.len(),
+        output.as_str().expect("text fixture").len()
+    );
+}
+
+/// Splits an excerpt into its head, tail, and reported omitted byte count.
+fn excerpt_parts(preview: &str) -> (&str, &str, usize) {
+    let (head, rest) = preview.split_once("\n[... ").expect("marker start");
+    let (marker, tail) = rest.split_once(" ...]\n").expect("marker end");
+    let omitted = marker
+        .strip_suffix(" bytes omitted")
+        .and_then(|count| count.parse::<usize>().ok())
+        .expect("omitted byte count");
+
+    (head, tail, omitted)
 }

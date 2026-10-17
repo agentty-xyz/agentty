@@ -107,6 +107,7 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
         vec![KeyValue::new("agentty.operation.id", "turn-1")],
     );
     queued.attribute("agentty.session.id", "session-1");
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let root = queued.selected();
     root.event("accepted");
     let root_context = root.context();
@@ -191,6 +192,7 @@ async fn spans_preserve_context_results_and_terminal_outcomes() {
     );
     assert!(matches!(find("failed").status, Status::Error { .. }));
     assert!(matches!(find("canceled").status, Status::Unset));
+    assert_queue_wait(&spans);
     assert_terminal_metadata(&spans);
     assert_context_ownership(&spans);
 }
@@ -347,6 +349,25 @@ fn assert_context_ownership(spans: &[SpanData]) {
         );
         assert_eq!(pair[0].parent_span_id, pair[1].span_context.span_id());
     }
+}
+
+fn assert_queue_wait(spans: &[SpanData]) {
+    let queue_wait_ms = |name: &str| {
+        spans
+            .iter()
+            .find(|span| span.name == name)
+            .and_then(|span| {
+                span.attributes
+                    .iter()
+                    .find(|attribute| attribute.key.as_str() == "agentty.queue.wait_ms")
+            })
+            .map(|attribute| attribute.value.clone())
+    };
+    assert!(matches!(
+        queue_wait_ms("session.turn"),
+        Some(opentelemetry::Value::I64(wait)) if wait >= 5
+    ));
+    assert_eq!(queue_wait_ms("abandoned"), None);
 }
 
 fn assert_terminal_metadata(spans: &[SpanData]) {

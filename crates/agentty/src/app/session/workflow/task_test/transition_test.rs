@@ -15,6 +15,7 @@ use super::super::{
 use super::support::{commit_fallback_transcript, insert_review_session, one_shot_submission};
 use crate::app::AppEvent;
 use crate::app::assist::AssistContext;
+use crate::app::test_support::purpose_recording_run_worker;
 use crate::db::AppRepositories;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::COMMITTING_PROGRESS_LABEL;
@@ -790,6 +791,57 @@ async fn test_commit_fallback_preserves_existing_message_continuity() {
 
     // Assert
     assert_eq!(outcome.commit_message, expected_message);
+}
+
+#[tokio::test]
+async fn commit_message_generation_records_its_utility_purpose() {
+    // Arrange
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_is_worktree_clean()
+        .once()
+        .returning(|_| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_diff()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok("+change".into()) }));
+    git_client
+        .expect_has_commits_since()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(false) }));
+    git_client
+        .expect_commit_all_preserving_single_commit()
+        .once()
+        .returning(|_, _, _, _| Box::pin(async { Ok(()) }));
+    git_client
+        .expect_head_short_hash()
+        .once()
+        .returning(|_| Box::pin(async { Ok("abc123".into()) }));
+    let (run_worker, purposes) = purpose_recording_run_worker("Add change");
+
+    // Act
+    let outcome = SessionTaskService::commit_session_changes(
+        &git_client,
+        Path::new("project"),
+        "main",
+        (
+            model_fixture::codex_selection(),
+            ReasoningLevel::Low,
+            SpeedMode::Normal,
+        ),
+        &run_worker,
+        false,
+        &Mutex::new(SessionTranscript::default()),
+    )
+    .await
+    .expect("commit should succeed");
+
+    // Assert
+    assert_eq!(outcome.commit_message, "Add change");
+    assert_eq!(
+        *purposes.lock().expect("recorded purposes"),
+        ["commit message"]
+    );
 }
 
 #[tokio::test]

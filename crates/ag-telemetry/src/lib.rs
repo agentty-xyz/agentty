@@ -4,7 +4,7 @@
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use opentelemetry::global;
 pub use opentelemetry::trace::{FutureExt, TraceContextExt};
@@ -234,6 +234,7 @@ struct OwnedSpanCompletion {
 
 /// Carries a root workflow and its waiting interval until worker selection.
 pub struct QueuedTrace {
+    accepted_at: Instant,
     root: Span,
     wait: Span,
 }
@@ -244,7 +245,11 @@ impl QueuedTrace {
         let root = Span::root(name, attributes);
         let wait = Span::start("queue.wait", Vec::new(), &root.context(), Vec::new());
 
-        Self { root, wait }
+        Self {
+            accepted_at: Instant::now(),
+            root,
+            wait,
+        }
     }
 
     /// Adds workflow ownership before execution.
@@ -253,8 +258,14 @@ impl QueuedTrace {
     }
 
     /// Ends waiting and transfers root ownership to the executing worker.
+    /// The root records the wait so its duration can be split into queueing
+    /// and execution without walking child spans.
     pub fn selected(self) -> Span {
         self.wait.finish(Outcome::Completed);
+        self.root.attribute(
+            "agentty.queue.wait_ms",
+            i64::try_from(self.accepted_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+        );
 
         self.root
     }
