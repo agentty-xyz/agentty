@@ -40,7 +40,24 @@ impl Fixture {
         Ok(Self { directory })
     }
 
+    /// Replaces the stub with one that answers `cargo metadata` and then
+    /// deletes itself, so launching Clippy afterwards fails.
+    fn remove_cargo_after_metadata(&self) -> Result<(), Box<dyn Error>> {
+        let cargo = self.directory.path().join("cargo");
+        fs::write(
+            &cargo,
+            "#!/bin/sh\n/bin/cat metadata.json\n/bin/rm \"$0\"\n",
+        )?;
+        fs::set_permissions(cargo, fs::Permissions::from_mode(0o755))?;
+
+        Ok(())
+    }
+
     fn run(&self, files: &[&str], exit_code: i32) -> std::io::Result<Output> {
+        self.command(files, exit_code)?.output()
+    }
+
+    fn command(&self, files: &[&str], exit_code: i32) -> std::io::Result<Command> {
         let mut command = Command::new(env!("CARGO_BIN_EXE_ag-xtask"));
         command
             .arg("clippy")
@@ -56,7 +73,7 @@ impl Fixture {
             command.env("LLVM_PROFILE_FILE", profile);
         }
 
-        command.output()
+        Ok(command)
     }
 
     fn calls(&self) -> Result<Vec<String>, Box<dyn Error>> {
@@ -108,6 +125,23 @@ fn clippy_failures_and_unreadable_metadata_fail_the_command() -> Result<(), Box<
         broken.calls().is_err(),
         "Clippy must not run without metadata"
     );
+
+    Ok(())
+}
+
+#[test]
+fn cargo_that_cannot_launch_clippy_fails_the_command() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new(None)?;
+    fixture.remove_cargo_after_metadata()?;
+    // Act
+    let output = fixture
+        .command(&["crates/core/src/lib.rs"], 0)?
+        .env("PATH", fixture.directory.path())
+        .output()?;
+    // Assert
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Could not execute cargo"));
 
     Ok(())
 }
