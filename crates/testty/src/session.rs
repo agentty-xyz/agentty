@@ -27,6 +27,14 @@ const DEFAULT_ROWS: u16 = 24;
 /// Default read timeout for draining PTY output.
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
+/// Primary device attributes (DA1) requests a terminal answers on its input.
+const PRIMARY_DEVICE_ATTRIBUTES_QUERIES: [&[u8]; 2] = [b"\x1b[c", b"\x1b[0c"];
+
+/// DA1 reply of a VT100 with advanced video, a terminal without the Kitty
+/// keyboard protocol. Without a reply, capability probes such as crossterm's
+/// keyboard enhancement check block until their timeout.
+const PRIMARY_DEVICE_ATTRIBUTES_REPLY: &[u8] = b"\x1b[?1;2c";
+
 /// A live PTY session driving a real TUI binary.
 ///
 /// The session owns the PTY child process and provides methods to send
@@ -42,6 +50,8 @@ pub struct PtySession {
     output_buffer: Vec<u8>,
     /// Receiver for output bytes read from the PTY in a background thread.
     output_receiver: mpsc::Receiver<Vec<u8>>,
+    /// Offset in `output_buffer` up to which terminal queries were answered.
+    query_scan_offset: usize,
     /// Number of rows in the terminal grid.
     rows: u16,
     /// Writer end of the PTY for sending input.
@@ -126,6 +136,7 @@ impl PtySession {
             output_buffer: Vec::new(),
             writer,
             output_receiver,
+            query_scan_offset: 0,
             child,
         })
     }
@@ -168,7 +179,9 @@ impl PtySession {
 
     /// Drain all available output from the PTY into the internal buffer.
     ///
-    /// Waits up to `timeout` for any pending output to arrive.
+    /// Waits up to `timeout` for any pending output to arrive. Answers
+    /// primary device attributes requests in the drained output, as a real
+    /// terminal would, so the child's capability probes do not time out.
     pub fn drain_output(&mut self, timeout: Duration) {
         let deadline = Instant::now() + timeout;
 
@@ -178,6 +191,7 @@ impl PtySession {
                 .unwrap_or(Duration::ZERO),
         ) {
             self.output_buffer.extend_from_slice(&chunk);
+            self.answer_terminal_queries();
         }
     }
 
@@ -427,6 +441,35 @@ impl PtySession {
                 }
             }
         }
+    }
+
+    /// Replies to each complete DA1 request after the last scanned offset.
+    ///
+    /// A request split across output chunks is left unscanned until its
+    /// remaining bytes arrive. Write failures are ignored because the child
+    /// may already have exited, and later waits report that outcome.
+    fn answer_terminal_queries(&mut self) {
+        let mut position = self.query_scan_offset;
+        while position < self.output_buffer.len() {
+            let remaining = &self.output_buffer[position..];
+            if let Some(query) = PRIMARY_DEVICE_ATTRIBUTES_QUERIES
+                .iter()
+                .find(|query| remaining.starts_with(query))
+            {
+                let _ = self.write_bytes(PRIMARY_DEVICE_ATTRIBUTES_REPLY);
+                position += query.len();
+
+                continue;
+            }
+            if PRIMARY_DEVICE_ATTRIBUTES_QUERIES
+                .iter()
+                .any(|query| query.starts_with(remaining))
+            {
+                break;
+            }
+            position += 1;
+        }
+        self.query_scan_offset = position;
     }
 
     /// Background thread function that reads PTY output and sends chunks

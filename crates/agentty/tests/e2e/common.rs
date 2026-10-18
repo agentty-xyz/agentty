@@ -1293,8 +1293,23 @@ pub(crate) fn wait_for_agentty_startup() -> Journey {
     Journey::new("agentty_startup")
         .with_description("Wait for agentty startup and initial render")
         .step(Step::wait_for_text("Agentty", 30000))
+        .step(wait_for_agent_cli_versions())
         .step(Step::wait_for_stable_frame(300, 5000))
 }
+
+/// Wait until background agent CLI version checks stop showing their
+/// loading label, so startup captures never depend on how quickly those
+/// checks finish. Pages without the version panel pass immediately.
+fn wait_for_agent_cli_versions() -> Step {
+    Step::eventually(
+        SESSION_TRANSITION_TIMEOUT,
+        SESSION_TRANSITION_POLL,
+        |frame| assertion::match_not_visible(frame, AGENT_CLI_VERSION_LOADING_LABEL),
+    )
+}
+
+/// Label the project page shows while an agent CLI version check runs.
+const AGENT_CLI_VERSION_LOADING_LABEL: &str = "updating...";
 
 /// Switch to a tab by pressing `Tab` and waiting for page-specific content.
 ///
