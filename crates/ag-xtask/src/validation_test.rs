@@ -74,7 +74,7 @@ impl Host for ScriptedHost {
 
     fn fingerprint(&self, packages: &[String], _: &str, _: &Path) -> Result<String, String> {
         self.check("fingerprint")?;
-        assert_eq!(packages, ["app", "core", "support"]);
+        assert_eq!(packages, ["app", "core"]);
         Ok(self
             .fingerprints
             .borrow_mut()
@@ -120,14 +120,18 @@ fn options(reuse: bool) -> Options {
 }
 
 #[test]
-fn graph_includes_dependencies_dependents_and_rejects_unknown_packages() {
+fn graph_includes_transitive_dependents_only_and_rejects_unknown_packages() {
     // Arrange
     let metadata = metadata();
     // Act
-    let affected = metadata.affected(&["core".into()]).expect("affected graph");
+    let from_core = metadata.affected(&["core".into()]).expect("core graph");
+    let from_support = metadata
+        .affected(&["support".into()])
+        .expect("support graph");
     let missing = metadata.affected(&["missing".into()]);
     // Assert
-    assert_eq!(affected, ["app", "core", "support"]);
+    assert_eq!(from_core, ["app", "core"]);
+    assert_eq!(from_support, ["app", "core", "support"]);
     assert!(missing.is_err());
 }
 

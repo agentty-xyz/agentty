@@ -13,20 +13,22 @@ AGENTTY_TEST_PACKAGES='ag-git' \
   prek run test-focused --all-files --hook-stage manual
 ```
 
-For final affected-package validation, include dependencies and dependents without a
-test-name restriction. Replace `ag-git` with the affected package, combining selections
-when several packages change:
+For final affected-package validation, run the changed package and its dependents
+without a test-name restriction. `rdeps(=ag-git)` selects `ag-git` and every package
+that depends on it. Dependencies are compiled but not retested, because their sources
+did not change. Replace `ag-git` with the changed package, combining selections with
+`or` when several packages change:
 
 ```sh
-AGENTTY_TEST_FILTER='package(=ag-git) or deps(=ag-git) or rdeps(=ag-git)' \
+AGENTTY_TEST_FILTER='rdeps(=ag-git)' \
   prek run test-focused --all-files --hook-stage manual
 ```
 
 `AGENTTY_TEST_PACKAGES` optionally limits compilation to a whitespace-separated list of
 Cargo package names. Without it, the hook builds the workspace. Cargo still builds
 dependencies required by the selected packages. For final validation, select every
-affected package, dependency, and dependent, or omit the build limit and use the
-dependency-graph filter above. An execution filter does not select compilation packages.
+changed package and dependent, or omit the build limit and use the `rdeps` filter above.
+An execution filter does not select compilation packages.
 
 `test-focused` requires a nonempty filter and fails when no tests match. Both it and
 `test-workspace` retain public integration tests, excluding only targets selected by the
@@ -35,8 +37,8 @@ compilation. Use `test-workspace` when impact is uncertain.
 
 ## Coordinated Validation
 
-To expand changed packages through workspace dependents and their dependencies, use the
-cataloged coordinator:
+To expand changed packages through their workspace dependents, use the cataloged
+coordinator:
 
 ```sh
 AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
