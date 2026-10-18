@@ -94,8 +94,7 @@ impl Fixture {
 }
 
 #[test]
-fn default_build_scope_preserves_public_tests_and_separate_e2e_gate() -> Result<(), Box<dyn Error>>
-{
+fn default_build_scope_preserves_public_tests() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new()?;
 
@@ -113,11 +112,10 @@ fn default_build_scope_preserves_public_tests_and_separate_e2e_gate() -> Result<
             .any(|argument| argument == "--no-tests=fail")
     );
     assert!(!arguments.iter().any(|argument| argument == "--lib"));
-    let filter = arguments.last().expect("filter argument");
-    assert!(filter.starts_with("(package(=ag-git)) and not"));
-    assert!(filter.contains("binary(=showcase)"));
-    assert!(filter.contains("binary(=protocol_compliance_e2e)"));
-    assert!(filter.contains("binary(=e2e)"));
+    assert_eq!(
+        arguments.last().map(String::as_str),
+        Some("package(=ag-git)")
+    );
 
     Ok(())
 }

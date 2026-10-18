@@ -31,9 +31,10 @@ changed package and dependent, or omit the build limit and use the `rdeps` filte
 An execution filter does not select compilation packages.
 
 `test-focused` requires a nonempty filter and fails when no tests match. Both it and
-`test-workspace` retain public integration tests, excluding only targets selected by the
-separate `test-agentty-e2e` gate. A filter narrows execution, not necessarily
-compilation. Use `test-workspace` when impact is uncertain.
+`test-workspace` retain public integration tests. Only the Agentty PTY suites are left
+out: their `test = false` manifest entries reserve them for the separate
+`test-agentty-e2e` gate, so other runs do not compile them. A filter narrows execution,
+not necessarily compilation. Use `test-workspace` when impact is uncertain.
 
 ## Coordinated Validation
 

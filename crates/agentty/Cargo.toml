@@ -11,6 +11,24 @@ repository.workspace = true
 name = "agentty"
 path = "src/main.rs"
 
+# PTY suites run only through `test-agentty-e2e`, which names them. Keeping
+# them out of `--tests` stops other test and coverage runs from compiling them.
+[[test]]
+name = "e2e"
+path = "tests/e2e/main.rs"
+test = false
+bench = false
+
+[[test]]
+name = "protocol_compliance_e2e"
+test = false
+bench = false
+
+[[test]]
+name = "showcase"
+test = false
+bench = false
+
 [lints]
 workspace = true
 

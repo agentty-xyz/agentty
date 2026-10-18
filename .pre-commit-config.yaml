@@ -94,13 +94,18 @@ repos:
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|crates/ag-harness/(src/.*\.rs|tests/benchmark/.*\.rs))$
         pass_filenames: false
+      - id: clippy-agentty-e2e
+        name: clippy agentty e2e
+        description: Lint the Agentty PTY suites, which `--all-targets` skips because only `test-agentty-e2e` runs them.
+        entry: cargo clippy -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test showcase -- -D warnings
+        language: system
+        files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
+        pass_filenames: false
       - id: test-workspace
         name: cargo nextest workspace
         description: Run workspace source and public API tests with `cargo-nextest`.
         entry: >-
           cargo nextest run --locked --timings --profile ci --workspace
-          -E 'not (package(=agentty) and kind(test) and
-          (binary(=showcase) or binary(=protocol_compliance_e2e) or binary(=e2e)))'
         language: system
         always_run: true
         pass_filenames: false
@@ -115,7 +120,7 @@ repos:
         stages: [manual]
       - id: test-focused
         name: cargo nextest focused
-        description: Run tests selected by AGENTTY_TEST_FILTER, optionally compiling only AGENTTY_TEST_PACKAGES, excluding separately gated Agentty E2E targets.
+        description: Run tests selected by AGENTTY_TEST_FILTER, optionally compiling only AGENTTY_TEST_PACKAGES; Agentty PTY suites run only through `test-agentty-e2e`.
         entry: >-
           bash -eu -o pipefail -c 'package_args=(--workspace);
           if [[ -n "${AGENTTY_TEST_PACKAGES:-}" ]]; then
@@ -125,9 +130,7 @@ repos:
           package_args=();
           for package in "${packages[@]}"; do package_args+=(-p "$package"); done; fi;
           cargo nextest run --locked --timings --profile ci "${package_args[@]}"
-          --no-tests=fail -E "(${AGENTTY_TEST_FILTER:?Set AGENTTY_TEST_FILTER to a nextest filterset})
-          and not (package(=agentty) and kind(test) and
-          (binary(=showcase) or binary(=protocol_compliance_e2e) or binary(=e2e)))"'
+          --no-tests=fail -E "${AGENTTY_TEST_FILTER:?Set AGENTTY_TEST_FILTER to a nextest filterset}"'
         language: system
         always_run: true
         pass_filenames: false
@@ -289,8 +292,6 @@ repos:
           RUSTFLAGS="$coverage_rustflags"
           cargo llvm-cov nextest --timings --workspace
           --lib --bins --examples --tests
-          -E "not (package(=agentty) and kind(test) and
-          (binary(=showcase) or binary(=protocol_compliance_e2e) or binary(=e2e)))"
           --locked --profile ci
           --fail-under-lines 93 --fail-under-functions 91 --lcov
           --no-default-ignore-filename-regex --ignore-filename-regex
