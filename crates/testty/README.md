@@ -63,6 +63,9 @@ implemented" notice and exit non-zero until the behavior is wired up.
   ready-made helpers for tabs, dialogs, and footers.
 - **Full isolation.** Each test runs your real binary in its own workspace, so tests
   never bleed into one another.
+- **Terminal replies.** Sessions answer primary device attributes (DA1) requests like a
+  terminal without the Kitty keyboard protocol, so capability probes return immediately
+  instead of waiting for their timeout.
 
 ### Proof you can share
 

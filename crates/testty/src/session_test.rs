@@ -274,6 +274,43 @@ fn wait_for_stable_frame_returns_after_content_stabilizes() {
     );
 }
 
+/// Verifies that whole and split primary device attributes requests receive
+/// a terminal reply before the child's one-second read timeout.
+#[test]
+fn primary_device_attributes_requests_receive_terminal_replies() {
+    // Arrange — script sends one whole and one split DA1 request, reads each
+    // reply without echo, and prints the replies without their escape byte.
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let script_path = temp_dir.path().join("device-attributes.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/bash\nstty raw -echo\nprintf '\\033[c'\nIFS= read -r -t 1 -d c whole\nprintf \
+         '\\033['\nsleep 0.2\nprintf '0c'\nIFS= read -r -t 1 -d c split\nstty sane\nprintf \
+         'whole:%s split:%s\\n' \"${whole#?}\" \"${split#?}\"\nsleep 60\n",
+    )
+    .expect("failed to write script");
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o750))
+            .expect("failed to set permissions");
+    }
+
+    let mut session =
+        PtySession::spawn(&script_path).expect("failed to spawn device attributes script");
+
+    // Act
+    let frame = session
+        .wait_for_text("whole:", Duration::from_secs(5))
+        .expect("script should report both replies");
+
+    // Assert
+    let text = frame.all_text();
+    assert!(
+        text.contains("whole:[?1;2 split:[?1;2"),
+        "both requests should receive the DA1 reply, got: '{text}'"
+    );
+}
+
 /// Verifies style-only redraws reset the stability window even when the
 /// visible text does not change.
 #[test]
