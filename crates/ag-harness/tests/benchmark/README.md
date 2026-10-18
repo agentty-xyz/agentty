@@ -101,10 +101,13 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   starting line, or an identical `list`/`search` inspection.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
-- `requests` lists every accepted request in order: its `purpose` (`turn` or
-  `context_summary`), `ms`, provider-reported `input_tokens`, `cache_hit_tokens`,
-  `output_tokens`, `reasoning_tokens`, and `finish_reason`, the harness's
-  `estimated_weight` and `calibrated_weight`, and its non-zero `reductions`.
+- `requests` lists every reported request in order, including outputs rejected and
+  re-requested (`rejected_output`): its `purpose` (`turn` or `context_summary`), `ms`,
+  provider-reported `input_tokens`, `cache_hit_tokens`, `output_tokens`,
+  `reasoning_tokens`, and `finish_reason`, the calibrated capacity it was fitted into
+  (`budget_weight`), its weight before (`unreduced_weight`) and after
+  (`estimated_weight`) reduction, the calibrated token prediction (`calibrated_weight`),
+  and its non-zero `reductions`. `model_calls` counts these requests.
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
   `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`,
   `summarized_tool_calls`, and `superseded_results` sum `ContextActivity` over every

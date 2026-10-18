@@ -252,8 +252,10 @@ impl ContextCounts {
     }
 }
 
-/// One accepted request: why it was sent, how long it took, what the
-/// provider reported, what the harness estimated, and how it was reduced.
+/// One reported request: why it was sent, whether its output was rejected,
+/// how long it took, what the provider reported, the capacity it was fitted
+/// into, what the harness estimated before and after reduction, and how it
+/// was reduced.
 fn request_record(request: &ModelRequestActivity) -> Value {
     let completion = request.completion();
     let usage = completion.and_then(|completion| completion.usage());
@@ -277,6 +279,9 @@ fn request_record(request: &ModelRequestActivity) -> Value {
         "output_tokens": usage.and_then(|usage| usage.output_tokens()),
         "reasoning_tokens": usage.and_then(|usage| usage.reasoning_tokens()),
         "finish_reason": completion.map(CompletionMetadata::finish_reason),
+        "rejected_output": request.rejected_output(),
+        "budget_weight": request.budget_weight(),
+        "unreduced_weight": request.unreduced_weight(),
         "estimated_weight": request.estimated_weight(),
         "calibrated_weight": request.calibrated_weight(),
         "reductions": reductions,

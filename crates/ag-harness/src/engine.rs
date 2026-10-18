@@ -11,12 +11,12 @@ use crate::effect::Effects;
 use crate::execution::BashTool;
 use crate::file_system::FileSystem;
 use crate::lifecycle::{
-    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleId, ToolErrorType,
-    ToolLifecycle,
+    ContextSummaryErrorType, ContextSummaryTrigger, LifecycleEmitter, LifecycleId,
+    ModelResponseType, ToolErrorType, ToolLifecycle,
 };
 use crate::model::{
-    Model, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
-    ensure_unique_tool_call_ids,
+    CompletionMetadata, Model, ModelError, ModelMessage, ModelRequest, ModelResponse,
+    ReasoningEffort, ensure_unique_tool_call_ids,
 };
 use crate::read::{self, ReadError, ReadTool};
 use crate::repetition::{self, RepeatedCalls, Repetition};
@@ -28,8 +28,8 @@ use crate::tool::{
     ToolDefinition, WriteArguments,
 };
 use crate::turn::{
-    ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError, TurnOptions, TurnOutcome,
-    TurnReport, sanitize_report_text, sanitized_completion_metadata,
+    ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnError,
+    TurnOptions, TurnOutcome, TurnReport, sanitize_report_text, sanitized_completion_metadata,
 };
 use crate::write::{WriteError, WriteTool};
 use crate::{compaction, context, schema_contract};
@@ -150,41 +150,26 @@ impl Engine<'_> {
                     turn_id,
                 )
                 .await;
-            let estimated_weight = state.context_fit.sent_weight();
+            let sent = SentRequest {
+                budget_weight: budget.max_request_weight().get() - budget.reserved_output_weight(),
+                calibration,
+                context: context_activity,
+                estimated_weight: state.context_fit.sent_weight(),
+                unreduced_weight: state.context_fit.unreduced_weight(),
+            };
             state
                 .overflow
-                .retried(self.lifecycle, turn_id, estimated_weight);
+                .retried(self.lifecycle, turn_id, sent.estimated_weight);
             state.model_request_index = state.model_request_index.saturating_add(1);
             let (response, activity, reasoning_content) = match completed {
-                // An invalid final output is re-requested with request-only
-                // feedback; neither it nor the feedback is journaled, so
-                // replayed history keeps only completed exchanges.
-                Err(
-                    error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
-                ) if state.output_corrections < MAX_OUTPUT_CORRECTIONS => {
-                    state.output_corrections += 1;
-                    request.record_feedback(output_feedback(&error));
+                Ok(completed) => completed,
+                Err(failure) => {
+                    self.recover(failure, &mut request, state, &sent)?;
 
                     continue;
                 }
-                // A request the provider rejected as exceeding its context
-                // window is refitted under a lower calibrated ceiling and
-                // re-sent; the rejection fails the turn only once the
-                // recoveries are spent or the refit cannot shrink it.
-                Err(error) if error.is_context_overflow() => {
-                    state
-                        .overflow
-                        .reject(self.context_calibration, error, estimated_weight)?;
-
-                    continue;
-                }
-                completed => completed?,
             };
-            state.model_requests.push(self.accepted_request(
-                activity.with_context(context_activity),
-                estimated_weight,
-                calibration,
-            ));
+            self.record_turn_request(state, activity, &sent);
 
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
@@ -216,6 +201,58 @@ impl Engine<'_> {
                 .await?;
             state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
+    }
+
+    /// Lets the turn send its next request after `failure`, or fails it. An
+    /// invalid final output is re-requested with request-only feedback;
+    /// neither it nor the feedback is journaled, so replayed history keeps
+    /// only completed exchanges. A request the provider rejected as
+    /// exceeding its context window is refitted under a lower calibrated
+    /// ceiling and re-sent; the rejection fails the turn only once the
+    /// recoveries are spent or the refit cannot shrink it.
+    fn recover(
+        &self,
+        failure: RequestFailure,
+        request: &mut ModelRequest,
+        state: &mut TurnState,
+        sent: &SentRequest,
+    ) -> Result<(), TurnError> {
+        match failure {
+            RequestFailure {
+                error: error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
+                activity,
+            } if state.output_corrections < MAX_OUTPUT_CORRECTIONS => {
+                state.output_corrections += 1;
+                request.record_feedback(output_feedback(&error));
+                self.record_turn_request(state, activity.rejected(), sent);
+
+                Ok(())
+            }
+            RequestFailure { error, .. } if error.is_context_overflow() => state
+                .overflow
+                .reject(self.context_calibration, error, sent.estimated_weight)
+                .map_err(TurnError::from),
+            RequestFailure { error, .. } => Err(error.into()),
+        }
+    }
+
+    /// Reports an answered request of the turn's own conversation with how
+    /// it was fitted, and calibrates later estimates against its usage.
+    fn record_turn_request(
+        &self,
+        state: &mut TurnState,
+        activity: ModelRequestActivity,
+        sent: &SentRequest,
+    ) {
+        state.model_requests.push(
+            self.accepted_request(
+                activity
+                    .with_context(sent.context)
+                    .with_fit(sent.budget_weight, sent.unreduced_weight),
+                sent.estimated_weight,
+                sent.calibration,
+            ),
+        );
     }
 
     /// Calibrates later estimates against an answered request of
@@ -387,9 +424,20 @@ impl Engine<'_> {
             *model_request_index = model_request_index.saturating_add(1);
             let (response, activity, _) = match completed {
                 Ok(completed) => completed,
-                Err(
-                    error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
-                ) => {
+                Err(RequestFailure {
+                    error:
+                        error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
+                    activity,
+                }) => {
+                    model_requests.push(
+                        self.accepted_request(
+                            activity
+                                .rejected()
+                                .with_purpose(ModelRequestPurpose::ContextSummary),
+                            estimated_weight,
+                            calibration,
+                        ),
+                    );
                     if corrections == MAX_OUTPUT_CORRECTIONS {
                         return Err(ContextSummaryErrorType::InvalidOutput);
                     }
@@ -518,7 +566,7 @@ impl Engine<'_> {
         request: &ModelRequest,
         model_request_index: u64,
         turn_id: Option<LifecycleId>,
-    ) -> Result<(ModelResponse, ModelRequestActivity, Option<String>), ModelError> {
+    ) -> Result<(ModelResponse, ModelRequestActivity, Option<String>), RequestFailure> {
         let started_at = Instant::now();
         let model_lifecycle =
             self.lifecycle
@@ -535,7 +583,7 @@ impl Engine<'_> {
                     model_lifecycle.failed(error.error_type(), error.http_status());
                 }
 
-                return Err(error);
+                return Err(RequestFailure::new(error, None, started_at));
             }
         };
         if let Some(output) = response.output()
@@ -546,7 +594,7 @@ impl Engine<'_> {
                 model_lifecycle.failed(error.error_type(), error.http_status());
             }
 
-            return Err(error);
+            return Err(RequestFailure::new(error, completion.as_ref(), started_at));
         }
         let response_type = response.response_type();
         let activity = ModelRequestActivity::new(
@@ -640,6 +688,43 @@ impl Engine<'_> {
 
                 Err(error)
             }
+        }
+    }
+}
+
+/// How one turn request was fitted before it was sent: the calibrated
+/// capacity and its weight before and after reduction, all without reserved
+/// output, with the reductions it carries.
+struct SentRequest {
+    budget_weight: u64,
+    calibration: Calibration,
+    context: ContextActivity,
+    estimated_weight: u64,
+    unreduced_weight: u64,
+}
+
+/// A failed model request's error with its activity: elapsed time and,
+/// when the provider answered before the output was rejected, its usage.
+struct RequestFailure {
+    error: ModelError,
+    activity: Box<ModelRequestActivity>,
+}
+
+impl RequestFailure {
+    fn new(
+        error: ModelError,
+        completion: Option<&CompletionMetadata>,
+        started_at: Instant,
+    ) -> Self {
+        let activity = ModelRequestActivity::new(
+            completion.map(sanitized_completion_metadata),
+            started_at.elapsed(),
+            ModelResponseType::Output,
+        );
+
+        Self {
+            error,
+            activity: Box::new(activity),
         }
     }
 }

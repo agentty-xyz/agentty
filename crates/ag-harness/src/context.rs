@@ -509,6 +509,8 @@ pub(crate) fn admit_mandatory_content(
 /// reduced request.
 #[derive(Debug, Default)]
 pub(crate) struct ContextFit {
+    /// Weight of the canonical messages synced so far, before any reduction.
+    canonical_weight: u64,
     capped_results: usize,
     capped_results_before: usize,
     cleared_reasoning_before: usize,
@@ -529,6 +531,7 @@ pub(crate) struct ContextFit {
     summary_failures: usize,
     superseded_results: usize,
     truncated_latest: Vec<usize>,
+    unreduced_weight: u64,
 }
 
 /// What a turn does next to send its grown request within the budget.
@@ -546,6 +549,12 @@ impl ContextFit {
     /// [`Self::fit`] returned, as sent and without reserved output.
     pub(crate) fn sent_weight(&self) -> u64 {
         self.sent_weight
+    }
+
+    /// Returns what the request the last [`Self::fit`] saw would weigh with
+    /// no reduction, without reserved output.
+    pub(crate) fn unreduced_weight(&self) -> u64 {
+        self.unreduced_weight
     }
 
     /// Returns how many summaries of this turn failed or were rejected.
@@ -603,6 +612,8 @@ impl ContextFit {
                 weight.saturating_add(estimator.tool_definition_weight(tool))
             });
         let budget_weight = budget.max_request_weight().get();
+        self.unreduced_weight =
+            base.saturating_add(self.canonical_weight) - budget.reserved_output_weight();
         let previous = self.fitted.take();
         let forced = summary == Some(ContextSummaryTrigger::ContextOverflow);
         if !forced
@@ -694,6 +705,7 @@ impl ContextFit {
         let synced = self.messages.len();
         for message in &request.messages()[synced..] {
             let weight = estimator.message_weight(message);
+            self.canonical_weight = self.canonical_weight.saturating_add(weight);
             self.required = self.required.saturating_add(weight);
             self.records.record(message);
             self.messages.push(FitMessage {

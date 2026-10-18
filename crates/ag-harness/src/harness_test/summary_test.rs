@@ -219,6 +219,15 @@ async fn turns_send_earlier_rounds_as_a_summary_once_they_outgrow_the_budget() {
     let last = report.model_requests().last().expect("final request");
     assert_eq!(last.purpose(), ModelRequestPurpose::Turn);
     assert!(last.context().summarized_tool_calls() > 0);
+    assert!(last.estimated_weight() < last.unreduced_weight());
+    assert!(last.estimated_weight() <= last.budget_weight());
+    assert!(
+        report
+            .model_requests()
+            .iter()
+            .filter(|request| request.purpose() == ModelRequestPurpose::ContextSummary)
+            .all(|request| request.budget_weight() == 0 && !request.rejected_output())
+    );
     assert_eq!(report.context_summary_failures(), 0);
     let events = summary_events(&events);
     assert!(matches!(
