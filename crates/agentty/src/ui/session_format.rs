@@ -103,6 +103,7 @@ fn session_age_text(age_seconds: i64) -> String {
 
 /// Formats the size-prefixed title with right-aligned, color-coded change
 /// totals, followed by any merge conflict and linked review-request URL.
+/// The title keeps the in-progress highlight in every session status.
 pub fn session_header_lines(
     session: &Session,
     header_width: u16,
@@ -111,7 +112,7 @@ pub fn session_header_lines(
     let title_width = usize::from(header_width);
     let title_text = text_util::inline_text(session.display_title());
     let base_style = Style::default()
-        .fg(style::status_color(session.status))
+        .fg(style::palette::warning())
         .add_modifier(Modifier::BOLD);
     let mut title_spans = markdown::parse_inline_spans(&title_text, base_style);
     title_spans.insert(0, Span::styled(format!("[{}] ", session.size), base_style));

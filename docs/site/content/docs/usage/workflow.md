@@ -24,6 +24,9 @@ rows retain their status, size, and warning colors, with bold emphasis on the ti
 Other selected controls use bold labels. With `NO_COLOR`, selections use bold reverse
 video without a selector glyph.
 
+Session chat titles and their `[size]` prefixes keep the bold, in-progress highlight in
+every status.
+
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
 title, with green added-line and red removed-line totals on its right. A linked review
 request appears below the title. The composer’s bottom border shows the active-work

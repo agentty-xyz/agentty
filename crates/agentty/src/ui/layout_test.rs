@@ -190,7 +190,7 @@ fn test_session_header_lines_truncate_long_titles_and_keep_totals() {
 }
 
 #[test]
-fn test_session_header_lines_use_theme_status_color() {
+fn test_session_header_lines_keep_theme_highlight_when_canceled() {
     // Arrange
     let _theme_scope = style::scoped_active_theme(ColorTheme::Green);
     let mut session = session_fixture();
@@ -203,7 +203,7 @@ fn test_session_header_lines_use_theme_status_color() {
     // Assert
     assert_eq!(
         header_lines[0].spans[0].style.fg,
-        Some(style::status_color(Status::Canceled))
+        Some(style::palette::warning())
     );
 }
 
