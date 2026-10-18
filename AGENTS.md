@@ -100,18 +100,19 @@ implementations elsewhere.
   remain unchanged; rerun after invalidating edits, failures, or new evidence. Record
   the command, scope, and result so the handoff shows what was covered.
 - Preserve public-contract integration tests when selecting affected suites. Source test
-  hooks and coverage do not replace them; use `test-focused` without a test-name
-  restriction for affected packages, dependencies, and dependents, or `test-workspace`.
+  hooks do not replace them; use `test-focused` without a test-name restriction for
+  affected packages, dependencies, and dependents, or `test-workspace`.
 - For cross-cutting changes, run `prek run --all-files` and `test-focused` for the
   affected dependency graph, only after the touched paths pass their formatters and
   focused tests. Run `test-workspace` locally when the impact cannot be bounded
   confidently.
 - Run mutating fixers one at a time and inspect their diffs before continuing. When a
   fixer reports that it modified files, rerun only that hook, not the whole hook set.
-- Pull-request CI runs `cargo-check`, `coverage`, `test-workspace`, and the full
-  `test-agentty-e2e` suite. Do not run them locally by default; run one with
-  `--hook-stage manual` only to diagnose its CI failure or when the user asks. Diagnose
-  with the single failing hook, not a rerun of every gate after each edit.
+- Pull-request CI runs `cargo-check`, `coverage` (which runs the `test-workspace`
+  selection), and the full `test-agentty-e2e` suite. Do not run them locally by default;
+  run one with `--hook-stage manual` only to diagnose its CI failure or when the user
+  asks. Diagnose with the single failing hook, not a rerun of every gate after each
+  edit.
 - Let the runner's configured timeouts govern individual tests. Run long checks in the
   foreground; redirect large output to a log and read its summary once the command
   exits. Do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes

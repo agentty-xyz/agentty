@@ -9,6 +9,9 @@ inputs:
     description: Write LCOV totals to the GitHub Actions run summary.
     required: false
     default: "false"
+  trunk-token:
+    description: Trunk organization API token used to upload test results.
+    required: false
 
 runs:
   using: composite
@@ -24,6 +27,7 @@ runs:
       uses: $/.github/actions/setup-native-sandbox
 
     - name: Generate and check coverage report
+      id: coverage
       shell: bash
       env:
         AGENTTY_MERGE_GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
@@ -39,6 +43,18 @@ runs:
       with:
         name: coverage-test-results
         build-directory: target/llvm-cov-target
+
+    - name: Upload coverage test results to Trunk
+      if: ${{ !cancelled() && inputs.trunk-token != '' }}
+      continue-on-error: true
+      uses: trunk-io/analytics-uploader@a86313c7029d22e6ea2d5c346060a224d90053dc # v2.1.6
+      env:
+        TRUNK_API_TOKEN: ${{ inputs.trunk-token }}
+      with:
+        junit-paths: target/nextest/ci/junit.xml
+        org-slug: agentty
+        previous-step-outcome: ${{ steps.coverage.outcome }}
+        token: ${{ inputs.trunk-token }}
 
     # The scanner CLI, its provisioned JRE, and analyzer plugins are otherwise
     # downloaded on every run. Only `main` saves the cache so pull requests
