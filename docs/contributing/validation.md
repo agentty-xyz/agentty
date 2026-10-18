@@ -77,16 +77,17 @@ container and Rust environment.
 prek run coverage --all-files --hook-stage manual
 ```
 
-Pull-request CI runs this gate; run it locally to diagnose a failure. The hook generates
-a fresh `coverage.lcov` and enforces workspace ratchets and complete coverage of changed
+Pull-request CI runs this gate; run it locally to diagnose a failure. The hook runs the
+`test-workspace` selection, so CI does not run that suite separately. It generates a
+fresh `coverage.lcov` and enforces workspace ratchets and complete coverage of changed
 coverable Rust lines, including untracked files. The comparison defaults to local
 `main`; set `AGENTTY_COVERAGE_BASE` for another existing base ref. CI selects the pull
 request or merge group's remote base branch, falling back to the repository's default
 branch. A missing base or failed generation fails the gate; an old report cannot satisfy
 it.
 
-Source-only tests and coverage do not replace public integration tests. Reuse results
-and diagnose stalled runners according to `AGENTS.md`.
+Source-only tests do not replace public integration tests. Reuse results and diagnose
+stalled runners according to `AGENTS.md`.
 
 ## Instruction and Hook Maintenance
 
