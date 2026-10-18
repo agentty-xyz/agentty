@@ -78,8 +78,9 @@ svg {
     max-width: 100%;
 }
 
-[hidden] {
-    display: none !important;
+/* Hidden UI must outrank component display rules such as .search-dialog. */
+.site-body [hidden] {
+    display: none;
 }
 
 .sr-only {
@@ -2281,12 +2282,17 @@ svg {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 0.01ms !important;
-        animation-duration: 0.01ms !important;
-        animation-iteration-count: 1 !important;
+    /* Match or outrank component selectors, including demo images and anchors. */
+    :root,
+    :root .site-body,
+    :root .site-body::before,
+    :root .site-body::after,
+    :root .site-body *,
+    :root .site-body *::before,
+    :root .site-body *::after {
+        scroll-behavior: auto;
+        transition-duration: 0.01ms;
+        animation-duration: 0.01ms;
+        animation-iteration-count: 1;
     }
 }
