@@ -8,9 +8,9 @@
 //! definitions
 //! (`crates/ag-harness/tests/benchmark/results/2026-10-18-estimate-probes.
 //! jsonl`). Errors below are provider tokens over estimated tokens, minus one,
-//! on those recorded requests; the default four-bytes-per-token estimate missed
-//! the same requests by up to +69%. Content denser than repository text,
-//! such as digit-heavy generated code, still runs 30–46% over every fitted
+//! on those recorded requests, replayed without tool-call reasoning to the
+//! models that never receive it. Content denser than repository text, such
+//! as digit-heavy generated code, still runs 30–46% over every fitted
 //! estimate, which runtime calibration absorbs.
 
 use ag_harness::model::{HeuristicContextEstimator, ModelProfile};
@@ -52,6 +52,7 @@ const QWEN_PLUS: ModelProfile = ModelProfile::new(1_000_000)
 /// Kimi K2.6 (JSON Object mode, schema rendered as a system message): 19
 /// synthetic probes and 10 recorded requests; content at 4.5 bytes per token,
 /// tool definitions at 3.2, no measurable fixed or tool-calling cost.
+/// Recorded requests: −4.5% to +8.2% (default estimate: +14% to +47%).
 const KIMI_K2_6_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
     .with_messages(224, 25)
     .with_tool_definitions(312, 0)
@@ -59,6 +60,7 @@ const KIMI_K2_6_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator
     .with_output_schema_in_prompt();
 /// Kimi K3 (JSON Object mode): 21 synthetic probes and 10 recorded requests;
 /// content at 4.5 bytes per token with twice Kimi K2.6's message framing.
+/// Recorded requests: −4.7% to +7.4% (default estimate: +18% to +53%).
 const KIMI_K3_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
     .with_messages(223, 54)
     .with_tool_definitions(307, 0)
@@ -67,17 +69,17 @@ const KIMI_K3_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::
 /// Muse Spark 1.3: 25 synthetic probes and 39 recorded requests; content at
 /// 4.4 bytes per token, tool definitions at 2.9, and a 420-token
 /// tool-calling preamble. Muse counts the `json_schema` response format only
-/// beside tools, which every Agentty request advertises. Recorded Muse
-/// requests: −6.0% to +6.9%; recorded Qwen requests over-count by up to 33%
-/// because Muse never receives replayed reasoning the estimate weighs.
+/// beside tools, which every Agentty request advertises. Recorded requests:
+/// −6.9% to +6.9% (default estimate: +23% to +64%).
 const MUSE_SPARK_1_3_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
     .with_messages(225, 44)
     .with_tool_definitions(339, 0)
     .with_request_tokens(420)
     .with_output_schema_in_prompt();
-/// Qwen3.8-Max (JSON Object mode): 24 synthetic probes and 37 recorded
+/// Qwen3.8-Max (JSON Object mode): 24 synthetic probes and 39 recorded
 /// requests; content at 4.2 bytes per token, tool definitions at 2.7, and a
-/// 250-token tool-calling preamble. Recorded requests: −8.3% to +9.6%.
+/// 250-token tool-calling preamble. Recorded requests: −8.3% to +9.6%
+/// (default estimate: +22% to +69%).
 const QWEN3_8_MAX_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
     .with_messages(239, 33)
     .with_tool_definitions(373, 0)
@@ -85,9 +87,7 @@ const QWEN3_8_MAX_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimat
     .with_output_schema_in_prompt();
 /// Qwen-Plus (JSON Object mode): 25 synthetic probes and 39 recorded
 /// requests; content at 4.2 bytes per token and tool definitions at 2.7.
-/// Recorded Muse requests: −7.2% to +7.5%; recorded Qwen requests run from
-/// −34% to +10.3%, over-counting the replayed reasoning Qwen-Plus never
-/// receives.
+/// Recorded requests: −7.9% to +10.9% (default estimate: +19% to +63%).
 const QWEN_PLUS_ESTIMATOR: HeuristicContextEstimator = HeuristicContextEstimator::DEFAULT
     .with_messages(236, 24)
     .with_tool_definitions(372, 0)

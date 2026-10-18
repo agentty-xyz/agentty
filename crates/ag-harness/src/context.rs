@@ -241,6 +241,11 @@ pub trait ContextEstimator: Send + Sync {
 /// tokens per 1,000 bytes plus fixed tokens per message, per tool definition,
 /// and per request, with images at their base64 data-URL length.
 ///
+/// Replayed provider reasoning is weighed like any payload: model clients keep
+/// reasoning only for providers that require it replayed, and sessions never
+/// switch history holding it to another model, so a request carries only the
+/// reasoning its provider receives.
+///
 /// [`Self::DEFAULT`] approximates any model at four bytes per token with four
 /// tokens per message and tool definition and no fixed request cost. A
 /// [`crate::model::ModelProfile`] declares a model's measured parameters, and

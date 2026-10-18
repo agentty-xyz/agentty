@@ -165,4 +165,6 @@ and tool-call `reasoning_bytes`; each tool definition's `bytes`; `schema_bytes`;
 provider-reported `input_tokens` and `cache_hit_tokens`, or a redacted `detail` when the
 request failed. Records hold sizes and token counts, never content.
 `results/2026-10-18-estimate-probes.jsonl` holds the probes and recorded Agentty
-requests the declared harness estimators were fitted to.
+requests the declared harness estimators were fitted to, and
+`results/2026-10-18-context-estimate.jsonl` the context-suite runs before (no `estimate`
+field) and after declaring them.
