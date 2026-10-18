@@ -107,6 +107,11 @@ pub(crate) enum SessionMutation {
         request: DurableMessageRequest,
         session_id: SessionId,
     },
+    /// Persists a desired outcome without admitting an attempt.
+    CreateTask {
+        request: ag_session::CreateTaskRequest,
+        session_id: SessionId,
+    },
     /// Admits one explicit task attempt with durable identity.
     SubmitTask {
         request: ag_session::SubmitTaskRequest,
@@ -135,6 +140,7 @@ impl SessionMutation {
             Self::SubmitDurableMessage { session_id, .. } => {
                 ("submit_durable_message", Some(session_id))
             }
+            Self::CreateTask { session_id, .. } => ("create_task", Some(session_id)),
             Self::SubmitTask { session_id, .. } => ("submit_task", Some(session_id)),
             Self::CompleteTask { .. } => ("complete_task", None),
             Self::AnswerQuestions { session_id, .. } => ("answer_questions", Some(session_id)),

@@ -1,8 +1,12 @@
 //! Task contracts through the public, migrated SQLite adapter.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
-use ag_session::{DurableMessageVisibility, SubmitTaskRequest, TaskAttemptStatus};
+use ag_session::{
+    CreateTaskRequest, DurableMessageVisibility, SubmitTaskRequest, Task, TaskAttempt,
+    TaskAttemptStatus,
+};
 use ag_store::{Database, DbError};
 
 fn request(attempt_id: &str) -> SubmitTaskRequest {
@@ -26,6 +30,206 @@ async fn database() -> Result<Database, DbError> {
     }
 
     Ok(database)
+}
+
+#[tokio::test]
+async fn planned_tasks_preserve_identity_and_creation_time_when_attempted_or_completed() {
+    // Arrange
+    let now = Arc::new(AtomicI64::new(123));
+    let database = Database::open_in_memory_with_timestamp_source({
+        let now = Arc::clone(&now);
+        Arc::new(move || now.load(Ordering::Relaxed))
+    })
+    .await
+    .expect("database");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "gpt-5.6-sol", "main", "Review", project)
+        .await
+        .expect("session");
+    let tasks = database.tasks();
+    let attempt = request("first");
+    let planned = CreateTaskRequest {
+        objective: attempt.objective.clone(),
+        task_id: attempt.task_id.clone(),
+    };
+
+    // Act
+    tasks.create_task("session", &planned).await.expect("plan");
+    let original = tasks.load_task("task").await.expect("load").expect("task");
+    now.store(456, Ordering::Relaxed);
+    tasks
+        .create_task("session", &planned)
+        .await
+        .expect("redelivery");
+
+    // Assert
+    assert_eq!(
+        tasks.load_task("task").await.expect("unchanged"),
+        Some(original.clone())
+    );
+    assert_eq!(original.created_at, 123);
+    assert_eq!(original.completed_at, None);
+    assert_eq!(original.attempts, Vec::<TaskAttempt>::new());
+    let operations: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM session_operation")
+        .fetch_one(database.pool())
+        .await
+        .expect("operations");
+    assert_eq!(operations, 0);
+
+    // Act
+    assert!(
+        tasks
+            .claim_attempt("session", &attempt, "reply")
+            .await
+            .expect("submit planned")
+    );
+    database
+        .operations()
+        .mark_session_operation_done(&attempt.operation_id())
+        .await
+        .expect("settle");
+    tasks.complete_task("task").await.expect("accept");
+    let completed = tasks.load_task("task").await.expect("load").expect("task");
+    now.store(789, Ordering::Relaxed);
+    tasks
+        .create_task("session", &planned)
+        .await
+        .expect("redelivery after completion");
+
+    // Assert
+    assert_eq!(completed.created_at, 123);
+    assert_eq!(completed.completed_at, Some(456));
+    assert_eq!(completed.attempts[0].queued_at, 456);
+    assert_eq!(
+        tasks.list_tasks("session").await.expect("history"),
+        vec![completed]
+    );
+}
+
+#[tokio::test]
+async fn task_listing_is_session_scoped_and_includes_unattempted_completed_outcomes() {
+    // Arrange
+    let database = database().await.expect("database");
+    let tasks = database.tasks();
+    for (session, task_id) in [
+        ("session", "z-first"),
+        ("other", "unrelated"),
+        ("session", "a-second"),
+    ] {
+        tasks
+            .create_task(
+                session,
+                &CreateTaskRequest {
+                    objective: "Planned outcome".to_string(),
+                    task_id: task_id.to_string(),
+                },
+            )
+            .await
+            .expect("plan");
+    }
+
+    // Act
+    tasks
+        .complete_task("z-first")
+        .await
+        .expect("accept without execution");
+    let listed = tasks.list_tasks("session").await.expect("list");
+
+    // Assert
+    assert_eq!(
+        listed
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["z-first", "a-second"]
+    );
+    assert!(listed.iter().all(|task| task.attempts.is_empty()));
+    assert_eq!(listed[0].completed_at, Some(123));
+    assert_eq!(listed[1].completed_at, None);
+    assert_eq!(
+        tasks.list_tasks("missing").await.expect("empty"),
+        Vec::<Task>::new()
+    );
+
+    // Act
+    database
+        .sessions()
+        .delete_session("session")
+        .await
+        .expect("delete owner");
+
+    // Assert
+    assert_eq!(
+        tasks.list_tasks("session").await.expect("deleted"),
+        Vec::<Task>::new()
+    );
+    assert_eq!(
+        tasks.list_tasks("other").await.expect("other owner").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn task_creation_rejects_empty_inputs_missing_sessions_and_identity_conflicts() {
+    // Arrange
+    let database = database().await.expect("database");
+    let tasks = database.tasks();
+    let planned = CreateTaskRequest {
+        objective: "Outcome".to_string(),
+        task_id: "planned".to_string(),
+    };
+
+    // Act / Assert
+    for (task_id, objective) in [(" \t", "Outcome"), ("planned", "\n")] {
+        assert!(
+            tasks
+                .create_task(
+                    "session",
+                    &CreateTaskRequest {
+                        objective: objective.to_string(),
+                        task_id: task_id.to_string(),
+                    }
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert!(tasks.create_task("missing", &planned).await.is_err());
+    assert_eq!(
+        tasks
+            .list_tasks("session")
+            .await
+            .expect("no partial writes"),
+        Vec::<Task>::new()
+    );
+    tasks.create_task("session", &planned).await.expect("plan");
+    for (session, objective) in [("other", "Outcome"), ("session", "Changed")] {
+        assert!(
+            tasks
+                .create_task(
+                    session,
+                    &CreateTaskRequest {
+                        objective: objective.to_string(),
+                        ..planned.clone()
+                    }
+                )
+                .await
+                .is_err()
+        );
+    }
+    let original = tasks
+        .load_task("planned")
+        .await
+        .expect("load")
+        .expect("task");
+    assert_eq!(original.objective, "Outcome");
+    assert_eq!(original.session_id.as_str(), "session");
 }
 
 #[tokio::test]

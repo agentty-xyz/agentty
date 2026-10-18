@@ -25,6 +25,21 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn create_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::CreateTaskRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::create_task(self, session_id, request).await
+    }
+
+    async fn list_tasks(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ag_session::Task>, ApiSessionError> {
+        SessionRuntimeHandle::list_tasks(self, session_id).await
+    }
+
     async fn submit_task(
         &self,
         session_id: &SessionId,
@@ -155,6 +170,19 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::ListTasks {
+                response_tx,
+                session_id,
+            } => {
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .list_tasks(&session_id)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
             SessionRuntimeCommand::GetTask {
                 response_tx,
                 task_id,

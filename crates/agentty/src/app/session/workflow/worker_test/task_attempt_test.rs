@@ -4,8 +4,8 @@ use std::time::Duration;
 use ag_contracts::{AgentRequestKind, MockAgentChannel};
 use ag_protocol::QuestionItem;
 use ag_session::{
-    DurableMessageVisibility, SessionError, SessionId, SessionStatus, SubmitTaskRequest,
-    TaskAttemptStatus,
+    CreateTaskRequest, DurableMessageVisibility, SessionError, SessionId, SessionStatus,
+    SubmitTaskRequest, TaskAttemptStatus,
 };
 use sqlx::SqlitePool;
 use tokio::sync::{Notify, mpsc};
@@ -177,6 +177,22 @@ async fn assert_task_storage_failure(app: &mut App, pool: SqlitePool, session_id
 
     // Act / Assert: storage failures cross both query and admission replies.
     pool.close().await;
+    assert!(
+        app.drive_session_request(service.create_task(
+            session_id,
+            CreateTaskRequest {
+                objective: "Unavailable storage".to_string(),
+                task_id: "unavailable".to_string(),
+            }
+        ))
+        .await
+        .is_err()
+    );
+    assert!(
+        app.drive_session_request(service.list_tasks(session_id))
+            .await
+            .is_err()
+    );
     assert!(
         app.drive_session_request(service.get_task("task"))
             .await

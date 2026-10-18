@@ -2,6 +2,18 @@
 
 use crate::{DurableMessageVisibility, SessionId};
 
+/// A desired outcome to persist without admitting an attempt or starting work.
+///
+/// Repeating the same identity, session, and objective is idempotent, even
+/// after completion. The owning session and objective cannot be changed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreateTaskRequest {
+    /// Nonempty desired outcome, immutable across attempts.
+    pub objective: String,
+    /// Globally unique, nonempty identity of the desired outcome.
+    pub task_id: String,
+}
+
 /// An explicit attempt to advance a task in an existing idle session.
 ///
 /// Re-deliver the identical request with the same `attempt_id` to acknowledge
@@ -39,7 +51,7 @@ pub struct Task {
     pub attempts: Vec<TaskAttempt>,
     /// Time the caller explicitly accepted the outcome, if complete.
     pub completed_at: Option<i64>,
-    /// Time the first attempt was admitted.
+    /// Time the task was created, possibly before its first attempt.
     pub created_at: i64,
     /// Stable task identity.
     pub id: String,

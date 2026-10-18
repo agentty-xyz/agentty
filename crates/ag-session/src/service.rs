@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
-use crate::{SubmitTaskRequest, Task};
+use crate::{CreateTaskRequest, SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -82,6 +82,24 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Persists an outcome without execution. Older hosts may omit support.
+    async fn create_task(
+        &self,
+        _session_id: &SessionId,
+        _request: CreateTaskRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support tasks".to_string(),
+        ))
+    }
+
+    /// Lists a session's tasks, including unattempted and completed outcomes.
+    async fn list_tasks(&self, _session_id: &SessionId) -> Result<Vec<Task>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support tasks".to_string(),
+        ))
+    }
+
     /// Admits an explicit task attempt. Older hosts may omit task support.
     async fn submit_task(
         &self,
@@ -164,7 +182,33 @@ impl SessionService {
         Self { backend }
     }
 
+    /// Persists a task with zero attempts in an existing session, regardless
+    /// of its execution status. Does not start work or change session state.
+    /// Identical creation requests preserve the task and its history.
+    ///
+    /// # Errors
+    /// Returns an error for empty inputs, conflicting identity, a missing
+    /// session, or a host that cannot persist tasks.
+    pub async fn create_task(
+        &self,
+        session_id: &SessionId,
+        request: CreateTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.create_task(session_id, request).await
+    }
+
+    /// Lists all tasks owned by a session in creation order, including their
+    /// attempt histories in one snapshot. Equal timestamps retain insertion
+    /// order. Returns an empty list for a missing session or one without tasks.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot read tasks.
+    pub async fn list_tasks(&self, session_id: &SessionId) -> Result<Vec<Task>, SessionError> {
+        self.backend.list_tasks(session_id).await
+    }
+
     /// Admits one task attempt through the existing serialized session worker.
+    /// Creates the task atomically if it does not already exist.
     /// Acceptance does not wait for execution or imply task completion.
     /// Identical deliveries are acknowledged without running again.
     ///

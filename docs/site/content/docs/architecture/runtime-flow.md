@@ -178,11 +178,13 @@ remain separate queries. Accepted workflows update
 through persistence adapters; workers retain execution ordering through post-processing.
 
 Explicit [task submissions](@/docs/core-components/durable-components/task.md) use the
-same gateway and durable-turn worker path. Storage admits the desired outcome, attempt,
-and operation atomically. Delivery retries acknowledge an existing attempt before live
-session eligibility checks; new attempts retain ordinary durable-turn eligibility.
-Operation settlement and startup recovery supply attempt status. The task remains open
-until a caller explicitly accepts its outcome, independently of session lifecycle.
+same gateway and durable-turn worker path. Task creation can separately persist an
+outcome through the gateway without worker dispatch; session-scoped listing stays on the
+query path. Storage admits the desired outcome, attempt, and operation atomically.
+Delivery retries acknowledge an existing attempt before live session eligibility checks;
+new attempts retain ordinary durable-turn eligibility. Operation settlement and startup
+recovery supply attempt status. The task remains open until a caller explicitly accepts
+its outcome, independently of session lifecycle.
 
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients

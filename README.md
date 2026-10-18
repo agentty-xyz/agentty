@@ -203,6 +203,11 @@ events and fields.
 
 ## Documentation
 
+The programmatic session API supports creating and listing tasks before execution,
+submitting attempts, and explicitly accepting outcomes. See the
+[task contract](https://agentty.xyz/docs/core-components/durable-components/task/) for
+session ownership, concurrency, and current limits.
+
 Documentation for installation and workflows is available at
 [agentty.xyz/docs](https://agentty.xyz/docs/).
 

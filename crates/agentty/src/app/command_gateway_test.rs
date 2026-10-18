@@ -439,7 +439,9 @@ async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
         let command = app.sessions.next_command().await;
         let envelope = match &command {
             SessionRuntimeCommand::Mutation(envelope) => Some(envelope),
-            SessionRuntimeCommand::Get { .. } | SessionRuntimeCommand::GetTask { .. } => None,
+            SessionRuntimeCommand::Get { .. }
+            | SessionRuntimeCommand::GetTask { .. }
+            | SessionRuntimeCommand::ListTasks { .. } => None,
         }
         .expect("cancellation must be a mutation");
 
