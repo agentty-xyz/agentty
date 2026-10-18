@@ -10,55 +10,53 @@ use crate::{activity, operation, project, review, session, setting, usage};
 /// App-layer repository bundle used for selective mock injection.
 #[derive(Clone)]
 pub struct AppRepositories {
-    activity: Arc<dyn activity::ActivityRepository>,
-    operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
-    project: Arc<dyn project::ProjectRepository>,
-    review: Arc<dyn review::ReviewRepository>,
-    run: Arc<dyn ag_worker::RunRepository>,
-    session: Arc<dyn session::SessionRepository>,
-    setting: Arc<dyn setting::SettingRepository>,
-    usage: Arc<dyn usage::UsageRepository>,
+    repositories: Arc<RepositorySet>,
 }
 
 impl AppRepositories {
     /// Returns the activity-event repository.
     pub fn activity(&self) -> &dyn activity::ActivityRepository {
-        self.activity.as_ref()
+        self.repositories.activity.as_ref()
     }
 
     /// Returns the session-operation repository.
     pub fn operations(&self) -> &dyn operation::OperationRepository<crate::DbError> {
-        self.operation.as_ref()
+        self.repositories.operation.as_ref()
     }
 
     /// Returns the project repository.
     pub fn projects(&self) -> &dyn project::ProjectRepository {
-        self.project.as_ref()
+        self.repositories.project.as_ref()
     }
 
     /// Returns the session review-request repository.
     pub fn reviews(&self) -> &dyn review::ReviewRepository {
-        self.review.as_ref()
+        self.repositories.review.as_ref()
     }
 
     /// Returns worker-owned utility run persistence.
     pub fn runs(&self) -> Arc<dyn ag_worker::RunRepository> {
-        Arc::clone(&self.run)
+        Arc::clone(&self.repositories.run)
     }
 
     /// Returns the session repository.
     pub fn sessions(&self) -> &dyn session::SessionRepository {
-        self.session.as_ref()
+        self.repositories.session.as_ref()
     }
 
     /// Returns the settings repository.
     pub fn settings(&self) -> &dyn setting::SettingRepository {
-        self.setting.as_ref()
+        self.repositories.setting.as_ref()
+    }
+
+    /// Returns desired outcomes and their operation-backed attempt history.
+    pub fn tasks(&self) -> &dyn crate::task::TaskRepository {
+        self.repositories.task.as_ref()
     }
 
     /// Returns the per-session usage repository.
     pub fn usage(&self) -> &dyn usage::UsageRepository {
-        self.usage.as_ref()
+        self.repositories.usage.as_ref()
     }
 
     /// Creates a repository bundle backed by one pool and timestamp source.
@@ -67,28 +65,48 @@ impl AppRepositories {
         timestamp_source: Arc<dyn TimestampSource>,
     ) -> Self {
         Self {
-            activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
-            operation: Arc::new(operation::SqliteOperationRepository::new(
-                pool.clone(),
-                Arc::clone(&timestamp_source),
-            )),
-            project: Arc::new(project::SqliteProjectRepository::new(
-                pool.clone(),
-                Arc::clone(&timestamp_source),
-            )),
-            review: Arc::new(review::SqliteReviewRepository::new(pool.clone())),
-            run: Arc::new(crate::run::SqliteRunRepository::new(
-                pool.clone(),
-                Arc::clone(&timestamp_source),
-            )),
-            session: Arc::new(session::SqliteSessionRepository::new(
-                pool.clone(),
-                Arc::clone(&timestamp_source),
-            )),
-            setting: Arc::new(setting::SqliteSettingRepository::new(pool.clone())),
-            usage: Arc::new(usage::SqliteUsageRepository::new(pool, timestamp_source)),
+            repositories: Arc::new(RepositorySet {
+                activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
+                operation: Arc::new(operation::SqliteOperationRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
+                project: Arc::new(project::SqliteProjectRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
+                review: Arc::new(review::SqliteReviewRepository::new(pool.clone())),
+                run: Arc::new(crate::run::SqliteRunRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
+                session: Arc::new(session::SqliteSessionRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
+                setting: Arc::new(setting::SqliteSettingRepository::new(pool.clone())),
+                task: Arc::new(crate::task::SqliteTaskRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
+                usage: Arc::new(usage::SqliteUsageRepository::new(pool, timestamp_source)),
+            }),
         }
     }
+}
+
+/// Shared adapters keep the bundle's stack footprint independent of the
+/// number of repositories carried through asynchronous workflows.
+struct RepositorySet {
+    activity: Arc<dyn activity::ActivityRepository>,
+    operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
+    project: Arc<dyn project::ProjectRepository>,
+    review: Arc<dyn review::ReviewRepository>,
+    run: Arc<dyn ag_worker::RunRepository>,
+    session: Arc<dyn session::SessionRepository>,
+    setting: Arc<dyn setting::SettingRepository>,
+    task: Arc<dyn crate::task::TaskRepository>,
+    usage: Arc<dyn usage::UsageRepository>,
 }
 
 #[cfg(test)]

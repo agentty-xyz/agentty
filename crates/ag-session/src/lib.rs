@@ -16,6 +16,7 @@ mod question;
 mod review;
 mod service;
 mod setting;
+mod task;
 mod transcript_notice;
 
 /// Shared explicit model selections for deterministic tests and demos.
@@ -60,4 +61,5 @@ pub use service::{
     DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionService,
 };
 pub use setting::SettingName;
+pub use task::{SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use transcript_notice::TranscriptNotice;

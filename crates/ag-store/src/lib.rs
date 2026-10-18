@@ -14,6 +14,7 @@ mod session_preparation;
 mod session_snapshot;
 mod setting;
 mod status;
+mod task;
 mod timestamp;
 mod usage;
 
@@ -37,6 +38,7 @@ pub use session_preparation::{
     SessionPreparationRepository, SessionPreparationRow, SessionPreparationState,
 };
 pub use setting::SettingRepository;
+pub use task::TaskRepository;
 pub use timestamp::TimestampSource;
 pub use usage::{SessionUsageRow, UsageRepository};
 

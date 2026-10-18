@@ -187,6 +187,7 @@ struct ReplyOptions {
     persist_prompt: bool,
     prompt_presentation: ReplyPromptPresentation,
     review_comment_thread_ids: Vec<String>,
+    task: Option<ag_session::SubmitTaskRequest>,
 }
 
 impl ReplyOptions {
@@ -200,6 +201,7 @@ impl ReplyOptions {
             prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue: false,
             review_comment_thread_ids,
+            task: None,
         }
     }
 
@@ -214,6 +216,7 @@ impl ReplyOptions {
             prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue,
             review_comment_thread_ids: Vec::new(),
+            task: None,
         }
     }
 
@@ -227,6 +230,7 @@ impl ReplyOptions {
             prompt_presentation: ReplyPromptPresentation::Visible,
             joins_worker_queue: false,
             review_comment_thread_ids: Vec::new(),
+            task: None,
         }
     }
 
@@ -241,6 +245,7 @@ impl ReplyOptions {
             prompt_presentation: ReplyPromptPresentation::HiddenAgent,
             joins_worker_queue,
             review_comment_thread_ids,
+            task: None,
         }
     }
 }
@@ -261,6 +266,7 @@ struct ReplyEnqueueOptions {
     idempotent: bool,
     joins_worker_queue: bool,
     report_failure_in_transcript: bool,
+    task: Option<ag_session::SubmitTaskRequest>,
 }
 
 /// Cleanup payload for a deleted session's git and filesystem resources.
@@ -1850,6 +1856,30 @@ impl SessionManager {
         .await
     }
 
+    /// Uses ordinary durable-turn preparation with atomic task admission at
+    /// the worker handoff. Model selection and setting resolution retain
+    /// their existing lifetimes.
+    pub(crate) async fn reply_to_task(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        request: ag_session::SubmitTaskRequest,
+    ) -> bool {
+        let Ok(session) = self.session_or_err(session_id) else {
+            return false;
+        };
+        let session_agent = session.agent;
+        let prompt = TurnPrompt::from_agent_data(request.message.clone());
+        let mut options = ReplyOptions::durable(
+            request.operation_id(),
+            request.visibility == ag_session::DurableMessageVisibility::Visible,
+        );
+        options.task = Some(request);
+
+        self.reply_impl(services, session_id, prompt, session_agent, options)
+            .await
+    }
+
     /// Submits a follow-up prompt with an allowlist of forge review threads
     /// eligible for post-push reply and resolution.
     ///
@@ -2504,6 +2534,7 @@ impl SessionManager {
             prompt_presentation,
             joins_worker_queue,
             review_comment_thread_ids,
+            task,
         } = options;
         // A saved fork prompt still needs the copied history if its worker
         // rejected acceptance after an earlier successful enqueue.
@@ -2521,8 +2552,6 @@ impl SessionManager {
         else {
             return false;
         };
-
-        let app_event_tx = services.event_sender();
 
         let Ok(handles) = self.session_handles_or_err(&persisted_session_id) else {
             return false;
@@ -2545,7 +2574,7 @@ impl SessionManager {
             self.append_reply_prompt_line(
                 services,
                 &transcript,
-                &app_event_tx,
+                &services.event_sender(),
                 &persisted_session_id,
                 &prompt,
                 prompt_presentation,
@@ -2579,6 +2608,7 @@ impl SessionManager {
                     idempotent,
                     report_failure_in_transcript: !defer_prompt_until_enqueued,
                     joins_worker_queue,
+                    task,
                 },
             )
             .await;
@@ -2590,7 +2620,7 @@ impl SessionManager {
             self.append_reply_prompt_line(
                 services,
                 &transcript,
-                &app_event_tx,
+                &services.event_sender(),
                 &persisted_session_id,
                 &prompt,
                 prompt_presentation,
@@ -2938,8 +2968,13 @@ impl SessionManager {
         let preparation_owned = command.is_preparation_prompt(persisted_session_id);
         let review_comment_count = command.review_comment_count();
         let enqueue_result = if options.idempotent {
-            self.enqueue_session_command_idempotently(services, persisted_session_id, command)
-                .await
+            self.enqueue_session_command_idempotently(
+                services,
+                persisted_session_id,
+                command,
+                options.task,
+            )
+            .await
         } else if options.joins_worker_queue {
             let persisted_session_id = SessionId::from(persisted_session_id);
             self.enqueue_queued_session_command(services, &persisted_session_id, command)

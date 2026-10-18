@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM task_attempt a\n               JOIN session_operation o ON o.id = a.session_operation_id\n               WHERE a.task_id = ? AND o.status IN ('queued', 'running')) AS \"active!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "active!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5b0be99a760faf669b678aa11f111171e1842645de6043549afa5e5ccc4cf93f"
+}

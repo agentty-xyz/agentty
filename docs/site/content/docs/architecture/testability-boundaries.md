@@ -53,6 +53,11 @@ explicit expectations so fixture reuse does not hide changes to those contracts.
 | Persistence                      | Repository traits in `ag-store` |
 | Storage timestamps               | `TimestampSource`               |
 
+`TaskRepository` atomically admits tasks, attempts, and operations and reads attempt
+status from operations. In-memory SQLite contract tests cover identity conflicts,
+rollback, cancellation, and restart settlement. Scripted worker tests cover the task
+API's handoff and completion timing without live providers.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

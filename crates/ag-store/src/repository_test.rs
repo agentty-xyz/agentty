@@ -6,7 +6,7 @@ use ag_worker::MockOperationRepository;
 use sqlx::SqlitePool;
 
 use crate::connection::{Database, MIGRATOR, open_in_memory_pool};
-use crate::repository::AppRepositories;
+use crate::repository::{AppRepositories, RepositorySet};
 use crate::timestamp::TimestampSource;
 
 /// Timestamp fixture used to verify persistence composition
@@ -199,14 +199,17 @@ async fn repository_parts_support_focused_adapter_injection() {
         .times(1)
         .returning(|_| Ok(true));
     let repositories = AppRepositories {
-        run: Arc::clone(&baseline.run),
-        activity: Arc::clone(&baseline.activity),
-        operation: Arc::new(operation),
-        project: Arc::clone(&baseline.project),
-        review: Arc::clone(&baseline.review),
-        session: Arc::clone(&baseline.session),
-        setting: Arc::clone(&baseline.setting),
-        usage: Arc::clone(&baseline.usage),
+        repositories: Arc::new(RepositorySet {
+            activity: Arc::clone(&baseline.repositories.activity),
+            operation: Arc::new(operation),
+            project: Arc::clone(&baseline.repositories.project),
+            review: Arc::clone(&baseline.repositories.review),
+            run: Arc::clone(&baseline.repositories.run),
+            session: Arc::clone(&baseline.repositories.session),
+            setting: Arc::clone(&baseline.repositories.setting),
+            task: Arc::clone(&baseline.repositories.task),
+            usage: Arc::clone(&baseline.repositories.usage),
+        }),
     };
 
     // Act

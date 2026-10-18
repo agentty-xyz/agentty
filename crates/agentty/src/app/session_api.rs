@@ -25,6 +25,22 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn submit_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::SubmitTaskRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::submit_task(self, session_id, request).await
+    }
+
+    async fn get_task(&self, task_id: &str) -> Result<Option<ag_session::Task>, ApiSessionError> {
+        SessionRuntimeHandle::get_task(self, task_id).await
+    }
+
+    async fn complete_task(&self, task_id: &str) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::complete_task(self, task_id).await
+    }
+
     async fn create_session(
         &self,
         request: CreateSessionRequest,
@@ -139,6 +155,19 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::GetTask {
+                response_tx,
+                task_id,
+            } => {
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .load_task(&task_id)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
             SessionRuntimeCommand::Get {
                 response_tx,
                 session_id,
@@ -414,6 +443,48 @@ impl App {
 
         Err(ApiSessionError::Operation(format!(
             "Session `{session_id}` could not enqueue the durable message"
+        )))
+    }
+
+    /// Admits explicit work after checking durable delivery identity.
+    pub(super) async fn submit_api_task(
+        &mut self,
+        session_id: &SessionId,
+        request: ag_session::SubmitTaskRequest,
+    ) -> Result<(), ApiSessionError> {
+        if self
+            .services
+            .db()
+            .tasks()
+            .contains_attempt(session_id, &request)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        {
+            return Ok(());
+        }
+        let session = self
+            .sessions
+            .session_for_id(session_id)
+            .ok_or(ApiSessionError::NotFound)?;
+        if !matches!(
+            session.status,
+            SessionStatus::Review | SessionStatus::AgentReview | SessionStatus::Question
+        ) {
+            return Err(ApiSessionError::Operation(format!(
+                "Session `{session_id}` cannot accept a task attempt in status `{}`",
+                session.status
+            )));
+        }
+        if self
+            .sessions
+            .reply_to_task(&self.services, session_id, request)
+            .await
+        {
+            return Ok(());
+        }
+
+        Err(ApiSessionError::Operation(format!(
+            "Session `{session_id}` could not enqueue the task attempt"
         )))
     }
 

@@ -10,6 +10,10 @@ merge locally or publish a review request. See
 
 <!-- more -->
 
+Programmatic integrations can also track desired outcomes and explicit attempts through
+the [Task API](@/docs/core-components/durable-components/task.md). Tasks use existing
+session workers; they do not add terminal controls or automatically complete sessions.
+
 ## Interface Layout
 
 <a id="usage-interface-layout"></a> Use `Tab` and `Shift+Tab` to move between tabs:

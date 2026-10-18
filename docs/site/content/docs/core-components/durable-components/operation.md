@@ -17,3 +17,7 @@ work within a workflow can have its own
 
 The [worker](@/docs/core-components/execution.md) coordinates execution and recovery.
 Saving an operation does not guarantee automatic replay after a restart.
+
+A [task attempt](@/docs/core-components/durable-components/task.md) uses a unique
+operation as its execution authority. Its terminal operation cannot be reopened;
+explicit retries create a new attempt and operation, preserving earlier history.

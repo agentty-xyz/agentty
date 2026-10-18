@@ -35,3 +35,6 @@ mod transition;
 
 #[path = "worker_test/shutdown_test.rs"]
 mod shutdown;
+
+#[path = "worker_test/task_attempt_test.rs"]
+mod task_attempt;
