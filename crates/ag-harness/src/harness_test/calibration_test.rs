@@ -20,7 +20,7 @@ use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
 use crate::tool::{Tool, ToolCall};
-use crate::turn::TurnOutcome;
+use crate::turn::{ModelRequestActivity, TurnOutcome};
 
 const BUDGET: u64 = 6_000;
 const OVERHEAD: u64 = 500;
@@ -46,7 +46,7 @@ impl InflatingModel {
     }
 
     fn estimated_weight(request: &ModelRequest) -> u64 {
-        let estimator = HeuristicContextEstimator;
+        let estimator = HeuristicContextEstimator::DEFAULT;
         let messages: u64 = request
             .messages()
             .iter()
@@ -145,7 +145,13 @@ async fn inflated_reported_input_tokens_fit_later_requests_further() {
     let requests = outcome.report().model_requests();
     assert_eq!(requests.len(), READS + 1);
     assert_eq!(requests[0].calibrated_weight(), None);
-    for (request, weight) in requests.iter().zip(&inflated_weights) {
+    // The small first request cannot tell its overhead from a ratio, so it
+    // only offsets the second request's prediction.
+    assert_eq!(
+        requests[1].calibrated_weight(),
+        Some(OVERHEAD + inflated_weights[0] + inflated_weights[1])
+    );
+    for (index, (request, weight)) in requests.iter().zip(&inflated_weights).enumerate() {
         let reported = OVERHEAD + weight * 2;
         assert_eq!(request.estimated_weight(), *weight);
         assert_eq!(
@@ -156,7 +162,8 @@ async fn inflated_reported_input_tokens_fit_later_requests_further() {
             Some(reported)
         );
         assert!(reported <= BUDGET, "request of {reported} tokens overflows");
-        if let Some(calibrated) = request.calibrated_weight() {
+        if index > 1 {
+            let calibrated = request.calibrated_weight().expect("calibrated request");
             assert!(
                 calibrated >= reported,
                 "{calibrated} under-predicts {reported}"
@@ -197,7 +204,7 @@ async fn calibration_carries_into_later_turns_of_the_same_model() {
 
     // Act
     let later = read_notes(&harness).await;
-    let reconfigured = harness.context_estimator(HeuristicContextEstimator);
+    let reconfigured = harness.context_estimator(HeuristicContextEstimator::DEFAULT);
     let reset = read_notes(&reconfigured).await;
 
     // Assert
@@ -267,4 +274,75 @@ async fn switching_models_discards_the_calibration() {
         switched.report().model_requests()[0].calibrated_weight(),
         None
     );
+}
+
+#[tokio::test]
+async fn registered_profiles_weigh_requests_with_their_estimator() {
+    // Arrange
+    let framed_estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(100);
+    let plain_weights = Arc::new(Mutex::new(Vec::new()));
+    let framed_weights = Arc::new(Mutex::new(Vec::new()));
+    let mut registry = ModelRegistry::new();
+    for (key, weights, profile) in [
+        ("plain", &plain_weights, ModelProfile::new(BUDGET)),
+        (
+            "framed",
+            &framed_weights,
+            ModelProfile::new(BUDGET).with_estimator(framed_estimator),
+        ),
+    ] {
+        registry
+            .register(
+                ExecutionIdentity::new(key, "1").expect("identity"),
+                InflatingModel::new(None, weights),
+                ModelCapabilities {
+                    image_input: false,
+                    profile,
+                    tool_calls: true,
+                },
+            )
+            .expect("register");
+    }
+    let harness = |key| {
+        Harness::from_registry(&registry, key)
+            .expect("harness")
+            .repository(Repository::fixture("repo"))
+            .allow(Tool::Read)
+            .file_system(notes_file_system())
+            .store(Arc::new(MemoryStore::new()))
+    };
+    let mut session = harness("plain")
+        .session("switched", object_schema())
+        .create()
+        .await
+        .expect("session");
+    let plain = session.send("read the notes").await.expect("plain turn");
+
+    // Act
+    let direct = read_notes(&harness("framed")).await;
+    session
+        .switch_model(&registry, "framed")
+        .await
+        .expect("switch");
+    let switched = session
+        .send("read them again")
+        .await
+        .expect("switched turn");
+
+    // Assert
+    let plain_weights = plain_weights.lock().expect("weights lock").clone();
+    let framed_weights = framed_weights.lock().expect("weights lock").clone();
+    let estimated = |outcome: &TurnOutcome| -> Vec<u64> {
+        outcome
+            .report()
+            .model_requests()
+            .iter()
+            .map(ModelRequestActivity::estimated_weight)
+            .collect()
+    };
+    assert_eq!(estimated(&plain), plain_weights);
+    let framed: Vec<u64> = framed_weights.iter().map(|weight| weight + 100).collect();
+    let (direct_framed, switched_framed) = framed.split_at(READS + 1);
+    assert_eq!(estimated(&direct), direct_framed);
+    assert_eq!(estimated(&switched), switched_framed);
 }

@@ -4,4 +4,5 @@ mod fixture;
 mod record;
 mod runner;
 
-pub(super) use runner::run;
+pub(super) use fixture::ReadLoopFixture;
+pub(super) use runner::{revision, run};

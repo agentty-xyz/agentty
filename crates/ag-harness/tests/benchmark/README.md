@@ -63,6 +63,7 @@ a fixed seed, so every run reads the same bytes:
 | `long_read_loop`     | Read 16 varied Rust-like files and list each file's `pub fn` names plus the file with the most.       | One per file (exact name set) plus the maximum file.   |
 | `doc_comment_writes` | Apply three named doc-comment edits across two files of about 250 lines; one target is past line 200. | One per edit plus the exact final contents and status. |
 | `huge_result`        | Read six small notes, then one 48 KB single-line file; return all seven code words in order.          | One per code word.                                     |
+| `sequential_writes`  | Edit eight long files one at a time (read, then write), so applied writes supersede earlier reads.    | One per edit plus the exact final contents and status. |
 
 Select it with `AG_HARNESS_BENCHMARK_SUITE=context` and exactly one provider per
 process. Set `QWEN_MODEL` to compare Qwen models:
@@ -76,13 +77,18 @@ AG_HARNESS_BENCHMARK_REPETITIONS=2 \
   cargo test --locked -p ag-harness --test benchmark
 ```
 
-`AG_HARNESS_BENCHMARK_CASE` selects one scenario. `AG_HARNESS_CONTEXT_WINDOW` (default
-`32000`) and `AG_HARNESS_CONTEXT_RESERVED_OUTPUT` (default `16384`) set the budget.
-`AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`) bounds each run; a run that exceeds it
-is recorded as failed. `AG_HARNESS_CONTEXT_SUMMARIES=1` enables
-`ContextSummaryPolicy::Enabled`, so outgrown requests summarize earlier tool rounds.
-Kimi is not paced in this suite, so its three-request-per-minute limit makes it
-unsuitable without a higher quota.
+`AG_HARNESS_BENCHMARK_CASE` selects one scenario. `AG_HARNESS_CONTEXT_ESTIMATE` weighs
+requests with declared `HeuristicContextEstimator` parameters instead of `DEFAULT`, as
+six comma-separated numbers: message tokens per 1,000 bytes, tokens per message,
+tool-definition tokens per 1,000 bytes, tokens per definition, request tokens, and `1`
+when the output schema is rendered into the prompt (for example `225,44,339,0,420,1` for
+Muse Spark 1.3, as declared in `crates/ag-agent/src/agent/model_profile.rs`).
+`AG_HARNESS_CONTEXT_WINDOW` (default `32000`) and `AG_HARNESS_CONTEXT_RESERVED_OUTPUT`
+(default `16384`) set the budget. `AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`)
+bounds each run; a run that exceeds it is recorded as failed.
+`AG_HARNESS_CONTEXT_SUMMARIES=1` enables `ContextSummaryPolicy::Enabled`, so outgrown
+requests summarize earlier tool rounds. Kimi is not paced in this suite, so its
+three-request-per-minute limit makes it unsuitable without a higher quota.
 
 Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 `target/ag-harness-context-benchmark.jsonl`) and prints it after `CONTEXT`:
@@ -113,7 +119,8 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   `summarized_tool_calls`, and `superseded_results` sum `ContextActivity` over every
   accepted request. A reduction carried into later requests is counted once per request,
   so these measure sustained pressure rather than distinct items.
-- `revision`, `model`, `window`, `reserved_output`, and `context_summaries` identify the
+- `revision`, `model`, `window`, `reserved_output`, `context_summaries`, and `estimate`
+  (the `AG_HARNESS_CONTEXT_ESTIMATE` value, or `null` for `DEFAULT`) identify the
   configuration. A failed turn's activity fields come from the report on its
   `TurnFailed` event; they are `null` only when the turn failed before preparing its
   first request or timed out. `detail` holds the error or failed checks.
@@ -134,3 +141,28 @@ jq -s -r 'group_by([.scenario, .model, .context_summaries])[] | {
 ```
 
 Committed baselines live under `results/` as `*-context.jsonl`.
+
+## Estimate suite
+
+The estimate suite measures how each provider counts input tokens, to fit the
+`HeuristicContextEstimator` parameters a model profile declares. Each probe sends one
+fixed request through `ag-router`, rendered as `ModelClient` renders it, varying one
+feature from a minimal request: short turns, 2–32 KB of prose, code, or `read` results,
+tool rounds, the benchmark's generated read-loop files, one to three tool definitions,
+and a large output schema. Select it with `AG_HARNESS_BENCHMARK_SUITE=estimate` and
+exactly one provider per process; Kimi requests are spaced 25 seconds apart.
+
+`AG_HARNESS_ESTIMATE_CORPUS` replaces the probes with recorded requests from a JSON
+Lines file, one request per line with a `name`, an optional `system` prompt and output
+`schema`, the advertised built-in `tools` by name, and `messages` as a session store
+records them (`kind` plus JSON `payload`), so real harness traffic can be measured.
+`AG_HARNESS_BENCHMARK_CASE` selects one probe by name.
+
+Each probe appends one JSON line to `AG_HARNESS_ESTIMATE_RESULTS` (default
+`target/ag-harness-estimate-probes.jsonl`) and prints it after `ESTIMATE`: the `probe`,
+`provider`, `model`, and `revision`; each message's estimator `bytes`, content `class`,
+and tool-call `reasoning_bytes`; each tool definition's `bytes`; `schema_bytes`; and the
+provider-reported `input_tokens` and `cache_hit_tokens`, or a redacted `detail` when the
+request failed. Records hold sizes and token counts, never content.
+`results/2026-10-18-estimate-probes.jsonl` holds the probes and recorded Agentty
+requests the declared harness estimators were fitted to.

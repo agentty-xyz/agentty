@@ -23,6 +23,7 @@ use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::read::ReadError;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
+use crate::schema_contract::OutputSchema;
 use crate::tool::{ReadAction, Tool, ToolCall, ToolDefinition};
 use crate::turn::{ToolActivity, TurnError};
 
@@ -590,6 +591,10 @@ impl ContextEstimator for FlatEstimator {
     fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
         2
     }
+
+    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
+        0
+    }
 }
 
 #[tokio::test]
@@ -700,7 +705,7 @@ async fn long_read_loops_send_reduced_copies_within_the_budget() {
 
     // Assert
     let requests = requests.lock().expect("requests lock");
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let tool_weight: u64 = requests[0]
         .tools()
         .iter()
@@ -777,7 +782,7 @@ async fn very_long_read_loops_drop_their_oldest_rounds_to_stay_within_the_budget
 
     // Assert
     let requests = requests.lock().expect("requests lock");
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let tool_weight: u64 = requests[0]
         .tools()
         .iter()

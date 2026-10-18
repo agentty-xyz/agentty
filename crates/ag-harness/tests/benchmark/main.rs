@@ -3,6 +3,7 @@
 mod context;
 #[path = "../support/context_budget.rs"]
 mod context_budget_fixture;
+mod estimate;
 mod summary;
 
 use std::collections::BTreeSet;
@@ -50,8 +51,11 @@ async fn main() -> Result<(), DynError> {
     match env::var(SUITE_ENV).as_deref() {
         Err(_) | Ok("compatibility") => {}
         Ok("context") => return context::run().await,
+        Ok("estimate") => return estimate::run().await,
         Ok(suite) => {
-            return Err(format!("{SUITE_ENV}={suite} is not compatibility or context").into());
+            return Err(
+                format!("{SUITE_ENV}={suite} is not compatibility, context, or estimate").into(),
+            );
         }
     }
     let repetitions = env::var("AG_HARNESS_BENCHMARK_REPETITIONS")

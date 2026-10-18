@@ -15,6 +15,7 @@ use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
 use crate::round_summary::{self, RoundSummaryJob, SOURCE_TEXT_LEVELS};
+use crate::schema_contract::OutputSchema;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
 
@@ -54,6 +55,10 @@ pub(crate) const SUMMARY_MIN_SOURCE_PERCENT: u64 = 20;
 /// Share, in percent, of the request capacity left after reserved output
 /// that one summary may use, bounded by [`compaction::MAX_SUMMARY_BYTES`].
 pub(crate) const SUMMARY_MAX_PERCENT: u64 = 15;
+
+/// Payload bytes per weight unit that convert a summary's share of the
+/// capacity into its byte limit, at the default estimator's rate.
+const SUMMARY_BYTES_PER_WEIGHT: u64 = 4;
 
 /// Failed summaries after which a turn stops requesting them and only
 /// reduces its requests deterministically.
@@ -96,8 +101,8 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// Weights are deterministic approximations produced by a [`ContextEstimator`];
 /// they never claim exact provider token counts. Every harness requires one:
 /// pass it to `Harness::new` or derive it from a registration's
-/// [`crate::model::ModelProfile`], and revise the effective
-/// [`crate::recovery::ExecutionIdentity`] when it changes. The budget governs
+/// [`crate::model::ModelProfile`]. Like the profile, the budget never enters
+/// request fingerprints or stored history. The budget governs
 /// every provider request of a turn: the initial request keeps the most recent
 /// turns that fit, each whole, with its tool traffic cleared, or as its input
 /// and final output, and a request grown by in-turn tool traffic is reduced
@@ -213,39 +218,128 @@ pub enum ContextSummaryPolicy {
 /// Injectable approximate weighing of provider request content.
 ///
 /// Estimates cover instructions, historical messages including tool groups,
-/// and advertised tool definitions. The current ordered text/image input is
-/// admitted as the canonical user message it becomes, so projection and
-/// in-turn fitting share one accounting. Implementations must be
-/// deterministic and use the same units as [`ContextBudget`]; estimates
-/// never claim exact provider token counts.
+/// advertised tool definitions, and the fixed cost of each request. The
+/// current ordered text/image input is admitted as the canonical user message
+/// it becomes, so projection and in-turn fitting share one accounting.
+/// Implementations must be deterministic and use the same units as
+/// [`ContextBudget`]; estimates never claim exact provider token counts.
 pub trait ContextEstimator: Send + Sync {
     /// Approximates one system, user, or historical conversation message.
     fn message_weight(&self, message: &ModelMessage) -> u64;
 
     /// Approximates one advertised tool definition.
     fn tool_definition_weight(&self, tool: &ToolDefinition) -> u64;
+
+    /// Approximates the fixed cost a provider adds to every request beyond
+    /// its messages and tool definitions, such as chat-template framing, the
+    /// tool-calling preamble, and an output `schema` rendered into the
+    /// prompt.
+    fn request_weight(&self, schema: &OutputSchema) -> u64;
 }
 
-/// Default byte-ratio estimator: one weight unit per four payload bytes plus
-/// a fixed per-item overhead, with images at their base64 data-URL length.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct HeuristicContextEstimator;
+/// Byte-rate estimator with per-model parameters: payload bytes at a rate of
+/// tokens per 1,000 bytes plus fixed tokens per message, per tool definition,
+/// and per request, with images at their base64 data-URL length.
+///
+/// [`Self::DEFAULT`] approximates any model at four bytes per token with four
+/// tokens per message and tool definition and no fixed request cost. A
+/// [`crate::model::ModelProfile`] declares a model's measured parameters, and
+/// harnesses built from its registration weigh requests with them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeuristicContextEstimator {
+    message_tokens: u64,
+    message_tokens_per_kilobyte: u64,
+    output_schema_in_prompt: bool,
+    request_tokens: u64,
+    tool_tokens: u64,
+    tool_tokens_per_kilobyte: u64,
+}
 
 impl HeuristicContextEstimator {
-    const BYTES_PER_WEIGHT: u64 = 4;
-    const ITEM_OVERHEAD_WEIGHT: u64 = 4;
+    /// Model-agnostic parameters: 250 tokens per 1,000 bytes for messages and
+    /// tool definitions, four tokens per message and tool definition, and
+    /// no fixed request cost or output schema.
+    pub const DEFAULT: Self = Self {
+        message_tokens: 4,
+        message_tokens_per_kilobyte: 250,
+        output_schema_in_prompt: false,
+        request_tokens: 0,
+        tool_tokens: 4,
+        tool_tokens_per_kilobyte: 250,
+    };
 
-    fn weigh_bytes(bytes: usize) -> u64 {
-        u64::try_from(bytes)
+    /// Weighs message payload at `tokens_per_kilobyte` tokens per 1,000
+    /// bytes plus `tokens_per_message` for each message's framing.
+    #[must_use]
+    pub const fn with_messages(
+        mut self,
+        tokens_per_kilobyte: u64,
+        tokens_per_message: u64,
+    ) -> Self {
+        self.message_tokens = tokens_per_message;
+        self.message_tokens_per_kilobyte = tokens_per_kilobyte;
+
+        self
+    }
+
+    /// Weighs each tool definition's name, description, and parameter schema
+    /// at `tokens_per_kilobyte` tokens per 1,000 bytes plus
+    /// `tokens_per_definition`.
+    #[must_use]
+    pub const fn with_tool_definitions(
+        mut self,
+        tokens_per_kilobyte: u64,
+        tokens_per_definition: u64,
+    ) -> Self {
+        self.tool_tokens = tokens_per_definition;
+        self.tool_tokens_per_kilobyte = tokens_per_kilobyte;
+
+        self
+    }
+
+    /// Adds `request_tokens` to every request for the provider's fixed
+    /// framing, including any tool-calling preamble.
+    #[must_use]
+    pub const fn with_request_tokens(mut self, request_tokens: u64) -> Self {
+        self.request_tokens = request_tokens;
+
+        self
+    }
+
+    /// Weighs every request's output schema as one more message, for a
+    /// provider that renders the schema into the prompt.
+    #[must_use]
+    pub const fn with_output_schema_in_prompt(mut self) -> Self {
+        self.output_schema_in_prompt = true;
+
+        self
+    }
+
+    fn weigh(bytes: usize, tokens_per_kilobyte: u64, item_tokens: u64) -> u64 {
+        let bytes = u128::try_from(bytes).unwrap_or(u128::MAX);
+        let tokens = bytes
+            .saturating_mul(u128::from(tokens_per_kilobyte))
+            .div_ceil(1_000);
+
+        u64::try_from(tokens)
             .unwrap_or(u64::MAX)
-            .div_ceil(Self::BYTES_PER_WEIGHT)
-            .saturating_add(Self::ITEM_OVERHEAD_WEIGHT)
+            .saturating_add(item_tokens)
+    }
+}
+
+impl Default for HeuristicContextEstimator {
+    fn default() -> Self {
+        Self::DEFAULT
     }
 }
 
 impl ContextEstimator for HeuristicContextEstimator {
     fn message_weight(&self, message: &ModelMessage) -> u64 {
-        Self::weigh_bytes(message.retained_bytes())
+        Self::weigh(
+            message.retained_bytes(),
+            self.message_tokens_per_kilobyte,
+            self.message_tokens,
+        )
     }
 
     fn tool_definition_weight(&self, tool: &ToolDefinition) -> u64 {
@@ -255,7 +349,21 @@ impl ContextEstimator for HeuristicContextEstimator {
             .saturating_add(tool.description().len())
             .saturating_add(tool.parameters().to_string().len());
 
-        Self::weigh_bytes(bytes)
+        Self::weigh(bytes, self.tool_tokens_per_kilobyte, self.tool_tokens)
+    }
+
+    fn request_weight(&self, schema: &OutputSchema) -> u64 {
+        let schema_weight = if self.output_schema_in_prompt {
+            Self::weigh(
+                schema.value().to_string().len(),
+                self.message_tokens_per_kilobyte,
+                self.message_tokens,
+            )
+        } else {
+            0
+        };
+
+        self.request_tokens.saturating_add(schema_weight)
     }
 }
 
@@ -468,8 +576,9 @@ impl TurnStop {
 /// accounting for the same content.
 ///
 /// # Errors
-/// Returns [`TurnError::ContextBudgetExceeded`] when instructions, the current
-/// input, advertised tool definitions, and the reserved output cannot fit.
+/// Returns [`TurnError::ContextBudgetExceeded`] when the fixed request cost,
+/// instructions, the current input, advertised tool definitions, and the
+/// reserved output cannot fit.
 pub(crate) fn admit_mandatory_content(
     estimator: &dyn ContextEstimator,
     budget: ContextBudget,
@@ -477,7 +586,9 @@ pub(crate) fn admit_mandatory_content(
     input: &TurnInput,
     options: &TurnOptions,
 ) -> Result<u64, TurnError> {
-    let mut required = budget.reserved_output_weight();
+    let mut required = budget
+        .reserved_output_weight()
+        .saturating_add(estimator.request_weight(options.schema()));
     if let Some(system_prompt) = system_prompt {
         let message = ModelMessage::System(system_prompt.to_string());
         required = required.saturating_add(estimator.message_weight(&message));
@@ -605,12 +716,12 @@ impl ContextFit {
     ) -> Result<FitStep<'_>, TurnError> {
         let synced = self.sync(estimator, request);
         self.truncated_latest.clear();
-        let base = request
-            .tools()
-            .iter()
-            .fold(budget.reserved_output_weight(), |weight, tool| {
-                weight.saturating_add(estimator.tool_definition_weight(tool))
-            });
+        let fixed = budget
+            .reserved_output_weight()
+            .saturating_add(estimator.request_weight(request.schema()));
+        let base = request.tools().iter().fold(fixed, |weight, tool| {
+            weight.saturating_add(estimator.tool_definition_weight(tool))
+        });
         let budget_weight = budget.max_request_weight().get();
         self.unreduced_weight =
             base.saturating_add(self.canonical_weight) - budget.reserved_output_weight();
@@ -907,7 +1018,7 @@ impl ContextFit {
         let rounds: Vec<&[ModelMessage]> = rounds.iter().map(Vec::as_slice).collect();
         let max_summary_bytes = usize::try_from(
             (capacity.saturating_mul(SUMMARY_MAX_PERCENT) / 100)
-                .saturating_mul(HeuristicContextEstimator::BYTES_PER_WEIGHT),
+                .saturating_mul(SUMMARY_BYTES_PER_WEIGHT),
         )
         .unwrap_or(usize::MAX)
         .min(compaction::MAX_SUMMARY_BYTES);
@@ -933,6 +1044,7 @@ impl ContextFit {
                 schema.clone(),
             );
             let required = weigh_messages(estimator, job.request().messages())
+                .saturating_add(estimator.request_weight(job.request().schema()))
                 .saturating_add(budget.reserved_output_weight());
             if required <= budget.max_request_weight().get() {
                 self.summary_attempted_through = tail_start;

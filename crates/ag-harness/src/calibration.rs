@@ -7,9 +7,9 @@ use crate::model::CompletionMetadata;
 use crate::turn::TurnError;
 
 /// Share, in percent, of the request capacity left after reserved output
-/// that requests are fitted to before any provider usage calibrated the
-/// estimate. The heuristic under-counts some content, so an uncalibrated
-/// estimate keeps a margin instead of filling the window.
+/// that requests are fitted to until provider usage calibrated how tokens
+/// grow with the estimate. The estimate under-counts some content, so an
+/// uncalibrated estimate keeps a margin instead of filling the window.
 pub(crate) const UNCALIBRATED_CAPACITY_PERCENT: u64 = 90;
 
 /// Share, in percent, of the request capacity left after reserved output
@@ -21,7 +21,10 @@ pub(crate) const CALIBRATED_CAPACITY_PERCENT: u64 = 95;
 /// Smallest growth, in percent of the request capacity left after reserved
 /// output, between the first calibrated request and a later one before
 /// their difference measures the slope. Closer requests differ by too little
-/// content for their token difference to be meaningful.
+/// content for their token difference to be meaningful. A first request
+/// smaller than this carries too little content for its ratio to measure the
+/// slope either: providers add fixed costs the estimate may miss, which
+/// dominate a small request.
 pub(crate) const SLOPE_MIN_GROWTH_PERCENT: u64 = 10;
 
 /// Smallest slope, in thousandths: content the estimate over-counts never
@@ -46,14 +49,16 @@ const PERMILLE: u64 = 1_000;
 /// tokens for one model and estimator, shared by a harness and the sessions
 /// it captures.
 ///
-/// Providers add a fixed per-request cost the estimate never sees, such as
-/// chat templates and rendered tool and output schemas, so one ratio fitted
-/// to a small request overstates every larger one. The calibration is
-/// instead an [`Envelope`]: a line through the first reported request whose
-/// slope is the steepest token growth observed against it, lifted so every
-/// observation lies on or below it. Slope and lift only rise, since an
-/// under-estimate overflows the provider window and fails the turn while an
-/// over-estimate only reduces context earlier.
+/// Providers add fixed per-request costs the estimate may miss, such as chat
+/// templates and rendered tool and output schemas, so one ratio fitted to a
+/// small request overstates every larger one. The calibration is instead an
+/// [`Envelope`]: a line through the first reported request whose slope is
+/// the steepest token growth observed against it, lifted so every
+/// observation lies on or below it. Until a large enough request measures
+/// the slope, a small first request only offsets the estimate by its excess
+/// tokens. Slope and lift only rise, since an under-estimate overflows the
+/// provider window and fails the turn while an over-estimate only reduces
+/// context earlier.
 ///
 /// A provider that rejects a request as exceeding its context window
 /// reports no usage, so the rejection instead caps the usable weight below
@@ -84,11 +89,12 @@ impl Calibration {
 impl ContextCalibration {
     /// Returns `budget` with its request capacity reduced to the largest
     /// estimated weight whose calibrated tokens fit
-    /// [`CALIBRATED_CAPACITY_PERCENT`] of it, or to
-    /// [`UNCALIBRATED_CAPACITY_PERCENT`] of it before any usage calibrated
-    /// the estimate, and further to the overflow ceiling once a provider
-    /// rejected a request as exceeding its context window; never above the
-    /// declared capacity. Returns the calibration applied with it.
+    /// [`CALIBRATED_CAPACITY_PERCENT`] of it, or
+    /// [`UNCALIBRATED_CAPACITY_PERCENT`] of it until provider usage
+    /// calibrated how tokens grow with the estimate, and further to the
+    /// overflow ceiling once a provider rejected a request as exceeding its
+    /// context window; never above the declared capacity. Returns the
+    /// calibration applied with it.
     pub(crate) fn effective_budget(&self, budget: ContextBudget) -> (ContextBudget, Calibration) {
         let capacity = budget.max_request_weight().get() - budget.reserved_output_weight();
         let calibration = *self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -167,7 +173,7 @@ impl ContextCalibration {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let updated = match state.envelope {
             Some(current) => current.observe(estimated_weight, tokens, min_growth),
-            None => Envelope::first(estimated_weight, tokens),
+            None => Envelope::first(estimated_weight, tokens, min_growth),
         };
         state.envelope = Some(updated);
     }
@@ -193,7 +199,7 @@ impl ContextCalibration {
 
     /// Share of the capacity a request may fill under `envelope`.
     fn capacity_percent(envelope: Option<Envelope>) -> u64 {
-        if envelope.is_some() {
+        if envelope.is_some_and(|envelope| envelope.slope != Slope::Offset) {
             CALIBRATED_CAPACITY_PERCENT
         } else {
             UNCALIBRATED_CAPACITY_PERCENT
@@ -207,8 +213,21 @@ pub(crate) struct Envelope {
     base_tokens: u64,
     base_weight: u64,
     lift: u64,
-    measured: bool,
+    slope: Slope,
     slope_permille: u64,
+}
+
+/// What an [`Envelope`]'s slope rests on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Slope {
+    /// Assumed one token per unit: the first report was too small to
+    /// measure a ratio, so its excess tokens only offset the estimate.
+    Offset,
+    /// The first report's ratio through the origin, which over-states every
+    /// larger request with the same content mix.
+    Ratio,
+    /// Measured from token growth between reports.
+    Measured,
 }
 
 impl Envelope {
@@ -222,22 +241,30 @@ impl Envelope {
         }
     }
 
-    /// Starts an envelope from the first report, as the ratio through it:
-    /// the fixed cost and the slope are not yet separable, and the ratio
-    /// over-states every larger request with the same content mix.
-    fn first(weight: u64, tokens: u64) -> Self {
+    /// Starts an envelope from the first report. The fixed cost and the
+    /// slope are not yet separable: a report of at least `min_growth` starts
+    /// from the ratio through it, which over-states larger requests, and a
+    /// smaller one, whose tokens may be mostly fixed cost, from one token per
+    /// unit through it, which offsets the estimate by its excess.
+    fn first(weight: u64, tokens: u64, min_growth: u64) -> Self {
+        let (slope, slope_permille) = if weight >= min_growth {
+            (Slope::Ratio, Self::clamped_ratio(tokens, weight))
+        } else {
+            (Slope::Offset, MIN_SLOPE_PERMILLE)
+        };
+
         Self {
             base_tokens: tokens,
             base_weight: weight,
             lift: 0,
-            measured: false,
-            slope_permille: Self::clamped_ratio(tokens, weight),
+            slope,
+            slope_permille,
         }
     }
 
     /// Returns this envelope covering one more report. A request at least
     /// `min_growth` larger than the first measures the slope: the first
-    /// such measurement replaces the starting ratio and its lift, and later
+    /// such measurement replaces the starting slope and its lift, and later
     /// ones only raise it. The lift then rises to cover the report.
     fn observe(mut self, weight: u64, tokens: u64, min_growth: u64) -> Self {
         if weight >= self.base_weight.saturating_add(min_growth) {
@@ -245,11 +272,11 @@ impl Envelope {
                 tokens.saturating_sub(self.base_tokens),
                 weight - self.base_weight,
             );
-            if self.measured {
+            if self.slope == Slope::Measured {
                 self.slope_permille = self.slope_permille.max(slope);
             } else {
                 self.lift = 0;
-                self.measured = true;
+                self.slope = Slope::Measured;
                 self.slope_permille = slope;
             }
         }

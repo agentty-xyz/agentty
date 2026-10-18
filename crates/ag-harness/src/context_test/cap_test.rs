@@ -168,7 +168,7 @@ fn fit_cuts_latest_results_further_only_when_capping_is_not_enough() {
 #[test]
 fn an_oversized_latest_result_is_capped_without_dropping_earlier_rounds() {
     // Arrange
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let budget = ContextBudget::new(NonZeroU64::new(7_000).expect("nonzero"))
         .with_reserved_output(500)
         .expect("budget");

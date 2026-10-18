@@ -37,7 +37,7 @@ fn preserves_request_reasoning_effort_over_harness_default() {
     let engine = Engine {
         context_budget: unbounded_context_budget(),
         context_calibration: &context_calibration,
-        context_estimator: &HeuristicContextEstimator,
+        context_estimator: &HeuristicContextEstimator::DEFAULT,
         context_summaries: ContextSummaryPolicy::Disabled,
         effects: Effects::default(),
         file_system: &file_system,
@@ -93,7 +93,7 @@ async fn run_scripted(
     let engine = Engine {
         context_budget,
         context_calibration: &context_calibration,
-        context_estimator: &HeuristicContextEstimator,
+        context_estimator: &HeuristicContextEstimator::DEFAULT,
         context_summaries: ContextSummaryPolicy::Disabled,
         effects: Effects::default(),
         file_system: &file_system,
@@ -190,7 +190,7 @@ async fn rejected_final_outputs_fail_the_turn_after_the_correction_limit() {
 async fn feedback_that_overflows_a_tool_free_request_fails_the_turn_typed() {
     // Arrange
     let input_weight =
-        HeuristicContextEstimator.message_weight(&ModelMessage::User("reply".to_string()));
+        HeuristicContextEstimator::DEFAULT.message_weight(&ModelMessage::User("reply".to_string()));
     let context_budget =
         ContextBudget::new(NonZeroU64::new(input_weight + 1).expect("nonzero budget"));
 
@@ -330,7 +330,7 @@ fn repeated_reads_run_again_once_the_earlier_result_was_reduced() {
     request.record_tool_result(&read, "x".repeat(5000));
     let mut fit = ContextFit::default();
     fit.fit(
-        &HeuristicContextEstimator,
+        &HeuristicContextEstimator::DEFAULT,
         ContextBudget::new(NonZeroU64::new(1000).expect("nonzero budget")),
         &request,
         None,

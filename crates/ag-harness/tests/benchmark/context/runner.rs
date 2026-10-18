@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ag_harness::lifecycle::LifecycleEvent;
-use ag_harness::model::{ContextBudget, ContextSummaryPolicy};
+use ag_harness::model::{ContextBudget, ContextSummaryPolicy, HeuristicContextEstimator};
 use ag_harness::{Harness, OutputSchema, Tool};
 use tempfile::TempDir;
 
@@ -27,10 +27,11 @@ const DEFAULT_RESULTS: &str = "target/ag-harness-context-benchmark.jsonl";
 type ScenarioFuture = std::pin::Pin<Box<dyn Future<Output = Result<Measured, DynError>>>>;
 type ScenarioRunner = fn(Harness) -> ScenarioFuture;
 
-const SCENARIOS: [(&str, ScenarioRunner); 3] = [
+const SCENARIOS: [(&str, ScenarioRunner); 4] = [
     ("long_read_loop", long_read_loop),
     ("doc_comment_writes", doc_comment_writes),
     ("huge_result", huge_result),
+    ("sequential_writes", sequential_writes),
 ];
 
 /// Runs the selected scenarios for exactly one provider and appends one JSON
@@ -83,6 +84,7 @@ pub(crate) async fn run() -> Result<(), DynError> {
 struct Config {
     case: Option<String>,
     context_summaries: bool,
+    estimate: Option<String>,
     provider: Provider,
     repetitions: usize,
     reserved_output: u64,
@@ -116,6 +118,7 @@ impl Config {
             case: std::env::var("AG_HARNESS_BENCHMARK_CASE").ok(),
             context_summaries: std::env::var("AG_HARNESS_CONTEXT_SUMMARIES")
                 .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on")),
+            estimate: std::env::var("AG_HARNESS_CONTEXT_ESTIMATE").ok(),
             provider,
             repetitions: number_env("AG_HARNESS_BENCHMARK_REPETITIONS", 1)?,
             reserved_output: number_env(
@@ -149,7 +152,12 @@ impl Config {
         };
         let observed = Arc::new(Mutex::new(Observed::default()));
         let recorder = Arc::clone(&observed);
+        let estimator = self
+            .estimate
+            .as_deref()
+            .map_or(Ok(HeuristicContextEstimator::DEFAULT), estimator)?;
         let harness = Harness::new(self.provider.client()?, budget)
+            .context_estimator(estimator)
             .context_summaries(policy)
             .with_lifecycle_observer(move |event: LifecycleEvent| {
                 recorder
@@ -189,6 +197,7 @@ impl Config {
             activity,
             context_summaries: self.context_summaries,
             correctness: score.correctness(),
+            estimate: self.estimate.clone(),
             detail,
             model: self.provider.model(),
             observed: std::mem::take(&mut *observed.lock().unwrap_or_else(PoisonError::into_inner)),
@@ -231,8 +240,15 @@ fn long_read_loop(harness: Harness) -> ScenarioFuture {
 }
 
 fn doc_comment_writes(harness: Harness) -> ScenarioFuture {
+    write_scenario(harness, WriteFixture::generate())
+}
+
+fn sequential_writes(harness: Harness) -> ScenarioFuture {
+    write_scenario(harness, WriteFixture::sequential())
+}
+
+fn write_scenario(harness: Harness, fixture: WriteFixture) -> ScenarioFuture {
     Box::pin(async move {
-        let fixture = WriteFixture::generate();
         let workspace = Workspace::create(fixture.files()).await?;
         let outcome = harness
             .repository(benchmark_repository(workspace.root())?)
@@ -340,7 +356,7 @@ impl Workspace {
 }
 
 /// Returns the benchmarked checkout's commit, when Git can report it.
-async fn revision() -> Option<String> {
+pub(crate) async fn revision() -> Option<String> {
     let git = std::env::var_os(GIT_EXECUTABLE_ENV)?;
     let output = tokio::process::Command::new(git)
         .args(["rev-parse", "--short=12", "HEAD"])
@@ -353,6 +369,39 @@ async fn revision() -> Option<String> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Parses `AG_HARNESS_CONTEXT_ESTIMATE`: message tokens per 1,000 bytes,
+/// tokens per message, tool-definition tokens per 1,000 bytes, tokens per
+/// definition, request tokens, and `1` when the provider renders the output
+/// schema into the prompt.
+fn estimator(spec: &str) -> Result<HeuristicContextEstimator, DynError> {
+    let values = spec
+        .split(',')
+        .map(|value| value.trim().parse::<u64>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| format!("AG_HARNESS_CONTEXT_ESTIMATE must hold numbers, got {spec:?}"))?;
+    let [
+        message_rate,
+        message_tokens,
+        tool_rate,
+        tool_tokens,
+        request_tokens,
+        schema,
+    ] = values[..]
+    else {
+        return Err(format!("AG_HARNESS_CONTEXT_ESTIMATE needs six values, got {spec:?}").into());
+    };
+    let estimator = HeuristicContextEstimator::DEFAULT
+        .with_messages(message_rate, message_tokens)
+        .with_tool_definitions(tool_rate, tool_tokens)
+        .with_request_tokens(request_tokens);
+
+    Ok(if schema == 1 {
+        estimator.with_output_schema_in_prompt()
+    } else {
+        estimator
+    })
 }
 
 fn number_env<T: std::str::FromStr>(name: &str, default: T) -> Result<T, DynError> {

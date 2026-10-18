@@ -55,7 +55,7 @@ fn budget_rejects_reservation_without_request_capacity() {
 #[test]
 fn heuristic_weights_are_deterministic_byte_ratios() {
     // Arrange
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let signature = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     let image = ImageContent::new(ImageMediaType::Png, signature).expect("image");
     let image_input = TurnInput::from_blocks(vec![InputBlock::Image(image)]).expect("image input");
@@ -81,6 +81,65 @@ fn heuristic_weights_are_deterministic_byte_ratios() {
         read_tool,
         u64::try_from(definition_bytes).expect("bytes").div_ceil(4) + 4
     );
+}
+
+#[test]
+fn declared_heuristic_weights_use_their_rates_and_fixed_tokens() {
+    // Arrange
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    let estimator = HeuristicContextEstimator::DEFAULT
+        .with_messages(225, 40)
+        .with_tool_definitions(340, 2)
+        .with_request_tokens(420);
+    let in_prompt = estimator.with_output_schema_in_prompt();
+
+    // Act
+    let message = estimator.message_weight(&ModelMessage::User("x".repeat(1_000)));
+    let tool = estimator.tool_definition_weight(&ToolDefinition::bash());
+    let request = estimator.request_weight(&schema);
+    let request_with_schema = in_prompt.request_weight(&schema);
+
+    // Assert
+    assert_eq!(message, 265);
+    let definition = ToolDefinition::bash();
+    let definition_bytes = definition.name().len()
+        + definition.description().len()
+        + definition.parameters().to_string().len();
+    assert_eq!(
+        tool,
+        (u64::try_from(definition_bytes).expect("bytes") * 340).div_ceil(1_000) + 2
+    );
+    assert_eq!(request, 420);
+    // `{"type":"object"}` is 17 bytes: 4 tokens at 225 per 1,000, plus the
+    // 40 every message carries.
+    assert_eq!(request_with_schema, 464);
+    assert_eq!(
+        HeuristicContextEstimator::DEFAULT.request_weight(&schema),
+        0
+    );
+    assert_eq!(
+        HeuristicContextEstimator::default(),
+        HeuristicContextEstimator::DEFAULT
+    );
+}
+
+#[test]
+fn mandatory_admission_includes_the_fixed_request_weight() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(3);
+
+    // Act
+    let remaining = admit_mandatory_content(
+        &estimator,
+        budget(10),
+        None,
+        &TurnInput::text("abcd"),
+        &options_with(ToolPolicy::default()),
+    );
+
+    // Assert
+    // The input message weighs 1 + 4 and the request 3, leaving 2 of 10.
+    assert_eq!(remaining.expect("fits"), 2);
 }
 
 #[test]
@@ -143,7 +202,7 @@ fn mandatory_admission_weighs_input_as_its_canonical_message() {
 
     // Act
     let rejected = admit_mandatory_content(
-        &HeuristicContextEstimator,
+        &HeuristicContextEstimator::DEFAULT,
         budget,
         None,
         &input,

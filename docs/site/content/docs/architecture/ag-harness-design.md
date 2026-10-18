@@ -58,8 +58,11 @@ crates/
   and `lifecycle` modules.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
   injected models by stable host keys with declared `ModelCapabilities`, whose
-  `ModelProfile` describes the model's context. The harness reads every model through
-  its profile and holds no per-model values; hosts own those.
+  `ModelProfile` describes the model's context and its `HeuristicContextEstimator`
+  parameters. The harness reads every model through its profile and holds no per-model
+  values; hosts own those. A profile only shapes how new requests are fitted, never
+  request fingerprints or stored history, so revising one needs no new registration
+  revision.
 - `SessionStore` is the public persistence contract and `BashExecutor` the public
   command-execution contract; both accept host implementations. Stores expose atomic
   record operations; the harness applies admission rules and builds each lease.
@@ -154,29 +157,37 @@ turn with `TurnError::RepeatedToolCalls` after its results are journaled, so rep
 history stays well-formed. Both emit `LifecycleEventKind::ToolCallsRepeated`, which the
 trace projection records as a turn-span event.
 
-The heuristic estimate under-counts some content, so the harness calibrates it from
-provider usage, much like Codex combines the last reported usage with an estimate of
-newer items. Providers also add a fixed per-request cost the estimate never sees (live
-Muse and Qwen runs reported about 1,200–1,300 input tokens for a 581-weight first
-request), so one ratio fitted to a small request would roughly halve the usable window.
-The calibration is instead an upper envelope over the reports: a line through the first
-reported request, its ratio until a request at least 10% of the input capacity larger
+The estimator weighs payload bytes at per-model rates plus fixed tokens per message,
+tool definition, and request, and the output schema where the provider renders it into
+the prompt. Live probes showed why each term exists: tool definitions tokenize about 1.6
+times denser than repository text, providers add a fixed tool-calling preamble of up to
+about 420 tokens, and Qwen and Kimi count the output schema on every request while Muse
+counts it beside tools. Fitted per model, the estimate stays within about ±10% of
+recorded Agentty requests, but content such as digit-heavy generated code still runs
+30–46% over it, so the harness calibrates it from provider usage, much like Codex
+combines the last reported usage with an estimate of newer items. Any fixed cost the
+estimate misses dominates a small request (the default estimator weighed live first
+requests of about 1,000–1,200 tokens at 490), so one ratio fitted to a small request
+would roughly halve the usable window. The calibration is instead an upper envelope over
+the reports: a line through the first reported request, its ratio when that request
+weighs at least 10% of the input capacity or else one token per unit, offsetting the
+estimate by its excess, until a request at least 10% of the input capacity larger
 measures the slope of token growth, the slope then rising to the steepest growth
 measured and the line lifted to cover every report. The slope stays within 1–3: images
 are weighed at their encoded size and must not loosen the text budget, and one
 inconsistent report must not empty the window. Projection, admission, and fitting
 compare estimates with the largest weight whose calibrated tokens fit 95% of the input
 capacity, the margin covering denser content such as cleared-result notices, which
-under-shot the envelope by up to about 5% live; before any usage, the estimate may fill
-90%. Because the calibration only lowers the weight limit while cached message weights
-stay in estimator units, a tighter limit only advances the fitting watermarks further
-and never reshuffles an already-reduced prefix. Every built-in provider reports
-OpenAI-style `prompt_tokens`, whose cached tokens are a subset (live cache hits never
-exceeded the reported input), so prompt caching does not skew the calibration. It lives
-in memory per harness and the sessions it captures, resets on `switch_model` and
-estimator replacement, and needs no schema change. Budget failures still name the
-declared budget, with the required weight restated in calibrated tokens, and
-`ModelRequestActivity` reports each request's estimated and calibrated weight.
+under-shot the envelope by up to about 5% live; until usage measures the slope, the
+estimate may fill 90%. Because the calibration only lowers the weight limit while cached
+message weights stay in estimator units, a tighter limit only advances the fitting
+watermarks further and never reshuffles an already-reduced prefix. Every built-in
+provider reports OpenAI-style `prompt_tokens`, whose cached tokens are a subset (live
+cache hits never exceeded the reported input), so prompt caching does not skew the
+calibration. It lives in memory per harness and the sessions it captures, resets on
+`switch_model` and estimator replacement, and needs no schema change. Budget failures
+still name the declared budget, with the required weight restated in calibrated tokens,
+and `ModelRequestActivity` reports each request's estimated and calibrated weight.
 
 A provider rejection of a request as exceeding its context window reports no usage, so
 it instead caps later requests at 75% of the rejected request's estimated weight, the

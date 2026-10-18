@@ -1,4 +1,7 @@
+use ag_harness::OutputSchema;
+use ag_harness::model::{ContextEstimator, HeuristicContextEstimator};
 use ag_session::{AgentKind, AgentModel};
+use serde_json::json;
 
 use crate::agent::model_profile::declared;
 
@@ -40,5 +43,33 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
                 .iter()
                 .all(|model| declared(*model).is_none())
         );
+    }
+}
+
+#[test]
+fn harness_models_weigh_requests_with_measured_estimators() {
+    // Arrange
+    let harness_models = AgentKind::Harness.models();
+
+    // Act
+    let estimators = harness_models
+        .iter()
+        .map(|model| {
+            declared(*model)
+                .expect("harness models declare context profiles")
+                .estimator()
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    let schema = OutputSchema::new(json!({"type": "object"})).expect("schema");
+    for (model, estimator) in harness_models.iter().zip(&estimators) {
+        assert_ne!(*estimator, HeuristicContextEstimator::DEFAULT, "{model:?}");
+        // Every measured provider renders the output schema into the prompt.
+        assert!(estimator.request_weight(&schema) > 0, "{model:?}");
+    }
+    for model in AgentKind::Codex.models() {
+        let profile = declared(*model).expect("Codex models declare compaction profiles");
+        assert_eq!(profile.estimator(), HeuristicContextEstimator::DEFAULT);
     }
 }

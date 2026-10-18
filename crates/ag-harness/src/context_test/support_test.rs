@@ -19,6 +19,10 @@ impl ContextEstimator for FixedEstimator {
     fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
         2
     }
+
+    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
+        0
+    }
 }
 
 /// One weight unit per retained byte, so reductions are exact byte counts.
@@ -30,6 +34,10 @@ impl ContextEstimator for ByteEstimator {
     }
 
     fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
+        0
+    }
+
+    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
         0
     }
 }

@@ -10,7 +10,7 @@ use ag_harness::model::{
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::store::{AcquiredTurn, SessionStore, WriteStatus};
 use ag_harness::tool::{ToolCall, ToolDefinition};
-use ag_harness::{Harness, Model, ModelError, SessionError, TurnError, TurnInput};
+use ag_harness::{Harness, Model, ModelError, OutputSchema, SessionError, TurnError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -26,6 +26,10 @@ impl ContextEstimator for FlatEstimator {
 
     fn tool_definition_weight(&self, _tool: &ToolDefinition) -> u64 {
         1
+    }
+
+    fn request_weight(&self, _schema: &OutputSchema) -> u64 {
+        0
     }
 }
 

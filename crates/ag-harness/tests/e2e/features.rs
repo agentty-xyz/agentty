@@ -380,7 +380,7 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
         ("kilo", "umber-29"),
         ("lima", "azure-31"),
     ];
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let turn_weight = |name: &str, value: &str, seed: u8| {
         estimator.message_weight(&ModelMessage::User(fact_turn(name, value, seed)))
             + estimator.message_weight(&ModelMessage::Assistant("{\"answer\":\"stored\"}".into()))
@@ -543,7 +543,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
         ("bravo", "olive-23"),
         ("charlie", "indigo-35"),
     ];
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let turn_weight = |name: &str, value: &str, seed: u8| {
         estimator.message_weight(&ModelMessage::User(fact_turn(name, value, seed)))
             + estimator.message_weight(&ModelMessage::Assistant("{\"answer\":\"stored\"}".into()))
