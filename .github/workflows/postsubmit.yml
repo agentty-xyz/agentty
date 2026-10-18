@@ -17,43 +17,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One job runs every member's source hook in turn. Each hook still builds
+  # its own package's feature set, while dependencies compile once and the
+  # run holds one runner instead of one per member.
   source-tests:
-    name: Source tests (${{ matrix.member }})
+    name: Source tests
     runs-on: ubuntu-latest
     env:
       TRUNK_API_TOKEN_AVAILABLE: ${{ secrets.TRUNK_API_TOKEN != '' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - member: ag-agent
-            hook: test-ag-agent-src
-          - member: ag-clipboard
-            hook: test-ag-clipboard-src
-          - member: ag-contracts
-            hook: test-ag-contracts-src
-          - member: ag-forge
-            hook: test-ag-forge-src
-          - member: ag-git
-            hook: test-ag-git-src
-          - member: ag-harness
-            hook: test-ag-harness-src
-          - member: ag-harness-cli
-            hook: test-ag-harness-cli-src
-          - member: ag-protocol
-            hook: test-ag-protocol-src
-          - member: ag-session
-            hook: test-ag-session-src
-          - member: ag-store
-            hook: test-ag-store-src
-          - member: ag-tui-text
-            hook: test-ag-tui-text-src
-          - member: agentty
-            hook: test-agentty-src
-          - member: ag-xtask
-            hook: test-ag-xtask-src
-          - member: testty
-            hook: test-testty-src
+      SOURCE_TEST_HOOKS: >-
+        test-ag-agent-src
+        test-ag-clipboard-src
+        test-ag-contracts-src
+        test-ag-forge-src
+        test-ag-git-src
+        test-ag-harness-src
+        test-ag-harness-cli-src
+        test-ag-protocol-src
+        test-ag-session-src
+        test-ag-store-src
+        test-ag-tui-text-src
+        test-agentty-src
+        test-ag-xtask-src
+        test-testty-src
 
     steps:
       - name: Checkout
@@ -64,15 +50,35 @@ jobs:
       - name: Setup Rust and `prek`
         uses: $/.github/actions/setup-rust-prek
 
+      # Every hook rewrites the same JUnit and timing files, so each run's
+      # reports are moved under its hook ID. A failing hook does not stop the
+      # remaining members.
       - name: Run source tests
         id: source-tests
-        run: prek run ${{ matrix.hook }} --all-files --hook-stage manual
+        run: |
+          status=0
+          for hook in $SOURCE_TEST_HOOKS; do
+            echo "::group::$hook"
+            rm -f target/nextest/ci/junit.xml target/cargo-timings/cargo-timing.html
+            prek run "$hook" --all-files --hook-stage manual || status=1
+            mkdir -p "target/source-tests/$hook"
+            for report in target/nextest/ci/junit.xml target/cargo-timings/cargo-timing.html; do
+              if [ -f "$report" ]; then
+                mv "$report" "target/source-tests/$hook/"
+              fi
+            done
+            echo "::endgroup::"
+          done
+          exit "$status"
 
       - name: Retain source test timings
         if: ${{ always() }}
-        uses: $/.github/actions/upload-test-results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: source-test-results-${{ matrix.member }}
+          name: source-test-results
+          path: target/source-tests/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload source test results to Trunk
         if: ${{ !cancelled() && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
@@ -81,7 +87,7 @@ jobs:
         env:
           TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
         with:
-          junit-paths: target/nextest/ci/junit.xml
+          junit-paths: target/source-tests/*/junit.xml
           org-slug: agentty
           previous-step-outcome: ${{ steps.source-tests.outcome }}
           token: ${{ secrets.TRUNK_API_TOKEN }}
