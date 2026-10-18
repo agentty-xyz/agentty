@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use ag_harness::bash::{BashConfig, CommandTermination, UnsandboxedExecutor};
 use ag_harness::model::{
     ContextBudget, ContextEstimator, HeuristicContextEstimator, ModelCapabilities, ModelClient,
-    ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry, ModelRequest,
+    ModelResponse,
 };
 use ag_harness::provider::{KimiConfig, MUSE_SPARK_1_3, MuseConfig, QWEN_PLUS, QwenConfig};
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
@@ -27,6 +28,7 @@ use ag_harness::{
 use serde_json::{Value, json};
 
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::{DynError, vision};
 
 const MODEL_API_BASE_URL: &str = "https://api.meta.ai/v1";
@@ -132,10 +134,10 @@ fn rounds() -> usize {
         .unwrap_or(2)
 }
 
-fn capabilities(budget: ContextBudget) -> ModelCapabilities {
+fn capabilities(profile: ModelProfile) -> ModelCapabilities {
     ModelCapabilities {
-        context_budget: budget,
         image_input: true,
+        profile,
         tool_calls: true,
     }
 }
@@ -234,7 +236,7 @@ async fn switch_roundtrip(from: Provider, to: Provider) -> Result<String, DynErr
         registry.register(
             ExecutionIdentity::new(provider.name(), "1")?,
             provider.client()?,
-            capabilities(unbounded_context_budget()),
+            capabilities(unbounded_model_profile()),
         )?;
     }
     let directory = tempfile::tempdir()?;
@@ -399,7 +401,7 @@ async fn context_budget_projection(provider: Provider) -> Result<String, DynErro
     registry.register(
         ExecutionIdentity::new(provider.name(), "budget-1")?,
         provider.client()?,
-        capabilities(ContextBudget::new(NonZeroU64::new(budget).ok_or("budget")?)),
+        capabilities(ModelProfile::new(budget)),
     )?;
     let directory = tempfile::tempdir()?;
     let harness = Harness::from_registry(&registry, provider.name())?
@@ -567,7 +569,7 @@ async fn compaction_checkpoint(provider: Provider) -> Result<String, DynError> {
     registry.register(
         ExecutionIdentity::new(provider.name(), "compact-1")?,
         provider.client()?,
-        capabilities(ContextBudget::new(NonZeroU64::new(budget).ok_or("budget")?)),
+        capabilities(ModelProfile::new(budget)),
     )?;
     let directory = tempfile::tempdir()?;
     let database = directory.path().join("compact.db");

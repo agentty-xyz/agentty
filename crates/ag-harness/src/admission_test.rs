@@ -1,9 +1,9 @@
 use serde_json::json;
 
 use super::{AdmissionState, ModelSwitch, NewTurn, TurnAdmission};
-use crate::context_budget_fixture::unbounded_context_budget;
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::policy::ToolPolicy;
 use crate::recovery::{
     ExecutionIdentity, HostRequest, HostTurnAcquisition, HostTurnRecord, HostTurnStatus,
@@ -183,7 +183,7 @@ fn undecodable_latest_options_reject_admission() {
 #[test]
 fn model_switch_requires_an_idle_current_selection_and_advances_it() {
     // Arrange
-    let switch = switch(2, ModelCapabilities::new(unbounded_context_budget()));
+    let switch = switch(2, ModelCapabilities::new(unbounded_model_profile()));
     let busy = AdmissionState {
         active_turn: true,
         model_generation: 2,
@@ -211,7 +211,7 @@ fn model_switch_requires_an_idle_current_selection_and_advances_it() {
 #[test]
 fn model_switch_rejects_history_the_target_cannot_replay() {
     // Arrange
-    let switch = switch(0, ModelCapabilities::new(unbounded_context_budget()));
+    let switch = switch(0, ModelCapabilities::new(unbounded_model_profile()));
     let portable = [ModelMessage::User("prompt".into())];
     let reasoning = [ModelMessage::AssistantReasoning {
         content: "{}".into(),

@@ -9,6 +9,7 @@ use crate::harness::tests::support::{model, response_without_metadata};
 use crate::model::{
     ContextBudget, MockModel, ModelCapabilities, ModelError, ModelRegistry, ModelResponse,
 };
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
@@ -101,8 +102,8 @@ async fn image_fingerprints_track_content_and_image_capability_only() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model(),
                 ModelCapabilities {
-                    context_budget: unbounded_context_budget(),
                     image_input: image_capable,
+                    profile: unbounded_model_profile(),
                     tool_calls: false,
                 },
             )
@@ -199,7 +200,7 @@ async fn fingerprints_recorded_before_tool_call_limit_removal_still_match() {
         .register(
             ExecutionIdentity::new("registered", "1").expect("identity"),
             model(),
-            ModelCapabilities::new(unbounded_context_budget()),
+            ModelCapabilities::new(unbounded_model_profile()),
         )
         .expect("register");
     let registration = registry.resolve("registered").expect("resolve").clone();
@@ -244,8 +245,8 @@ async fn registered_capability_gates_image_input_before_execution() {
                 ExecutionIdentity::new("registered", "1").expect("identity"),
                 model,
                 ModelCapabilities {
-                    context_budget: unbounded_context_budget(),
                     image_input: image_capable,
+                    profile: unbounded_model_profile(),
                     tool_calls: false,
                 },
             )

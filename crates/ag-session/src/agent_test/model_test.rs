@@ -1,4 +1,4 @@
-use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata, ModelContextLimits};
+use crate::agent::{AgentKind, AgentModel, AgentSelectionMetadata};
 
 #[test]
 /// Ensures model parsing is constrained to the selected provider.
@@ -324,23 +324,4 @@ fn test_harness_kind_metadata() {
     assert_eq!(harness_kind.default_model(), AgentModel::MuseSpark13);
     assert!(!harness_kind.supports_speed_mode());
     assert!(!AgentKind::ALL.contains(&harness_kind));
-}
-
-#[test]
-/// Ensures estimate-margin limits reserve the output plus a quarter of the
-/// window and saturate instead of overflowing.
-fn test_estimate_margin_reserves_output_and_a_quarter_of_the_window() {
-    // Arrange
-    let window = 400_000;
-
-    // Act
-    let limits = ModelContextLimits::with_estimate_margin(window, 32_000);
-    let saturated = ModelContextLimits::with_estimate_margin(window, u64::MAX);
-
-    // Assert
-    assert_eq!(limits.context_window_tokens, window);
-    assert_eq!(limits.input_headroom_tokens, 132_000);
-    assert_eq!(limits.input_token_budget(), 268_000);
-    assert_eq!(saturated.input_headroom_tokens, u64::MAX);
-    assert_eq!(saturated.input_token_budget(), 0);
 }

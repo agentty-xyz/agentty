@@ -25,6 +25,10 @@ mod repository_fixture;
 mod context_budget_fixture;
 
 #[cfg(test)]
+#[path = "support/model_profile.rs"]
+mod model_profile_fixture;
+
+#[cfg(test)]
 #[path = "support/store_conformance.rs"]
 mod store_conformance_test;
 
@@ -67,6 +71,7 @@ use serde_json::json;
 use tokio::io::AsyncRead;
 
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 
 struct ExternalToolModel {
     batched: bool,
@@ -1307,8 +1312,8 @@ async fn registered_models_reject_image_input_without_capability() -> Result<(),
                     messages: Arc::default(),
                 },
                 ModelCapabilities {
-                    context_budget: unbounded_context_budget(),
                     image_input,
+                    profile: unbounded_model_profile(),
                     tool_calls: false,
                 },
             )
@@ -1376,8 +1381,8 @@ async fn models_without_image_opt_in_reject_image_input() -> Result<(), Box<dyn 
         ExecutionIdentity::new("text", "1")?,
         ExternalModel,
         ModelCapabilities {
-            context_budget: unbounded_context_budget(),
             image_input: true,
+            profile: unbounded_model_profile(),
             tool_calls: false,
         },
     )?;

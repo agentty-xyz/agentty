@@ -25,7 +25,7 @@ pub mod test_support;
 
 pub use ag_contracts::{ReasoningLevel, SessionDiffState, SessionStats};
 pub use agent::{
-    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata, ModelContextLimits,
+    AgentKind, AgentModel, AgentSelection, AgentSelectionMetadata,
     parse_persisted_session_agent_model, resolve_agent_kind_for_model,
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,

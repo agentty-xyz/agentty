@@ -1,12 +1,11 @@
 //! Model-aware context projection contract shared by both built-in stores.
 
-use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{
-    ContextBudget, ContextEstimator, ModelCapabilities, ModelCompletion, ModelMessage,
-    ModelMetadata, ModelRegistry, ModelRequest, ModelResponse,
+    ContextEstimator, ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata,
+    ModelProfile, ModelRegistry, ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::{ExecutionIdentity, HostTurnStatus};
 use ag_harness::store::{AcquiredTurn, SessionStore, WriteStatus};
@@ -60,23 +59,17 @@ impl Model for RecordingModel {
     }
 }
 
-fn budget(max_request_weight: u64, reserved_output_weight: u64) -> ContextBudget {
-    ContextBudget::new(NonZeroU64::new(max_request_weight).expect("nonzero budget"))
-        .with_reserved_output(reserved_output_weight)
-        .expect("reserve within budget")
-}
-
 fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
     let mut registry = ModelRegistry::new();
-    let registrations: [(&'static str, ContextBudget); 6] = [
-        ("small", budget(39, 5)),
-        ("mid", budget(41, 0)),
-        ("huge", budget(101, 0)),
-        ("tiny", budget(5, 0)),
-        ("tiny-default", budget(4, 0)),
-        ("vision", budget(65, 0)),
+    let registrations: [(&'static str, ModelProfile); 6] = [
+        ("small", ModelProfile::new(39).with_reserved_tokens(5)),
+        ("mid", ModelProfile::new(41)),
+        ("huge", ModelProfile::new(101)),
+        ("tiny", ModelProfile::new(5)),
+        ("tiny-default", ModelProfile::new(4)),
+        ("vision", ModelProfile::new(65)),
     ];
-    for (name, context_budget) in registrations {
+    for (name, profile) in registrations {
         registry
             .register(
                 ExecutionIdentity::new(name, "1").expect("identity"),
@@ -85,8 +78,8 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                     requests: Arc::clone(requests),
                 },
                 ModelCapabilities {
-                    context_budget,
                     image_input: name == "vision",
+                    profile,
                     tool_calls: true,
                 },
             )

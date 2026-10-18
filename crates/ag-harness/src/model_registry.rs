@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::model::{ContextBudget, ModelMetadata};
+use crate::model::{ContextBudget, ContextBudgetError, ModelMetadata, ModelProfile};
 use crate::recovery::ExecutionIdentity;
 use crate::{Model, TurnInput};
 
@@ -15,10 +15,11 @@ use crate::{Model, TurnInput};
 /// output are required by the model contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ModelCapabilities {
-    /// Approximate request budget bounding every provider request.
-    pub context_budget: ContextBudget,
     /// Whether the adapter accepts image-bearing user input and history.
     pub image_input: bool,
+    /// Declared model context, from which registration derives the request
+    /// budget bounding every provider request.
+    pub profile: ModelProfile,
     /// Whether the adapter supports native tool calls and normalized tool
     /// history.
     pub tool_calls: bool,
@@ -26,11 +27,11 @@ pub struct ModelCapabilities {
 
 impl ModelCapabilities {
     /// Declares a text-only adapter without native tool calls under the
-    /// required request budget.
-    pub fn new(context_budget: ContextBudget) -> Self {
+    /// required model profile.
+    pub fn new(profile: ModelProfile) -> Self {
         Self {
-            context_budget,
             image_input: false,
+            profile,
             tool_calls: false,
         }
     }
@@ -40,6 +41,7 @@ impl ModelCapabilities {
 #[derive(Clone)]
 pub struct ModelRegistration {
     capabilities: ModelCapabilities,
+    context_budget: ContextBudget,
     identity: ExecutionIdentity,
     model: Arc<dyn Model>,
 }
@@ -70,6 +72,11 @@ impl ModelRegistration {
         capabilities
     }
 
+    /// Returns the request budget derived from the declared profile.
+    pub(crate) fn context_budget(&self) -> ContextBudget {
+        self.context_budget
+    }
+
     pub(crate) fn model(&self) -> Arc<dyn Model> {
         Arc::clone(&self.model)
     }
@@ -98,9 +105,11 @@ impl ModelRegistry {
     /// behavior changes.
     ///
     /// # Errors
-    /// Returns [`ModelRegistryError::DuplicateKey`] without replacing an
-    /// existing registration when the key is already present, even with
-    /// another revision.
+    /// Returns [`ModelRegistryError::InvalidProfile`] when the declared
+    /// profile leaves no request capacity, and
+    /// [`ModelRegistryError::DuplicateKey`] without replacing an existing
+    /// registration when the key is already present, even with another
+    /// revision.
     pub fn register(
         &mut self,
         identity: ExecutionIdentity,
@@ -116,14 +125,22 @@ impl ModelRegistry {
     /// The identity and capability contract is the same as [`Self::register`].
     ///
     /// # Errors
-    /// Returns [`ModelRegistryError::DuplicateKey`] without replacing an
-    /// existing registration when the key is already present.
+    /// Returns [`ModelRegistryError::InvalidProfile`] for a profile without
+    /// request capacity, and [`ModelRegistryError::DuplicateKey`] without
+    /// replacing an existing registration when the key is already present.
     pub fn register_shared(
         &mut self,
         identity: ExecutionIdentity,
         model: Arc<dyn Model>,
         capabilities: ModelCapabilities,
     ) -> Result<(), ModelRegistryError> {
+        let context_budget = capabilities.profile.context_budget().map_err(|source| {
+            ModelRegistryError::InvalidProfile {
+                key: identity.key().to_string(),
+                source,
+            }
+        })?;
+
         match self.models.entry(identity.key().to_string()) {
             Entry::Occupied(entry) => Err(ModelRegistryError::DuplicateKey {
                 key: entry.key().clone(),
@@ -131,6 +148,7 @@ impl ModelRegistry {
             Entry::Vacant(entry) => {
                 entry.insert(ModelRegistration {
                     capabilities,
+                    context_budget,
                     identity,
                     model,
                 });
@@ -161,6 +179,15 @@ pub enum ModelRegistryError {
     DuplicateKey {
         /// Conflicting host key.
         key: String,
+    },
+    /// The declared profile leaves no request capacity.
+    #[error("model key `{key}` declares an invalid context profile: {source}")]
+    InvalidProfile {
+        /// Rejected host key.
+        key: String,
+        /// Budget derivation failure.
+        #[source]
+        source: ContextBudgetError,
     },
     /// No registration owns this key.
     #[error("unknown model key `{key}`")]

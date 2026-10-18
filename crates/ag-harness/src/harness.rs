@@ -87,7 +87,7 @@ impl Session {
         )
         .await?;
         self.harness.model = registration.model();
-        self.harness.context_budget = registration.capabilities().context_budget;
+        self.harness.context_budget = registration.context_budget();
         self.harness.context_calibration = ContextCalibration::default();
         if self.harness.execution_identity.is_none()
             || self
@@ -913,10 +913,8 @@ impl Harness {
     /// Returns [`ModelRegistryError::UnknownKey`] for an unregistered key.
     pub fn from_registry(registry: &ModelRegistry, key: &str) -> Result<Self, ModelRegistryError> {
         let registration = registry.resolve(key)?.clone();
-        let mut harness = Self::from_shared_model(
-            registration.model(),
-            registration.capabilities().context_budget,
-        );
+        let mut harness =
+            Self::from_shared_model(registration.model(), registration.context_budget());
         harness.execution_identity = Some(registration.identity().clone());
         harness.model_registration = Some(registration);
 

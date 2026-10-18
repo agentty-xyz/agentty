@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::Display;
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +12,7 @@ use ag_contracts::{PermissionMode, ProviderCallBudget, ReasoningLevel};
 use ag_harness::bash::{BashConfig, UnsandboxedExecutor};
 use ag_harness::lifecycle::{LifecycleObserver, LifecycleObserverSet, LifecycleTraceObserver};
 use ag_harness::model::{
-    ContextBudget, ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelRegistry,
+    ModelCapabilities, ModelClient, ModelCompletion, ModelMetadata, ModelProfile, ModelRegistry,
     ModelRequest, ReasoningEffort,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
@@ -23,16 +22,18 @@ use ag_harness::{
     TurnInput, TurnOptions,
 };
 use ag_protocol::{ProtocolRequestProfile, SchemaRequiredPolicy, protocol_output_schema};
-use ag_session::{AgentKind, AgentModel, ModelContextLimits};
+use ag_session::{AgentKind, AgentModel};
 use ag_telemetry::{Context, TraceContextExt as _};
 use async_trait::async_trait;
+
+use crate::agent::model_profile;
 
 /// Revision of Agentty's harness model registrations. Durable sessions record
 /// it and require the same value on resume.
 const REGISTRATION_REVISION: &str = "agentty-native-2";
-/// Conservative limits for a harness model without declared limits.
-const FALLBACK_CONTEXT_LIMITS: ModelContextLimits =
-    ModelContextLimits::with_estimate_margin(128_000, 16_384);
+/// Conservative profile for a harness model without a declared profile.
+const FALLBACK_MODEL_PROFILE: ModelProfile =
+    ModelProfile::new(128_000).with_estimate_margin(16_384);
 /// Placeholder endpoint for resume-only registrations, which never send
 /// requests.
 const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";
@@ -291,7 +292,7 @@ impl ModelSelection {
             .map_err(failure("Invalid harness model registration"))?;
         let capabilities = ModelCapabilities {
             tool_calls: true,
-            ..ModelCapabilities::new(self.context_budget()?)
+            ..ModelCapabilities::new(self.profile())
         };
         let mut registry = ModelRegistry::new();
         registry
@@ -319,17 +320,12 @@ impl ModelSelection {
             .with_lifecycle_observer(traced(observer)))
     }
 
-    /// Returns the declared context budget for this model.
-    fn context_budget(&self) -> Result<ContextBudget, String> {
-        let limits = AgentKind::Harness
+    /// Returns the declared context profile for this model.
+    fn profile(&self) -> ModelProfile {
+        AgentKind::Harness
             .parse_model(&self.model)
-            .and_then(AgentModel::context_limits)
-            .unwrap_or(FALLBACK_CONTEXT_LIMITS);
-        let window = NonZeroU64::new(limits.context_window_tokens).unwrap_or(NonZeroU64::MIN);
-
-        ContextBudget::new(window)
-            .with_reserved_output(limits.input_headroom_tokens)
-            .map_err(failure("Invalid harness context budget"))
+            .and_then(model_profile::declared)
+            .unwrap_or(FALLBACK_MODEL_PROFILE)
     }
 }
 

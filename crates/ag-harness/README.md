@@ -233,7 +233,7 @@ the `model::Model` trait to bring any other provider into `ag-harness`.
 `model::ModelRegistry` selects models by stable host keys with declared capabilities:
 
 ```rust
-use ag_harness::model::{ModelCapabilities, ModelRegistry};
+use ag_harness::model::{ModelCapabilities, ModelProfile, ModelRegistry};
 use ag_harness::recovery::ExecutionIdentity;
 
 let mut models = ModelRegistry::new();
@@ -243,15 +243,17 @@ models.register(
     ModelCapabilities {
         image_input: true,
         tool_calls: true,
-        ..ModelCapabilities::new(budget)
+        ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072))
     },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
 ```
 
-- Capabilities are host declarations, not detection. The required `ContextBudget` keeps
-  the most recent turns that fit and fails before any provider call when mandatory
-  content cannot fit. `TurnReport::history` says what was replayed or dropped.
+- Capabilities are host declarations, not detection. The required `ModelProfile`
+  declares the model's context window and reserved tokens; registration derives the
+  `ContextBudget` from it and rejects a profile that leaves no input capacity. The
+  budget keeps the most recent turns that fit and fails before any provider call when
+  mandatory content cannot fit. `TurnReport::history` says what was replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
   that fit, which later turns replay first; call it again to cover the rest.

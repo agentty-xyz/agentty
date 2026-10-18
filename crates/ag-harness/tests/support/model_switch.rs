@@ -1,10 +1,9 @@
 //! Atomic switching contract shared by public integration and source coverage.
 
-use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
 
 use ag_harness::model::{
-    ContextBudget, ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelRegistry,
+    ModelCapabilities, ModelCompletion, ModelMessage, ModelMetadata, ModelProfile, ModelRegistry,
     ModelRequest, ModelResponse,
 };
 use ag_harness::recovery::ExecutionIdentity;
@@ -14,7 +13,7 @@ use ag_harness::{Harness, Model, ModelError, SessionError, TurnInput};
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::store_conformance_test::{Gate, image_input, options, schema, stores};
 
 struct RecordingModel {
@@ -57,8 +56,8 @@ fn registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
                     requests: Arc::clone(requests),
                 },
                 ModelCapabilities {
-                    context_budget: unbounded_context_budget(),
                     image_input: name.ends_with("vision"),
+                    profile: unbounded_model_profile(),
                     tool_calls: name != "no-tools",
                 },
             )
@@ -372,7 +371,7 @@ async fn unsupported_history_precedes_stale_and_busy_switch_rejections() {
             ModelSwitch::new(
                 ExecutionIdentity::new("b", "1").expect("identity"),
                 None,
-                ModelCapabilities::new(unbounded_context_budget()),
+                ModelCapabilities::new(unbounded_model_profile()),
                 generation,
             )
         };
@@ -549,9 +548,9 @@ async fn switching_survives_sqlite_reopen() {
 /// Registers a large-window `a` and a small-window `b`, each recording its
 /// requests.
 fn windowed_registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry {
-    let small_budget = ContextBudget::new(NonZeroU64::new(1_200).expect("window"));
+    let small_profile = ModelProfile::new(1_200);
     let mut registry = ModelRegistry::new();
-    for (name, context_budget) in [("a", unbounded_context_budget()), ("b", small_budget)] {
+    for (name, profile) in [("a", unbounded_model_profile()), ("b", small_profile)] {
         registry
             .register(
                 ExecutionIdentity::new(name, "1").expect("identity"),
@@ -559,7 +558,7 @@ fn windowed_registry(requests: &Arc<Mutex<Vec<ModelRequest>>>) -> ModelRegistry 
                     name,
                     requests: Arc::clone(requests),
                 },
-                ModelCapabilities::new(context_budget),
+                ModelCapabilities::new(profile),
             )
             .expect("register");
     }
@@ -733,8 +732,8 @@ async fn independent_store_admission_checks_generation_atomically() {
     for store in stores().await {
         let identity = ExecutionIdentity::new("b", "1").expect("identity");
         let capabilities = ModelCapabilities {
-            context_budget: unbounded_context_budget(),
             image_input: false,
+            profile: unbounded_model_profile(),
             tool_calls: true,
         };
         for switch_first in [false, true] {
@@ -790,8 +789,8 @@ async fn switching_checks_adapter_schema_without_network_access() {
             })
             .expect("client"),
             ModelCapabilities {
-                context_budget: unbounded_context_budget(),
                 image_input: false,
+                profile: unbounded_model_profile(),
                 tool_calls: true,
             },
         )
@@ -947,7 +946,7 @@ async fn switch_errors_do_not_admit_partial_selection() {
                     &ModelSwitch::new(
                         ExecutionIdentity::new("b", "1").expect("identity"),
                         None,
-                        ModelCapabilities::new(unbounded_context_budget()),
+                        ModelCapabilities::new(unbounded_model_profile()),
                         0,
                     )
                 )

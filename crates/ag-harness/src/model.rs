@@ -2,8 +2,9 @@
 //!
 //! Implement [`Model`] to plug in any provider, or use the built-in clients in
 //! [`crate::provider`]. [`ModelRegistry`] selects models by stable host keys
-//! with declared [`ModelCapabilities`], whose required [`ContextBudget`]
-//! bounds every request through model-aware history projection.
+//! with declared [`ModelCapabilities`], whose required [`ModelProfile`]
+//! derives the [`ContextBudget`] bounding every request through model-aware
+//! history projection.
 
 use std::collections::HashSet;
 use std::error::Error;
@@ -21,6 +22,7 @@ pub use crate::context::{
 };
 use crate::input::TurnInput;
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, ModelResponseType};
+pub use crate::model_profile::ModelProfile;
 pub use crate::model_registry::{
     ModelCapabilities, ModelRegistration, ModelRegistry, ModelRegistryError,
 };

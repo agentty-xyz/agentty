@@ -28,7 +28,6 @@ macro_rules! define_model_catalog {
             id: $id:literal,
             description: $description:literal,
             fast: $fast:literal,
-            context: $context:expr,
         },
     )* })*) => {
         /// Supported agent model names across all providers.
@@ -48,7 +47,6 @@ macro_rules! define_model_catalog {
             const fn descriptor(self) -> ModelDescriptor {
                 match self {
                     $($(Self::$model => ModelDescriptor {
-                        context_limits: $context,
                         description: $description,
                         id: $id,
                         supports_fast_mode: $fast,
@@ -76,28 +74,24 @@ define_model_catalog! {
             id: "gemini-4-argon",
             description: "Gemini 4 Argon model.",
             fast: false,
-            context: None,
         },
         /// Higher-quality Gemini preview model backed by `gemini-3.1-pro-preview`.
         Gemini31Pro = 6 => {
             id: "gemini-3.1-pro-preview",
             description: "Higher-quality Gemini model for deeper reasoning.",
             fast: false,
-            context: None,
         },
         /// Fast Gemini model backed by `gemini-3.8-flash`.
         Gemini38Flash = 4 => {
             id: "gemini-3.8-flash",
             description: "Fast Gemini model for agentic and multimodal tasks.",
             fast: false,
-            context: None,
         },
         /// Lightweight Gemini model backed by `gemini-3.5-flash-lite`.
         Gemini35FlashLite = 5 => {
             id: "gemini-3.5-flash-lite",
             description: "Lightweight Gemini model for fast, cost-conscious workloads.",
             fast: false,
-            context: None,
         },
     }
     Claude {
@@ -106,28 +100,24 @@ define_model_catalog! {
             id: "claude-fable-5-1",
             description: "Claude Fable model for creative, narrative-heavy tasks.",
             fast: false,
-            context: None,
         },
         /// Claude Opus model backed by `claude-opus-5-5`.
         ClaudeOpus55 = 8 => {
             id: "claude-opus-5-5",
             description: "Latest Claude Opus model for complex agentic tasks.",
             fast: true,
-            context: None,
         },
         /// Claude Sonnet model backed by `claude-sonnet-5-5`.
         ClaudeSonnet55 = 9 => {
             id: "claude-sonnet-5-5",
             description: "Balanced Claude model for quality and latency.",
             fast: false,
-            context: None,
         },
         /// Claude Haiku model backed by `claude-haiku-4-5-20251001`.
         ClaudeHaiku4520251001 = 11 => {
             id: "claude-haiku-4-5-20251001",
             description: "Fast Claude model for lighter tasks.",
             fast: false,
-            context: None,
         },
     }
     Codex {
@@ -136,35 +126,30 @@ define_model_catalog! {
             id: "gpt-6-astra",
             description: "Most capable Codex model for the hardest end-to-end work.",
             fast: true,
-            context: Some(ModelContextLimits::CODEX_LARGE),
         },
         /// Codex Sol model backed by `gpt-6.1-sol`.
         Gpt61Sol = 1 => {
             id: "gpt-6.1-sol",
             description: "Near-Astra Codex model for complex work at a lower cost.",
             fast: true,
-            context: Some(ModelContextLimits::CODEX_LARGE),
         },
         /// Codex Luna model backed by `gpt-6-luna`.
         Gpt6Luna = 2 => {
             id: "gpt-6-luna",
             description: "Efficient Codex model for focused, high-volume tasks.",
             fast: true,
-            context: Some(ModelContextLimits::CODEX_LARGE),
         },
         /// Codex Terra model backed by `gpt-5.6-terra`.
         Gpt56Terra = 3 => {
             id: "gpt-5.6-terra",
             description: "Current Codex model for balanced coding performance.",
             fast: true,
-            context: Some(ModelContextLimits::CODEX_LARGE),
         },
         /// Codex spark model backed by `gpt-5.3-codex-spark`.
         Gpt53CodexSpark = 7 => {
             id: "gpt-5.3-codex-spark",
             description: "Codex spark model for quick coding iterations.",
             fast: false,
-            context: Some(ModelContextLimits::CODEX_SPARK),
         },
     }
     Harness {
@@ -173,101 +158,35 @@ define_model_catalog! {
             id: "muse-spark-1.3",
             description: "Muse Spark model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::MUSE_SPARK_1_3),
         },
         /// Kimi model backed by `kimi-k3`.
         KimiK3 = 13 => {
             id: "kimi-k3",
             description: "Latest Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::KIMI_K3),
         },
         /// Kimi model backed by `kimi-k2.6`.
         KimiK26 = 14 => {
             id: "kimi-k2.6",
             description: "Previous Kimi model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::KIMI_K2_6),
         },
         /// Qwen model backed by `qwen3.8-max`.
         Qwen38Max = 15 => {
             id: "qwen3.8-max",
             description: "Most capable Qwen model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::QWEN3_8_MAX),
         },
         /// Qwen model backed by `qwen-plus`.
         QwenPlus = 16 => {
             id: "qwen-plus",
             description: "Balanced Qwen model served through the native harness.",
             fast: false,
-            context: Some(ModelContextLimits::QWEN_PLUS),
         },
     }
 }
 
-/// Declared context capacity and Agentty's proactive input-budget reserve.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModelContextLimits {
-    /// Total context capacity in tokens.
-    pub context_window_tokens: u64,
-    /// Tokens reserved for output and provider overhead before compaction.
-    /// This is an input-budget policy, not a model's maximum output limit.
-    pub input_headroom_tokens: u64,
-}
-
-impl ModelContextLimits {
-    const CODEX_LARGE: Self = Self {
-        context_window_tokens: 1_050_000,
-        input_headroom_tokens: 128_000,
-    };
-    const CODEX_SPARK: Self = Self {
-        context_window_tokens: 128_000,
-        input_headroom_tokens: 8_000,
-    };
-    /// Kimi K2.6: documented and enforced 262,144-token window with a
-    /// 32,768-token default `max_tokens`.
-    const KIMI_K2_6: Self = Self::with_estimate_margin(262_144, 32_768);
-    /// Kimi K3: documented 1M (1,048,576-token) window with a 131,072-token
-    /// default `max_completion_tokens`.
-    const KIMI_K3: Self = Self::with_estimate_margin(1_048_576, 131_072);
-    /// Muse Spark 1.3: documented 1,048,576-token window and an undocumented
-    /// output limit, reserved at the 131,072 tokens the API accepts.
-    const MUSE_SPARK_1_3: Self = Self::with_estimate_margin(1_048_576, 131_072);
-    /// Qwen3.8-Max: documented 1,000,000-token window, 983,616-token thinking
-    /// input limit, and 131,072-token output limit.
-    const QWEN3_8_MAX: Self = Self::with_estimate_margin(1_000_000, 131_072);
-    /// Qwen-Plus: documented 1,000,000-token window, 995,904-token thinking
-    /// input limit, and 32,768-token output limit.
-    const QWEN_PLUS: Self = Self::with_estimate_margin(1_000_000, 32_768);
-
-    /// Returns limits for a model whose input is measured by an approximate
-    /// estimator, reserving `max_output_tokens` plus a quarter of the window.
-    ///
-    /// The native harness estimates one token per four bytes, which
-    /// under-counts real provider tokens: live probes measured up to 29% more
-    /// tokens than estimated on varied prose and 17% on repository content.
-    /// Holding back a quarter of the window keeps an input that fills the
-    /// budget beside the reserved output while real tokens exceed the
-    /// estimate by at least a third, and by more as the output share grows.
-    #[must_use]
-    pub const fn with_estimate_margin(context_window_tokens: u64, max_output_tokens: u64) -> Self {
-        Self {
-            context_window_tokens,
-            input_headroom_tokens: max_output_tokens.saturating_add(context_window_tokens / 4),
-        }
-    }
-
-    /// Returns the input-token budget after reserving output and overhead.
-    #[must_use]
-    pub const fn input_token_budget(self) -> u64 {
-        self.context_window_tokens
-            .saturating_sub(self.input_headroom_tokens)
-    }
-}
-
 struct ModelDescriptor {
-    context_limits: Option<ModelContextLimits>,
     description: &'static str,
     id: &'static str,
     supports_fast_mode: bool,
@@ -347,12 +266,6 @@ impl AgentModel {
     /// invocations.
     pub const fn as_str(self) -> &'static str {
         self.descriptor().id
-    }
-
-    /// Returns declared proactive compaction limits, if known for this model.
-    #[must_use]
-    pub const fn context_limits(self) -> Option<ModelContextLimits> {
-        self.descriptor().context_limits
     }
 
     /// Returns the model identifier passed to provider transports.

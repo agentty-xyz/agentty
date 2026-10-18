@@ -5,9 +5,9 @@ use async_trait::async_trait;
 use tokio::sync::Notify;
 
 use crate::SessionError;
-use crate::context_budget_fixture::unbounded_context_budget;
 use crate::input::TurnInput;
 use crate::model::{ModelCapabilities, ModelMessage};
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::ExecutionIdentity;
 use crate::session::tests::support::{schema, turn_options};
 use crate::session::{Database, LoadedSession, ReservationObserver};
@@ -101,7 +101,7 @@ async fn switch_across_concurrent_unsupported_history(
                     &ModelSwitch::new(
                         ExecutionIdentity::new("b", "1").expect("identity"),
                         None,
-                        ModelCapabilities::new(unbounded_context_budget()),
+                        ModelCapabilities::new(unbounded_model_profile()),
                         0,
                     ),
                 )

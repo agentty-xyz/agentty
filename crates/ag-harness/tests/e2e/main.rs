@@ -9,6 +9,8 @@ mod features;
 mod greeting;
 mod image;
 mod kimi;
+#[path = "../support/model_profile.rs"]
+mod model_profile_fixture;
 mod muse;
 mod muse_read;
 mod qwen;

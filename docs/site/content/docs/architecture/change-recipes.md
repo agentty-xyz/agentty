@@ -56,8 +56,9 @@ through the correct modules without crossing layer boundaries.
    supports its capabilities; Agentty product integration still follows the worker and
    runtime boundary.
 1. To offer it in Agentty Harness sessions, add it to the `Harness` entries of the
-   `ag-session` model catalog with its context limits; an `ag-agent` test rejects ids
-   the harness catalog does not know.
+   `ag-session` model catalog and declare its `ModelProfile` in
+   `crates/ag-agent/src/agent/model_profile.rs`; an `ag-agent` test rejects ids the
+   harness catalog does not know.
 
 ## Add or Change a Utility Agent Prompt
 
