@@ -3,8 +3,9 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
 use super::{
-    CHAT_INPUT_MAX_PANEL_HEIGHT, QuestionPanelState, SessionChatLayoutInput, SessionChatPage,
-    SessionChatPageInput, non_prompt_bottom_height, render_question_panel, transcript_view_height,
+    CHAT_INPUT_MAX_PANEL_HEIGHT, QuestionPanelState, SessionChatLayoutInput, SessionChatLayoutPlan,
+    SessionChatPage, SessionChatPageInput, non_prompt_bottom_height, render_question_panel,
+    transcript_view_height,
 };
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
@@ -73,6 +74,42 @@ fn layout_input<'a>(
         mode,
         review_text: None,
         session,
+    }
+}
+
+#[test]
+fn test_composer_margin_stays_outside_transcript_viewport() {
+    // Arrange
+    let mut session = session_fixture();
+    let view_mode = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: Some(0),
+    };
+    let prompt_mode = prompt_mode("draft");
+
+    for status in [Status::Draft, Status::InProgress, Status::Review] {
+        session.status = status;
+        for mode in [&view_mode, &prompt_mode] {
+            for height in 0..=30 {
+                // Act
+                let plan = SessionChatLayoutPlan::new(layout_input(
+                    Rect::new(0, 0, 80, height),
+                    &session,
+                    mode,
+                ));
+
+                // Assert
+                let gap = plan.areas.bottom_area.y - plan.areas.output_area.bottom();
+                assert!(gap <= 1);
+                if height >= 20 {
+                    assert_eq!(gap, 1);
+                    assert_eq!(
+                        plan.transcript_view_height(),
+                        plan.areas.output_area.height - 1
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -494,7 +531,7 @@ fn test_archived_session_reclaims_composer_space_for_transcript() {
         let archived_height = transcript_view_height(layout_input(area, &session, &mode));
 
         // Assert
-        assert_eq!(archived_height, active_height + 1);
+        assert_eq!(archived_height, active_height + 2);
     }
 }
 

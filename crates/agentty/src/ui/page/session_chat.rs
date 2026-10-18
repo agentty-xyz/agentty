@@ -108,8 +108,14 @@ impl SessionChatLayoutPlan {
 
                 (prompt_panel, bottom_height)
             };
-        let areas =
+        let mut areas =
             layout::session_chat_areas(input.area, bottom_height, header_height(&header_lines));
+        if !matches!(input.session.status, Status::Done | Status::Canceled)
+            && !matches!(input.mode, AppMode::Question { .. })
+        {
+            // Keep the composer's top margin outside the scrollable transcript.
+            areas.output_area.height = areas.output_area.height.saturating_sub(1);
+        }
         let question_panel_areas = question_panel_areas(areas.bottom_area, input.mode);
 
         Self {
