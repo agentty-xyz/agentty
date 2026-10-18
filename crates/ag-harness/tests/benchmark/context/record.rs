@@ -154,6 +154,7 @@ pub(super) struct RunRecord {
     pub(super) context_summaries: bool,
     pub(super) correctness: f64,
     pub(super) detail: Option<String>,
+    pub(super) estimate: Option<String>,
     pub(super) model: String,
     pub(super) observed: Observed,
     pub(super) provider: &'static str,
@@ -181,6 +182,7 @@ impl RunRecord {
         line.insert("window".into(), json!(self.window));
         line.insert("reserved_output".into(), json!(self.reserved_output));
         line.insert("context_summaries".into(), json!(self.context_summaries));
+        line.insert("estimate".into(), json!(self.estimate));
         line.insert("success".into(), json!(self.success));
         line.insert("correctness".into(), json!(self.correctness));
         line.insert("wall_ms".into(), json!(self.wall_ms));

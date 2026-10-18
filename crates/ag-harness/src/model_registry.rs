@@ -102,7 +102,8 @@ impl ModelRegistry {
     ///
     /// Revise the identity whenever model configuration, capability
     /// declarations, endpoints, credential scope, or injected execution
-    /// behavior changes.
+    /// behavior changes. A revised [`ModelProfile`] alone needs no new
+    /// revision: it only shapes how new requests are fitted.
     ///
     /// # Errors
     /// Returns [`ModelRegistryError::InvalidProfile`] when the declared

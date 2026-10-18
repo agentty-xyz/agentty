@@ -6,6 +6,7 @@ use super::support::{
 };
 use crate::context::{
     CLEARED_REASONING, ContextBudget, ContextEstimator, ContextFit, FIT_TARGET_PERCENT,
+    HeuristicContextEstimator,
 };
 use crate::model::{ModelMessage, ModelRequest};
 use crate::tool::ToolCall;
@@ -60,6 +61,34 @@ fn fit_sends_the_canonical_request_while_it_fits() {
     // Assert
     assert_eq!(fitted, None);
     assert_eq!(activity, ContextActivity::default());
+}
+
+#[test]
+fn the_fixed_request_weight_counts_against_the_budget() {
+    // Arrange
+    let request = read_rounds(&[1000, 1000]);
+    let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(50);
+    let messages: u64 = request
+        .messages()
+        .iter()
+        .map(|message| estimator.message_weight(message))
+        .sum();
+    let mut fitting = ContextFit::default();
+    let mut over = ContextFit::default();
+
+    // Act
+    let unchanged = fitting
+        .fit(&estimator, budget(messages + 50), &request, None)
+        .map(sent);
+    let reduced = over
+        .fit(&estimator, budget(messages + 49), &request, None)
+        .map(sent);
+
+    // Assert
+    assert_eq!(unchanged.expect("fits").0, None);
+    assert_eq!(fitting.sent_weight(), messages + 50);
+    assert!(reduced.expect("fits after reduction").0.is_some());
+    assert_eq!(over.unreduced_weight(), messages + 50);
 }
 
 #[test]

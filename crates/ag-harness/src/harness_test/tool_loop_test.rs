@@ -608,7 +608,7 @@ fn overflow() -> ModelError {
 /// Returns the heuristic weight of `request` without reserved output, as
 /// the engine estimates a sent request.
 fn sent_weight(request: &ModelRequest) -> u64 {
-    let estimator = HeuristicContextEstimator;
+    let estimator = HeuristicContextEstimator::DEFAULT;
     let messages: u64 = request
         .messages()
         .iter()

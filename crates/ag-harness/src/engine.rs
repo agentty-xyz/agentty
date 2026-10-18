@@ -415,9 +415,12 @@ impl Engine<'_> {
             let (_, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
-            let estimated_weight = request.messages().iter().fold(0_u64, |weight, message| {
-                weight.saturating_add(self.context_estimator.message_weight(message))
-            });
+            let estimated_weight = request.messages().iter().fold(
+                self.context_estimator.request_weight(request.schema()),
+                |weight, message| {
+                    weight.saturating_add(self.context_estimator.message_weight(message))
+                },
+            );
             let completed = self
                 .complete_model_request(&request, *model_request_index, turn_id)
                 .await;

@@ -131,15 +131,22 @@ let outcome = session
   (`ModelRequestPurpose::ContextSummary`); `ContextActivity::summarized_tool_calls`,
   `TurnReport::context_summary_failures`, and `ContextSummary*` lifecycle events report
   them. Summaries are disabled by default.
+- **Requests are weighed with the model's estimator.** `HeuristicContextEstimator`
+  weighs message payload and tool definitions at per-model rates of tokens per 1,000
+  bytes, plus fixed tokens per message, per tool definition, and per request, and can
+  count an output schema the provider renders into the prompt. `DEFAULT` is four bytes
+  per token with four tokens per item; a `ModelProfile` declares measured parameters
+  with `with_estimator`, and harnesses built from its registration use them.
 - **Provider usage calibrates the estimate.** Each response's reported input tokens
   calibrate later requests: a line through the first reported request, sloped by the
   steepest token growth since and lifted over every report, so providers' fixed
-  per-request cost does not inflate large requests. Projection, admission, and fitting
-  keep calibrated requests within 95% of the input budget, and use 90% of the estimate
-  until a provider reports usage. The calibration lives in memory, is shared by a
-  harness and its sessions, and resets when a session switches model or the estimator is
-  replaced. `ModelRequestActivity::estimated_weight` and `calibrated_weight` report what
-  each request was fitted as.
+  per-request cost does not inflate large requests. A first request below a tenth of the
+  input budget only offsets the estimate by its excess tokens until a larger request
+  measures the slope. Projection, admission, and fitting keep calibrated requests within
+  95% of the input budget, and use 90% until usage measured the slope. The calibration
+  lives in memory, is shared by a harness and its sessions, and resets when a session
+  switches model or the estimator is replaced. `ModelRequestActivity::estimated_weight`
+  and `calibrated_weight` report what each request was fitted as.
 - **A provider context-window rejection is recovered in the turn.** A request the
   provider rejects with `ModelErrorType::ContextOverflow` caps later requests at 75% of
   its estimated weight, and the turn refits and re-sends it, up to twice per turn. A
@@ -250,15 +257,18 @@ let harness = Harness::from_registry(&models, "review-model")?;
 ```
 
 - Capabilities are host declarations, not detection. The required `ModelProfile`
-  declares the model's context window and reserved tokens; registration derives the
-  `ContextBudget` from it and rejects a profile that leaves no input capacity. The
-  budget keeps the most recent turns that fit and fails before any provider call when
-  mandatory content cannot fit. `TurnReport::history` says what was replayed or dropped.
+  declares the model's context window, reserved tokens, and estimator; registration
+  derives the `ContextBudget` from it and rejects a profile that leaves no input
+  capacity. The budget keeps the most recent turns that fit and fails before any
+  provider call when mandatory content cannot fit. `TurnReport::history` says what was
+  replayed or dropped.
 - `session.switch_model(&models, key)` changes the model of an idle session.
   `session.compact()` stores a schema-validated summary of the oldest uncovered turns
   that fit, which later turns replay first; call it again to cover the rest.
 - Bump the registration revision whenever configuration or credentials scope changes.
-  Never put secrets in it.
+  Never put secrets in it. A revised `ModelProfile` alone needs no new revision: it only
+  shapes how new requests are fitted, while a new revision would strand stored sessions.
+  Sessions switched to a registration adopt its budget and estimator.
 
 Built-in clients accept JSON wrapped in Markdown fences or prose when the embedded
 object parses; anything else fails with `ModelError::InvalidJson`. Requests time out

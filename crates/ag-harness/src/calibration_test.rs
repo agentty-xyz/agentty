@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::calibration::{ContextCalibration, Envelope};
+use crate::calibration::{ContextCalibration, Envelope, Slope};
 use crate::context::ContextBudget;
 use crate::model::{CompletionMetadata, CompletionUsage};
 use crate::turn::TurnError;
@@ -85,6 +85,34 @@ fn the_first_report_calibrates_its_ratio() {
     assert_eq!(tokens(&calibration, 760), 950);
     assert_eq!(tokens(&calibration, 200), 250);
     assert_eq!(tokens(&calibration, 0), 0);
+}
+
+#[test]
+fn a_small_first_report_only_offsets_the_estimate() {
+    // Arrange
+    let calibration = calibrated(&[(50, 120)]);
+
+    // Act
+    let capacity = capacity(&calibration);
+
+    // Assert
+    assert_eq!(capacity, 830);
+    assert_eq!(tokens(&calibration, 830), 900);
+    assert_eq!(tokens(&calibration, 50), 120);
+}
+
+#[test]
+fn growth_after_a_small_first_report_measures_the_slope() {
+    // Arrange
+    let calibration = calibrated(&[(50, 120)]);
+
+    // Act
+    calibration.observe(budget(), 450, Some(&completion(Some(920))));
+
+    // Assert
+    assert_eq!(tokens(&calibration, 450), 920);
+    assert_eq!(capacity(&calibration), 465);
+    assert_eq!(tokens(&calibration, 465), 950);
 }
 
 #[test]
@@ -264,7 +292,11 @@ fn sample_envelopes() -> Vec<Envelope> {
                 base_tokens,
                 base_weight,
                 lift,
-                measured: lift > 0,
+                slope: if lift > 0 {
+                    Slope::Measured
+                } else {
+                    Slope::Ratio
+                },
                 slope_permille,
             });
         }
@@ -308,6 +340,7 @@ fn restated_failures_exceed_the_declared_budget_exactly_when_the_effective_one_i
         ContextCalibration::default(),
         calibrated(&[(100, 600), (500, 1_080)]),
         calibrated(&[(400, 500)]),
+        calibrated(&[(50, 120)]),
         calibrated(&[(800, 200)]),
     ];
 

@@ -61,14 +61,26 @@ pub(super) const PART_CODES: [&str; 6] = [
     "fjord-61",
 ];
 pub(super) const LARGE_CODE: &str = "ivory-97";
+/// Module and new doc-comment ending of each sequential-write file, in path
+/// order.
+const SEQUENTIAL_EDITS: [(&str, &str); 8] = [
+    ("anchor", "before the harbor log rotates at dawn"),
+    ("beacon", "and records each signal it skipped"),
+    ("canyon", "once per survey pass, west to east"),
+    ("delta", "while the tide gauge is offline"),
+    ("ember", "and keeps the kiln readings monotonic"),
+    ("falcon", "after every perch check succeeds"),
+    ("garnet", "so the vault ledger balances twice"),
+    ("harbor", "before the pilot boat leaves the quay"),
+];
 /// Stays below the read tool's per-line limit while exceeding the share of
 /// the default benchmark budget that one tool result may keep.
 const LARGE_LINE_BYTES: usize = 48_000;
 
 /// One repository file written before a scenario starts.
-pub(super) struct FixtureFile {
-    pub(super) contents: String,
-    pub(super) path: String,
+pub(crate) struct FixtureFile {
+    pub(crate) contents: String,
+    pub(crate) path: String,
 }
 
 /// Deterministic check results for one scenario run.
@@ -106,7 +118,7 @@ impl Score {
 }
 
 /// Many mid-sized Rust-like files whose public functions must be listed.
-pub(super) struct ReadLoopFixture {
+pub(crate) struct ReadLoopFixture {
     files: Vec<FixtureFile>,
     most_public_functions: String,
     public_functions: BTreeMap<String, BTreeSet<String>>,
@@ -114,7 +126,7 @@ pub(super) struct ReadLoopFixture {
 
 impl ReadLoopFixture {
     /// Generates the same sixteen files on every call.
-    pub(super) fn generate() -> Self {
+    pub(crate) fn generate() -> Self {
         let mut rng = Lcg::new(0x5eed_0001);
         let mut modules = NOUNS.to_vec();
         rng.shuffle(&mut modules);
@@ -152,7 +164,7 @@ impl ReadLoopFixture {
     }
 
     /// Returns the files to commit before the run.
-    pub(super) fn files(&self) -> &[FixtureFile] {
+    pub(crate) fn files(&self) -> &[FixtureFile] {
         &self.files
     }
 
@@ -237,11 +249,12 @@ impl ReadLoopFixture {
     }
 }
 
-/// Three doc-comment edits across two long Rust-like files.
+/// Doc-comment edits across long Rust-like files.
 pub(super) struct WriteFixture {
     pub(super) edits: Vec<DocEdit>,
     pub(super) expected: Vec<FixtureFile>,
     files: Vec<FixtureFile>,
+    sequential: bool,
 }
 
 impl WriteFixture {
@@ -292,6 +305,43 @@ impl WriteFixture {
                 path: "src/ledger.rs".to_string(),
             },
         ];
+
+        Self::with_edits(files, edits, false)
+    }
+
+    /// Generates eight long files with one edit each, made file by file, so
+    /// once the reads outgrow the budget each applied write supersedes the
+    /// read of its file.
+    pub(super) fn sequential() -> Self {
+        let mut rng = Lcg::new(0x5eed_0004);
+        let mut files = Vec::new();
+        let mut edits = Vec::new();
+        for (index, (module, suffix)) in SEQUENTIAL_EDITS.into_iter().enumerate() {
+            let source = RustSource::generate(&mut rng, module, 12, 8);
+            let public = source.public_functions();
+            let function = public[(index * 5) % public.len()];
+            let path = format!("src/{module}.rs");
+            edits.push(DocEdit {
+                function: function.name.clone(),
+                new_line: format!(
+                    "/// {} the {} {suffix}.",
+                    capitalize(&third_person(&function.verb)),
+                    function.noun
+                ),
+                old_line: function.doc.clone(),
+                path: path.clone(),
+            });
+            files.push(FixtureFile {
+                contents: source.contents,
+                path,
+            });
+        }
+
+        Self::with_edits(files, edits, true)
+    }
+
+    /// Returns the fixture for `files`, sorted by path, and their `edits`.
+    fn with_edits(files: Vec<FixtureFile>, edits: Vec<DocEdit>, sequential: bool) -> Self {
         let expected = files
             .iter()
             .map(|file| FixtureFile {
@@ -309,6 +359,7 @@ impl WriteFixture {
             edits,
             expected,
             files,
+            sequential,
         }
     }
 
@@ -336,6 +387,15 @@ impl WriteFixture {
             })
             .collect::<Vec<_>>()
             .join("\n");
+
+        if self.sequential {
+            return format!(
+                "Make exactly these eight doc-comment edits, one file at a time in the listed \
+                 order: read the file, apply its edit with the write tool, and only then read the \
+                 next file. Keep indentation and change nothing else.\n{edits}\nWhen all eight \
+                 edits are applied, set answer to `done`."
+            );
+        }
 
         format!(
             "Make exactly these three doc-comment edits with the write tool, keeping indentation \

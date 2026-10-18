@@ -186,6 +186,65 @@ fn write_fixture_edits_are_unambiguous_and_span_a_long_file() {
 }
 
 #[test]
+fn sequential_write_fixture_edits_each_long_file_once_in_order() {
+    // Arrange
+    let fixture = WriteFixture::sequential();
+    let prompt = fixture.prompt();
+    let expected = fixture
+        .expected
+        .iter()
+        .map(|file| (file.path.clone(), file.contents.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let status = fixture
+        .files()
+        .iter()
+        .map(|file| format!(" M {}", file.path))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Act
+    let perfect = fixture.score(&expected, &status);
+    let edited_paths = fixture
+        .edits
+        .iter()
+        .map(|edit| edit.path.as_str())
+        .collect::<Vec<_>>();
+    let unambiguous = fixture.edits.iter().all(|edit| {
+        let source = fixture
+            .files()
+            .iter()
+            .find(|file| file.path == edit.path)
+            .expect("edited file");
+        let matches = source
+            .contents
+            .lines()
+            .filter(|line| line.trim() == edit.old_line)
+            .count();
+
+        matches == 1 && prompt.contains(&edit.new_line)
+    });
+
+    // Assert
+    assert!(perfect.is_perfect(), "{:?}", perfect.failures);
+    assert!(unambiguous);
+    assert_eq!(
+        edited_paths,
+        fixture
+            .files()
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(fixture.files().len(), 8);
+    // Together the files outgrow the default 15,616-unit capacity even at
+    // four and a half bytes per unit, so later writes supersede earlier
+    // reads.
+    let bytes: usize = fixture.files().iter().map(|file| file.contents.len()).sum();
+    assert!(bytes * 2 > 9 * 15_616, "{bytes} bytes");
+    assert!(prompt.contains("one file at a time"));
+}
+
+#[test]
 fn huge_result_fixture_names_every_code_once() {
     // Arrange
     let fixture = HugeResultFixture::generate();
@@ -231,11 +290,13 @@ fn fixtures_are_deterministic() {
     let first = (
         contents(ReadLoopFixture::generate().files()),
         contents(WriteFixture::generate().files()),
+        contents(WriteFixture::sequential().files()),
         contents(HugeResultFixture::generate().files()),
     );
     let second = (
         contents(ReadLoopFixture::generate().files()),
         contents(WriteFixture::generate().files()),
+        contents(WriteFixture::sequential().files()),
         contents(HugeResultFixture::generate().files()),
     );
 

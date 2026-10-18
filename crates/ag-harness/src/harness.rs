@@ -57,9 +57,11 @@ pub struct Session {
 impl Session {
     /// Selects a registered model for subsequent turns of an idle session.
     ///
-    /// Adopts the registration's context budget, discards the in-memory
-    /// calibration of the previous model's estimates, and fences older handles,
-    /// including when switching back to a previous registration. Historical
+    /// Adopts the registration's context budget and estimator, replacing any
+    /// estimator set with [`Harness::context_estimator`], discards the
+    /// in-memory calibration of the previous model's estimates, and fences
+    /// older handles, including when switching back to a previous
+    /// registration. Historical
     /// provider reasoning is not portable and causes an explicit rejection.
     /// Ordinary completed messages and tool groups remain intact. Recovery
     /// lookup remains usable on stale handles; new execution requires a fresh
@@ -89,6 +91,7 @@ impl Session {
         self.harness.model = registration.model();
         self.harness.context_budget = registration.context_budget();
         self.harness.context_calibration = ContextCalibration::default();
+        self.harness.context_estimator = Arc::new(registration.capabilities().profile.estimator());
         if self.harness.execution_identity.is_none()
             || self
                 .harness
@@ -902,7 +905,8 @@ impl Harness {
         Self::from_shared_model(Arc::new(model), context_budget)
     }
 
-    /// Creates a harness using a registered model and its execution identity.
+    /// Creates a harness using a registered model and its execution identity,
+    /// weighing requests with the registered profile's estimator.
     ///
     /// Captures the registration immediately, so the harness and its sessions
     /// can outlive the registry. Capabilities are host declarations, not tool
@@ -915,6 +919,7 @@ impl Harness {
         let registration = registry.resolve(key)?.clone();
         let mut harness =
             Self::from_shared_model(registration.model(), registration.context_budget());
+        harness.context_estimator = Arc::new(registration.capabilities().profile.estimator());
         harness.execution_identity = Some(registration.identity().clone());
         harness.model_registration = Some(registration);
 
@@ -1130,7 +1135,7 @@ impl Harness {
         Self {
             context_budget,
             context_calibration: ContextCalibration::default(),
-            context_estimator: Arc::new(HeuristicContextEstimator),
+            context_estimator: Arc::new(HeuristicContextEstimator::DEFAULT),
             context_summaries: ContextSummaryPolicy::Disabled,
             database: Arc::new(OnceCell::new()),
             database_path: None,

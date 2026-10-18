@@ -1,6 +1,6 @@
 use std::num::NonZeroU64;
 
-use crate::context::{ContextBudget, ContextBudgetError};
+use crate::context::{ContextBudget, ContextBudgetError, HeuristicContextEstimator};
 use crate::model_profile::ModelProfile;
 
 #[test]
@@ -75,5 +75,25 @@ fn context_budget_rejects_a_profile_without_input_capacity() {
             max_request_weight: 0,
             reserved_output_weight: 0,
         })
+    );
+}
+
+#[test]
+fn profile_carries_its_declared_estimator() {
+    // Arrange
+    let estimator = HeuristicContextEstimator::DEFAULT.with_request_tokens(250);
+
+    // Act
+    let declared = ModelProfile::new(128_000).with_estimator(estimator);
+
+    // Assert
+    assert_eq!(
+        ModelProfile::new(128_000).estimator(),
+        HeuristicContextEstimator::DEFAULT
+    );
+    assert_eq!(declared.estimator(), estimator);
+    assert_eq!(
+        declared.context_budget(),
+        ModelProfile::new(128_000).context_budget()
     );
 }
