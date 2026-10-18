@@ -206,6 +206,23 @@ requests run through the same engine, but their source is mandatory input that a
 cannot shrink, so a rejected one fails with the provider's error without a second
 request and leaves the lowered cap for later requests.
 
+A model's input budget holds back its maximum output plus an estimate margin sized from
+the estimator's measured error,
+`ModelProfile::with_estimate_margin(max_output, under_count_percent)`: the budget
+shrinks until a request filling 95% of it still fits the window while its real tokens
+run the declared percent over the estimate. The calibrated slope never drops below one
+token per unit, so content the estimator under-counts is the error left whether or not
+usage has calibrated the session. Hosts declare the largest under-count measured plus a
+buffer; Agentty measures it on recorded requests and on one live request fitted near the
+budget from repository sources, where read results ran up to 12.6% over the fitted
+estimate. A well-fitted estimator so gives up 7–10% of the window instead of a blanket
+quarter. Content denser than declared, such as digit-heavy generated code at 30–46% over
+a fitted estimate, is left to calibration and overflow recovery. Calibration learns it
+from the next usage report, and until then the unfilled 5% plus the margin absorb a
+dense tool result, such as a full `read` of digits, which Qwen tokenizes one per digit;
+more dense content in one request overflows, and one rejection's 75% cap fits content
+about half again over the estimate.
+
 ```mermaid
 flowchart TD
     Prompt["Receive prompt"] --> Pending["Persist running turn"]

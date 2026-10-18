@@ -12,6 +12,21 @@
 //! models that never receive it. Content denser than repository text, such
 //! as digit-heavy generated code, still runs 30–46% over every fitted
 //! estimate, which runtime calibration absorbs.
+//!
+//! Each harness profile's estimate margin tolerates the largest under-count
+//! its estimator showed, rounded up, plus five points: on those recorded
+//! requests, or on one live request fitted near the input budget from this
+//! repository's Rust sources read whole (`ag-harness` live test
+//! `test_estimate_margin_near_window`), which ran +12.6% over the estimate on
+//! Muse Spark 1.3, +11.9% on Kimi K3, +9.0% on Qwen-Plus, +7.7% on
+//! Qwen3.8-Max, and +7.6% on Kimi K2.6. Kimi K2.6 shares Kimi K3's tokenizer
+//! and margin. Calibration learns denser content only from the next usage
+//! report, and a full budget leaves 113,000–140,000 tokens beside its
+//! prediction on the 1M windows and 33,000 on Kimi K2.6: one maximal 50 KB
+//! `read` of digits, which Qwen tokenizes one per digit, misses about 39,000
+//! Qwen tokens and 12,000 Kimi tokens. Content denser still overflows the
+//! window, and the harness re-sends the request within 75% of the rejected
+//! weight, which fits content up to 53–57% over the estimate.
 
 use ag_harness::model::{HeuristicContextEstimator, ModelProfile};
 use ag_session::AgentModel;
@@ -26,27 +41,27 @@ const CODEX_SPARK: ModelProfile = ModelProfile::new(128_000).with_reserved_token
 /// Kimi K2.6: documented and enforced 262,144-token window with a
 /// 32,768-token default `max_tokens`.
 const KIMI_K2_6: ModelProfile = ModelProfile::new(262_144)
-    .with_estimate_margin(32_768)
+    .with_estimate_margin(32_768, 17)
     .with_estimator(KIMI_K2_6_ESTIMATOR);
 /// Kimi K3: documented 1M (1,048,576-token) window with a 131,072-token
 /// default `max_completion_tokens`.
 const KIMI_K3: ModelProfile = ModelProfile::new(1_048_576)
-    .with_estimate_margin(131_072)
+    .with_estimate_margin(131_072, 17)
     .with_estimator(KIMI_K3_ESTIMATOR);
 /// Muse Spark 1.3: documented 1,048,576-token window and an undocumented
 /// output limit, reserved at the 131,072 tokens the API accepts.
 const MUSE_SPARK_1_3: ModelProfile = ModelProfile::new(1_048_576)
-    .with_estimate_margin(131_072)
+    .with_estimate_margin(131_072, 18)
     .with_estimator(MUSE_SPARK_1_3_ESTIMATOR);
 /// Qwen3.8-Max: documented 1,000,000-token window, 983,616-token thinking
 /// input limit, and 131,072-token output limit.
 const QWEN3_8_MAX: ModelProfile = ModelProfile::new(1_000_000)
-    .with_estimate_margin(131_072)
+    .with_estimate_margin(131_072, 15)
     .with_estimator(QWEN3_8_MAX_ESTIMATOR);
 /// Qwen-Plus: documented 1,000,000-token window, 995,904-token thinking
 /// input limit, and 32,768-token output limit.
 const QWEN_PLUS: ModelProfile = ModelProfile::new(1_000_000)
-    .with_estimate_margin(32_768)
+    .with_estimate_margin(32_768, 16)
     .with_estimator(QWEN_PLUS_ESTIMATOR);
 
 /// Kimi K2.6 (JSON Object mode, schema rendered as a system message): 19

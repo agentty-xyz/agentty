@@ -154,6 +154,12 @@ let outcome = session
   provider's error. The cap is part of the calibration, so later turns stay below it
   until the model or estimator changes. `TurnReport::context_overflow_recoveries` counts
   the re-sends, and `LifecycleEventKind::ContextOverflowRetried` reports each one.
+- **The estimate margin follows measured error.**
+  `ModelProfile::with_estimate_margin(max_output, under_count_percent)` reserves the
+  maximum output plus the margin that keeps a request filling 95% of the input budget
+  within the window while its real tokens run `under_count_percent` over the estimate.
+  Declare the estimator's largest measured under-count plus a buffer; denser content is
+  left to calibration and overflow recovery.
 - **Identical reads are answered from the earlier result.** A `read` whose arguments
   match an earlier read of the same turn returns a short note naming that call instead
   of running again, while the last request still carried the earlier result whole, no
@@ -250,7 +256,7 @@ models.register(
     ModelCapabilities {
         image_input: true,
         tool_calls: true,
-        ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072))
+        ..ModelCapabilities::new(ModelProfile::new(1_048_576).with_estimate_margin(131_072, 18))
     },
 )?;
 let harness = Harness::from_registry(&models, "review-model")?;
