@@ -82,11 +82,11 @@ repos:
         pass_filenames: false
       - id: clippy
         name: clippy
-        description: Run strict clippy across all Rust targets and features, failing on warnings.
-        entry: cargo clippy -q --locked --all-targets --all-features -- -D warnings
+        description: Run strict clippy across all targets and features of the packages owning changed files and their dependents; a changed file outside every package lints the whole workspace.
+        entry: cargo run -q --locked -p ag-xtask -- clippy
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
-        pass_filenames: false
+        require_serial: true
       - id: clippy-ag-harness-benchmark
         name: clippy ag-harness benchmark
         description: Lint the manual ag-harness live benchmark without executing it.

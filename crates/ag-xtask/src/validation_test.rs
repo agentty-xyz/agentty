@@ -97,12 +97,14 @@ impl Host for ScriptedHost {
 fn metadata() -> Metadata {
     serde_json::from_value(serde_json::json!({
         "target_directory": "target",
-        "workspace_members": ["core", "support", "app", "other"],
+        "workspace_members": ["core", "support", "app", "other", "macros"],
         "packages": [
-            {"id":"core", "name":"core", "dependencies":[{"name":"support", "path":"support"}]},
-            {"id":"support", "name":"support", "dependencies":[]},
-            {"id":"app", "name":"app", "dependencies":[{"name":"core", "path":"core"}, {"name":"external", "path":null}]},
-            {"id":"other", "name":"other", "dependencies":[]}
+            {"id":"core", "name":"core", "manifest_path":"/workspace/crates/core/Cargo.toml", "dependencies":[{"name":"support", "path":"support"}]},
+            {"id":"support", "name":"support", "manifest_path":"/workspace/crates/support/Cargo.toml", "dependencies":[]},
+            {"id":"app", "name":"app", "manifest_path":"/workspace/crates/app/Cargo.toml", "dependencies":[{"name":"core", "path":"core"}, {"name":"external", "path":null}]},
+            {"id":"other", "name":"other", "manifest_path":"/workspace/crates/other/Cargo.toml", "dependencies":[]},
+            {"id":"macros", "name":"macros", "manifest_path":"/workspace/crates/core/macros/Cargo.toml", "dependencies":[]},
+            {"id":"registry", "name":"registry", "manifest_path":"/registry/registry/Cargo.toml", "dependencies":[]}
         ]
     })).expect("metadata fixture")
 }
@@ -117,6 +119,39 @@ fn options(reuse: bool) -> Options {
         hooks: vec!["clippy".into(), "test-focused".into()],
         reuse,
     }
+}
+
+#[test]
+fn files_map_to_their_innermost_workspace_package_or_to_the_whole_workspace() {
+    // Arrange
+    let metadata = metadata();
+    let root = Path::new("/workspace");
+    // Act
+    let owned = metadata.owners(
+        &[
+            "crates/app/src/main.rs".into(),
+            "crates/core/src/lib.rs".into(),
+            "crates/core/macros/src/lib.rs".into(),
+            "crates/app/Cargo.toml".into(),
+        ],
+        root,
+    );
+    let lockfile = metadata.owners(
+        &["crates/core/src/lib.rs".into(), "Cargo.lock".into()],
+        root,
+    );
+    let outside_members = metadata.owners(&["../registry/registry/src/lib.rs".into()], root);
+    // Assert
+    assert_eq!(
+        owned,
+        Some(vec![
+            "app".to_string(),
+            "core".to_string(),
+            "macros".to_string()
+        ])
+    );
+    assert_eq!(lockfile, None);
+    assert_eq!(outside_members, None);
 }
 
 #[test]
