@@ -13,43 +13,48 @@ use crate::{common, test_support};
 
 type E2eResult = Result<(), Box<dyn std::error::Error>>;
 
+/// Theme and color-mode pairs covering terminal wiring: a persisted
+/// non-default theme reaches the terminal in color, and `NO_COLOR` keeps
+/// selections visible. Per-theme selection colors are pinned by the
+/// `ui::selection` and `ui::style` unit tests.
+pub(crate) const SELECTION_COLOR_CASES: [(ColorTheme, bool); 2] =
+    [(ColorTheme::Green, true), (ColorTheme::Current, false)];
+
 #[tokio::test]
 async fn selection_visibility_across_tabs_and_dialogs() -> E2eResult {
-    for theme in ColorTheme::ALL {
-        for colors_enabled in [false, true] {
-            // Arrange
-            let next_theme = match theme {
-                ColorTheme::Green => ColorTheme::Current,
-                ColorTheme::Current | ColorTheme::DarkHorizon => ColorTheme::Green,
-            };
-            let theme_navigation = if theme == ColorTheme::Current {
-                "j"
-            } else {
-                "k"
-            };
-            FeatureTest::new(format!(
-                "selection_visibility_{}_{}",
-                theme.as_str(),
-                colors_enabled
-            ))
-            .with_git()
-            .with_terminal_size(100, 30)
-            .env("NO_COLOR", if colors_enabled { "" } else { "1" })
-            .setup(move |env| Box::pin(async move { seed_selection_controls(env, theme).await }))
-            .run(
-                move |scenario| {
-                    // Act
-                    selection_scenario(scenario, theme_navigation)
-                },
-                move |_frame, report| {
-                    Box::pin(async move {
-                        // Assert
-                        assert_selection_report(report, theme, next_theme, colors_enabled);
-                    })
-                },
-            )
-            .await?;
-        }
+    for (theme, colors_enabled) in SELECTION_COLOR_CASES {
+        // Arrange
+        let next_theme = match theme {
+            ColorTheme::Green => ColorTheme::Current,
+            ColorTheme::Current | ColorTheme::DarkHorizon => ColorTheme::Green,
+        };
+        let theme_navigation = if theme == ColorTheme::Current {
+            "j"
+        } else {
+            "k"
+        };
+        FeatureTest::new(format!(
+            "selection_visibility_{}_{}",
+            theme.as_str(),
+            colors_enabled
+        ))
+        .with_git()
+        .with_terminal_size(100, 30)
+        .env("NO_COLOR", if colors_enabled { "" } else { "1" })
+        .setup(move |env| Box::pin(async move { seed_selection_controls(env, theme).await }))
+        .run(
+            move |scenario| {
+                // Act
+                selection_scenario(scenario, theme_navigation)
+            },
+            move |_frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    assert_selection_report(report, theme, next_theme, colors_enabled);
+                })
+            },
+        )
+        .await?;
     }
 
     Ok(())
