@@ -332,7 +332,7 @@ async fn test_apply_turn_result_reports_background_push_failures() {
         .returning(|_| Box::pin(async { Ok(true) }));
     expect_safe_auto_push_state(&mut mock_git_client);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .returning(|_, _| {
             Box::pin(async {

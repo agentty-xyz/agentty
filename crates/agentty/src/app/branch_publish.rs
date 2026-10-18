@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
-use ag_git::GitClient;
+use ag_git::{BranchPushOutcome, GitClient};
 use tokio::sync::mpsc;
 
 use super::session::{self, unix_timestamp_from_system_time};
@@ -402,7 +402,7 @@ pub(crate) async fn push_session_branch(
         || session::session_branch(&branch_publish_session.id),
         str::to_string,
     );
-    let upstream_reference = push_session_branch_to_remote(
+    let push_outcome = push_session_branch_to_remote(
         &db,
         branch_publish_session.folder.clone(),
         git_client.clone(),
@@ -418,7 +418,7 @@ pub(crate) async fn push_session_branch(
     Ok(BranchPublishTaskSuccess::Pushed {
         branch_name,
         review_request_creation,
-        upstream_reference,
+        upstream_reference: push_outcome.upstream_reference,
     })
 }
 
@@ -443,7 +443,7 @@ async fn publish_pull_request(
         || session::session_branch(&branch_publish_session.id),
         str::to_string,
     );
-    let upstream_reference = push_session_branch_to_remote(
+    let push_outcome = push_session_branch_to_remote(
         &db,
         branch_publish_session.folder.clone(),
         git_client.clone(),
@@ -473,7 +473,7 @@ async fn publish_pull_request(
     Ok(BranchPublishTaskSuccess::PullRequestPublished {
         branch_name,
         review_request,
-        upstream_reference,
+        upstream_reference: push_outcome.upstream_reference,
     })
 }
 
@@ -495,7 +495,7 @@ pub(crate) async fn push_session_branch_to_remote(
     session_id: &str,
     remote_branch_name: Option<&str>,
     published_upstream_ref: Option<&str>,
-) -> Result<String, BranchPublishTaskFailure> {
+) -> Result<BranchPushOutcome, BranchPublishTaskFailure> {
     let retry_text = retry_action_text(publish_branch_action);
     let target_branch =
         remote_branch_name.map_or_else(|| session::session_branch(session_id), str::to_string);
@@ -546,11 +546,19 @@ pub(crate) async fn push_session_branch_to_remote(
     }
 
     let push = if remote_branch_name.is_some() && published_upstream_ref.is_none() {
-        git_client.push_current_branch_to_new_remote_branch(folder, target_branch)
+        git_client
+            .push_current_branch_to_new_remote_branch(folder, target_branch)
+            .await
+            .map(|upstream_reference| BranchPushOutcome {
+                updated: true,
+                upstream_reference,
+            })
     } else {
-        git_client.push_current_branch_to_remote_branch(folder, target_branch)
+        git_client
+            .push_current_branch_to_remote_branch_with_outcome(folder, target_branch)
+            .await
     };
-    let upstream_reference = push.await.map_err(|error| {
+    let outcome = push.map_err(|error| {
         let detail = error.to_string();
         let normalized = detail.to_ascii_lowercase();
 
@@ -571,7 +579,7 @@ pub(crate) async fn push_session_branch_to_remote(
     })?;
 
     db.sessions()
-        .update_session_published_upstream_ref(session_id, Some(upstream_reference.clone()))
+        .update_session_published_upstream_ref(session_id, Some(outcome.upstream_reference.clone()))
         .await
         .map_err(|error| {
             BranchPublishTaskFailure::failed(
@@ -583,7 +591,7 @@ pub(crate) async fn push_session_branch_to_remote(
             )
         })?;
 
-    Ok(upstream_reference)
+    Ok(outcome)
 }
 
 /// Blocks session-branch force-pushes while the worktree is in an unsafe git

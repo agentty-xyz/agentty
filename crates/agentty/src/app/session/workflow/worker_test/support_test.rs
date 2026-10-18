@@ -7,7 +7,7 @@ use ag_contracts::{
     AgentError, AgentRequestKind, MockAgentChannel, OneShotSubmission, PermissionMode, TurnResult,
 };
 use ag_forge as forge;
-use ag_git::{MockGitClient, RebaseStepResult};
+use ag_git::{BranchPushOutcome, MockGitClient, RebaseStepResult};
 use ag_protocol::{
     AgentResponse, ReviewCommentOutcome, ReviewCommentResolution, TurnPromptAttachment,
 };
@@ -841,9 +841,16 @@ pub(super) async fn assert_later_push_skips_review_operations(context: &SessionW
     let mut git_client = MockGitClient::new();
     expect_safe_auto_push_state(&mut git_client);
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     git_client.expect_repo_url().never();
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
 
@@ -881,9 +888,16 @@ pub(super) async fn push_descendant_that_reverted_fix(context: &SessionWorkerCon
     let mut git_client = MockGitClient::new();
     expect_safe_auto_push_state(&mut git_client);
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     git_client
         .expect_get_ref_ahead_behind()
         .once()
@@ -958,13 +972,20 @@ pub(super) fn auto_commit_git_client(
     let mut mock_git_client = dirty_auto_commit_git_client(commit_message);
     expect_safe_auto_push_state(&mut mock_git_client);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(|folder, remote_branch_name| {
             folder.ends_with("sess1") && remote_branch_name == "wt/session-id"
         })
         .in_sequence(sequence)
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     mock_git_client
         .expect_repo_url()
         .once()
@@ -991,10 +1012,17 @@ pub(super) fn review_resolution_git_client(sequence: &mut Sequence) -> MockGitCl
         .returning(|_| Box::pin(async { Ok("commit-1".to_string()) }));
     expect_safe_auto_push_state(&mut mock_git_client);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .in_sequence(sequence)
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     mock_git_client
         .expect_get_ref_ahead_behind()
         .once()
@@ -1073,7 +1101,7 @@ pub(super) fn auto_commit_git_client_with_push_failure(commit_message: &str) -> 
     let mut mock_git_client = dirty_auto_commit_git_client(commit_message);
     expect_safe_auto_push_state(&mut mock_git_client);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(|folder, remote_branch_name| {
             folder.ends_with("sess1") && remote_branch_name == "wt/session-id"

@@ -387,7 +387,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
     let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
     let mut mock_git_client = MockGitClient::new();
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     let context = Arc::new(PostTurnContext {
         app_event_tx,

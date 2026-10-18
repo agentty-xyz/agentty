@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
-use ag_git::{GitClient, GitError};
+use ag_git::{BranchPushOutcome, GitClient, GitError};
 use ag_session::test_support as model_fixture;
 use ag_worker::MockRunClient;
 use mockall::Sequence;
@@ -559,9 +559,16 @@ async fn test_finalize_rebase_task_warns_when_commit_message_lookup_fails() {
         .once()
         .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/sess-rebase".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/sess-rebase".to_string(),
+                })
+            })
+        });
     mock_git_client
         .expect_head_commit_message()
         .once()

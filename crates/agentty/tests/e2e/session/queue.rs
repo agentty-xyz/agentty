@@ -292,6 +292,17 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
         r#"#!/bin/sh
 if [ "$1" = "push" ]; then
   sleep 2
+  case " $* " in
+    *" --porcelain "*)
+      for push_argument in "$@"; do
+        case "$push_argument" in
+          HEAD:*)
+            printf '*\tHEAD:refs/heads/%s\t[new branch]\n' "${{push_argument#HEAD:}}"
+            ;;
+        esac
+      done
+      ;;
+  esac
   exit 0
 fi
 exec '{}' "$@"

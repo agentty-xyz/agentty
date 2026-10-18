@@ -233,14 +233,17 @@ async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInpu
     .await;
 
     match push_result {
-        Ok(_) => {
+        Ok(outcome) => {
             if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
                 sync_linked_review_request_metadata_after_push(input, metadata_sync_input).await;
             }
             resolve_review_comments_after_push(&ReviewCommentSyncInput::from(input)).await;
 
-            let message = TranscriptNotice::BranchPush
-                .format("Auto-pushed published branch after completed turn.");
+            let message = TranscriptNotice::BranchPush.format(if outcome.updated {
+                "Auto-pushed published branch after completed turn."
+            } else {
+                "Published branch already up to date; no remote update needed."
+            });
 
             let _ = input
                 .app_event_tx

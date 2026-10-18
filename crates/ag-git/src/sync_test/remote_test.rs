@@ -15,12 +15,115 @@ use crate::repo::{
 use crate::sync::{
     PullRebaseResult, SingleCommitMessageStrategy, branch_tracking_statuses,
     commit_all_preserving_single_commit, current_branch_name, current_branch_remote_name,
-    current_upstream_reference, get_ref_ahead_behind, parse_branch_tracking_statuses,
-    parse_current_branch_remote_output, primary_upstream_reference, pull_rebase,
-    pull_rebase_with_runner, push_current_branch, push_current_branch_to_new_remote_branch,
-    push_current_branch_to_new_remote_branch_with_runner, push_current_branch_to_remote_branch,
+    current_upstream_reference, get_ref_ahead_behind, parse_branch_push_updated,
+    parse_branch_tracking_statuses, parse_current_branch_remote_output, primary_upstream_reference,
+    pull_rebase, pull_rebase_with_runner, push_current_branch,
+    push_current_branch_to_new_remote_branch, push_current_branch_to_new_remote_branch_with_runner,
+    push_current_branch_to_remote_branch, push_current_branch_to_remote_branch_with_runner,
     push_current_branch_with_runner, remote_branch_exists, remote_branch_exists_with_runner,
 };
+
+#[test]
+fn branch_push_status_uses_only_the_destination_ref() {
+    // Arrange
+    let cases = [
+        ("=\tHEAD:refs/heads/review/topic\t[up to date]", Some(false)),
+        (" \tHEAD:refs/heads/review/topic\tabc..def", Some(true)),
+        (
+            "+\tHEAD:refs/heads/review/topic\tabc...def (forced update)",
+            Some(true),
+        ),
+        ("*\tHEAD:refs/heads/review/topic\t[new branch]", Some(true)),
+        (
+            "*\trefs/tags/v1:refs/tags/v1\t[new tag]\n=\tHEAD:refs/heads/review/topic\t[up to \
+             date]",
+            Some(false),
+        ),
+        ("*\tHEAD:refs/heads/other\t[new branch]", None),
+        ("!\tHEAD:refs/heads/review/topic\t[rejected]", None),
+        ("-\t:refs/heads/review/topic\t[deleted]", None),
+        ("unexpected output", None),
+        ("", None),
+    ];
+    for (output, expected) in cases {
+        // Act
+        let result =
+            parse_branch_push_updated(&format!("To remote\n{output}\nDone\n"), "review/topic");
+
+        // Assert
+        assert_eq!(result.ok(), expected, "{output}");
+    }
+}
+
+#[tokio::test]
+async fn explicit_branch_push_preserves_porcelain_status_and_failures() {
+    // Arrange
+    for (exit_code, output, expected) in [
+        (
+            0,
+            "=\tHEAD:refs/heads/review/topic\t[up to date]\n",
+            Some(false),
+        ),
+        (
+            0,
+            "+\tHEAD:refs/heads/review/topic\tabc...def\n",
+            Some(true),
+        ),
+        (0, "unexpected output", None),
+        (1, "!\tHEAD:refs/heads/review/topic\t[rejected]\n", None),
+    ] {
+        let mut runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let expectations = [
+            (
+                vec!["rev-parse", "--abbrev-ref", "HEAD"],
+                async_git_output(0, "main\n", ""),
+            ),
+            (
+                vec!["config", "--get", "branch.main.remote"],
+                async_git_output(0, "review-remote\n", ""),
+            ),
+            (
+                vec![
+                    "push",
+                    "--porcelain",
+                    "--force-with-lease",
+                    "--set-upstream",
+                    "review-remote",
+                    "HEAD:review/topic",
+                ],
+                async_git_output(exit_code, output, ""),
+            ),
+        ];
+        for (arguments, output) in expectations {
+            runner
+                .expect_run()
+                .with(function(move |command: &AsyncGitCommand| {
+                    command.arguments == arguments
+                }))
+                .once()
+                .in_sequence(&mut sequence)
+                .return_once(move |_| Box::pin(async move { Ok(output) }));
+        }
+
+        // Act
+        let result = push_current_branch_to_remote_branch_with_runner(
+            PathBuf::from("test-repo"),
+            "review/topic".to_string(),
+            &runner,
+        )
+        .await;
+
+        // Assert
+        assert_eq!(
+            result.as_ref().ok().map(|outcome| outcome.updated),
+            expected
+        );
+        if let Ok(outcome) = result {
+            assert_eq!(outcome.upstream_reference, "review-remote/review/topic");
+        }
+    }
+}
 
 #[tokio::test]
 async fn current_branch_name_returns_error_for_detached_head() {

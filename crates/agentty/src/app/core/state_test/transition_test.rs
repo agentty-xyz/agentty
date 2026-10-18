@@ -44,7 +44,7 @@ async fn push_session_branch_auth_failure_shows_git_guidance() {
         .once()
         .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .with(
             mockall::predicate::eq(PathBuf::from("/tmp/review-session")),

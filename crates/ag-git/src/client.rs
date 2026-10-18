@@ -8,7 +8,8 @@ use super::error::GitError;
 use super::merge::SquashMergeOutcome;
 use super::rebase::{InProgressGitOperation, RebaseStepResult};
 use super::sync::{
-    BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+    BranchPushOutcome, BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy,
+    WorktreeFileContent,
 };
 use super::{
     abort_rebase, branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,
@@ -339,6 +340,18 @@ pub trait GitClient: Send + Sync {
         repo_path: PathBuf,
         remote_branch_name: String,
     ) -> GitFuture<Result<String, GitError>>;
+
+    /// Pushes an explicit remote branch and distinguishes an update from an
+    /// already-current destination using Git's porcelain status.
+    ///
+    /// # Errors
+    /// Returns an error when the push fails or its destination status is
+    /// missing.
+    fn push_current_branch_to_remote_branch_with_outcome(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<BranchPushOutcome, GitError>>;
 
     /// Pushes the current branch to one explicit remote branch while requiring
     /// that the remote branch does not exist.
@@ -705,6 +718,17 @@ impl GitClient for RealGitClient {
     ) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move {
             push_current_branch_to_new_remote_branch(repo_path, remote_branch_name).await
+        })
+    }
+
+    fn push_current_branch_to_remote_branch_with_outcome(
+        &self,
+        repo_path: PathBuf,
+        remote_branch_name: String,
+    ) -> GitFuture<Result<BranchPushOutcome, GitError>> {
+        Box::pin(async move {
+            sync::push_current_branch_to_remote_branch_with_outcome(repo_path, remote_branch_name)
+                .await
         })
     }
 

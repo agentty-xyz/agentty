@@ -36,7 +36,8 @@ pub(crate) use rebase::{
 pub(crate) use repo::{main_checkout_working_tree, main_repo_root, repo_url};
 pub(crate) use sleeper::{Sleeper, ThreadSleeper};
 pub use sync::{
-    BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy, WorktreeFileContent,
+    BranchPushOutcome, BranchTrackingMap, PullRebaseResult, SingleCommitMessageStrategy,
+    WorktreeFileContent,
 };
 pub(crate) use sync::{
     branch_tracking_statuses, check_pre_commit_hook_ready, commit_all,

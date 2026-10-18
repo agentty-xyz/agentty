@@ -2,19 +2,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ag_forge as forge;
-use ag_git as git;
+use ag_git::{self as git, BranchPushOutcome};
 use ag_session::test_support as model_fixture;
 
 use super::super::session;
 use super::{
-    BranchPublishTaskFailure, BranchPublishTaskSession, ReviewRequestCreationInfo,
-    branch_push_success_message, detected_forge_kind_from_git_push_error,
-    git_push_authentication_message, is_git_push_authentication_error,
-    push_session_branch_to_remote, review_request_created_notice, review_request_queued_label,
-    review_request_remote,
+    BranchPublishTaskFailure, BranchPublishTaskSession, BranchPublishTaskSuccess,
+    ReviewRequestCreationInfo, branch_push_success_message,
+    detected_forge_kind_from_git_push_error, git_push_authentication_message,
+    is_git_push_authentication_error, publish_pull_request, push_session_branch_to_remote,
+    review_request_created_notice, review_request_queued_label, review_request_remote,
 };
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Status};
 use crate::infra::db::AppRepositories;
+use crate::test_support::FixedClock;
 
 #[test]
 fn review_request_queued_label_describes_waiting_without_loading_punctuation() {
@@ -41,9 +42,8 @@ fn expect_safe_session_branch_push(mock_git_client: &mut git::MockGitClient, ses
         });
 }
 
-async fn push_session_branch_to_remote_with_mock(
-    mock_git_client: git::MockGitClient,
-) -> Result<String, BranchPublishTaskFailure> {
+/// Creates the persisted review session used by branch publication tests.
+async fn review_session_database() -> AppRepositories {
     let database = AppRepositories::in_memory().await.expect("db should open");
     let project_id = database
         .projects()
@@ -61,6 +61,14 @@ async fn push_session_branch_to_remote_with_mock(
         )
         .await
         .expect("failed to insert session");
+
+    database
+}
+
+async fn push_session_branch_to_remote_with_mock(
+    mock_git_client: git::MockGitClient,
+) -> Result<BranchPushOutcome, BranchPublishTaskFailure> {
+    let database = review_session_database().await;
 
     push_session_branch_to_remote(
         &database,
@@ -131,23 +139,7 @@ async fn review_request_remote_attaches_session_worktree_to_detected_remote() {
 #[tokio::test]
 async fn push_session_branch_to_remote_persists_upstream_reference() {
     // Arrange
-    let database = AppRepositories::in_memory().await.expect("db should open");
-    let project_id = database
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to insert project");
-    database
-        .sessions()
-        .insert_session(
-            "session-id",
-            model_fixture::CODEX_MODEL_ID,
-            "main",
-            "Review",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
+    let database = review_session_database().await;
     let session_folder = PathBuf::from("/tmp/session-worktree");
     let expected_session_folder = session_folder.clone();
     let mut mock_git_client = git::MockGitClient::new();
@@ -186,10 +178,117 @@ async fn push_session_branch_to_remote_persists_upstream_reference() {
         .expect("missing session row");
 
     // Assert
-    assert_eq!(upstream_reference, "origin/wt/session-id");
+    assert!(upstream_reference.updated);
+    assert_eq!(
+        upstream_reference.upstream_reference,
+        "origin/wt/session-id"
+    );
     assert_eq!(
         persisted_session.published_upstream_ref.as_deref(),
         Some("origin/wt/session-id")
+    );
+}
+
+#[tokio::test]
+async fn publish_pull_request_returns_pushed_upstream_and_persists_review_request() {
+    // Arrange
+    let database = review_session_database().await;
+    let branch_publish_session = BranchPublishTaskSession {
+        base_branch: "main".to_string(),
+        folder: PathBuf::from("/tmp/session-worktree"),
+        id: "session-id".into(),
+        published_upstream_ref: Some("origin/review/topic".to_string()),
+        review_request: None,
+        status: Status::Review,
+    };
+    let expected_review_request = ReviewRequest {
+        last_refreshed_at: 0,
+        summary: forge::ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: forge::ForgeKind::GitHub,
+            source_branch: "review/topic".to_string(),
+            state: forge::ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Publish changes".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+        },
+    };
+    let mut mock_git_client = git::MockGitClient::new();
+    expect_safe_session_branch_push(&mut mock_git_client, "session-id");
+    mock_git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .withf(|_, branch| branch == "review/topic")
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/review/topic".to_string(),
+                })
+            })
+        });
+    mock_git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
+    });
+    mock_git_client
+        .expect_head_commit_message()
+        .once()
+        .returning(|_| Box::pin(async { Ok(Some("Publish changes".to_string())) }));
+    let mut mock_review_request_client = forge::MockReviewRequestClient::new();
+    mock_review_request_client
+        .expect_detect_remote()
+        .once()
+        .returning(|repo_url| forge::detect_remote(&repo_url));
+    mock_review_request_client
+        .expect_find_by_source_branch()
+        .once()
+        .withf(|_, branch| branch == "review/topic")
+        .returning(|_, _| Box::pin(async { Ok(None) }));
+    let summary = expected_review_request.summary.clone();
+    mock_review_request_client
+        .expect_create_review_request()
+        .once()
+        .withf(|_, input| {
+            input.source_branch == "review/topic"
+                && input.target_branch == "main"
+                && input.title == "Publish changes"
+                && input.body.is_none()
+        })
+        .return_once(move |_, _| Box::pin(async move { Ok(summary) }));
+
+    // Act
+    let result = publish_pull_request(
+        &branch_publish_session,
+        database.clone(),
+        Arc::new(FixedClock::unix_epoch()),
+        Arc::new(mock_git_client),
+        Arc::new(mock_review_request_client),
+        Some("review/topic"),
+    )
+    .await
+    .expect("review request should publish");
+
+    // Assert
+    assert_eq!(
+        result,
+        BranchPublishTaskSuccess::PullRequestPublished {
+            branch_name: "review/topic".to_string(),
+            review_request: expected_review_request.clone(),
+            upstream_reference: "origin/review/topic".to_string(),
+        }
+    );
+    let persisted_review_request = database
+        .reviews()
+        .load_session_review_request("session-id")
+        .await
+        .expect("review request should load")
+        .expect("review request should be persisted");
+    assert_eq!(persisted_review_request.display_id, "#42");
+    assert_eq!(persisted_review_request.last_refreshed_at, 0);
+    assert_eq!(
+        persisted_review_request.web_url,
+        expected_review_request.summary.web_url
     );
 }
 
@@ -407,10 +506,17 @@ async fn push_uses_tracked_lease_when_upstream_ref_is_already_set() {
     let mut mock_git_client = git::MockGitClient::new();
     expect_safe_session_branch_push(&mut mock_git_client, "session-id");
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(move |folder, branch| folder == &expected_folder && branch == "feature/existing")
-        .returning(|_, _| Box::pin(async { Ok("origin/feature/existing".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/feature/existing".to_string(),
+                })
+            })
+        });
 
     // Act
     let result = push_session_branch_to_remote(
@@ -426,7 +532,7 @@ async fn push_uses_tracked_lease_when_upstream_ref_is_already_set() {
 
     // Assert
     let upstream = result.expect("push should succeed");
-    assert_eq!(upstream, "origin/feature/existing");
+    assert_eq!(upstream.upstream_reference, "origin/feature/existing");
 }
 
 #[tokio::test]
@@ -457,13 +563,19 @@ async fn push_uses_tracked_lease_for_default_session_branch_name() {
     let mut mock_git_client = git::MockGitClient::new();
     expect_safe_session_branch_push(&mut mock_git_client, "session-id");
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(move |folder, branch| folder == &expected_folder && branch == &expected_branch)
         .returning(move |_, _| {
             let expected_upstream = expected_upstream.clone();
 
-            Box::pin(async move { Ok(expected_upstream) })
+            Box::pin(async move {
+                Ok(BranchPushOutcome {
+                    updated: true,
+
+                    upstream_reference: expected_upstream,
+                })
+            })
         });
 
     // Act
@@ -480,7 +592,7 @@ async fn push_uses_tracked_lease_for_default_session_branch_name() {
 
     // Assert
     let upstream = result.expect("push should succeed");
-    assert_eq!(upstream, expected_upstream_assertion);
+    assert_eq!(upstream.upstream_reference, expected_upstream_assertion);
 }
 
 #[tokio::test]
@@ -512,7 +624,7 @@ async fn push_blocks_while_session_branch_rebase_is_in_progress() {
     mock_git_client.expect_detect_git_info().times(0);
     mock_git_client.expect_remote_branch_exists().times(0);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
     mock_git_client
         .expect_push_current_branch_to_new_remote_branch()
@@ -546,7 +658,7 @@ async fn push_blocks_while_session_branch_merge_is_in_progress() {
         .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Merge)) }));
     mock_git_client.expect_detect_git_info().times(0);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
 
     // Act
@@ -568,7 +680,7 @@ async fn push_blocks_while_session_branch_cherry_pick_is_in_progress() {
         .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::CherryPick)) }));
     mock_git_client.expect_detect_git_info().times(0);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
 
     // Act
@@ -590,7 +702,7 @@ async fn push_blocks_while_session_branch_revert_is_in_progress() {
         .returning(|_| Box::pin(async { Ok(Some(git::InProgressGitOperation::Revert)) }));
     mock_git_client.expect_detect_git_info().times(0);
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
 
     // Act
@@ -633,7 +745,7 @@ async fn push_blocks_when_worktree_is_not_on_session_branch() {
         .once()
         .returning(|_| Box::pin(async { Some("main".to_string()) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
 
     // Act
@@ -668,7 +780,7 @@ async fn push_reports_folder_when_session_branch_cannot_be_detected() {
         .once()
         .returning(|_| Box::pin(async { None }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(0);
 
     // Act
@@ -768,7 +880,7 @@ async fn push_shows_auth_guidance_when_push_returns_auth_error() {
     let mut mock_git_client = git::MockGitClient::new();
     expect_safe_session_branch_push(&mut mock_git_client, "session-id");
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(move |folder, branch| folder == &expected_folder && branch == &expected_branch)
         .returning(move |_, _| {

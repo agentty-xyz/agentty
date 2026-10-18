@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_git as git;
-use ag_git::GitClient;
+use ag_git::{BranchPushOutcome, GitClient};
 use ag_worker::{MockRunClient, RunClient};
 use tempfile::{TempDir, tempdir};
 use tokio::sync::mpsc;
@@ -332,7 +332,7 @@ pub(super) fn blocking_auto_push_git_client(
         .once()
         .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(|session_folder, remote_branch_name| {
             session_folder.ends_with("sess-rebase") && remote_branch_name == "wt/sess-rebase"
@@ -345,7 +345,10 @@ pub(super) fn blocking_auto_push_git_client(
                 push_started.notify_one();
                 release_push.notified().await;
 
-                Ok("origin/wt/sess-rebase".to_string())
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/sess-rebase".to_string(),
+                })
             })
         });
 
@@ -425,12 +428,19 @@ pub(super) fn metadata_sync_git_client() -> git::MockGitClient {
         .once()
         .returning(|_| Box::pin(async { Some("wt/sess-reb".to_string()) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
         .withf(|session_folder, remote_branch_name| {
             session_folder.ends_with("sess-rebase") && remote_branch_name == "wt/sess-rebase"
         })
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/sess-rebase".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/sess-rebase".to_string(),
+                })
+            })
+        });
     mock_git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });

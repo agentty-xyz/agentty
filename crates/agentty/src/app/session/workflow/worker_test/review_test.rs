@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_forge as forge;
-use ag_git::MockGitClient;
+use ag_git::{BranchPushOutcome, MockGitClient};
 use ag_protocol::{AgentResponse, ReviewCommentOutcome, ReviewCommentResolution};
 use ag_worker::SessionRunClient;
 use mockall::Sequence;
@@ -22,9 +22,10 @@ use super::support::{
     apply_worker_turn_result, assert_later_push_skips_review_operations,
     auto_commit_git_client_with_push_failure, auto_commit_run_client, dirty_auto_commit_git_client,
     empty_transcript, expect_safe_auto_push_state, fixed_review_turn_result, github_forge_remote,
-    insert_in_progress_session_with_review_request, linked_github_review_request,
-    push_descendant_that_reverted_fix, queue_test_context, queued_message, resume_command,
-    review_resolution_client, review_resolution_git_client, successful_turn_result,
+    insert_in_progress_session_with_review_request, insert_in_progress_test_session,
+    linked_github_review_request, push_descendant_that_reverted_fix, queue_test_context,
+    queued_message, resume_command, review_resolution_client, review_resolution_git_client,
+    successful_turn_result,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::BranchPublishTaskSession;
@@ -96,10 +97,17 @@ async fn test_process_queued_message_auto_pushes_after_last_published_branch_fol
         .expect_diff()
         .returning(|_, _| Box::pin(async { Ok(String::new()) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .times(1)
         .withf(|_folder, remote_branch_name| remote_branch_name == "wt/session-id")
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     context.git_client = Arc::new(mock_git_client);
 
     // Act
@@ -149,105 +157,113 @@ async fn test_process_queued_message_auto_pushes_after_last_published_branch_fol
 /// Verifies completed turns auto-push already-published session branches
 /// in the background and report sync progress through app events.
 async fn test_apply_turn_result_starts_background_push_for_published_branch() {
-    // Arrange
-    let base_dir = tempdir().expect("failed to create temp dir");
-    let db = AppRepositories::in_memory().await.expect("db should open");
-    let project_id = db
-        .projects()
-        .upsert_project("/tmp/project", Some("main".to_string()))
-        .await
-        .expect("failed to upsert project");
-    db.sessions()
-        .insert_session(
-            "sess1",
-            "gemini-3.8-flash",
-            "main",
-            "InProgress",
-            project_id,
-        )
-        .await
-        .expect("failed to insert session");
-    let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
-    let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
-    let mut mock_git_client = MockGitClient::new();
-    mock_git_client
-        .expect_is_worktree_clean()
-        .times(1)
-        .returning(|_| Box::pin(async { Ok(true) }));
-    expect_safe_auto_push_state(&mut mock_git_client);
-    mock_git_client
-        .expect_push_current_branch_to_remote_branch()
-        .once()
-        .withf(|folder, remote_branch_name| {
-            folder.ends_with("sess1") && remote_branch_name == "wt/session-id"
-        })
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
-    let context = SessionWorkerContext {
-        app_event_tx,
-        available_agent_kinds: Arc::from(AgentKind::ALL),
-        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
-        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
-        session_run: SessionRunClient::from_channel(
-            "sess1".to_string(),
-            Arc::new(MockAgentChannel::new()),
-        ),
-        child_pid: Arc::new(Mutex::new(None)),
-        clock: Arc::new(crate::infra::clock::RealClock),
-        db: db.clone(),
-        folder: base_dir.path().join("sess1"),
-        fs_client: Arc::new(fs::MockFsClient::new()),
-        git_client: Arc::new(mock_git_client),
-        transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
-        queued_messages: Arc::new(Mutex::new(VecDeque::new())),
-        review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
+    for updated in [false, true] {
+        // Arrange
+        let base_dir = tempdir().expect("failed to create temp dir");
+        let db = AppRepositories::in_memory().await.expect("db should open");
+        insert_in_progress_test_session(&db).await;
+        let (app_event_tx, mut app_event_rx) = mpsc::unbounded_channel();
+        let session_agent = AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
+        let mut mock_git_client = MockGitClient::new();
+        mock_git_client
+            .expect_is_worktree_clean()
+            .times(1)
+            .returning(|_| Box::pin(async { Ok(true) }));
+        expect_safe_auto_push_state(&mut mock_git_client);
+        mock_git_client
+            .expect_push_current_branch_to_remote_branch_with_outcome()
+            .once()
+            .withf(|folder, remote_branch_name| {
+                folder.ends_with("sess1") && remote_branch_name == "wt/session-id"
+            })
+            .returning(move |_, _| {
+                Box::pin(async move {
+                    Ok(BranchPushOutcome {
+                        updated,
+                        upstream_reference: "origin/wt/session-id".to_string(),
+                    })
+                })
+            });
+        let context = SessionWorkerContext {
+            app_event_tx,
+            available_agent_kinds: Arc::from(AgentKind::ALL),
+            branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+            session_run: SessionRunClient::from_channel(
+                "sess1".to_string(),
+                Arc::new(MockAgentChannel::new()),
+            ),
+            child_pid: Arc::new(Mutex::new(None)),
+            clock: Arc::new(crate::infra::clock::RealClock),
+            db: db.clone(),
+            folder: base_dir.path().join("sess1"),
+            fs_client: Arc::new(fs::MockFsClient::new()),
+            git_client: Arc::new(mock_git_client),
+            transcript: empty_transcript(),
+            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            queued_messages: Arc::new(Mutex::new(VecDeque::new())),
+            review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
-        session_update_versions: Arc::default(),
-        session_id: "sess1".into(),
-        session_agent: AgentSelection::new(
-            crate::domain::agent::AgentKind::Antigravity,
-            AgentModel::Gemini38Flash,
-        ),
-        status: Arc::new(Mutex::new(Status::InProgress)),
-    };
-    let turn_result = Ok(successful_turn_result("Implemented the change."));
+            session_update_versions: Arc::default(),
+            session_id: "sess1".into(),
+            session_agent: AgentSelection::new(
+                crate::domain::agent::AgentKind::Antigravity,
+                AgentModel::Gemini38Flash,
+            ),
+            status: Arc::new(Mutex::new(Status::InProgress)),
+        };
+        let turn_result = Ok(successful_turn_result("Implemented the change."));
 
-    // Act
-    let turn_metadata = TurnMetadata {
-        published_upstream_ref: Some("origin/wt/session-id".to_string()),
-        review_comment_thread_ids: Vec::new(),
-        session_agent,
-    };
-    let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
-        .await
-        .expect("turn result should succeed");
-    let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
-        let mut sync_events = Vec::new();
-        while sync_events.len() < 2 {
-            let event = app_event_rx.recv().await.expect("missing app event");
-            if let AppEvent::PublishedBranchSyncUpdated {
-                session_id,
-                sync_operation_id,
-                sync_status,
-                ..
-            } = event
-            {
-                sync_events.push((session_id, sync_operation_id, sync_status));
+        // Act
+        let turn_metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
+            session_agent,
+        };
+        let status = apply_worker_turn_result(&context, turn_metadata, turn_result)
+            .await
+            .expect("turn result should succeed");
+        let sync_events = tokio::time::timeout(Duration::from_secs(1), async {
+            let mut sync_events = Vec::new();
+            while sync_events.len() < 2 {
+                let event = app_event_rx.recv().await.expect("missing app event");
+                if let AppEvent::PublishedBranchSyncUpdated {
+                    session_id,
+                    sync_operation_id,
+                    sync_status,
+                    persistent_notice,
+                } = event
+                {
+                    sync_events.push((
+                        session_id,
+                        sync_operation_id,
+                        sync_status,
+                        persistent_notice,
+                    ));
+                }
             }
-        }
 
-        sync_events
-    })
-    .await
-    .expect("timed out waiting for sync events");
+            sync_events
+        })
+        .await
+        .expect("timed out waiting for sync events");
 
-    // Assert
-    assert_eq!(status, Status::Review);
-    assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
-    assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
-    assert_eq!(sync_events[0].0, "sess1");
-    assert_eq!(sync_events[1].0, "sess1");
-    assert_eq!(sync_events[0].1, sync_events[1].1);
+        // Assert
+        assert_eq!(status, Status::Review);
+        assert_eq!(sync_events[0].2, PublishedBranchSyncStatus::InProgress);
+        assert_eq!(sync_events[1].2, PublishedBranchSyncStatus::Succeeded);
+        assert_eq!(sync_events[0].0, "sess1");
+        assert_eq!(sync_events[1].0, "sess1");
+        assert_eq!(sync_events[0].1, sync_events[1].1);
+        assert_eq!(
+            sync_events[1].3.as_deref(),
+            Some(if updated {
+                "\n[Branch Push] Auto-pushed published branch after completed turn.\n"
+            } else {
+                "\n[Branch Push] Published branch already up to date; no remote update needed.\n"
+            })
+        );
+    }
 }
 
 #[tokio::test]
@@ -368,7 +384,7 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
         .once()
         .returning(|_| Box::pin(async { Ok(true) }));
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     let transcript = empty_transcript();
     let context = SessionWorkerContext {
@@ -721,7 +737,7 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
             Box::pin(async { Err(ag_git::GitError::OutputParse("commit failed".to_string())) })
         });
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     let mut review_request_client = forge::MockReviewRequestClient::new();
     review_request_client.expect_detect_remote().never();
@@ -818,7 +834,7 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
         })
     });
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     let context = SessionWorkerContext {
         app_event_tx,
@@ -1175,7 +1191,7 @@ async fn posted_reply_survives_revalidation_commit_failure_and_successful_retry(
             Box::pin(async { Err(ag_git::GitError::OutputParse("commit failed".to_string())) })
         });
     failed_commit
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     context.git_client = Arc::new(failed_commit);
     db.reviews()
