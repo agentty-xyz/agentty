@@ -12,6 +12,7 @@ use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, TurnErrorType};
 use crate::model::{ModelError, ModelMessage, ModelRequest, ModelResponse};
+use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
@@ -222,8 +223,8 @@ async fn superseded_reads_are_cleared_first_and_reported() {
             ExecutionIdentity::new("budgeted", "1").expect("identity"),
             model,
             ModelCapabilities {
-                context_budget: ContextBudget::new(NonZeroU64::new(1_350).expect("budget")),
                 image_input: false,
+                profile: ModelProfile::new(1_350),
                 tool_calls: true,
             },
         )

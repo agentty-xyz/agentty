@@ -57,7 +57,9 @@ crates/
   records live in the `provider`, `model`, `tool`, `bash`, `turn`, `store`, `recovery`,
   and `lifecycle` modules.
 - `Model` is the object-safe provider boundary. `ModelRegistry` resolves built-in or
-  injected models by stable host keys with declared `ModelCapabilities`.
+  injected models by stable host keys with declared `ModelCapabilities`, whose
+  `ModelProfile` describes the model's context. The harness reads every model through
+  its profile and holds no per-model values; hosts own those.
 - `SessionStore` is the public persistence contract and `BashExecutor` the public
   command-execution contract; both accept host implementations. Stores expose atomic
   record operations; the harness applies admission rules and builds each lease.
@@ -236,11 +238,11 @@ a stopped turn keeps everything it already did.
   every text. The newest turns are dropped until the source fits the context budget, and
   the checkpoint covers exactly the rendered turns, so the rest stay uncovered for a
   later call. A summary that is no smaller than its source is rejected.
-- Every harness has an approximate `ContextBudget`, passed to `Harness::new` or declared
-  by its registration: requests keep the most recent turns that fit, each whole, with
-  its tool traffic replaced by notices, or as its input and final output (input and stop
-  note for a stopped turn), and mandatory content that cannot fit fails with a typed
-  error before any provider call.
+- Every harness has an approximate `ContextBudget`, passed to `Harness::new` or derived
+  from its registration's `ModelProfile`: requests keep the most recent turns that fit,
+  each whole, with its tool traffic replaced by notices, or as its input and final
+  output (input and stop note for a stopped turn), and mandatory content that cannot fit
+  fails with a typed error before any provider call.
 - The byte-based history limit keeps each turn too large to load whole in its elided or
   brief form, so one oversized turn no longer hides itself and every older turn. Every
   store selects the same forms; SQLite decides whole and brief turns from stored sizes

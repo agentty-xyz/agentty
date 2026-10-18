@@ -11,10 +11,11 @@ use ag_protocol::ProtocolRequestProfile;
 use ag_session::AgentModel;
 
 use super::{
-    BudgetedModel, FALLBACK_CONTEXT_LIMITS, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
+    BudgetedModel, FALLBACK_MODEL_PROFILE, ModelSelection, NativeHarnessConfig, ResumeOnlyModel,
     bash_environment, default_model, output_schema, reasoning_effort, repository, turn_options,
     unicode_environment,
 };
+use crate::agent::model_profile;
 
 /// Builds an environment snapshot from string pairs.
 fn environment(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -130,8 +131,8 @@ fn model_selection_round_trips_registration_keys() {
 
 #[test]
 /// Registers each served model under the current revision with its declared
-/// context limits, and uncataloged models with the conservative fallback.
-fn registrations_declare_revision_and_per_model_context_budgets() {
+/// context profile, and uncataloged models with the conservative fallback.
+fn registrations_declare_revision_and_per_model_context_profiles() {
     // Arrange
     let environment = environment(&[
         ("DASHSCOPE_API_KEY", "key"),
@@ -149,24 +150,16 @@ fn registrations_declare_revision_and_per_model_context_budgets() {
         let selection = ModelSelection::resolve(model).expect("served model");
         let registry = selection.registry(&environment, None).expect("registry");
         let registration = registry.resolve(&selection.key()).expect("registration");
-        let budget = registration.capabilities().context_budget;
-        let limits = AgentModel::parse_persisted(model)
+        let expected = AgentModel::parse_persisted(model)
             .ok()
-            .and_then(AgentModel::context_limits)
-            .unwrap_or(FALLBACK_CONTEXT_LIMITS);
+            .and_then(model_profile::declared)
+            .unwrap_or(FALLBACK_MODEL_PROFILE);
         assert_eq!(registration.identity().revision(), "agentty-native-2");
-        assert_eq!(
-            budget.max_request_weight().get(),
-            limits.context_window_tokens,
-            "{model}"
-        );
-        assert_eq!(
-            budget.reserved_output_weight(),
-            limits.input_headroom_tokens,
-            "{model}"
-        );
+        assert_eq!(registration.capabilities().profile, expected, "{model}");
     }
-    assert_eq!(FALLBACK_CONTEXT_LIMITS.input_token_budget(), 79_616);
+    assert_eq!(FALLBACK_MODEL_PROFILE.context_window_tokens(), 128_000);
+    assert_eq!(FALLBACK_MODEL_PROFILE.reserved_tokens(), 48_384);
+    assert_eq!(FALLBACK_MODEL_PROFILE.input_token_budget(), 79_616);
 }
 
 #[tokio::test]

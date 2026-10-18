@@ -51,7 +51,7 @@
 //! | Module        | Contents                                                   |
 //! | ------------- | ---------------------------------------------------------- |
 //! | [`provider`]  | Built-in Muse, Kimi, and Qwen clients                      |
-//! | [`model`]     | The [`Model`] trait, requests, registry, context budgets   |
+//! | [`model`]     | The [`Model`] trait, requests, registry, context profiles  |
 //! | [`tool`]      | Tool arguments, results, and the [`tool::FileSystem`] seam |
 //! | [`bash`]      | Sandboxed Bash configuration, executors, command records   |
 //! | [`turn`]      | Turn builders, reports, activity, and settlement errors    |
@@ -85,6 +85,10 @@ mod repository_fixture;
 #[path = "../tests/support/context_budget.rs"]
 mod context_budget_fixture;
 
+#[cfg(test)]
+#[path = "../tests/support/model_profile.rs"]
+mod model_profile_fixture;
+
 mod admission;
 pub mod bash;
 mod calibration;
@@ -113,6 +117,7 @@ mod input;
 pub mod lifecycle;
 mod memory_store;
 pub mod model;
+mod model_profile;
 mod model_registry;
 #[cfg(test)]
 #[path = "../tests/support/model_registry.rs"]

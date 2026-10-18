@@ -14,6 +14,7 @@ use crate::model::{
     CompletionMetadata, CompletionUsage, Model, ModelCompletion, ModelError, ModelRequest,
     ModelResponse,
 };
+use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
@@ -219,8 +220,8 @@ async fn switching_models_discards_the_calibration() {
                 ExecutionIdentity::new(key, "1").expect("identity"),
                 InflatingModel::new(Some(2), &weights),
                 ModelCapabilities {
-                    context_budget: budget(),
                     image_input: false,
+                    profile: ModelProfile::new(BUDGET),
                     tool_calls: true,
                 },
             )

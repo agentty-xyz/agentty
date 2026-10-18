@@ -32,6 +32,7 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 
 pub(crate) fn schema() -> OutputSchema {
     OutputSchema::new(json!({"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false})).expect("schema")
@@ -1851,8 +1852,8 @@ async fn unresolved_commands_fence_model_switches_until_owner_reconciliation() {
         store.interrupt(turn.owner()).await.expect("stop owner");
         let identity = ag_harness::recovery::ExecutionIdentity::new("next", "1").expect("identity");
         let capabilities = ag_harness::model::ModelCapabilities {
-            context_budget: unbounded_context_budget(),
             image_input: false,
+            profile: unbounded_model_profile(),
             tool_calls: true,
         };
 

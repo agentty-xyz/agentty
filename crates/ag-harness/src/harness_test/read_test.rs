@@ -1,6 +1,5 @@
 use std::io;
 use std::io::Cursor;
-use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,12 +12,13 @@ use super::support::{
     read_call_with_path, read_harness, readable_file_system, readable_file_system_with,
     response_with_metadata, response_without_metadata,
 };
-use crate::context::{ContextBudget, ContextEstimator, HeuristicContextEstimator};
+use crate::context::{ContextEstimator, HeuristicContextEstimator};
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
 use crate::lifecycle::{LifecycleEvent, LifecycleEventKind, ModelResponseType, ToolErrorType};
 use crate::model::{ModelMessage, ModelResponse, ReasoningEffort};
+use crate::model_profile::ModelProfile;
 use crate::model_registry::{ModelCapabilities, ModelRegistry};
 use crate::read::ReadError;
 use crate::recovery::ExecutionIdentity;
@@ -607,8 +607,8 @@ async fn tool_results_that_outgrow_the_budget_fail_typed_mid_turn() {
             ExecutionIdentity::new("budgeted", "1").expect("identity"),
             model,
             ModelCapabilities {
-                context_budget: ContextBudget::new(NonZeroU64::new(15).expect("nonzero budget")),
                 image_input: false,
+                profile: ModelProfile::new(15),
                 tool_calls: true,
             },
         )
@@ -680,8 +680,8 @@ async fn long_read_loops_send_reduced_copies_within_the_budget() {
             ExecutionIdentity::new("budgeted", "1").expect("identity"),
             model,
             ModelCapabilities {
-                context_budget: ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
                 image_input: false,
+                profile: ModelProfile::new(budget),
                 tool_calls: true,
             },
         )
@@ -757,8 +757,8 @@ async fn very_long_read_loops_drop_their_oldest_rounds_to_stay_within_the_budget
             ExecutionIdentity::new("budgeted", "1").expect("identity"),
             model,
             ModelCapabilities {
-                context_budget: ContextBudget::new(NonZeroU64::new(budget).expect("budget")),
                 image_input: false,
+                profile: ModelProfile::new(budget),
                 tool_calls: true,
             },
         )

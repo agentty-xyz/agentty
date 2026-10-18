@@ -1,8 +1,8 @@
-//! Public model catalog, compatibility, and token-budget contracts.
+//! Public model catalog and compatibility contracts.
 
 use std::collections::HashSet;
 
-use ag_session::{AgentKind, AgentModel, AgentSelectionMetadata, ModelContextLimits};
+use ag_session::{AgentKind, AgentModel, AgentSelectionMetadata};
 
 #[test]
 fn provider_catalog_preserves_wire_ids_order_and_defaults() {
@@ -120,63 +120,4 @@ fn every_catalog_model_has_unique_roundtrippable_metadata() {
         AgentModel::parse_persisted("claude-fable-5"),
         Ok(AgentModel::ClaudeFable51)
     );
-}
-
-#[test]
-fn declared_context_limits_preserve_proactive_compaction_budgets() {
-    // Arrange
-    let codex_models = AgentKind::Codex.models();
-
-    // Act / Assert
-    for model in codex_models {
-        let expected = if *model == AgentModel::Gpt53CodexSpark {
-            (128_000, 8_000, 120_000)
-        } else {
-            (1_050_000, 128_000, 922_000)
-        };
-        let limits = model
-            .context_limits()
-            .expect("Codex models declare compaction limits");
-        assert_eq!(limits.context_window_tokens, expected.0);
-        assert_eq!(limits.input_headroom_tokens, expected.1);
-        assert_eq!(limits.input_token_budget(), expected.2);
-    }
-    for (model, expected) in [
-        (AgentModel::MuseSpark13, (1_048_576, 393_216, 655_360)),
-        (AgentModel::KimiK3, (1_048_576, 393_216, 655_360)),
-        (AgentModel::KimiK26, (262_144, 98_304, 163_840)),
-        (AgentModel::Qwen38Max, (1_000_000, 381_072, 618_928)),
-        (AgentModel::QwenPlus, (1_000_000, 282_768, 717_232)),
-    ] {
-        let limits = model
-            .context_limits()
-            .expect("harness models declare compaction limits");
-        assert_eq!(limits.context_window_tokens, expected.0, "{model:?}");
-        assert_eq!(limits.input_headroom_tokens, expected.1, "{model:?}");
-        assert_eq!(limits.input_token_budget(), expected.2, "{model:?}");
-    }
-    assert_eq!(AgentKind::Harness.models().len(), 5);
-    for provider in [AgentKind::Gemini, AgentKind::Antigravity, AgentKind::Claude] {
-        assert!(
-            provider
-                .models()
-                .iter()
-                .all(|model| model.context_limits().is_none())
-        );
-    }
-}
-
-#[test]
-fn input_budget_saturates_when_headroom_exceeds_capacity() {
-    // Arrange
-    let limits = ModelContextLimits {
-        context_window_tokens: 100,
-        input_headroom_tokens: 101,
-    };
-
-    // Act
-    let budget = limits.input_token_budget();
-
-    // Assert
-    assert_eq!(budget, 0);
 }

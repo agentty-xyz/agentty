@@ -3,9 +3,11 @@
 use std::path::{Component, Path, PathBuf};
 
 use ag_contracts::{PermissionMode, ReasoningLevel};
-use ag_session::{AgentKind, AgentModel, ModelContextLimits};
+use ag_harness::model::ModelProfile;
+use ag_session::AgentKind;
 use serde_json::Value;
 
+use crate::agent::model_profile;
 use crate::model::reasoning;
 
 /// Canonical wire-level policy mapping for one [`PermissionMode`].
@@ -96,13 +98,13 @@ impl PreActionApprovalKind {
 
 /// Returns the declared input-token budget for a Codex model.
 ///
-/// Context capacity and output/overhead reserves come from the selection
-/// catalog. Unknown and non-Codex ids retain the conservative 120k fallback.
+/// Context capacity and output/overhead reserves come from the declared model
+/// profile. Unknown and non-Codex ids retain the conservative 120k fallback.
 pub(super) fn auto_compact_input_token_threshold(model: &str) -> u64 {
     AgentKind::Codex
         .parse_model(model)
-        .and_then(AgentModel::context_limits)
-        .map_or(120_000, ModelContextLimits::input_token_budget)
+        .and_then(model_profile::declared)
+        .map_or(120_000, ModelProfile::input_token_budget)
 }
 
 /// Returns the app-server approval policy used for one permission mode.

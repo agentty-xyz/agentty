@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::TurnInput;
 use crate::bash::CommandIntent;
-use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::reservation::{AdmittedStore, admit};
 use crate::store::{AcquiredTurn, ModelSwitch, NewSession, SessionStore};
@@ -29,8 +29,8 @@ async fn admission_decorator_forwards_the_complete_store_contract() {
                     crate::recovery::ExecutionIdentity::new("next", "1").expect("identity"),
                     None,
                     crate::model::ModelCapabilities {
-                        context_budget: unbounded_context_budget(),
                         image_input: false,
+                        profile: unbounded_model_profile(),
                         tool_calls: true,
                     },
                     0,

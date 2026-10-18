@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ag_harness::model::{
-    ModelCapabilities, ModelCompletion, ModelMetadata, ModelRegistry, ModelRegistryError,
-    ModelRequest, ModelResponse,
+    ContextBudgetError, ModelCapabilities, ModelCompletion, ModelMetadata, ModelProfile,
+    ModelRegistry, ModelRegistryError, ModelRequest, ModelResponse,
 };
 use ag_harness::provider::{ModelConfiguration, ModelProvider};
 use ag_harness::recovery::ExecutionIdentity;
@@ -17,6 +17,7 @@ use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
+use crate::model_profile_fixture::unbounded_model_profile;
 use crate::store_conformance_test::{options, schema, stores};
 
 struct CountingModel {
@@ -57,7 +58,7 @@ fn registry(key: &str, revision: &str, calls: &Arc<AtomicUsize>) -> ModelRegistr
                 calls: Arc::clone(calls),
                 name: "first",
             },
-            ModelCapabilities::new(unbounded_context_budget()),
+            ModelCapabilities::new(unbounded_model_profile()),
         )
         .expect("registration");
 
@@ -70,8 +71,8 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut registry = registry("primary", "1", &calls);
     let capabilities = ModelCapabilities {
-        context_budget: unbounded_context_budget(),
         image_input: false,
+        profile: unbounded_model_profile(),
         tool_calls: true,
     };
     registry
@@ -132,9 +133,51 @@ async fn registry_selects_models_and_rejects_duplicates_without_replacement() {
             .model_registration()
             .expect("registration")
             .capabilities(),
-        ModelCapabilities::new(unbounded_context_budget())
+        ModelCapabilities::new(unbounded_model_profile())
     );
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn registry_rejects_profiles_without_request_capacity() {
+    // Arrange
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ModelRegistry::new();
+    let profile = ModelProfile::new(100).with_reserved_tokens(100);
+
+    // Act
+    let rejected = registry.register(
+        ExecutionIdentity::new("covered", "1").expect("identity"),
+        CountingModel {
+            calls: Arc::clone(&calls),
+            name: "covered",
+        },
+        ModelCapabilities::new(profile),
+    );
+
+    // Assert
+    let error = rejected.expect_err("profile without request capacity");
+    assert_eq!(
+        error,
+        ModelRegistryError::InvalidProfile {
+            key: "covered".into(),
+            source: ContextBudgetError::ReservedOutputExceedsBudget {
+                max_request_weight: 100,
+                reserved_output_weight: 100,
+            },
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "model key `covered` declares an invalid context profile: reserved output weight 100 \
+         leaves no request capacity within 100"
+    );
+    assert_eq!(
+        registry.resolve("covered").err(),
+        Some(ModelRegistryError::UnknownKey {
+            key: "covered".into()
+        })
+    );
 }
 
 #[tokio::test]
@@ -195,8 +238,8 @@ async fn registered_identity_survives_snapshots_and_conflicts_on_changes() {
                     name: "first",
                 },
                 ModelCapabilities {
-                    context_budget: unbounded_context_budget(),
                     image_input: false,
+                    profile: unbounded_model_profile(),
                     tool_calls: true,
                 },
             )
@@ -305,8 +348,8 @@ async fn registered_builtin_configurations_execute_through_the_selected_client()
         let metadata = client.metadata().clone();
         let mut registry = ModelRegistry::new();
         let capabilities = ModelCapabilities {
-            context_budget: unbounded_context_budget(),
             image_input: false,
+            profile: unbounded_model_profile(),
             tool_calls: true,
         };
         registry
@@ -373,20 +416,20 @@ async fn shared_and_boxed_models_register_and_retain_the_original_instance() {
         .register_shared(
             ExecutionIdentity::new("shared", "1").expect("identity"),
             Arc::clone(&shared),
-            ModelCapabilities::new(unbounded_context_budget()),
+            ModelCapabilities::new(unbounded_model_profile()),
         )
         .expect("shared registration");
     registry
         .register_shared(
             ExecutionIdentity::new("boxed", "1").expect("identity"),
             Arc::from(boxed),
-            ModelCapabilities::new(unbounded_context_budget()),
+            ModelCapabilities::new(unbounded_model_profile()),
         )
         .expect("boxed registration");
     let duplicate = registry.register_shared(
         ExecutionIdentity::new("shared", "2").expect("identity"),
         Arc::clone(&shared),
-        ModelCapabilities::new(unbounded_context_budget()),
+        ModelCapabilities::new(unbounded_model_profile()),
     );
     let shared_harness = Harness::from_registry(&registry, "shared").expect("harness");
     let boxed_harness = Harness::from_registry(&registry, "boxed").expect("harness");
@@ -438,14 +481,14 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 .register_shared(
                     ExecutionIdentity::new("primary", "1").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::new(unbounded_context_budget()),
+                    ModelCapabilities::new(unbounded_model_profile()),
                 )
                 .expect("registration");
             registry
                 .register_shared(
                     ExecutionIdentity::new("other", "1").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::new(unbounded_context_budget()),
+                    ModelCapabilities::new(unbounded_model_profile()),
                 )
                 .expect("registration");
             let harness = Harness::from_registry(&registry, "primary")
@@ -471,7 +514,7 @@ async fn durable_sessions_reject_other_registrations_even_without_model_metadata
                 .register_shared(
                     ExecutionIdentity::new("primary", "2").expect("identity"),
                     Arc::clone(&shared),
-                    ModelCapabilities::new(unbounded_context_budget()),
+                    ModelCapabilities::new(unbounded_model_profile()),
                 )
                 .expect("revised registration");
             let revised = Harness::from_registry(&revised, "primary")
