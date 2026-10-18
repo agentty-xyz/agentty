@@ -12,6 +12,7 @@ use super::{
     review_comment_resolution_loading_text,
 };
 use crate::app::ReviewCacheEntry;
+use crate::app::message_admission::MessageIntent;
 use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
@@ -22,6 +23,25 @@ use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
 use crate::infra::personality::MockPersonalityCatalogClient;
 use crate::presentation::app_mode::ReviewCommentSelection;
+
+#[test]
+fn composer_modes_translate_to_application_message_intent() {
+    // Arrange
+    let cases = [
+        (PromptSessionMode::Existing, MessageIntent::FollowUp),
+        (PromptSessionMode::NewDraft, MessageIntent::Stage),
+        (PromptSessionMode::NewDeletable, MessageIntent::Start),
+        (PromptSessionMode::NewRegular, MessageIntent::Start),
+    ];
+
+    for (mode, expected) in cases {
+        // Act
+        let intent = mode.message_intent();
+
+        // Assert
+        assert_eq!(intent, expected);
+    }
+}
 
 #[tokio::test]
 async fn speed_mode_stays_normal_when_compatibility_model_switch_fails() {

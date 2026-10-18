@@ -6,7 +6,16 @@
 
 use ag_session::SessionStatus;
 
-use crate::app::prompt_intent::PromptSessionMode;
+/// Submission meaning resolved by the caller before command admission.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MessageIntent {
+    /// Save a draft until an explicit start action.
+    Stage,
+    /// Submit the first prompt, regardless of the current foreground status.
+    Start,
+    /// Route a follow-up using the current foreground status.
+    FollowUp,
+}
 
 /// The workflow selected from submission intent and foreground session state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,11 +35,11 @@ pub(super) enum MessagePlan {
 impl MessagePlan {
     /// Preserves composer intent even when the session is missing or its status
     /// has changed. The selected workflow retains responsibility for rejection.
-    pub(super) fn for_prompt(mode: PromptSessionMode, status: Option<SessionStatus>) -> Self {
-        match mode {
-            PromptSessionMode::NewDraft => Self::Stage,
-            PromptSessionMode::NewDeletable | PromptSessionMode::NewRegular => Self::Start,
-            PromptSessionMode::Existing => Self::for_existing(status),
+    pub(super) fn for_prompt(intent: MessageIntent, status: Option<SessionStatus>) -> Self {
+        match intent {
+            MessageIntent::Stage => Self::Stage,
+            MessageIntent::Start => Self::Start,
+            MessageIntent::FollowUp => Self::for_existing(status),
         }
     }
 

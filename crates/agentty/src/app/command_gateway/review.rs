@@ -15,53 +15,19 @@ use crate::domain::transient_message::TransientMessageBody;
 /// session command carries the separate admission-attempt identity.
 pub(crate) struct ReviewRequestCommand {
     pub(super) operation_id: String,
+    pub(super) remote_branch_name: Option<String>,
     pub(super) session_id: SessionId,
-    source: ReviewRequestSource,
 }
 
 impl ReviewRequestCommand {
-    /// Captures a terminal request that returns after admission.
-    pub(crate) fn from_session_view(
-        session_id: SessionId,
-        remote_branch_name: Option<String>,
-    ) -> Self {
+    /// Assigns the worker operation identity independently of delivery.
+    pub(crate) fn new(session_id: SessionId, remote_branch_name: Option<String>) -> Self {
         Self {
             operation_id: Uuid::new_v4().to_string(),
             session_id,
-            source: ReviewRequestSource::SessionView { remote_branch_name },
+            remote_branch_name,
         }
     }
-
-    /// Captures an API request whose response is owned by the worker until
-    /// publication completes, fails, or is canceled.
-    pub(crate) fn from_session_api(
-        session_id: SessionId,
-        response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
-    ) -> Self {
-        Self {
-            operation_id: Uuid::new_v4().to_string(),
-            session_id,
-            source: ReviewRequestSource::SessionApi { response_tx },
-        }
-    }
-
-    /// Supplies provenance for direct foreground publication calls.
-    pub(super) fn initiator(&self) -> super::CommandInitiator {
-        match self.source {
-            ReviewRequestSource::SessionView { .. } => super::CommandInitiator::SessionView,
-            ReviewRequestSource::SessionApi { .. } => super::CommandInitiator::SessionApi,
-        }
-    }
-}
-
-/// Delivery and acknowledgement policy, independent of mailbox provenance.
-enum ReviewRequestSource {
-    SessionView {
-        remote_branch_name: Option<String>,
-    },
-    SessionApi {
-        response_tx: oneshot::Sender<Result<ReviewRequest, SessionError>>,
-    },
 }
 
 impl App {
@@ -81,16 +47,13 @@ impl App {
     pub(super) async fn execute_review_request(
         &mut self,
         command: ReviewRequestCommand,
+        response_tx: Option<oneshot::Sender<Result<ReviewRequest, SessionError>>>,
     ) -> Result<(), SessionError> {
         let ReviewRequestCommand {
             operation_id,
             session_id,
-            source,
+            remote_branch_name,
         } = command;
-        let (remote_branch_name, response_tx) = match source {
-            ReviewRequestSource::SessionView { remote_branch_name } => (remote_branch_name, None),
-            ReviewRequestSource::SessionApi { response_tx } => (None, Some(response_tx)),
-        };
         let Some(context) = self.branch_publish_task_context(&session_id) else {
             if let Some(response_tx) = response_tx {
                 let _ = response_tx.send(Err(SessionError::NotFound));

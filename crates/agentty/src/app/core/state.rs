@@ -1452,10 +1452,9 @@ impl App {
         remote_branch_name: Option<String>,
     ) {
         if publish_branch_action == PublishBranchAction::PublishPullRequest {
-            let command =
-                ReviewRequestCommand::from_session_view(session_id.into(), remote_branch_name);
+            let command = ReviewRequestCommand::new(session_id.into(), remote_branch_name);
             if matches!(
-                self.admit_review_request(command).await,
+                self.admit_review_request(command, None).await,
                 Err(ag_session::SessionError::NotFound)
             ) {
                 self.mode = Self::view_info_popup_mode(

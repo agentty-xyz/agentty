@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use ag_forge::{ReviewCommentSnapshot, ReviewCommentThread};
 use tracing::warn;
 
-use crate::app::command_gateway::{CommandInitiator, SessionCommand, SessionMutation};
+use crate::app::command_gateway::{
+    CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
+};
+use crate::app::message_admission::MessageIntent;
 use crate::app::task::{PromptImagePasteTaskInput, TaskService};
 use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
@@ -70,6 +73,17 @@ pub(crate) enum PromptSessionMode {
     /// New non-draft session that should be preserved on cancel because it
     /// has staged drafts.
     NewRegular,
+}
+
+impl PromptSessionMode {
+    /// Drops composer cancellation policy before application admission.
+    pub(super) fn message_intent(self) -> MessageIntent {
+        match self {
+            Self::Existing => MessageIntent::FollowUp,
+            Self::NewDraft => MessageIntent::Stage,
+            Self::NewDeletable | Self::NewRegular => MessageIntent::Start,
+        }
+    }
 }
 
 /// Presentation navigation requested after one app-layer prompt workflow.
@@ -751,10 +765,13 @@ impl App {
     ) {
         let command = SessionCommand::new(
             CommandInitiator::SessionView,
-            SessionMutation::Prompt {
-                session_id,
-                session_mode,
-                prompt,
+            CommandDelivery::Admission {
+                request: SessionMutation::Prompt {
+                    session_id,
+                    intent: session_mode.message_intent(),
+                    prompt,
+                },
+                response_tx: None,
             },
         );
         let _ = self.admit_session_command(command).await;
