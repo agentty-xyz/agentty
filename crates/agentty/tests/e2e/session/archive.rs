@@ -30,8 +30,16 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         .with_title("Archived conversation"),
                     )
                     .await?;
-                    common::open_database(env)
-                        .await?
+                    let database = common::open_database(env).await?;
+                    database
+                        .sessions()
+                        .update_session_status_with_timing_at("archived-chat", "InProgress", 0)
+                        .await?;
+                    database
+                        .sessions()
+                        .update_session_status_with_timing_at("archived-chat", status, 125)
+                        .await?;
+                    database
                         .sessions()
                         .append_session_message(
                             "archived-chat",
@@ -51,6 +59,7 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         .wait_for_text("Archived conversation", 5000)
                         .press_key("Enter")
                         .wait_for_text("c: continue", 5000)
+                        .wait_for_text("Timer: 2m 5s", 5000)
                         .wait_for_stable_frame(300, 5000)
                         .capture_labeled("archive", "Archived chat without a composer")
                         .press_key("q")
@@ -70,7 +79,9 @@ async fn session_archive_chat_hides_composer() -> E2eResult {
                         ] {
                             assertion::assert_text_in_region(&archived, text, &full);
                         }
-                        for text in ["Auto Edit", "Started", "╭"] {
+                        let timing_row = archived.row_text(archived.rows() - 3);
+                        assert!(timing_row.contains("Timer: 2m 5s · Started"));
+                        for text in ["Auto Edit", "╭"] {
                             assertion::assert_not_visible(&archived, text);
                         }
                         let full = Region::full(frame.cols(), frame.rows());

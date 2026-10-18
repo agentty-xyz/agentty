@@ -34,7 +34,6 @@ fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> Sessio
         active_progress: None,
         resources: None,
         host_cpu_temperature_celsius: None,
-        default_reasoning_level: ReasoningLevel::default(),
         frame_time: FrameTime::new(0, 0, 0),
         has_merge_conflict: false,
         markdown_render_cache: test_markdown_render_cache(),
@@ -70,12 +69,10 @@ fn layout_input<'a>(
 ) -> SessionChatLayoutInput<'a> {
     SessionChatLayoutInput {
         area,
-        default_reasoning_level: ReasoningLevel::default(),
         has_merge_conflict: false,
         mode,
         review_text: None,
         session,
-        wall_clock_unix_seconds: 0,
     }
 }
 
@@ -497,7 +494,7 @@ fn test_archived_session_reclaims_composer_space_for_transcript() {
         let archived_height = transcript_view_height(layout_input(area, &session, &mode));
 
         // Assert
-        assert_eq!(archived_height, active_height + 2);
+        assert_eq!(archived_height, active_height + 1);
     }
 }
 
@@ -510,6 +507,7 @@ fn test_render_archived_session_keeps_transcript_and_navigation_without_composer
         session.transcript = Some(crate::test_support::assistant_transcript(
             "Archived conversation remains readable.",
         ));
+        session.in_progress_total_seconds = 125;
         let mode = AppMode::View {
             session_id: session.id.clone(),
             scroll_offset: None,
@@ -531,7 +529,8 @@ fn test_render_archived_session_keeps_transcript_and_navigation_without_composer
         let text = buffer_text(buffer);
         assert!(text.contains("Archived conversation remains readable."));
         assert!(!text.contains("Auto Edit"));
-        assert!(!text.contains("Started"));
+        let timing = buffer_row_text(buffer, 18, 100);
+        assert!(timing.contains("Timer: 2m 5s · Started"));
         assert!(!text.contains("╭"));
         let footer = buffer_row_text(buffer, 19, 100);
         for action in ["q: back", "c: continue", "j/k: scroll", "?: help"] {
@@ -689,7 +688,7 @@ fn test_render_question_panel_preserves_frame_without_prepared_areas() {
         input: &input,
         questions: &questions,
         selected_option_index: None,
-        started_label: "",
+        timing_label: "",
     };
 
     // Act
@@ -883,7 +882,7 @@ fn test_render_question_lookup_requires_space_for_a_complete_result_row() {
             input: &input,
             questions: &questions,
             selected_option_index: None,
-            started_label: "",
+            timing_label: "",
         };
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, height))
             .expect("failed to create terminal");
@@ -993,11 +992,12 @@ fn test_render_question_mode_with_options_in_small_terminal_does_not_panic() {
         .expect("failed to draw question mode with many options in small terminal");
 }
 
-/// Renders `mode` for a session started two hours before the frame clock and
-/// returns every buffer row.
+/// Renders `mode` for a session started two hours before the frame clock with
+/// an hour and a minute of work, and returns every buffer row.
 fn rendered_rows_with_started_session(mode: &AppMode, width: u16, height: u16) -> Vec<String> {
     let mut session = session_fixture();
     session.created_at = 1_782_864_000;
+    session.in_progress_total_seconds = 3_660;
     let mut page = test_session_chat_page(&session, mode);
     page.frame_time = FrameTime::new(1_782_871_200, 0, 0);
     let backend = ratatui::backend::TestBackend::new(width, height);
@@ -1015,9 +1015,8 @@ fn rendered_rows_with_started_session(mode: &AppMode, width: u16, height: u16) -
 }
 
 #[test]
-fn test_render_session_shows_started_label_only_in_every_footer() {
+fn test_render_session_preserves_timer_across_composer_modes_and_widths() {
     // Arrange
-    let label = "Started 2h 0m ago";
     let view_mode = AppMode::View {
         session_id: "session-id".into(),
         scroll_offset: None,
@@ -1038,8 +1037,11 @@ fn test_render_session_shows_started_label_only_in_every_footer() {
 
     // Act
     let mut rendered_rows = Vec::new();
-    for width in [80, 240] {
-        rendered_rows.push(rendered_rows_with_started_session(&view_mode, width, 16));
+    for width in [40, 41, 80, 240] {
+        rendered_rows.push((
+            width,
+            rendered_rows_with_started_session(&view_mode, width, 16),
+        ));
         for focus in [ChatFocus::Input, ChatFocus::Chat] {
             if let AppMode::Prompt { focus: current, .. } = &mut prompt {
                 *current = focus;
@@ -1047,17 +1049,25 @@ fn test_render_session_shows_started_label_only_in_every_footer() {
             if let AppMode::Question { focus: current, .. } = &mut question_mode {
                 *current = focus;
             }
-            rendered_rows.push(rendered_rows_with_started_session(&prompt, width, 16));
-            rendered_rows.push(rendered_rows_with_started_session(
-                &question_mode,
+            rendered_rows.push((
                 width,
-                16,
+                rendered_rows_with_started_session(&prompt, width, 16),
+            ));
+            rendered_rows.push((
+                width,
+                rendered_rows_with_started_session(&question_mode, width, 16),
             ));
         }
     }
 
     // Assert
-    for rows in &rendered_rows {
+    for (width, rows) in &rendered_rows {
+        let label = if *width == 40 {
+            assert!(rows.iter().all(|row| !row.contains("Started")));
+            "Timer: 1h 1m 0s"
+        } else {
+            "Timer: 1h 1m 0s · Started 2h 0m ago"
+        };
         let label_rows: Vec<&String> = rows.iter().filter(|row| row.contains(label)).collect();
         let resource_row = rows.iter().find(|row| row.contains("Processes: --"));
         assert_eq!(label_rows.len(), 1, "rows: {rows:#?}");

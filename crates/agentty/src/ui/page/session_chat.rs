@@ -1,9 +1,9 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::domain::agent::ReasoningLevel;
 use crate::domain::question::QuestionItem;
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
@@ -26,8 +26,11 @@ use crate::ui::input_layout::{
     calculate_input_height, overlay_area_above, panel_inner_height, suggestion_dropdown_height,
 };
 use crate::ui::{
-    Component, Page, layout, markdown, prompt_format, question_format, session_format,
+    Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
 };
+
+/// Archived sessions reserve one timing row and one navigation row.
+const ARCHIVED_FOOTER_HEIGHT: u16 = 2;
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -82,8 +85,6 @@ impl SessionChatLayoutPlan {
         let mut header_lines = session_format::session_header_lines(
             input.session,
             input.area.width.saturating_sub(2),
-            input.default_reasoning_level,
-            input.wall_clock_unix_seconds,
             input.has_merge_conflict,
         );
         header_lines.push(session_format::session_resources_line(
@@ -95,7 +96,7 @@ impl SessionChatLayoutPlan {
             if matches!(input.session.status, Status::Done | Status::Canceled) {
                 (
                     None,
-                    SINGLE_ROW_FOOTER_HEIGHT.min(input.area.height.saturating_sub(1)),
+                    ARCHIVED_FOOTER_HEIGHT.min(input.area.height.saturating_sub(1)),
                 )
             } else {
                 let prompt_panel =
@@ -136,8 +137,6 @@ pub struct SessionChatPageInput<'a> {
     /// Exact prompt transcript block for the currently active turn, when one
     /// has been submitted in this app process.
     pub active_prompt_output: Option<&'a str>,
-    /// Active project-scoped default reasoning level.
-    pub default_reasoning_level: ReasoningLevel,
     /// Whether the session branch currently conflicts with its base branch.
     pub has_merge_conflict: bool,
     /// Shared render cache for session transcript markdown.
@@ -172,8 +171,6 @@ pub struct SessionChatPage<'a> {
     pub active_prompt_output: Option<&'a str>,
     /// Whether the session worktree can be opened externally.
     pub can_open_worktree: bool,
-    /// Active project-scoped default reasoning level.
-    pub default_reasoning_level: ReasoningLevel,
     /// Whether the session branch currently conflicts with its base branch.
     pub has_merge_conflict: bool,
     /// Shared markdown cache reused across transcript renders in this page.
@@ -209,7 +206,6 @@ impl<'a> SessionChatPage<'a> {
             active_progress,
             resources,
             host_cpu_temperature_celsius,
-            default_reasoning_level,
             frame_time,
             has_merge_conflict,
             markdown_render_cache,
@@ -228,7 +224,6 @@ impl<'a> SessionChatPage<'a> {
             resources,
             host_cpu_temperature_celsius,
             can_open_worktree: false,
-            default_reasoning_level,
             frame_time,
             has_merge_conflict,
             markdown_render_cache,
@@ -280,12 +275,10 @@ impl<'a> SessionChatPage<'a> {
     fn render_session(&self, f: &mut Frame, area: Rect, session: &Session) {
         let mut layout_plan = SessionChatLayoutPlan::new(SessionChatLayoutInput {
             area,
-            default_reasoning_level: self.default_reasoning_level,
             has_merge_conflict: self.has_merge_conflict,
             mode: self.mode,
             review_text: self.review_text,
             session,
-            wall_clock_unix_seconds: self.frame_time.unix_seconds(),
         });
 
         if let Some(line) = layout_plan.header_lines.last_mut() {
@@ -311,9 +304,21 @@ impl<'a> SessionChatPage<'a> {
             output = output.active_progress(active_progress);
         }
         output.render(f, layout_plan.areas.output_area);
-        let started_label =
-            session_format::session_started_label(session.created_at, self.frame_time);
-        self.render_bottom_panel(f, session, &layout_plan, &started_label);
+        let timing_padding = if matches!(session.status, Status::Done | Status::Canceled) {
+            0
+        } else {
+            4
+        };
+        let timing_label = session_format::session_timing_label(
+            session,
+            self.frame_time,
+            layout_plan
+                .areas
+                .bottom_area
+                .width
+                .saturating_sub(timing_padding),
+        );
+        self.render_bottom_panel(f, session, &layout_plan, &timing_label);
         Self::render_session_header(f, layout_plan.areas.header_area, layout_plan.header_lines);
     }
 
@@ -325,25 +330,37 @@ impl<'a> SessionChatPage<'a> {
     }
 
     /// Renders the composer and footer, or the interactive question panel.
-    /// Archived sessions render only the navigation footer.
+    /// Archived sessions keep timing and navigation rows without a composer.
     ///
-    /// Every composer right-aligns `started_label` in its bottom border when it
-    /// fits.
+    /// Every composer right-aligns timing in its bottom border, prioritizing
+    /// the active-work timer when the session age does not fit alongside it.
     fn render_bottom_panel(
         &self,
         f: &mut Frame,
         session: &Session,
         layout_plan: &SessionChatLayoutPlan,
-        started_label: &str,
+        timing_label: &str,
     ) {
         let bottom_area = layout_plan.areas.bottom_area;
 
         if matches!(session.status, Status::Done | Status::Canceled) {
+            let footer_areas =
+                Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(bottom_area);
+            f.render_widget(
+                Paragraph::new(
+                    Line::styled(
+                        timing_label,
+                        Style::default().fg(style::palette::text_muted()),
+                    )
+                    .right_aligned(),
+                ),
+                footer_areas[0],
+            );
             f.render_widget(
                 Paragraph::new(session_format::session_view_footer_line(
                     self.view_help_state(session),
                 )),
-                bottom_area,
+                footer_areas[1],
             );
 
             return;
@@ -357,7 +374,7 @@ impl<'a> SessionChatPage<'a> {
             let mut chat_input =
                 ChatInput::new(&prepared_prompt_panel.title, input.text(), input.cursor)
                     .placeholder("Type your message")
-                    .footer(started_label)
+                    .footer(timing_label)
                     .active(!prepared_prompt_panel.is_chat_focused);
 
             if let Some(status) = prepared_prompt_panel.status.as_deref() {
@@ -414,7 +431,7 @@ impl<'a> SessionChatPage<'a> {
                     input,
                     questions,
                     selected_option_index: *selected_option_index,
-                    started_label,
+                    timing_label,
                 },
             );
 
@@ -426,7 +443,7 @@ impl<'a> SessionChatPage<'a> {
         let panel_areas = layout::prompt_panel_areas(bottom_area);
         ChatInput::new(&title, "", 0)
             .status(&status)
-            .footer(started_label)
+            .footer(timing_label)
             .active(false)
             .render(f, panel_areas.input_area);
 
@@ -486,8 +503,6 @@ pub(crate) struct SessionChatLayoutInput<'a> {
     /// Page area routed to the session chat page, excluding the status and
     /// footer bars.
     pub(crate) area: Rect,
-    /// Active project-scoped default reasoning level shown in the header.
-    pub(crate) default_reasoning_level: ReasoningLevel,
     /// Whether the session branch currently conflicts with its base branch.
     pub(crate) has_merge_conflict: bool,
     /// Current UI mode, which determines the reserved bottom-panel height.
@@ -496,8 +511,6 @@ pub(crate) struct SessionChatLayoutInput<'a> {
     pub(crate) review_text: Option<&'a str>,
     /// Session whose transcript is rendered.
     pub(crate) session: &'a Session,
-    /// Render-time clock used for the header's deterministic timers.
-    pub(crate) wall_clock_unix_seconds: i64,
 }
 
 /// Returns the transcript rows the session output panel paints for `input`.
@@ -652,7 +665,7 @@ struct QuestionPanelState<'a> {
     input: &'a input::InputState,
     questions: &'a [QuestionItem],
     selected_option_index: Option<usize>,
-    started_label: &'a str,
+    timing_label: &'a str,
 }
 
 /// Renders the question-mode bottom panel with question text, options, input,
@@ -671,7 +684,7 @@ fn render_question_panel(
         input,
         questions,
         selected_option_index,
-        started_label,
+        timing_label,
     } = *state;
     let question_item = questions.get(current_index);
     let question = question_item.map_or("", |item| item.text.as_str());
@@ -729,7 +742,7 @@ fn render_question_panel(
     };
     let chat_input = ChatInput::new("Answer", display_text, display_cursor)
         .placeholder(input_placeholder)
-        .footer(started_label)
+        .footer(timing_label)
         .active(is_free_text_mode && !is_chat_focused);
     if panel_areas.input_area.height > 0 {
         chat_input.render(f, panel_areas.input_area);

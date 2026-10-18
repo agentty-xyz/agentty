@@ -149,7 +149,6 @@ enum SessionSurfaceMode<'a> {
 #[derive(Clone, Copy)]
 struct SessionChatRenderContext<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
-    default_reasoning_level: ReasoningLevel,
     frame_time: FrameTime,
     is_tmux_session: bool,
     markdown_render_cache: &'a markdown::MarkdownRenderCache,
@@ -175,7 +174,6 @@ struct SessionChatRenderContext<'a> {
 #[derive(Clone, Copy)]
 struct FrameResources<'a> {
     active_prompt_outputs: &'a HashMap<SessionId, String>,
-    default_reasoning_level: ReasoningLevel,
     diff_layout_cache: &'a page::diff::DiffLayoutCache,
     frame_time: FrameTime,
     is_tmux_session: bool,
@@ -206,7 +204,6 @@ impl<'a> FrameResources<'a> {
     {
         SessionChatRenderContext {
             active_prompt_outputs: self.active_prompt_outputs,
-            default_reasoning_level: self.default_reasoning_level,
             is_tmux_session: self.is_tmux_session,
             markdown_render_cache: self.markdown_render_cache,
             mode,
@@ -282,7 +279,6 @@ pub(crate) fn route_frame(f: &mut Frame, area: Rect, context: RenderContext<'_>)
 
     let resources = FrameResources {
         active_prompt_outputs,
-        default_reasoning_level,
         diff_layout_cache: render_cache_store.diff_layout_cache(),
         is_tmux_session,
         markdown_render_cache: render_cache_store.markdown_render_cache(),
@@ -759,7 +755,6 @@ fn render_diff_surface(
 fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderContext<'_>) {
     let SessionChatRenderContext {
         active_prompt_outputs,
-        default_reasoning_level,
         is_tmux_session,
         markdown_render_cache,
         mode,
@@ -801,7 +796,6 @@ fn render_session_chat(f: &mut Frame, area: Rect, context: SessionChatRenderCont
         active_progress,
         resources: session_resources.get(session_id).copied(),
         host_cpu_temperature_celsius: session_cpu_temperatures.get(session_id).copied(),
-        default_reasoning_level,
         has_merge_conflict,
         markdown_render_cache,
         mode,

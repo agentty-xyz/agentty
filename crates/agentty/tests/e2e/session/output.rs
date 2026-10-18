@@ -1184,6 +1184,9 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
                 .wait_for_text("✗ skill review", 10000)
                 .capture_labeled("settled", "Statuses update in place")
                 .wait_for_text("Tools: Bash ×1", 15000)
+                // The summary is published before live-row cleanup completes.
+                // Wait for turn finalization before asserting the final frame.
+                .wait_for_text("Enter: reply", 15000)
         }, |frame, report| Box::pin(async move {
             for (index, labels) in [
                 ["… Bash · printf activity-details", "… skill review"],

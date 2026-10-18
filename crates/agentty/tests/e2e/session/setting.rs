@@ -542,30 +542,71 @@ async fn test_balanced_response_style_remains_visible() -> E2eResult {
     Ok(())
 }
 
-/// Verify constrained headers and prompt titles preserve style, token usage,
-/// and the permission indicator.
+/// Verify constrained headers and prompt titles preserve style, change totals,
+/// the permission indicator, and active-work timing across composer focus
+/// changes.
 #[tokio::test]
-async fn test_narrow_session_preserves_style_tokens_and_permission() -> E2eResult {
+async fn test_narrow_session_preserves_style_totals_and_permission() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("narrow_session_preserves_style_tokens_and_permission")
+    FeatureTest::new("narrow_session_preserves_style_totals_and_permission")
         .with_git()
         .with_terminal_size(40, 24)
-        .setup(|env| Box::pin(async move { seed_review_ready_session_on_sessions_tab(env).await }))
+        .setup(|env| {
+            Box::pin(async move {
+                seed_review_ready_session_on_sessions_tab(env).await?;
+                let database = common::open_database(env).await?;
+                database
+                    .sessions()
+                    .update_session_created_at(
+                        "review-shortcut-0001",
+                        common::PINNED_CLOCK_UNIX_SECONDS - 7_200,
+                    )
+                    .await?;
+                database
+                    .sessions()
+                    .update_session_status_with_timing_at("review-shortcut-0001", "InProgress", 0)
+                    .await?;
+                database
+                    .sessions()
+                    .update_session_status_with_timing_at("review-shortcut-0001", "Review", 3_660)
+                    .await?;
+
+                Ok(())
+            })
+        })
         .run(
             |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
+                    .wait_for_text("Timer: 1h 1m 0s", 5000)
+                    .capture_labeled("view", "Timer while viewing a narrow session")
                     .press_key("Enter")
                     .wait_for_text("Balanced · Normal · Auto Edit", 5000)
-                    .wait_for_text("Tokens: 0/0", 5000)
+                    .wait_for_text("(+12 -3)", 5000)
+                    .capture_labeled("reply", "Timer while replying in a narrow session")
+                    .press_key("Tab")
+                    .wait_for_text("j/k: scroll", 5000)
                     .wait_for_stable_frame(300, 5000)
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "Balanced · Normal · Auto Edit", &full);
-                    assertion::assert_text_in_region(frame, "Tokens: 0/0", &full);
+                    assertion::assert_text_in_region(frame, "(+12 -3)", &full);
+                    assertion::assert_not_visible(frame, "Tokens:");
+                    let view_frame = common::frame_from_capture(&report.captures[0]);
+                    let reply_frame = common::frame_from_capture(&report.captures[1]);
+                    for captured_frame in [&view_frame, &reply_frame, frame] {
+                        let timing_rows: Vec<String> = (0..captured_frame.rows())
+                            .map(|row| captured_frame.row_text(row))
+                            .filter(|row| row.contains("Timer: 1h 1m 0s"))
+                            .collect();
+                        assert_eq!(timing_rows.len(), 1);
+                        assert!(timing_rows[0].contains("╰"));
+                        assert!(timing_rows[0].trim_end().ends_with("╯"));
+                        assertion::assert_not_visible(captured_frame, "Started");
+                    }
                 })
             },
         )

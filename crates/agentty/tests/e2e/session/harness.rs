@@ -181,7 +181,7 @@ async fn test_harness_session_runs_with_flag_and_provider_key() -> E2eResult {
                     // scroll them, so the final frame checks stable session
                     // facts.
                     let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "Lines: +1 / -0", &full);
+                    assertion::assert_text_in_region(frame, "(+1 -0)", &full);
                     assertion::assert_text_in_region(frame, "harness/muse-spark-1.3", &full);
                 })
             },

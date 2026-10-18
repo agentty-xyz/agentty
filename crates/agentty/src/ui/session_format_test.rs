@@ -2,12 +2,11 @@ use ag_session::test_support as model_fixture;
 use ratatui::style::Modifier;
 
 use super::{
-    prompt_session_status, session_header_lines, session_metadata_text,
-    session_output_queued_lines, session_output_status_icon, session_output_status_message,
-    session_output_uses_tachyon_loader, session_resources_line, session_speed_display,
-    session_started_label,
+    prompt_session_status, session_header_lines, session_output_queued_lines,
+    session_output_status_icon, session_output_status_message, session_output_uses_tachyon_loader,
+    session_resources_line, session_speed_display, session_started_label,
 };
-use crate::domain::agent::{AgentModel, ReasoningLevel, ResponseStyle};
+use crate::domain::agent::{AgentModel, ResponseStyle};
 use crate::domain::resource::SessionResources;
 use crate::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, Session, Status,
@@ -107,39 +106,42 @@ fn session_with_review_request(url: &str) -> Session {
 }
 
 #[test]
-fn test_session_header_lines_keeps_review_request_url_on_same_line_if_it_fits() {
+fn test_session_header_lines_shows_review_request_url_below_title() {
     // Arrange
     let session = session_with_review_request("https://github.com/agentty-xyz/agentty/pull/42");
     let header_width = 180;
 
     // Act
-    let header_lines =
-        session_header_lines(&session, header_width, ReasoningLevel::default(), 0, false);
+    let header_lines = session_header_lines(&session, header_width, false);
     let metadata_line = header_lines[1].to_string();
 
     // Assert
     assert_eq!(header_lines.len(), 2);
-    assert_eq!(metadata_line.chars().count(), usize::from(header_width));
-    assert!(metadata_line.contains("Tokens: 0/0"));
-    assert!(metadata_line.ends_with("https://github.com/agentty-xyz/agentty/pull/42"));
+    assert_eq!(
+        metadata_line,
+        "https://github.com/agentty-xyz/agentty/pull/42"
+    );
 }
 
 #[test]
-fn test_session_header_lines_wraps_review_request_url_to_second_line_when_too_narrow() {
+fn test_session_header_lines_truncates_review_url_and_omits_empty_urls() {
     // Arrange
-    let session = session_with_review_request("https://example.test/pull/42");
+    for (url, expected) in [
+        (
+            " https://example.test/pull/42 ",
+            Some("https://example.t..."),
+        ),
+        ("", None),
+        ("  ", None),
+    ] {
+        let session = session_with_review_request(url);
 
-    // Act
-    let header_lines = session_header_lines(&session, 60, ReasoningLevel::default(), 0, false);
-    let metadata_line = header_lines[1].to_string();
-    let review_url_line = header_lines[2].to_string();
+        // Act
+        let header = session_header_lines(&session, 20, false);
 
-    // Assert
-    assert_eq!(header_lines.len(), 3);
-    assert!(header_lines[0].to_string().starts_with("[XS] "));
-    assert!(metadata_line.contains("Tokens: 0/0"));
-    assert!(review_url_line.starts_with("https://"));
-    assert!(review_url_line.ends_with("https://example.test/pull/42"));
+        // Assert
+        assert_eq!(header.get(1).map(ToString::to_string).as_deref(), expected);
+    }
 }
 
 #[test]
@@ -149,7 +151,7 @@ fn test_session_header_lines_show_red_merge_conflict_alert() {
     session.base_branch = "develop".to_string();
 
     // Act
-    let header_lines = session_header_lines(&session, 100, ReasoningLevel::default(), 0, true);
+    let header_lines = session_header_lines(&session, 100, true);
 
     // Assert
     assert_eq!(header_lines[1].to_string(), "Merge conflict with develop");
@@ -166,30 +168,34 @@ fn test_session_header_lines_show_red_merge_conflict_alert() {
 }
 
 #[test]
-fn test_session_metadata_text_omits_review_request_url() {
-    // Arrange
-    let session = session_with_review_request("https://example.test/pull/42");
-
-    // Act
-    let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
-
-    // Assert
-    assert!(metadata_text.contains("Tokens: 0/0"));
-    assert!(!metadata_text.contains("https://example.test/pull/42"));
-}
-
-#[test]
-fn test_session_metadata_text_shows_stats_without_composer_fields() {
+fn test_session_header_shows_colored_totals_without_composer_fields() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = model_fixture::codex_selection();
+    session.stats.added_lines = 12;
+    session.stats.deleted_lines = 3;
 
     // Act
-    let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+    let header = session_header_lines(&session, 160, false);
+    let title = &header[0];
 
     // Assert
-    assert!(metadata_text.contains("Timer: 0s  Lines: +0 / -0"));
-    assert!(metadata_text.contains("Tokens: 0/0"));
+    assert_eq!(header.len(), 1);
+    assert_eq!(title.width(), 160);
+    assert!(title.to_string().ends_with("(+12 -3)"));
+    for (text, color) in [
+        ("(", style::palette::warning()),
+        ("+12", style::palette::success()),
+        ("-3", style::palette::danger()),
+        (")", style::palette::warning()),
+    ] {
+        let span = title
+            .spans
+            .iter()
+            .find(|span| span.content == text)
+            .expect("change total span should be present");
+        assert_eq!(span.style.fg, Some(color));
+    }
     for field in [
         "Agent:",
         "Model:",
@@ -197,13 +203,15 @@ fn test_session_metadata_text_shows_stats_without_composer_fields() {
         "Style:",
         "Speed:",
         "Reasoning:",
+        "Timer:",
+        "Tokens:",
     ] {
-        assert!(!metadata_text.contains(field));
+        assert!(!title.to_string().contains(field));
     }
 }
 
 #[test]
-fn test_session_metadata_text_keeps_stats_and_speed_in_prompt_only() {
+fn test_session_header_keeps_speed_in_prompt_only() {
     for speed in [
         crate::domain::agent::SpeedMode::Normal,
         crate::domain::agent::SpeedMode::Fast,
@@ -214,16 +222,12 @@ fn test_session_metadata_text_keeps_stats_and_speed_in_prompt_only() {
         session.speed_mode = speed;
 
         // Act
-        let header = session_header_lines(&session, 160, ReasoningLevel::default(), 0, false);
+        let header = session_header_lines(&session, 160, false);
         let prompt_status = prompt_session_status(&session);
 
         // Assert
-        assert!(
-            header[1]
-                .to_string()
-                .contains("Timer: 0s  Lines: +0 / -0  Tokens: 0/0")
-        );
-        assert!(!header[1].to_string().contains("Speed:"));
+        assert!(header[0].to_string().ends_with("(+0 -0)"));
+        assert!(!header[0].to_string().contains("Speed:"));
         assert_eq!(
             prompt_status,
             format!("Balanced · {} · Auto Edit", speed.name())
@@ -232,7 +236,7 @@ fn test_session_metadata_text_keeps_stats_and_speed_in_prompt_only() {
 }
 
 #[test]
-fn test_session_metadata_text_omits_speed_for_provider_without_speed_control() {
+fn test_session_header_omits_speed_for_provider_without_speed_control() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = crate::domain::agent::AgentSelection::new(
@@ -242,11 +246,11 @@ fn test_session_metadata_text_omits_speed_for_provider_without_speed_control() {
     session.speed_mode = crate::domain::agent::SpeedMode::Fast;
 
     // Act
-    let metadata_text = session_metadata_text(&session, 160, ReasoningLevel::default(), 0);
+    let header = session_header_lines(&session, 160, false);
 
     // Assert
-    assert!(metadata_text.contains("Timer: 0s  Lines: +0 / -0  Tokens: 0/0"));
-    assert!(!metadata_text.contains("Speed:"));
+    assert!(header[0].to_string().ends_with("(+0 -0)"));
+    assert!(!header[0].to_string().contains("Speed:"));
 }
 
 #[test]
@@ -272,27 +276,24 @@ fn test_prompt_status_shows_every_response_style() {
 }
 
 #[test]
-fn metadata_preserves_tokens_at_constrained_widths() {
+fn header_preserves_totals_at_constrained_widths() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();
     session.agent = model_fixture::codex_selection();
     session.stats.input_tokens = 123;
     session.stats.output_tokens = 456;
+    session.title = Some("修复 **wide title** with a long description".to_string());
 
     for width in 0..=200 {
         // Act
-        let metadata = session_metadata_text(&session, width, ReasoningLevel::default(), 0);
-        let header = session_header_lines(&session, width, ReasoningLevel::default(), 0, false);
+        let header = session_header_lines(&session, width, false);
 
         // Assert
-        assert_eq!(header.len(), 2);
-        assert_eq!(header[1].to_string(), metadata);
-        assert!(header[1].width() <= usize::from(width));
-        if width >= 15 {
-            assert!(
-                metadata.contains("Tokens: 123/456"),
-                "width {width}: {metadata}"
-            );
+        assert_eq!(header.len(), 1);
+        assert!(header[0].width() <= usize::from(width));
+        if width >= 7 {
+            assert!(header[0].to_string().ends_with("(+0 -0)"));
+            assert_eq!(header[0].width(), usize::from(width));
         }
     }
 }
