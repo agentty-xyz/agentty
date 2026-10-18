@@ -3,6 +3,9 @@
 .agentty/
 docs/site/public/
 
+# Claude Code session worktrees
+.claude/worktrees/
+
 # Python bytecode caches
 __pycache__/
 *.py[cod]
