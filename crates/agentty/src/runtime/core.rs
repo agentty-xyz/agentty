@@ -157,6 +157,16 @@ where
         terminal,
         tick,
     };
+    // Draw before applying queued background results so the first screen
+    // appears immediately and never depends on how quickly startup work, such
+    // as agent CLI version checks, finishes.
+    render_frame(
+        main_loop_state.app,
+        main_loop_state.terminal,
+        main_loop_state.clock.as_ref(),
+        &mut main_loop_state.last_draw,
+        main_loop_state.presentation.as_ref(),
+    )?;
 
     run_until_quit(&mut main_loop_state, |state| Box::pin(state.run_cycle())).await
 }
