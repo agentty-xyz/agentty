@@ -61,5 +61,5 @@ pub use service::{
     DurableMessageVisibility, QuestionAnswer, SessionBackend, SessionService,
 };
 pub use setting::SettingName;
-pub use task::{SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
+pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use transcript_notice::TranscriptNotice;

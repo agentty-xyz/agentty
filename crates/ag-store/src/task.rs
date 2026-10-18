@@ -1,9 +1,10 @@
-//! Atomic task admission and an operation-backed attempt read model.
+//! Independent task planning, atomic attempt admission, and attempt history.
 
 use std::sync::Arc;
 
 use ag_session::{
-    DurableMessageVisibility, SessionId, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
+    CreateTaskRequest, DurableMessageVisibility, SessionId, SubmitTaskRequest, Task, TaskAttempt,
+    TaskAttemptStatus,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -14,6 +15,19 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
+    /// Creates an outcome with zero attempts in any persisted session.
+    /// Identical requests are idempotent; session and objective are immutable.
+    async fn create_task(
+        &self,
+        session_id: &str,
+        request: &CreateTaskRequest,
+    ) -> Result<(), DbError>;
+
+    /// Loads all tasks and histories for one session in one snapshot, ordered
+    /// by creation timestamp and insertion order. Missing sessions return
+    /// empty.
+    async fn list_tasks(&self, session_id: &str) -> Result<Vec<Task>, DbError>;
+
     /// Atomically creates the task, attempt, and queued operation. Returns
     /// `false` for an identical delivery, including a terminal attempt.
     /// Rejects conflicting payloads, completed tasks, and concurrent attempts.
@@ -90,10 +104,121 @@ impl SqliteTaskRepository {
 
         Ok(true)
     }
+
+    /// Reads attempt state using the caller's task snapshot.
+    async fn load_attempts(
+        connection: &mut SqliteConnection,
+        task_id: &str,
+    ) -> Result<Vec<TaskAttempt>, DbError> {
+        let attempts = sqlx::query!(
+            r#"SELECT a.id, a.message, a.is_visible AS "is_visible: bool",
+                      o.id AS "operation_id!", o.status AS "status!", o.queued_at,
+                      o.started_at, o.finished_at, o.last_error
+               FROM task_attempt a JOIN session_operation o ON o.id = a.session_operation_id
+               WHERE a.task_id = ? ORDER BY a.rowid"#,
+            task_id
+        )
+        .fetch_all(connection)
+        .await?;
+
+        attempts
+            .into_iter()
+            .map(|attempt| {
+                let status = match attempt.status.as_str() {
+                    "queued" => TaskAttemptStatus::Queued,
+                    "running" => TaskAttemptStatus::Running,
+                    "done" => TaskAttemptStatus::Succeeded,
+                    "failed" => TaskAttemptStatus::Failed,
+                    "canceled" => TaskAttemptStatus::Canceled,
+                    _ => {
+                        return Err(DbError::InvalidStatus {
+                            entity: "task attempt",
+                            value: attempt.status,
+                        });
+                    }
+                };
+
+                Ok(TaskAttempt {
+                    finished_at: attempt.finished_at,
+                    id: attempt.id,
+                    last_error: attempt.last_error,
+                    message: attempt.message,
+                    operation_id: attempt.operation_id,
+                    queued_at: attempt.queued_at,
+                    started_at: attempt.started_at,
+                    status,
+                    visibility: if attempt.is_visible {
+                        DurableMessageVisibility::Visible
+                    } else {
+                        DurableMessageVisibility::Hidden
+                    },
+                })
+            })
+            .collect()
+    }
 }
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
+    async fn create_task(
+        &self,
+        session_id: &str,
+        request: &CreateTaskRequest,
+    ) -> Result<(), DbError> {
+        if request.task_id.trim().is_empty() || request.objective.trim().is_empty() {
+            return Err(Self::invalid("Task and objective must be nonempty"));
+        }
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query!(
+            "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
+             CONFLICT(id) DO NOTHING",
+            request.task_id,
+            session_id,
+            request.objective,
+            now
+        )
+        .execute(&mut *transaction)
+        .await?;
+        let task = sqlx::query!(
+            "SELECT session_id, objective, completed_at FROM task WHERE id = ?",
+            request.task_id
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        if task.session_id != session_id || task.objective != request.objective {
+            return Err(Self::invalid("Task session and objective are immutable"));
+        }
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn list_tasks(&self, session_id: &str) -> Result<Vec<Task>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let rows = sqlx::query!(
+            "SELECT id, session_id, objective, created_at, completed_at FROM task WHERE \
+             session_id = ? ORDER BY created_at, rowid",
+            session_id
+        )
+        .fetch_all(&mut *transaction)
+        .await?;
+        let mut tasks = Vec::with_capacity(rows.len());
+        for row in rows {
+            tasks.push(Task {
+                attempts: Self::load_attempts(&mut transaction, &row.id).await?,
+                completed_at: row.completed_at,
+                created_at: row.created_at,
+                id: row.id,
+                objective: row.objective,
+                session_id: SessionId::from(row.session_id),
+            });
+        }
+        transaction.commit().await?;
+
+        Ok(tasks)
+    }
+
     async fn claim_attempt(
         &self,
         session_id: &str,
@@ -199,50 +324,7 @@ impl TaskRepository for SqliteTaskRepository {
         let Some(row) = row else {
             return Ok(None);
         };
-        let attempts = sqlx::query!(
-            r#"SELECT a.id, a.message, a.is_visible AS "is_visible: bool",
-                      o.id AS "operation_id!", o.status AS "status!", o.queued_at,
-                      o.started_at, o.finished_at, o.last_error
-               FROM task_attempt a JOIN session_operation o ON o.id = a.session_operation_id
-               WHERE a.task_id = ? ORDER BY a.rowid"#,
-            task_id
-        )
-        .fetch_all(&mut *transaction)
-        .await?;
-        let attempts = attempts
-            .into_iter()
-            .map(|attempt| {
-                let status = match attempt.status.as_str() {
-                    "queued" => TaskAttemptStatus::Queued,
-                    "running" => TaskAttemptStatus::Running,
-                    "done" => TaskAttemptStatus::Succeeded,
-                    "failed" => TaskAttemptStatus::Failed,
-                    "canceled" => TaskAttemptStatus::Canceled,
-                    _ => {
-                        return Err(DbError::InvalidStatus {
-                            entity: "task attempt",
-                            value: attempt.status,
-                        });
-                    }
-                };
-
-                Ok(TaskAttempt {
-                    finished_at: attempt.finished_at,
-                    id: attempt.id,
-                    last_error: attempt.last_error,
-                    message: attempt.message,
-                    operation_id: attempt.operation_id,
-                    queued_at: attempt.queued_at,
-                    started_at: attempt.started_at,
-                    status,
-                    visibility: if attempt.is_visible {
-                        DurableMessageVisibility::Visible
-                    } else {
-                        DurableMessageVisibility::Hidden
-                    },
-                })
-            })
-            .collect::<Result<Vec<_>, DbError>>()?;
+        let attempts = Self::load_attempts(&mut transaction, task_id).await?;
         transaction.commit().await?;
 
         Ok(Some(Task {

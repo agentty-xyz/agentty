@@ -27,5 +27,8 @@ mod setting;
 #[path = "session_api_test/synchronization_test.rs"]
 mod synchronization;
 
+#[path = "session_api_test/task_test.rs"]
+mod task;
+
 #[path = "session_api_test/transition_test.rs"]
 mod transition;

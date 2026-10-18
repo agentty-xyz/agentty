@@ -174,6 +174,16 @@ impl App {
                 request,
                 session_id,
             } => self.submit_api_durable_message(&session_id, request).await,
+            SessionMutation::CreateTask {
+                request,
+                session_id,
+            } => self
+                .services
+                .db()
+                .tasks()
+                .create_task(&session_id, &request)
+                .await
+                .map_err(|error| SessionError::Operation(error.to_string())),
             SessionMutation::SubmitTask {
                 request,
                 session_id,

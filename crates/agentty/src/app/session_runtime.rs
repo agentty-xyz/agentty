@@ -31,6 +31,10 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    ListTasks {
+        response_tx: oneshot::Sender<Result<Vec<ag_session::Task>, SessionError>>,
+        session_id: SessionId,
+    },
     GetTask {
         response_tx: oneshot::Sender<Result<Option<ag_session::Task>, SessionError>>,
         task_id: String,
@@ -51,6 +55,31 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Persists a desired outcome through shared admission without execution.
+    pub(crate) async fn create_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::CreateTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::CreateTask {
+            request,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
+    /// Lists one session's task history through the foreground actor.
+    pub(crate) async fn list_tasks(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ag_session::Task>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::ListTasks {
+            response_tx,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
     /// Submits an explicit attempt through shared admission.
     pub(crate) async fn submit_task(
         &self,
