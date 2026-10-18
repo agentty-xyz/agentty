@@ -803,8 +803,9 @@ END
         events[3].kind(),
         LifecycleEventKind::TurnFailed {
             error_type: TurnErrorType::Model(ModelErrorType::InvalidResponse),
+            report: Some(report),
             ..
-        }
+        } if report.model_requests().is_empty()
     ));
     if let SessionError::TurnPersistence { turn, persistence } = error {
         assert!(matches!(

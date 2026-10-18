@@ -766,3 +766,39 @@ async fn an_overflow_on_the_first_request_of_a_turn_drops_history_and_lowers_lat
             if budget == 20_000 && required > budget
     ));
 }
+
+#[tokio::test]
+async fn a_failed_turn_reports_the_requests_and_tool_calls_before_its_failure() {
+    // Arrange
+    let (model, _requests) = scripted(vec![
+        Ok(ModelResponse::ToolCall(read_of(
+            "read_0",
+            &json!({"path": "notes.txt"}),
+        ))),
+        Err(ModelError::InvalidResponse),
+    ]);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let harness = repetition_harness(model, &events);
+
+    // Act
+    let error = harness
+        .run_once("read the notes", object_schema())
+        .await
+        .expect_err("the second request fails");
+
+    // Assert
+    assert!(matches!(
+        error,
+        TurnError::Model(ModelError::InvalidResponse)
+    ));
+    let events = events.lock().expect("events lock");
+    let report = events
+        .iter()
+        .find_map(|event| match event.kind() {
+            LifecycleEventKind::TurnFailed { report, .. } => report.clone(),
+            _ => None,
+        })
+        .expect("the failure carries a report");
+    assert_eq!(report.model_requests().len(), 1);
+    assert_eq!(report.tool_calls().len(), 1);
+}

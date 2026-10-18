@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -70,24 +70,41 @@ pub(crate) struct Engine<'a> {
 }
 
 impl Engine<'_> {
+    /// Runs one turn to its final output. A turn that fails after
+    /// preparing its request still reports what it did before failing.
     pub(crate) async fn run(
         &self,
         request: ModelRequest,
         turn_id: Option<LifecycleId>,
         journal: Option<WriteJournal>,
-    ) -> Result<(TurnOutcome, Vec<ModelMessage>), TurnError> {
+    ) -> Result<(TurnOutcome, Vec<ModelMessage>), EngineFailure> {
         let started_at = Instant::now();
         let recorder = journal.clone();
-        let (mut request, tools) = self.prepare_request(request, journal)?;
-        let mut rounds = ToolRounds::new(tools, recorder);
-        let mut context_fit = context::ContextFit::default();
-        let mut model_request_index = 0_u64;
-        let mut model_requests = Vec::new();
-        let mut output_corrections = 0;
-        let mut consecutive_malformed_responses = 0;
-        let mut malformed_tool_calls = 0;
-        let mut repetition_nudges = 0;
-        let mut overflow = OverflowRecovery::default();
+        let (request, tools) = self
+            .prepare_request(request, journal)
+            .map_err(EngineFailure::unreported)?;
+        let mut state = TurnState::new(ToolRounds::new(tools, recorder));
+        match self.drive(request, turn_id, &mut state).await {
+            Ok((output, messages)) => {
+                let report = state.into_report(started_at.elapsed());
+
+                Ok((TurnOutcome::new(output, report), messages))
+            }
+            Err(error) => Err(EngineFailure {
+                error,
+                report: Some(Box::new(state.into_report(started_at.elapsed()))),
+            }),
+        }
+    }
+
+    /// Sends requests and executes tool calls until the model answers with
+    /// output, recording what the turn did in `state`.
+    async fn drive(
+        &self,
+        mut request: ModelRequest,
+        turn_id: Option<LifecycleId>,
+        state: &mut TurnState,
+    ) -> Result<(Value, Vec<ModelMessage>), TurnError> {
         let summary_trigger = (self.context_summaries == ContextSummaryPolicy::Enabled)
             .then_some(ContextSummaryTrigger::Proactive);
 
@@ -100,23 +117,26 @@ impl Engine<'_> {
             let (budget, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
-            let step = context_fit
+            let step = state
+                .context_fit
                 .fit(self.context_estimator, budget, &request, summary_trigger)
                 .map_err(|error| {
-                    overflow.rejection_or(ContextCalibration::declared_failure(
-                        self.context_budget,
-                        calibration,
-                        error,
-                    ))
+                    state
+                        .overflow
+                        .rejection_or(ContextCalibration::declared_failure(
+                            self.context_budget,
+                            calibration,
+                            error,
+                        ))
                 })?;
             let (fitted, context_activity) = match step {
                 FitStep::Send(fitted, context_activity) => (fitted, context_activity),
                 FitStep::Summarize(job) => {
                     self.summarize_rounds(
                         &job,
-                        (&request, &mut context_fit),
+                        (&request, &mut state.context_fit),
                         turn_id,
-                        (&mut model_request_index, &mut model_requests),
+                        (&mut state.model_request_index, &mut state.model_requests),
                     )
                     .await;
 
@@ -124,19 +144,25 @@ impl Engine<'_> {
                 }
             };
             let completed = self
-                .complete_model_request(fitted.unwrap_or(&request), model_request_index, turn_id)
+                .complete_model_request(
+                    fitted.unwrap_or(&request),
+                    state.model_request_index,
+                    turn_id,
+                )
                 .await;
-            let estimated_weight = context_fit.sent_weight();
-            overflow.retried(self.lifecycle, turn_id, estimated_weight);
-            model_request_index = model_request_index.saturating_add(1);
+            let estimated_weight = state.context_fit.sent_weight();
+            state
+                .overflow
+                .retried(self.lifecycle, turn_id, estimated_weight);
+            state.model_request_index = state.model_request_index.saturating_add(1);
             let (response, activity, reasoning_content) = match completed {
                 // An invalid final output is re-requested with request-only
                 // feedback; neither it nor the feedback is journaled, so
                 // replayed history keeps only completed exchanges.
                 Err(
                     error @ (ModelError::InvalidJson { .. } | ModelError::SchemaViolation { .. }),
-                ) if output_corrections < MAX_OUTPUT_CORRECTIONS => {
-                    output_corrections += 1;
+                ) if state.output_corrections < MAX_OUTPUT_CORRECTIONS => {
+                    state.output_corrections += 1;
                     request.record_feedback(output_feedback(&error));
 
                     continue;
@@ -146,13 +172,15 @@ impl Engine<'_> {
                 // re-sent; the rejection fails the turn only once the
                 // recoveries are spent or the refit cannot shrink it.
                 Err(error) if error.is_context_overflow() => {
-                    overflow.reject(self.context_calibration, error, estimated_weight)?;
+                    state
+                        .overflow
+                        .reject(self.context_calibration, error, estimated_weight)?;
 
                     continue;
                 }
                 completed => completed?,
             };
-            model_requests.push(self.accepted_request(
+            state.model_requests.push(self.accepted_request(
                 activity.with_context(context_activity),
                 estimated_weight,
                 calibration,
@@ -161,14 +189,8 @@ impl Engine<'_> {
             let (calls, batched) = match response {
                 ModelResponse::Output(output) => {
                     request.record_output_with_reasoning(&output, reasoning_content);
-                    let report =
-                        TurnReport::new(started_at.elapsed(), model_requests, rounds.activity)
-                            .with_corrections(output_corrections, malformed_tool_calls)
-                            .with_repetition_nudges(repetition_nudges)
-                            .with_context_overflow_recoveries(overflow.recoveries)
-                            .with_context_summary_failures(context_fit.summary_failures());
 
-                    return Ok((TurnOutcome::new(output, report), request.into_messages()));
+                    return Ok((output, request.into_messages()));
                 }
                 ModelResponse::ToolCall(call) => (vec![call], false),
                 ModelResponse::ToolCalls(calls) => {
@@ -180,18 +202,19 @@ impl Engine<'_> {
                     (calls, true)
                 }
             };
-            malformed_tool_calls += count_malformed(&calls, &mut consecutive_malformed_responses)?;
+            state.malformed_tool_calls +=
+                count_malformed(&calls, &mut state.consecutive_malformed_responses)?;
             let repetition = self
                 .execute_tool_calls(
                     &calls,
                     batched,
                     turn_id,
                     &mut request,
-                    &context_fit,
-                    &mut rounds,
+                    &state.context_fit,
+                    &mut state.rounds,
                 )
                 .await?;
-            repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
+            state.repetition_nudges += self.act_on_repetition(repetition, &mut request, turn_id)?;
         }
     }
 
@@ -618,6 +641,61 @@ impl Engine<'_> {
                 Err(error)
             }
         }
+    }
+}
+
+/// A failed turn's error with the report of what it did before failing,
+/// or `None` when it failed before preparing its request.
+pub(crate) struct EngineFailure {
+    pub(crate) error: TurnError,
+    pub(crate) report: Option<Box<TurnReport>>,
+}
+
+impl EngineFailure {
+    fn unreported(error: TurnError) -> Self {
+        Self {
+            error,
+            report: None,
+        }
+    }
+}
+
+/// Everything one turn did so far; its report is built from this whether
+/// the turn finishes or fails.
+struct TurnState {
+    rounds: ToolRounds,
+    context_fit: context::ContextFit,
+    model_request_index: u64,
+    model_requests: Vec<ModelRequestActivity>,
+    output_corrections: usize,
+    consecutive_malformed_responses: usize,
+    malformed_tool_calls: usize,
+    repetition_nudges: usize,
+    overflow: OverflowRecovery,
+}
+
+impl TurnState {
+    fn new(rounds: ToolRounds) -> Self {
+        Self {
+            rounds,
+            context_fit: context::ContextFit::default(),
+            model_request_index: 0,
+            model_requests: Vec::new(),
+            output_corrections: 0,
+            consecutive_malformed_responses: 0,
+            malformed_tool_calls: 0,
+            repetition_nudges: 0,
+            overflow: OverflowRecovery::default(),
+        }
+    }
+
+    /// Reports the turn's activity over its elapsed `duration`.
+    fn into_report(self, duration: Duration) -> TurnReport {
+        TurnReport::new(duration, self.model_requests, self.rounds.activity)
+            .with_corrections(self.output_corrections, self.malformed_tool_calls)
+            .with_repetition_nudges(self.repetition_nudges)
+            .with_context_overflow_recoveries(self.overflow.recoveries)
+            .with_context_summary_failures(self.context_fit.summary_failures())
     }
 }
 

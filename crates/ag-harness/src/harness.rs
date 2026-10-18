@@ -17,7 +17,7 @@ use crate::context::{
     HistoryTurn,
 };
 use crate::effect::Effects;
-use crate::engine::Engine;
+use crate::engine::{Engine, EngineFailure};
 use crate::file_system::{FileSystem, LocalFileSystem};
 use crate::input::{InputBlock, TurnInput};
 use crate::lifecycle::{LifecycleEmitter, LifecycleObserver, TurnErrorType, TurnLifecycle};
@@ -501,7 +501,10 @@ impl Session {
         };
         let (mut outcome, mut messages) = match result {
             Ok(result) => result,
-            Err(error) => {
+            Err(EngineFailure { error, report }) => {
+                if let Some(turn) = turn.as_mut() {
+                    turn.set_failure_report(report);
+                }
                 let persistence = guard.fail(&error).await;
                 if let Err(persistence) = persistence {
                     guard.mark_interrupted();
@@ -1162,14 +1165,7 @@ impl Harness {
         engine.effects = effects;
         let result = engine.run(request, turn_id, None).await;
 
-        if let Some(turn) = turn {
-            match &result {
-                Ok(_) => turn.completed(),
-                Err(error) => turn.failed(error.error_type()),
-            }
-        }
-
-        result.map(|(outcome, _)| outcome)
+        Self::finish_turn(turn, result)
     }
 
     /// Admits mandatory content against the context budget scaled by the
@@ -1215,14 +1211,33 @@ impl Harness {
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let engine = self.engine(options);
         let result = engine.run(request, turn_id, None).await;
-        if let Some(turn) = turn {
-            match &result {
-                Ok(_) => turn.completed(),
-                Err(error) => turn.failed(error.error_type()),
+
+        Self::finish_turn(turn, result)
+    }
+
+    /// Reports a standalone turn's end to its lifecycle, with what a failed
+    /// turn did before failing, and returns its outcome.
+    fn finish_turn(
+        turn: Option<TurnLifecycle>,
+        result: Result<(TurnOutcome, Vec<ModelMessage>), EngineFailure>,
+    ) -> Result<TurnOutcome, TurnError> {
+        match result {
+            Ok((outcome, _)) => {
+                if let Some(turn) = turn {
+                    turn.completed();
+                }
+
+                Ok(outcome)
+            }
+            Err(EngineFailure { error, report }) => {
+                if let Some(mut turn) = turn {
+                    turn.set_failure_report(report);
+                    turn.failed(error.error_type());
+                }
+
+                Err(error)
             }
         }
-
-        result.map(|(outcome, _)| outcome)
     }
 
     fn snapshot(&self) -> Self {

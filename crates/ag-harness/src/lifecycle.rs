@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{CompletionMetadata, ModelErrorType, ModelMetadata};
 pub use crate::telemetry::LifecycleMetrics;
 pub use crate::trace::LifecycleTraceObserver;
+use crate::turn::TurnReport;
 
 /// Stream-local identifier that correlates lifecycle events for one operation.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -74,6 +75,9 @@ pub enum LifecycleEventKind {
         duration: Duration,
         /// Stable failure classification.
         error_type: TurnErrorType,
+        /// What the turn did before failing, or `None` when it failed
+        /// before its first model request was prepared or was cancelled.
+        report: Option<Box<TurnReport>>,
         /// Identifier shared by all events in the turn.
         turn_id: LifecycleId,
     },
@@ -556,6 +560,7 @@ impl LifecycleEmitter {
         Some(TurnLifecycle {
             active: true,
             emitter: self.clone(),
+            report: None,
             started_at: Instant::now(),
             turn_id,
         })
@@ -797,6 +802,7 @@ impl Drop for DeliveryPermit<'_> {
 pub(crate) struct TurnLifecycle {
     active: bool,
     emitter: LifecycleEmitter,
+    report: Option<Box<TurnReport>>,
     started_at: Instant,
     turn_id: LifecycleId,
 }
@@ -814,11 +820,17 @@ impl TurnLifecycle {
         });
     }
 
+    /// Keeps what the turn did before failing for its failure event.
+    pub(crate) fn set_failure_report(&mut self, report: Option<Box<TurnReport>>) {
+        self.report = report;
+    }
+
     pub(crate) fn failed(mut self, error_type: TurnErrorType) {
         self.active = false;
         self.emitter.emit(LifecycleEventKind::TurnFailed {
             duration: self.started_at.elapsed(),
             error_type,
+            report: self.report.take(),
             turn_id: self.turn_id,
         });
     }
@@ -830,6 +842,7 @@ impl Drop for TurnLifecycle {
             self.emitter.emit(LifecycleEventKind::TurnFailed {
                 duration: self.started_at.elapsed(),
                 error_type: TurnErrorType::Cancelled,
+                report: self.report.take(),
                 turn_id: self.turn_id,
             });
         }

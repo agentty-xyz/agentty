@@ -170,7 +170,11 @@ impl Config {
                 (Some(measured.activity), measured.score, detail)
             }
             Ok(Err(error)) => (
-                None,
+                observed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take_failed_report()
+                    .map(|report| Activity::from_report(&report)),
                 Score::default(),
                 Some(summary::sanitize_detail(&error.to_string())),
             ),

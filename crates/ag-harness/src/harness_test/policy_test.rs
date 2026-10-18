@@ -67,8 +67,9 @@ async fn rejects_schema_invalid_output_from_injected_model() {
         event.kind(),
         LifecycleEventKind::TurnFailed {
             error_type: TurnErrorType::Model(ModelErrorType::InvalidOutput),
+            report: Some(report),
             ..
-        }
+        } if report.output_corrections() == 2
     )));
 }
 
