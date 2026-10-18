@@ -1,13 +1,161 @@
-use ag_session::test_support as model_fixture;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use ag_contracts::{AgentRequestKind, MockAgentChannel, PersonalityPrompt};
+use ag_session::test_support as model_fixture;
+use ag_worker::SessionRunClient;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+use super::super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{
     READ_ONLY_CHAT_PROMPT, load_session_permission_mode, load_session_response_style,
-    load_title_reasoning_level,
+    load_title_reasoning_level, prepare_turn_request,
 };
 use crate::app::session::SessionError;
-use crate::domain::agent::{ReasoningLevel, ResponseStyle};
+use crate::domain::agent::{
+    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
+};
 use crate::domain::permission::PermissionMode;
+use crate::domain::personality::Personality;
+use crate::domain::session::Status;
+use crate::domain::session_message::SessionTranscript;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, DbError, PersistedSessionCreation};
+use crate::infra::personality::MockPersonalityCatalogClient;
+
+#[tokio::test]
+async fn prepared_turn_preserves_default_settings() {
+    // Arrange
+    let (context, _) = persisted_turn_test_context().await;
+    let metadata = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: Vec::new(),
+        session_agent: context.session_agent,
+    };
+    let prompt = TurnPrompt::from_text("Explain this code".to_string());
+
+    // Act
+    let prepared = prepare_turn_request(
+        &context,
+        &metadata,
+        AgentRequestKind::SessionResume,
+        None,
+        &prompt,
+        None,
+    )
+    .await
+    .expect("default settings");
+
+    // Assert
+    assert_eq!(prepared.request.permission_mode, PermissionMode::AutoEdit);
+    assert_eq!(prepared.request.reasoning_level, ReasoningLevel::default());
+    assert_eq!(prepared.request.response_style, ResponseStyle::default());
+    assert_eq!(prepared.request.speed_mode, SpeedMode::default());
+    assert_eq!(prepared.request.personality, PersonalityPrompt::default());
+    assert_eq!(prepared.request.prompt, prompt);
+}
+
+#[tokio::test]
+async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
+    // Arrange
+    let (mut context, project_id) = persisted_turn_test_context().await;
+    let metadata = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: Vec::new(),
+        session_agent: context.session_agent,
+    };
+    let prompt = TurnPrompt::from_text("Explain this code".to_string());
+    let personality = Personality {
+        description: "Reviews code".to_string(),
+        id: "reviewer".to_string(),
+        name: "Reviewer".to_string(),
+        prompt: "Review carefully.".to_string(),
+    };
+    let fingerprint = personality.fingerprint();
+    let mut catalog = MockPersonalityCatalogClient::new();
+    catalog
+        .expect_resolve()
+        .withf(|folder, id| folder == &PathBuf::from("/project/worktree") && id == "reviewer")
+        .times(1)
+        .returning(move |_, _| {
+            let personality = personality.clone();
+            Box::pin(async move { Some(personality) })
+        });
+    context.personality_catalog_client = Arc::new(catalog);
+
+    // Act: change persisted settings after the turn's model was captured.
+    update_turn_test_settings(&context.db).await;
+    let prepared = prepare_turn_request(
+        &context,
+        &metadata,
+        AgentRequestKind::SessionResume,
+        Some("earlier messages".to_string()),
+        &prompt,
+        None,
+    )
+    .await
+    .expect("current settings");
+    let state = context
+        .db
+        .sessions()
+        .load_session_personality_state("worker")
+        .await
+        .expect("personality state")
+        .expect("session");
+
+    // Assert
+    assert_eq!(prepared.session_project_id, Some(project_id));
+    assert_eq!(
+        prepared.request.model,
+        metadata.session_agent.model().provider_model_str()
+    );
+    assert_eq!(prepared.request.permission_mode, PermissionMode::ReadOnly);
+    assert_eq!(prepared.request.reasoning_level, ReasoningLevel::Low);
+    assert_eq!(prepared.request.response_style, ResponseStyle::Concise);
+    assert_eq!(prepared.request.speed_mode, SpeedMode::Fast);
+    assert_eq!(
+        prepared.request.personality,
+        PersonalityPrompt::active("Review carefully.".to_string(), true)
+    );
+    assert!(
+        prepared
+            .request
+            .prompt
+            .text
+            .starts_with(READ_ONLY_CHAT_PROMPT)
+    );
+    assert_eq!(
+        prepared.request.continuation.replay_transcript(),
+        Some("earlier messages")
+    );
+    assert_eq!(
+        prepared.request.continuation.provider_conversation_id(),
+        Some("conversation")
+    );
+    assert_eq!(
+        prepared
+            .request
+            .continuation
+            .persisted_instruction_conversation_id(),
+        Some("instructions")
+    );
+    assert_eq!(
+        prepared
+            .personality_persistence
+            .applied_personality_id
+            .as_deref(),
+        Some("reviewer")
+    );
+    assert_eq!(
+        prepared
+            .personality_persistence
+            .applied_personality_prompt_hash,
+        Some(fingerprint)
+    );
+    assert_eq!(state.applied_personality_id, None);
+    assert_eq!(state.applied_personality_prompt_hash, None);
+}
 
 #[test]
 fn read_only_chat_prompt_redirects_write_access_requests_to_mode_shortcut() {
@@ -103,9 +251,23 @@ async fn permission_mode_load_propagates_query_errors() {
         .await
         .expect("db should open");
     pool.close().await;
+    let context = turn_test_context(repositories);
+    let metadata = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: Vec::new(),
+        session_agent: context.session_agent,
+    };
 
     // Act
-    let result = load_session_permission_mode(&repositories, "worker").await;
+    let result = prepare_turn_request(
+        &context,
+        &metadata,
+        AgentRequestKind::SessionStart,
+        None,
+        &TurnPrompt::from_text("hello".to_string()),
+        None,
+    )
+    .await;
 
     // Assert
     assert!(matches!(
@@ -198,4 +360,92 @@ async fn title_reasoning_level_defaults_without_project() {
 
     // Assert
     assert_eq!(reasoning_level, ReasoningLevel::High);
+}
+
+/// Request preparation needs persisted state but no filesystem or worker
+/// execution.
+async fn persisted_turn_test_context() -> (SessionWorkerContext, i64) {
+    let db = AppRepositories::in_memory().await.expect("db should open");
+    let project_id = db
+        .projects()
+        .upsert_project("/project", None)
+        .await
+        .expect("project");
+    db.sessions()
+        .insert_session(
+            "worker",
+            model_fixture::CODEX_MODEL_ID,
+            "main",
+            "InProgress",
+            project_id,
+        )
+        .await
+        .expect("session");
+
+    (turn_test_context(db), project_id)
+}
+
+/// Changes the persisted selection after capturing the queued turn metadata.
+async fn update_turn_test_settings(db: &AppRepositories) {
+    db.sessions()
+        .update_session_model("worker", "changed-model")
+        .await
+        .expect("model");
+    db.sessions()
+        .update_session_permission_mode("worker", PermissionMode::ReadOnly)
+        .await
+        .expect("permissions");
+    db.sessions()
+        .update_session_reasoning_level("worker", ReasoningLevel::Low)
+        .await
+        .expect("reasoning");
+    db.sessions()
+        .update_session_response_style("worker", ResponseStyle::Concise)
+        .await
+        .expect("style");
+    db.sessions()
+        .update_session_speed_mode("worker", SpeedMode::Fast)
+        .await
+        .expect("speed");
+    db.sessions()
+        .update_session_personality_id("worker", Some("reviewer".to_string()))
+        .await
+        .expect("personality");
+    db.sessions()
+        .update_session_provider_conversation_id("worker", Some("conversation".to_string()))
+        .await
+        .expect("conversation");
+    db.sessions()
+        .update_session_instruction_conversation_id("worker", Some("instructions".to_string()))
+        .await
+        .expect("instructions");
+}
+
+/// Builds the host boundary without starting a worker or touching the
+/// filesystem.
+fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
+    SessionWorkerContext {
+        app_event_tx: mpsc::unbounded_channel().0,
+        available_agent_kinds: Arc::from(AgentKind::ALL),
+        branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
+        cancel_token: Arc::new(Mutex::new(CancellationToken::new())),
+        child_pid: Arc::new(Mutex::new(None)),
+        clock: Arc::new(crate::infra::clock::RealClock),
+        db,
+        folder: PathBuf::from("/project/worktree"),
+        fs_client: Arc::new(crate::infra::fs::MockFsClient::new()),
+        git_client: Arc::new(ag_git::MockGitClient::new()),
+        personality_catalog_client: Arc::new(MockPersonalityCatalogClient::new()),
+        queued_messages: Arc::default(),
+        review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
+        session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+        session_id: "worker".into(),
+        session_run: SessionRunClient::from_channel(
+            "worker".to_string(),
+            Arc::new(MockAgentChannel::new()),
+        ),
+        session_update_versions: Arc::default(),
+        status: Arc::new(Mutex::new(Status::InProgress)),
+        transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+    }
 }
