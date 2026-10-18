@@ -3,8 +3,8 @@ use ratatui::layout::Rect;
 use super::{
     DEFAULT_REVIEW_COMMENT, DiffLine, DiffLineKind, FileTreeItem, build_review_text,
     diff_header_new_path, diff_header_paths, diff_line_change_totals, diff_line_gutter_width,
-    diff_view_max_scroll_offset, filter_diff_lines, max_diff_line_number, parse_diff_lines,
-    parse_git_path_token, parse_hunk_header, wrap_diff_content,
+    diff_page_areas, diff_view_max_scroll_offset, filter_diff_lines, max_diff_line_number,
+    parse_diff_lines, parse_git_path_token, parse_hunk_header, wrap_diff_content,
 };
 
 const DIFF_MAIN_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -388,6 +388,21 @@ fn test_wrap_diff_content_exact() {
 
     // Assert
     assert_eq!(chunks, vec!["abcd"]);
+}
+
+#[test]
+fn test_diff_page_areas_keep_footer_flush_with_bottom() {
+    // Arrange
+    let area = Rect::new(5, 3, 42, 10);
+
+    // Act
+    let areas = diff_page_areas(area);
+
+    // Assert
+    assert_eq!(areas.file_list_area, Rect::new(6, 4, 8, 8));
+    assert_eq!(areas.diff_area, Rect::new(14, 4, 32, 8));
+    assert_eq!(areas.footer_area, Rect::new(6, 12, 40, 1));
+    assert_eq!(areas.footer_area.bottom(), area.bottom());
 }
 
 #[test]

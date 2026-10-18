@@ -1055,16 +1055,35 @@ fn test_centered_content_rect_clamps_requested_size_to_available_area() {
 }
 
 #[test]
-fn test_tab_page_areas_start_content_at_top_and_keep_footer_inset() {
+fn test_tab_page_areas_start_content_at_top_and_keep_footer_flush_with_bottom() {
     // Arrange
-    let area = Rect::new(5, 3, 40, 10);
+    let cases = [
+        (
+            Rect::new(5, 3, 40, 10),
+            Rect::new(6, 3, 38, 9),
+            Rect::new(6, 12, 38, 1),
+        ),
+        (
+            Rect::new(5, 3, 1, 1),
+            Rect::new(5, 3, 1, 0),
+            Rect::new(5, 3, 1, 1),
+        ),
+        (
+            Rect::new(5, 3, 0, 0),
+            Rect::new(5, 3, 0, 0),
+            Rect::new(5, 3, 0, 0),
+        ),
+    ];
 
-    // Act
-    let areas = tab_page_areas(area);
+    for (area, main_area, footer_area) in cases {
+        // Act
+        let areas = tab_page_areas(area);
 
-    // Assert
-    assert_eq!(areas.main_area, Rect::new(6, 3, 38, 8));
-    assert_eq!(areas.footer_area, Rect::new(6, 11, 38, 1));
+        // Assert
+        assert_eq!(areas.main_area, main_area);
+        assert_eq!(areas.footer_area, footer_area);
+        assert_eq!(areas.footer_area.bottom(), area.bottom());
+    }
 }
 
 #[test]

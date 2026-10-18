@@ -165,7 +165,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"answer\":\"Proc
 /// the selected thread's current diff context.
 #[tokio::test]
 async fn test_session_review_comments() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("session_review_comments")
         .with_git()
         .with_terminal_size(160, 60)
@@ -182,12 +182,18 @@ async fn test_session_review_comments() -> E2eResult {
         })
         .run(
             |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::open_selected_session_view())
                     .press_key("d")
                     .wait_for_text("j/k: select file", 5000)
                     .wait_for_text("c: comments", 5000)
+                    // Wait for both asynchronous panels before focusing a
+                    // comment, avoiding a timing-dependent loading frame.
+                    .wait_for_text("println!(\"review\")", 5000)
+                    .wait_for_text("[ ] src/main.rs:1-2", 5000)
+                    .wait_for_stable_frame(300, 5000)
                     .press_key("c")
                     .wait_for_text("Please explain why this review output is needed.", 5000)
                     .wait_for_text("Use stdout context.", 5000)
@@ -223,6 +229,7 @@ async fn test_session_review_comments() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
+                    // Assert
                     let inline_frame = common::frame_from_capture(&report.captures[0]);
                     assert_inline_review_comment(&inline_frame);
 

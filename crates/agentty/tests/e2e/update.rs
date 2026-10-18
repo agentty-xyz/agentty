@@ -14,13 +14,14 @@ type E2eResult = Result<(), Box<dyn std::error::Error>>;
 /// Mirrors the private app-task E2E interval override.
 const VERSION_CHECK_INTERVAL_MS_ENV_VAR: &str = "AGENTTY_TEST_VERSION_CHECK_INTERVAL_MS";
 
-/// Installs an npm stub whose first Agentty lookup returns the running
-/// version and whose second lookup exposes a newer release.
+/// Installs an npm stub whose first Agentty lookup per app process returns the
+/// running version and whose second lookup exposes a newer release.
 fn install_periodic_agentty_update_stub(env: &BuilderEnv) -> E2eResult {
     let npm_path = env.stub_bin.join("npm");
     let npm_script = format!(
         r#"#!/bin/sh
-lookup_count="$AGENTTY_ROOT/periodic-version-lookups"
+# Keep the semantic run and VHS replay on independent lookup sequences.
+lookup_count="$AGENTTY_ROOT/periodic-version-lookups-$PPID"
 if [ "$1" = "view" ] && [ "$2" = "agentty" ]; then
   if [ -f "$lookup_count" ]; then
     printf '"999.0.0"'
