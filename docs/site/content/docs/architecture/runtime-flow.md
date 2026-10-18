@@ -403,6 +403,13 @@ Channel owners clean up provider processes after cancellation. Operation complet
 includes post-processing, not just model completion. Heartbeat failures are reported
 without abandoning live work; startup recovery requires exclusive application ownership.
 
+Turn preparation groups the current permissions, reasoning level, response style, speed,
+and personality into resolved settings after workspace preparation. The model selection
+still travels with the queued turn; the worker applies its captured execution policy at
+submission. Resolution preserves existing reads and defaults rather than persisting an
+earlier configuration snapshot. Personality application state is saved only after a
+successful turn.
+
 ## Utility run supervision
 
 Utility runs carry purpose, session/project ownership, and inherited cancellation.

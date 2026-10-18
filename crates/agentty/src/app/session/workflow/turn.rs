@@ -19,7 +19,7 @@ use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle};
+use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -290,6 +290,59 @@ async fn prepare_turn_workspace(
     }
 }
 
+/// Settings resolved at execution time, after workspace preparation.
+///
+/// The queued model selection and worker-owned execution policy have different
+/// lifetimes and deliberately remain outside this value. Personality
+/// application state travels with its prompt but is persisted only after a
+/// successful turn.
+struct ResolvedTurnSettings {
+    permission_mode: PermissionMode,
+    personality: ResolvedTurnPersonality,
+    reasoning_level: ReasoningLevel,
+    response_style: ResponseStyle,
+    speed_mode: SpeedMode,
+}
+
+/// Settings plus continuation and host bookkeeping read for one request.
+struct ResolvedTurnContext {
+    continuation: TurnContinuation,
+    session_project_id: Option<i64>,
+    settings: ResolvedTurnSettings,
+}
+
+impl ResolvedTurnContext {
+    /// Reads the existing sources in order without persisting a configuration
+    /// snapshot. Permission failures stop preparation; other loaders retain
+    /// their existing defaults. Continuation is read before personality lookup
+    /// so personality notices and failures keep their original ordering.
+    async fn load(
+        context: &SessionWorkerContext,
+        replay_transcript: Option<String>,
+    ) -> Result<Self, SessionError> {
+        let session_project_id = load_session_project_id(&context.db, &context.session_id).await;
+        let permission_mode =
+            load_session_permission_mode(&context.db, &context.session_id).await?;
+        let reasoning_level = load_session_reasoning_level(&context.db, &context.session_id).await;
+        let response_style = load_session_response_style(&context.db, &context.session_id).await;
+        let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
+        let continuation = load_turn_continuation(context, replay_transcript).await;
+        let personality = resolve_turn_personality(context).await;
+
+        Ok(Self {
+            continuation,
+            session_project_id,
+            settings: ResolvedTurnSettings {
+                permission_mode,
+                personality,
+                reasoning_level,
+                response_style,
+                speed_mode,
+            },
+        })
+    }
+}
+
 /// Request and host bookkeeping resolved together during context preparation.
 struct PreparedTurnRequest {
     personality_persistence: post_turn::TurnPersonalityPersistence,
@@ -309,25 +362,17 @@ async fn prepare_turn_request(
     Span::child("context.prepare")
         .run(
             async {
-                let session_project_id =
-                    load_session_project_id(&context.db, &context.session_id).await;
-                let permission_mode =
-                    load_session_permission_mode(&context.db, &context.session_id).await?;
-                let reasoning_level =
-                    load_session_reasoning_level(&context.db, &context.session_id).await;
-                let response_style =
-                    load_session_response_style(&context.db, &context.session_id).await;
-                let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
-                let continuation = load_turn_continuation(context, replay_transcript).await;
-                let ResolvedTurnPersonality {
-                    persistence: personality_persistence,
-                    prompt: personality,
-                } = resolve_turn_personality(context).await;
-                let agent_prompt = apply_read_only_chat_prompt(prompt.clone(), permission_mode);
+                let ResolvedTurnContext {
+                    continuation,
+                    session_project_id,
+                    settings,
+                } = ResolvedTurnContext::load(context, replay_transcript).await?;
+                let agent_prompt =
+                    apply_read_only_chat_prompt(prompt.clone(), settings.permission_mode);
                 let model = turn_metadata.session_agent.model().provider_model_str();
 
                 Ok(PreparedTurnRequest {
-                    personality_persistence,
+                    personality_persistence: settings.personality.persistence,
                     request: TurnRequest {
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         continuation,
@@ -335,13 +380,13 @@ async fn prepare_turn_request(
                         main_checkout_root: main_checkout_snapshot
                             .map(|snapshot| snapshot.main_repo_root.clone()),
                         model: model.to_string(),
-                        permission_mode,
-                        personality,
+                        permission_mode: settings.permission_mode,
+                        personality: settings.personality.prompt,
                         prompt: agent_prompt,
-                        reasoning_level,
+                        reasoning_level: settings.reasoning_level,
                         request_kind,
-                        response_style,
-                        speed_mode,
+                        response_style: settings.response_style,
+                        speed_mode: settings.speed_mode,
                     },
                     session_project_id,
                 })
