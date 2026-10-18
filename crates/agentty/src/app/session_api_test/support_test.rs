@@ -103,17 +103,18 @@ pub(super) fn question_transition_app_server(
 ) -> MockAppServerClient {
     let turn_index = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut app_server = MockAppServerClient::new();
-    app_server.expect_run_turn().times(3..).returning({
+    // Utility prompts take the isolated path whenever a pooled runtime is
+    // available, so only the start and resume turns always reach `run_turn`.
+    app_server
+        .expect_run_isolated_turn()
+        .times(0..)
+        .returning(|_, _| Box::pin(async { Ok(utility_prompt_response()) }));
+    app_server.expect_run_turn().times(2..).returning({
             move |request, _| {
                 let first_turn_release = Arc::clone(&first_turn_release);
                 let request_kind = request.request_kind;
                 if request_kind == AgentRequestKind::UtilityPrompt {
-                    return Box::pin(async {
-                        Ok(app_server_response(
-                            r#"{"answer":"Initial prompt","questions":[]}"#,
-                            None,
-                        ))
-                    });
+                    return Box::pin(async { Ok(utility_prompt_response()) });
                 }
 
                 let turn_index =
@@ -254,4 +255,9 @@ pub(super) async fn persist_inherited_launch_settings(app: &App, session_id: &Se
         .update_session_personality_id(session_id, Some("inherited-personality".to_string()))
         .await
         .expect("source personality should update");
+}
+
+/// Answers any utility prompt, such as title generation, during question flows.
+fn utility_prompt_response() -> AppServerTurnResponse {
+    app_server_response(r#"{"answer":"Initial prompt","questions":[]}"#, None)
 }
