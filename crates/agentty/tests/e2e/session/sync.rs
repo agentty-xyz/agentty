@@ -137,7 +137,7 @@ done
 async fn seed_rebase_transcript_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    seed_rebase_transcript_session_with_delay(env, 5).await?;
+    seed_rebase_transcript_session_with_delay(env, "sleep 5").await?;
     let database = common::open_database(env).await?;
     database
         .sessions()

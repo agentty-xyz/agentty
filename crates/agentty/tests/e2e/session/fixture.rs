@@ -247,10 +247,11 @@ pub(super) async fn seed_auto_address_review_mode(
     Ok(())
 }
 
-/// Seeds the rebase transcript fixture with a configurable pre-rebase delay.
+/// Seeds the rebase transcript fixture with a pre-rebase hook that runs
+/// `hold_rebase`: a fixed `sleep` or a `ReleaseGate::shell_wait` statement.
 pub(super) async fn seed_rebase_transcript_session_with_delay(
     env: &BuilderEnv,
-    delay_seconds: u64,
+    hold_rebase: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env).await?;
     seed_linked_review_worktree_with_diff(env)?;
@@ -280,10 +281,7 @@ pub(super) async fn seed_rebase_transcript_session_with_delay(
     .await?;
 
     let pre_rebase_hook = env.workdir.join(".git").join("hooks").join("pre-rebase");
-    std::fs::write(
-        &pre_rebase_hook,
-        format!("#!/bin/sh\nsleep {delay_seconds}\n"),
-    )?;
+    std::fs::write(&pre_rebase_hook, format!("#!/bin/sh\n{hold_rebase}\n"))?;
     #[cfg(unix)]
     std::fs::set_permissions(&pre_rebase_hook, std::fs::Permissions::from_mode(0o750))?;
 

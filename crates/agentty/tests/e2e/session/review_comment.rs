@@ -13,7 +13,7 @@ use super::fixture::{
     E2eResult, run_git, seed_review_ready_session_with_review_request, seed_sessions_startup_tab,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate};
 
 /// User-authored prompt retained in composer history after review resolution.
 const REVIEW_HISTORY_PROMPT_TEXT: &str = "Explain the review status loader";
@@ -578,13 +578,16 @@ async fn test_review_comment_incomplete_outcomes() -> E2eResult {
 #[tokio::test]
 async fn review_comments_queue_behind_running_turn_and_chat() -> E2eResult {
     // Arrange, Act, Assert
+    let slow_turn = ReleaseGate::new()?;
+    let review_turn = ReleaseGate::new()?;
+    let (setup_slow_turn, setup_review_turn) = (slow_turn.clone(), review_turn.clone());
     FeatureTest::new("review_comments_queue")
         .with_git()
         .with_terminal_size(160, 60)
-        .setup(|env| Box::pin(async move {
+        .setup(move |env| Box::pin(async move {
             seed_review_comment_agent_resolution(env).await?;
             let claude_path = env.stub_bin.join("claude");
-            std::fs::write(&claude_path, r#"#!/bin/sh
+            let script = r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
@@ -594,7 +597,7 @@ case "$prompt" in
     response='{ \"answer\": \"Helper response\" }'
     ;;
   *"Evaluate the following selected forge review comments"*)
-    sleep 3
+    HOLD_REVIEW_TURN
     answer='Queued review comment completed'
     response='{ \"answer\": \"Queued review comment completed\", \"review_comment_outcomes\": [{ \"reply\": \"Explained the output\", \"resolution\": \"fixed\", \"thread_id\": \"thread-inline\" }] }'
     ;;
@@ -603,7 +606,7 @@ case "$prompt" in
     response='{ \"answer\": \"Earlier queued chat completed\" }'
     ;;
   *"Start slow review work"*)
-    sleep 20
+    HOLD_SLOW_TURN
     answer='Slow review work completed'
     response='{ \"answer\": \"Slow review work completed\" }'
     ;;
@@ -612,12 +615,15 @@ esac
 printf '%s\n' '{"type":"system","subtype":"init"}'
 printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$answer"
 printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_tokens":5,"output_tokens":9}}\n' "$response"
-"#)?;
+"#
+            .replace("HOLD_SLOW_TURN", &setup_slow_turn.shell_wait())
+            .replace("HOLD_REVIEW_TURN", &setup_review_turn.shell_wait());
+            std::fs::write(&claude_path, script)?;
             #[cfg(unix)]
             std::fs::set_permissions(&claude_path, std::fs::Permissions::from_mode(0o750))?;
             Ok(())
         }))
-        .run(|scenario| scenario
+        .run(move |scenario| scenario
             .compose(&common::wait_for_agentty_startup())
             .compose(&common::switch_to_tab("Sessions"))
             .compose(&common::open_selected_session_view())
@@ -640,9 +646,11 @@ printf '{"type":"result","subtype":"success","result":"%s","usage":{"input_token
             .press_key("Enter")
             .wait_for_text("≡ resolve 1 review comment", 5000)
             .capture_labeled("waiting_review_comments", "Review comments join the visible queue")
-            .wait_for_text("Earlier queued chat completed", 30000)
+            .compose(&slow_turn.release())
+            .wait_for_text("Earlier queued chat completed", 10000)
             .wait_for_text("Resolving 1 review comment...", 5000)
             .capture_labeled("running_review_comments", "Review comments start after earlier chat")
+            .compose(&review_turn.release())
             .wait_for_text("Queued review comment completed", 10000)
             .wait_for_text("Enter: reply", 10000),
             |frame, report| Box::pin(async move {

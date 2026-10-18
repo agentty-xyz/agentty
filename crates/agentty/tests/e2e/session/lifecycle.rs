@@ -22,7 +22,7 @@ use super::fixture::{
     seed_review_ready_session, seed_running_stop_session, seed_session_title_candidate_project,
     seed_sessions_tab,
 };
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
 use crate::{common, test_support};
 
 /// Seeds one review-ready session with a persisted reasoning level and timer.
@@ -785,10 +785,14 @@ async fn session_stop_turn_returns_to_review() -> E2eResult {
 }
 
 /// Delays the checkout hook so navigation must work before creation finishes.
-async fn seed_delayed_session_creation(env: &BuilderEnv) -> E2eResult {
+///
+/// `hold_checkout` is the shell statement the hook runs: a
+/// [`ReleaseGate::shell_wait`] when the scenario can release it, or a fixed
+/// `sleep` when no visible signal marks creation completion.
+async fn seed_delayed_session_creation(env: &BuilderEnv, hold_checkout: &str) -> E2eResult {
     seed_sessions_tab(env).await?;
     let hook = env.workdir.join(".git/hooks/post-checkout");
-    std::fs::write(&hook, "#!/bin/sh\nsleep 8\n")?;
+    std::fs::write(&hook, format!("#!/bin/sh\n{hold_checkout}\n"))?;
     #[cfg(unix)]
     std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o750))?;
 
@@ -801,7 +805,7 @@ async fn session_creation_keeps_navigation_responsive() -> E2eResult {
     // Arrange
     FeatureTest::new("session_creation_responsive")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_delayed_session_creation(env).await }))
+        .setup(|env| Box::pin(async move { seed_delayed_session_creation(env, "sleep 8").await }))
         .run(
             |scenario| {
                 // Act
@@ -852,16 +856,18 @@ async fn session_creation_keeps_navigation_responsive() -> E2eResult {
 #[tokio::test]
 async fn session_creation_runs_early_prompt_once() -> E2eResult {
     // Arrange
+    let checkout = ReleaseGate::new()?;
+    let hold_checkout = checkout.shell_wait();
     FeatureTest::new("session_creation_early_prompt")
         .with_git()
-        .setup(|env| {
+        .setup(move |env| {
             Box::pin(async move {
-                seed_delayed_session_creation(env).await?;
+                seed_delayed_session_creation(env, &hold_checkout).await?;
                 seed_claude_structured_output_project(env).await
             })
         })
         .run(
-            |scenario| {
+            move |scenario| {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
@@ -875,6 +881,7 @@ async fn session_creation_runs_early_prompt_once() -> E2eResult {
                     .capture_labeled("queued", "Prompt waits for workspace setup")
                     .press_key("Enter")
                     .press_key("Enter")
+                    .compose(&checkout.release())
                     .wait_for_text(CLAUDE_STRUCTURED_RESPONSE_TEXT, 30000)
                     .wait_for_stable_frame(300, 3000)
                     .capture_labeled("started", "Saved prompt runs after workspace setup")
@@ -994,11 +1001,13 @@ async fn session_creation_recovers_unreleased_first_prompt() -> E2eResult {
 #[tokio::test]
 async fn session_creation_retries_rejected_handoff() -> E2eResult {
     // Arrange
+    let checkout = ReleaseGate::new()?;
+    let hold_checkout = checkout.shell_wait();
     FeatureTest::new("session_creation_retry_handoff")
         .with_git()
-        .setup(|env| {
+        .setup(move |env| {
             Box::pin(async move {
-                seed_delayed_session_creation(env).await?;
+                seed_delayed_session_creation(env, &hold_checkout).await?;
                 seed_claude_structured_output_project(env).await?;
                 (async {
                     let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
@@ -1025,7 +1034,7 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
             })
         })
         .run(
-            |scenario| {
+            move |scenario| {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
@@ -1036,6 +1045,7 @@ async fn session_creation_retries_rejected_handoff() -> E2eResult {
                     .write_text("Retry this saved first prompt")
                     .press_key("Enter")
                     .wait_for_text("Saved prompt:", 2000)
+                    .compose(&checkout.release())
                     .wait_for_text("Press s to retry.", 30000)
                     .capture_labeled(
                         "rejected",

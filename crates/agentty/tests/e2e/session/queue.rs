@@ -16,7 +16,7 @@ use super::fixture::{
     seed_running_stop_session,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
 
 /// Stable id for the seeded rebasing session used by message-queue tests.
 const REBASING_QUEUE_SESSION_ID: &str = "rebasing-queue-0001";
@@ -163,12 +163,15 @@ printf '%s\n' "{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$resul
     .await
 }
 
-/// Installs a delayed Claude turn so the scenario can queue sync while the
+/// Installs a held Claude turn so the scenario can queue sync while the
 /// worker is still active, optionally forcing its later validation to fail.
+///
+/// The turn runs `hold_turn` before answering: a fixed `sleep` or a
+/// [`ReleaseGate::shell_wait`] statement.
 async fn install_delayed_sync_claude_stub(
     env: &BuilderEnv,
     fail_sync_validation: bool,
-    delay_seconds: u64,
+    hold_turn: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
     let validation_failure_marker = env.stub_bin.join("queued-sync-validation-failure");
@@ -182,7 +185,7 @@ async fn install_delayed_sync_claude_stub(
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
-sleep {delay_seconds}
+{hold_turn}
 {mark_validation_failure}printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_SYNC_TURN_ANSWER}"}}]}}}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{QUEUED_SYNC_TURN_ANSWER}\",\"questions\":[]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
@@ -200,18 +203,20 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     seed_project_settings(env, &[("DefaultSmartModel", "claude-haiku-4-5-20251001")]).await
 }
 
-/// Installs a delayed Claude turn that ends with a clarification question so
-/// the scenario can cancel it while sync remains queued on the worker.
+/// Installs a held Claude turn that ends with a clarification question so the
+/// scenario can cancel it while sync remains queued on the worker.
 async fn install_queued_sync_question_claude_stub(
     env: &BuilderEnv,
+    turn: &ReleaseGate,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let claude_path = env.stub_bin.join("claude");
+    let hold_turn = turn.shell_wait();
     let script = format!(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 cat > /dev/null 2>&1
-sleep 8
+{hold_turn}
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"Need one clarification before sync.\",\"questions\":[{{\"text\":\"{QUEUED_SYNC_QUESTION_TEXT}\",\"options\":[\"Continue\"]}}]}}","usage":{{"input_tokens":5,"output_tokens":9}}}}'
 "#
@@ -367,10 +372,12 @@ async fn install_cancelled_queued_review_request_stubs(
 /// command and answer the real turn immediately.
 async fn install_fifo_queued_review_request_stubs(
     env: &BuilderEnv,
+    first_turn: &ReleaseGate,
 ) -> Result<(), Box<dyn std::error::Error>> {
     install_queued_review_request_stubs(env).await?;
 
     let claude_path = env.stub_bin.join("claude");
+    let hold_first_turn = first_turn.shell_wait();
     let claude_script = format!(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
@@ -389,9 +396,8 @@ case "$input" in
     emit_answer '{QUEUED_REVIEW_FOLLOW_UP_ANSWER}'
     ;;
   *"Queue mixed work"*)
-    # Keep the first turn active while the PTY driver queues both items, even
-    # when the E2E test group is running four scenarios concurrently.
-    sleep 20
+    # Keep the first turn active until the scenario has queued both items.
+    {hold_first_turn}
     emit_answer '{QUEUED_REVIEW_REQUEST_TURN_ANSWER}'
     ;;
   *)
@@ -605,16 +611,18 @@ async fn session_queue_chat_message_during_rebase() -> E2eResult {
 #[tokio::test]
 async fn review_request_creation_queues_during_rebase() -> E2eResult {
     // Arrange, Act, Assert
+    let rebase = ReleaseGate::new()?;
+    let hold_rebase = rebase.shell_wait();
     FeatureTest::new("review_request_queued_during_rebase")
         .with_git()
-        .setup(|env| {
+        .setup(move |env| {
             Box::pin(async move {
-                seed_rebase_transcript_session_with_delay(env, 10).await?;
+                seed_rebase_transcript_session_with_delay(env, &hold_rebase).await?;
                 install_queued_review_request_stubs(env).await
             })
         })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -632,6 +640,7 @@ async fn review_request_creation_queues_during_rebase() -> E2eResult {
                         "review_request_queued_during_rebase",
                         "Review-request creation queued behind the active session sync",
                     )
+                    .compose(&rebase.release())
                     .wait_for_text("[Sync] Successfully synced", 20000)
                     .wait_for_text("Publishing review request...", 5000)
                     .capture_labeled(
@@ -684,13 +693,15 @@ async fn review_request_creation_queues_during_rebase() -> E2eResult {
 #[tokio::test]
 async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
     // Arrange, Act, Assert
+    let turn = ReleaseGate::new()?;
+    let hold_turn = turn.shell_wait();
     FeatureTest::new("session_running_sync_shortcut")
         .with_git()
-        .setup(|env| {
-            Box::pin(async move { install_delayed_sync_claude_stub(env, false, 10).await })
+        .setup(move |env| {
+            Box::pin(async move { install_delayed_sync_claude_stub(env, false, &hold_turn).await })
         })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -709,7 +720,8 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
                         "running_sync_queued",
                         "Running session view after queueing sync",
                     )
-                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .compose(&turn.release())
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync] Successfully synced", 10000)
                     .wait_for_text("Enter: reply", 5000)
                     .capture_labeled(
@@ -774,11 +786,17 @@ async fn session_running_turn_shows_sync_shortcut() -> E2eResult {
 #[tokio::test]
 async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
     // Arrange, Act, Assert
+    let turn = ReleaseGate::new()?;
+    let setup_turn = turn.clone();
     FeatureTest::new("session_queued_sync_resumes_after_question_cancel")
         .with_git()
-        .setup(|env| Box::pin(async move { install_queued_sync_question_claude_stub(env).await }))
+        .setup(move |env| {
+            Box::pin(
+                async move { install_queued_sync_question_claude_stub(env, &setup_turn).await },
+            )
+        })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -792,7 +810,8 @@ async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
                     .wait_for_text("r: sync", 5000)
                     .press_key("r")
                     .wait_for_text("rebase onto the base branch after this turn", 5000)
-                    .wait_for_text(QUEUED_SYNC_QUESTION_TEXT, 30000)
+                    .compose(&turn.release())
+                    .wait_for_text(QUEUED_SYNC_QUESTION_TEXT, 10000)
                     .capture_labeled(
                         "queued_sync_waiting_on_question",
                         "Queued sync pauses while the active turn asks a question",
@@ -834,16 +853,18 @@ async fn session_queued_sync_resumes_after_question_cancel() -> E2eResult {
 #[tokio::test]
 async fn session_queued_action_survives_project_switching() -> E2eResult {
     // Arrange, Act, Assert
+    let turn = ReleaseGate::new()?;
+    let hold_turn = turn.shell_wait();
     FeatureTest::new("session_queued_action_survives_project_switching")
         .with_git()
-        .setup(|env| {
+        .setup(move |env| {
             Box::pin(async move {
-                install_delayed_sync_claude_stub(env, false, 10).await?;
+                install_delayed_sync_claude_stub(env, false, &hold_turn).await?;
                 common::seed_second_project(env).await
             })
         })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .press_key("a")
@@ -874,7 +895,8 @@ async fn session_queued_action_survives_project_switching() -> E2eResult {
                         "restored_queued_action",
                         "Running session accepts work after project switching",
                     )
-                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .compose(&turn.release())
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync] Successfully synced", 10000)
                     .wait_for_text("Enter: reply", 5000)
             },
@@ -1012,7 +1034,7 @@ async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
     FeatureTest::new("session_queued_sync_cancelled_with_turn")
         .with_git()
         .setup(|env| {
-            Box::pin(async move { install_delayed_sync_claude_stub(env, false, 10).await })
+            Box::pin(async move { install_delayed_sync_claude_stub(env, false, "sleep 10").await })
         })
         .run(
             |scenario| {
@@ -1077,11 +1099,15 @@ async fn session_queued_sync_clears_when_turn_is_cancelled() -> E2eResult {
 #[tokio::test]
 async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
     // Arrange, Act, Assert
+    let turn = ReleaseGate::new()?;
+    let hold_turn = turn.shell_wait();
     FeatureTest::new("session_queued_sync_validation_failure")
         .with_git()
-        .setup(|env| Box::pin(async move { install_delayed_sync_claude_stub(env, true, 10).await }))
+        .setup(move |env| {
+            Box::pin(async move { install_delayed_sync_claude_stub(env, true, &hold_turn).await })
+        })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -1098,7 +1124,8 @@ async fn session_queued_sync_validation_failure_is_visible() -> E2eResult {
                         "queued_sync_waiting",
                         "Sync remains queued behind the active turn",
                     )
-                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 30000)
+                    .compose(&turn.release())
+                    .wait_for_text(QUEUED_SYNC_TURN_ANSWER, 10000)
                     .wait_for_text("[Sync Error] Session isolation violation", 10000)
                     .wait_for_text("Enter: reply", 5000)
                     .wait_for_stable_frame(300, 5000)
@@ -1319,14 +1346,20 @@ async fn review_request_queued_creation_clears_when_turn_is_cancelled() -> E2eRe
 #[tokio::test]
 async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResult {
     // Arrange, Act, Assert
+    let first_turn = ReleaseGate::new()?;
+    let setup_gate = first_turn.clone();
     FeatureTest::new("session_queued_work_fifo")
         .with_git()
         // Tall enough to hold both completed turns plus the review-request
         // notice, so execution order never depends on transcript scrolling.
         .with_terminal_size(80, 44)
-        .setup(|env| Box::pin(async move { install_fifo_queued_review_request_stubs(env).await }))
+        .setup(move |env| {
+            Box::pin(
+                async move { install_fifo_queued_review_request_stubs(env, &setup_gate).await },
+            )
+        })
         .run(
-            |scenario| {
+            move |scenario| {
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -1352,7 +1385,8 @@ async fn session_queued_work_uses_fifo_display_and_execution_order() -> E2eResul
                         "mixed_queue_submission_order",
                         "Queued chat appears above the later review-request action",
                     )
-                    .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 30000)
+                    .compose(&first_turn.release())
+                    .wait_for_text(QUEUED_REVIEW_REQUEST_TURN_ANSWER, 10000)
                     .wait_for_text(QUEUED_REVIEW_FOLLOW_UP_ANSWER, 10000)
                     .capture_labeled(
                         "mixed_queue_chat_execution_order",

@@ -1281,6 +1281,71 @@ impl BuilderEnv {
     }
 }
 
+/// File-backed gate that holds a stub command until the scenario releases it.
+///
+/// Stub scripts block on [`ReleaseGate::shell_wait`] instead of a fixed
+/// `sleep`, so a turn stays active exactly until the scenario has asserted
+/// what it needs, however loaded the host is. VHS recordings skip the
+/// [`Step::Eventually`] step that releases the gate, so published scenarios
+/// keep fixed sleeps.
+#[derive(Clone)]
+pub(crate) struct ReleaseGate {
+    directory: std::sync::Arc<tempfile::TempDir>,
+}
+
+impl ReleaseGate {
+    /// Create an unreleased gate in a fresh temporary directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the temporary directory cannot be created.
+    pub(crate) fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            directory: std::sync::Arc::new(tempfile::tempdir()?),
+        })
+    }
+
+    /// Shell statement that waits until the gate is released.
+    ///
+    /// The wait also ends when the gate directory is removed, so a stub left
+    /// running by a cancelled or failed scenario cannot poll forever.
+    pub(crate) fn shell_wait(&self) -> String {
+        let quote = |path: &Path| path.to_string_lossy().replace('\'', "'\"'\"'");
+        let (directory, path) = (quote(self.directory.path()), quote(&self.path()));
+
+        format!("until [ -f '{path}' ] || [ ! -d '{directory}' ]; do sleep 0.05; done")
+    }
+
+    /// Journey step that releases the gate once, immediately.
+    ///
+    /// The step owns a clone of the gate so its directory outlives the
+    /// scenario builder that created the step.
+    pub(crate) fn release(&self) -> Journey {
+        let gate = self.clone();
+
+        Journey::new("release_gate")
+            .with_description("Release the stub command held by the gate")
+            .step(Step::eventually(
+                Duration::from_secs(1),
+                Duration::from_millis(10),
+                move |frame| match std::fs::write(gate.path(), "released") {
+                    Ok(()) => Ok(()),
+                    // Retries the write on the next poll; on timeout the
+                    // failure names the I/O error.
+                    Err(error) => assertion::match_text_in_region(
+                        frame,
+                        &format!("E2E gate released ({error})"),
+                        &Region::full(frame.cols(), frame.rows()),
+                    ),
+                },
+            ))
+    }
+
+    fn path(&self) -> PathBuf {
+        self.directory.path().join("released")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Agentty-specific Journey builders
 // ---------------------------------------------------------------------------
