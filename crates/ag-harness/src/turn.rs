@@ -303,9 +303,11 @@ impl HistoryActivity {
     }
 }
 
-/// Observable facts about one provider request in a successful turn.
+/// Observable facts about one provider request of a turn.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct ModelRequestActivity {
+    #[serde(default)]
+    budget_weight: u64,
     #[serde(default)]
     calibrated_weight: Option<u64>,
     completion: Option<CompletionMetadata>,
@@ -316,10 +318,22 @@ pub struct ModelRequestActivity {
     estimated_weight: u64,
     #[serde(default)]
     purpose: ModelRequestPurpose,
+    #[serde(default)]
+    rejected_output: bool,
     response_type: ModelResponseType,
+    #[serde(default)]
+    unreduced_weight: u64,
 }
 
 impl ModelRequestActivity {
+    /// Returns the calibrated capacity the request was fitted into, without
+    /// reserved output, in [`crate::model::ContextBudget`] units. Zero for
+    /// summary requests, which are not fitted, and for reports recorded
+    /// before this field existed.
+    pub fn budget_weight(&self) -> u64 {
+        self.budget_weight
+    }
+
     /// Returns the input tokens that provider usage reported for earlier
     /// requests predicted for this request when it was fitted, or `None`
     /// before any usage report, when requests are fitted to 90% of the
@@ -359,9 +373,24 @@ impl ModelRequestActivity {
         self.purpose
     }
 
+    /// Whether the request's output failed validation and was re-requested
+    /// with corrective feedback. Its usage, when the provider reported it
+    /// with the response, still counts in [`Self::completion`].
+    pub fn rejected_output(&self) -> bool {
+        self.rejected_output
+    }
+
     /// Returns whether the request produced output or a tool call.
     pub fn response_type(&self) -> ModelResponseType {
         self.response_type
+    }
+
+    /// Returns what the request would have weighed with no context
+    /// reduction, without reserved output; [`Self::estimated_weight`] is
+    /// what it weighed as sent. Zero for summary requests and for reports
+    /// recorded before this field existed.
+    pub fn unreduced_weight(&self) -> u64 {
+        self.unreduced_weight
     }
 
     pub(crate) fn new(
@@ -370,14 +399,32 @@ impl ModelRequestActivity {
         response_type: ModelResponseType,
     ) -> Self {
         Self {
+            budget_weight: 0,
             calibrated_weight: None,
             completion,
             context: ContextActivity::default(),
             duration,
             estimated_weight: 0,
             purpose: ModelRequestPurpose::Turn,
+            rejected_output: false,
             response_type,
+            unreduced_weight: 0,
         }
+    }
+
+    /// Records the capacity the request was fitted into and its weight
+    /// before reduction.
+    pub(crate) fn with_fit(mut self, budget_weight: u64, unreduced_weight: u64) -> Self {
+        self.budget_weight = budget_weight;
+        self.unreduced_weight = unreduced_weight;
+
+        self
+    }
+
+    pub(crate) fn rejected(mut self) -> Self {
+        self.rejected_output = true;
+
+        self
     }
 
     pub(crate) fn with_context(mut self, context: ContextActivity) -> Self {

@@ -154,8 +154,9 @@ let outcome = session
   report lists it as `ToolActivity::ReadRepeated`. `write` and `bash` always run.
 - **Invalid final output gets two corrections.** A final answer that is not valid JSON
   or violates the schema is re-requested with short, request-only feedback up to twice
-  per turn; `TurnReport::output_corrections` counts these retries, and a third rejection
-  fails the turn.
+  per turn; `TurnReport::output_corrections` counts these retries, each rejected request
+  is reported with `ModelRequestActivity::rejected_output`, and a third rejection fails
+  the turn.
 - **Malformed tool calls get error results.** A call whose arguments its tool cannot
   decode, such as invalid JSON or a misspelled field, is journaled with its raw
   arguments and answered with an error result naming the problem and the tool's fields,
@@ -281,7 +282,9 @@ contain prompts or output. `lifecycle::LifecycleMetrics` and
 `lifecycle::LifecycleTraceObserver` export them to OpenTelemetry. Turn spans nest under
 the caller's OpenTelemetry context, including for `.start()`ed turns. A failed turn's
 `LifecycleEventKind::TurnFailed` carries the `TurnReport` of what it did before failing:
-its accepted requests, tool calls, and counts.
+its reported requests, tool calls, and counts. Each fitted request reports the
+calibrated capacity it was fitted into (`budget_weight`) and its weight before
+(`unreduced_weight`) and after (`estimated_weight`) reduction.
 
 ## Where things live
 

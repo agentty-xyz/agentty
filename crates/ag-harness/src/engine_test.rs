@@ -17,7 +17,7 @@ use crate::model::{
     ReasoningEffort,
 };
 use crate::tool::ToolCall;
-use crate::turn::TurnError;
+use crate::turn::{ModelRequestActivity, TurnError};
 use crate::{OutputSchema, ToolPolicy, TurnOptions};
 
 fn object_schema() -> OutputSchema {
@@ -135,7 +135,19 @@ async fn rejected_final_outputs_are_re_requested_with_bounded_feedback() {
     let outcome = outcome.expect("the third output should be accepted");
     assert_eq!(outcome.output(), &json!({"answer": "ok"}));
     assert_eq!(outcome.report().output_corrections(), 2);
-    assert_eq!(outcome.report().model_requests().len(), 1);
+    let reported = outcome.report().model_requests();
+    assert_eq!(
+        reported
+            .iter()
+            .map(ModelRequestActivity::rejected_output)
+            .collect::<Vec<_>>(),
+        [true, true, false]
+    );
+    assert!(reported.iter().all(|request| {
+        request.budget_weight() > 0
+            && request.unreduced_weight() > 0
+            && request.estimated_weight() == request.unreduced_weight()
+    }));
     assert_eq!(requests.len(), 3);
     let feedback: Vec<&str> = requests[2]
         .messages()
