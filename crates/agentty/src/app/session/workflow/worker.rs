@@ -1014,14 +1014,23 @@ impl SessionWorkerService {
         services: &AppServices,
         runtime: SessionWorkerRuntime,
         command: SessionCommand,
+        task: Option<ag_session::SubmitTaskRequest>,
     ) -> Result<bool, SessionError> {
         let session_id = runtime.session_id.clone();
         let operation_id = command.operation_id().to_string();
-        let claimed = services
-            .db()
-            .operations()
-            .claim_session_operation(&operation_id, &session_id, command.kind())
-            .await?;
+        let claimed = if let Some(task) = task {
+            services
+                .db()
+                .tasks()
+                .claim_attempt(&session_id, &task, command.kind())
+                .await?
+        } else {
+            services
+                .db()
+                .operations()
+                .claim_session_operation(&operation_id, &session_id, command.kind())
+                .await?
+        };
         if !claimed {
             return Ok(false);
         }
@@ -1938,11 +1947,12 @@ impl SessionManager {
         services: &AppServices,
         session_id: &str,
         command: SessionCommand,
+        task: Option<ag_session::SubmitTaskRequest>,
     ) -> Result<bool, SessionError> {
         let runtime = self.session_worker_runtime_or_err(services, session_id)?;
 
         self.worker_service_mut()
-            .enqueue_session_command_idempotently(services, runtime, command)
+            .enqueue_session_command_idempotently(services, runtime, command, task)
             .await
     }
 

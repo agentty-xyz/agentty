@@ -11,9 +11,10 @@ associated with a project, session, or enclosing
 
 ## Execution Scope
 
-The durable Run model currently covers utility execution. It does not yet represent a
-general task attempt spanning an entire workflow. Provider retries remain within the
-same run.
+The durable Run model covers utility execution. A
+[task attempt](@/docs/core-components/durable-components/task.md) separately links a
+desired outcome to a session workflow operation. Provider retries remain within the same
+run.
 
 [Workers](@/docs/core-components/execution.md) own execution, cancellation, and
 recovery. Abandoned runs are marked failed after restart rather than automatically

@@ -31,6 +31,10 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    GetTask {
+        response_tx: oneshot::Sender<Result<Option<ag_session::Task>, SessionError>>,
+        task_id: String,
+    },
     Get {
         response_tx: oneshot::Sender<Result<Option<Session>, SessionError>>,
         session_id: SessionId,
@@ -47,6 +51,39 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Submits an explicit attempt through shared admission.
+    pub(crate) async fn submit_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::SubmitTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::SubmitTask {
+            request,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
+    /// Reads task history through the foreground actor.
+    pub(crate) async fn get_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ag_session::Task>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetTask {
+            response_tx,
+            task_id: task_id.to_string(),
+        })
+        .await
+    }
+
+    /// Persists explicit outcome acceptance through shared admission.
+    pub(crate) async fn complete_task(&self, task_id: &str) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::CompleteTask {
+            task_id: task_id.to_string(),
+        })
+        .await
+    }
+
     /// Selects caller provenance without changing mailbox ordering or replies.
     pub(crate) fn with_initiator(mut self, initiator: CommandInitiator) -> Self {
         self.initiator = initiator;

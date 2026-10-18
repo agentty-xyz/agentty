@@ -36,6 +36,10 @@ impl SessionCommand {
                 request: SessionMutation::SubmitDurableMessage { request, .. },
                 ..
             } => Some(request.operation_id.clone()),
+            CommandDelivery::Admission {
+                request: SessionMutation::SubmitTask { request, .. },
+                ..
+            } => Some(request.operation_id()),
             CommandDelivery::Review { request, .. } => Some(request.operation_id.clone()),
             _ => None,
         };
@@ -103,6 +107,13 @@ pub(crate) enum SessionMutation {
         request: DurableMessageRequest,
         session_id: SessionId,
     },
+    /// Admits one explicit task attempt with durable identity.
+    SubmitTask {
+        request: ag_session::SubmitTaskRequest,
+        session_id: SessionId,
+    },
+    /// Records the caller's acceptance of a desired outcome.
+    CompleteTask { task_id: String },
     /// Answers one complete clarification-question set.
     AnswerQuestions {
         request: AnswerQuestionsRequest,
@@ -124,6 +135,8 @@ impl SessionMutation {
             Self::SubmitDurableMessage { session_id, .. } => {
                 ("submit_durable_message", Some(session_id))
             }
+            Self::SubmitTask { session_id, .. } => ("submit_task", Some(session_id)),
+            Self::CompleteTask { .. } => ("complete_task", None),
             Self::AnswerQuestions { session_id, .. } => ("answer_questions", Some(session_id)),
             Self::Cancel { session_id, .. } => ("cancel", Some(session_id)),
             Self::Merge { session_id, .. } => ("merge", Some(session_id)),

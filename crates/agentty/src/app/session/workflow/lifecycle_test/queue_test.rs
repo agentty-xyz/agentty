@@ -162,6 +162,7 @@ async fn test_enqueue_reply_command_reports_worker_failure_in_transcript() {
                 idempotent: false,
                 report_failure_in_transcript: true,
                 joins_worker_queue: true,
+                task: None,
             },
         )
         .await;

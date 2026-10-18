@@ -6,6 +6,7 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
+use crate::{SubmitTaskRequest, Task};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -81,6 +82,31 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Admits an explicit task attempt. Older hosts may omit task support.
+    async fn submit_task(
+        &self,
+        _session_id: &SessionId,
+        _request: SubmitTaskRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support tasks".to_string(),
+        ))
+    }
+
+    /// Loads the desired outcome and retained attempt history.
+    async fn get_task(&self, _task_id: &str) -> Result<Option<Task>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support tasks".to_string(),
+        ))
+    }
+
+    /// Explicitly accepts the task outcome after all attempts have settled.
+    async fn complete_task(&self, _task_id: &str) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support tasks".to_string(),
+        ))
+    }
+
     /// Creates one session and returns its stable identifier.
     async fn create_session(
         &self,
@@ -136,6 +162,39 @@ impl SessionService {
     /// Creates an owned session capability backed by a shared host handle.
     pub fn new(backend: Arc<dyn SessionBackend>) -> Self {
         Self { backend }
+    }
+
+    /// Admits one task attempt through the existing serialized session worker.
+    /// Acceptance does not wait for execution or imply task completion.
+    /// Identical deliveries are acknowledged without running again.
+    ///
+    /// # Errors
+    /// Returns an error for conflicting identity, an unavailable host, a
+    /// completed task, or a session that cannot accept a new durable turn.
+    pub async fn submit_task(
+        &self,
+        session_id: &SessionId,
+        request: SubmitTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.submit_task(session_id, request).await
+    }
+
+    /// Loads a task and all its attempts from durable storage.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot read tasks.
+    pub async fn get_task(&self, task_id: &str) -> Result<Option<Task>, SessionError> {
+        self.backend.get_task(task_id).await
+    }
+
+    /// Explicitly accepts the outcome. Successful model execution alone never
+    /// completes a task. Repeated completion retains its original timestamp.
+    ///
+    /// # Errors
+    /// Returns an error if the task is missing, an attempt is unfinished, or
+    /// the host cannot persist completion.
+    pub async fn complete_task(&self, task_id: &str) -> Result<(), SessionError> {
+        self.backend.complete_task(task_id).await
     }
 
     /// Creates one session and returns its stable identifier.

@@ -58,7 +58,9 @@ contracts.
   behind `infra/` traits. The session command gateway owns admission. A pure message
   planner selects existing workflows from submission intent and session state; the
   worker owns execution ordering and settlement.
-- Keep frontend-neutral session models in `ag-session` and persistence in `ag-store`.
+- Keep frontend-neutral session and task models in `ag-session` and persistence in
+  `ag-store`. Task attempts project execution state from worker-owned operations; task
+  completion is explicit outcome acceptance.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
 - `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot

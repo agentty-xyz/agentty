@@ -19,3 +19,5 @@ responsibility for execution ordering and recovery.
   for session workflow execution.
 - [Run](@/docs/core-components/durable-components/run.md): isolated utility model
   execution and its outcome.
+- [Task](@/docs/core-components/durable-components/task.md): desired outcome and
+  explicit attempts to advance it within a session.

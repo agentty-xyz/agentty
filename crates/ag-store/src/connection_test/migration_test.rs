@@ -6,6 +6,67 @@ use sqlx::sqlite::SqlitePoolOptions;
 use super::support::insert_session_fixture;
 use crate::connection::Database;
 
+#[tokio::test]
+async fn task_migration_preserves_existing_sessions_and_operation_retry_semantics() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    sqlx::raw_sql("DROP TRIGGER task_attempt_no_reopen; DROP TABLE task_attempt; DROP TABLE task;")
+        .execute(database.pool())
+        .await
+        .expect("prior schema");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    insert_session_fixture(&database, "legacy", "main", "Review", project).await;
+    database
+        .operations()
+        .insert_session_operation("legacy-operation", "legacy", "reply")
+        .await
+        .expect("operation");
+    database
+        .operations()
+        .mark_session_operation_failed("legacy-operation", "retryable")
+        .await
+        .expect("failure");
+    let before = database
+        .sessions()
+        .load_session("legacy")
+        .await
+        .expect("session")
+        .expect("present");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 92).await;
+    let after = database
+        .sessions()
+        .load_session("legacy")
+        .await
+        .expect("session")
+        .expect("present");
+    let claimed = database
+        .operations()
+        .claim_session_operation("legacy-operation", "legacy", "reply")
+        .await
+        .expect("legacy retry");
+
+    // Assert
+    assert_eq!(after.id, before.id);
+    assert_eq!(after.status, before.status);
+    assert_eq!(after.project_id, before.project_id);
+    assert_eq!(after.model, before.model);
+    assert!(claimed);
+    assert_eq!(
+        database
+            .tasks()
+            .load_task("legacy")
+            .await
+            .expect("no backfill"),
+        None
+    );
+}
+
 /// Verifies the current schema no longer persists agent session summaries.
 #[tokio::test]
 async fn test_session_schema_omits_summary_column() {

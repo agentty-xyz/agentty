@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a05feca6b829d4afce83230f1831aa5ba2d6f7f3a1430fc9dea2660fb1a8d58b"
+}
