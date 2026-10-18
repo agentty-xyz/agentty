@@ -5,8 +5,11 @@ use ag_session::{
 };
 use tokio::sync::oneshot;
 
-use super::{CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation};
+use super::{
+    CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+};
 use crate::app::SessionRuntimeCommand;
+use crate::app::message_admission::MessageIntent;
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission};
 use crate::domain::session::PublishBranchAction;
 use crate::domain::transient_message::{TransientMessageBody, TransientMessageSlot};
@@ -78,14 +81,16 @@ async fn admission_logs_identity_and_provenance_without_prompt_content() {
     let (response_tx, response_rx) = oneshot::channel();
     let command = SessionCommand::new(
         CommandInitiator::SessionApi,
-        SessionMutation::SubmitDurableMessage {
-            session_id,
-            request: DurableMessageRequest {
-                message: private_prompt.to_string(),
-                operation_id: operation_id.to_string(),
-                visibility: DurableMessageVisibility::Visible,
+        CommandDelivery::Admission {
+            request: SessionMutation::SubmitDurableMessage {
+                session_id,
+                request: DurableMessageRequest {
+                    message: private_prompt.to_string(),
+                    operation_id: operation_id.to_string(),
+                    visibility: DurableMessageVisibility::Visible,
+                },
             },
-            response_tx,
+            response_tx: Some(response_tx),
         },
     );
     let command_id = command.id.clone();
@@ -164,10 +169,10 @@ async fn missing_handles_rejects_publication_before_persistence() {
     let session_id = SessionId::from(app.create_session().await.expect("session should exist"));
     app.sessions.session_handles_mut().remove(&session_id);
     let (response_tx, response_rx) = oneshot::channel();
-    let command = ReviewRequestCommand::from_session_api(session_id, response_tx);
+    let command = ReviewRequestCommand::new(session_id, None);
 
     // Act
-    let result = app.admit_review_request(command).await;
+    let result = app.admit_review_request(command, Some(response_tx)).await;
 
     // Assert
     assert_eq!(result, Err(SessionError::NotFound));
@@ -256,7 +261,10 @@ async fn command_identity_correlates_mailbox_admission_with_persisted_operation(
             .branch_operation_lock,
     );
     let guard = branch_operation_lock.lock_owned().await;
-    let handle = app.sessions.handle();
+    let handle = app
+        .sessions
+        .handle()
+        .with_initiator(CommandInitiator::SessionView);
     let _consumer = app.sessions.foreground_consumer();
     let request_session_id = session_id.clone();
     let response =
@@ -266,9 +274,15 @@ async fn command_identity_correlates_mailbox_admission_with_persisted_operation(
         SessionRuntimeCommand::Mutation(SessionCommand {
             id,
             correlation_id,
-            request: SessionMutation::CreateReviewRequest(publication),
+            initiator,
+            delivery:
+                CommandDelivery::Review {
+                    request: publication,
+                    ..
+                },
             ..
         }) => {
+            assert_eq!(*initiator, CommandInitiator::SessionView);
             assert_ne!(id, &publication.operation_id);
             assert_eq!(
                 correlation_id.as_deref(),
@@ -321,10 +335,10 @@ async fn terminal_and_api_admissions_share_worker_order_without_waiting_for_comp
     );
     let guard = branch_operation_lock.lock_owned().await;
     let (response_tx, mut response_rx) = oneshot::channel();
-    app.admit_review_request(ReviewRequestCommand::from_session_api(
-        session_id.clone(),
-        response_tx,
-    ))
+    app.admit_review_request(
+        ReviewRequestCommand::new(session_id.clone(), None),
+        Some(response_tx),
+    )
     .await
     .expect("first command should be admitted");
     set_session_status_for_test(&mut app, &session_id, SessionStatus::InProgress);
@@ -382,14 +396,16 @@ fn repeated_durable_submissions_have_distinct_command_ids_and_stable_operation_c
     // Arrange
     let request = || {
         let (response_tx, _response_rx) = oneshot::channel();
-        SessionMutation::SubmitDurableMessage {
-            session_id: SessionId::from("session"),
-            request: DurableMessageRequest {
-                message: "continue".to_string(),
-                operation_id: "durable-operation".to_string(),
-                visibility: DurableMessageVisibility::Visible,
+        CommandDelivery::Admission {
+            request: SessionMutation::SubmitDurableMessage {
+                session_id: SessionId::from("session"),
+                request: DurableMessageRequest {
+                    message: "continue".to_string(),
+                    operation_id: "durable-operation".to_string(),
+                    visibility: DurableMessageVisibility::Visible,
+                },
             },
-            response_tx,
+            response_tx: Some(response_tx),
         }
     };
 
@@ -430,7 +446,13 @@ async fn terminal_and_api_mailbox_requests_retain_their_initiators() {
         // Assert
         assert_eq!(envelope.initiator, initiator);
         assert!(envelope.correlation_id.is_none());
-        assert!(matches!(envelope.request, SessionMutation::Cancel { .. }));
+        assert!(matches!(
+            envelope.delivery,
+            CommandDelivery::Admission {
+                request: SessionMutation::Cancel { .. },
+                response_tx: Some(_),
+            }
+        ));
         command_ids.push(envelope.id.clone());
         app.apply_session_runtime_command(command).await;
         assert_eq!(
@@ -524,10 +546,13 @@ async fn message_plans_preserve_busy_queue_order_and_terminal_attachments() {
         // Act
         app.admit_session_command(SessionCommand::new(
             CommandInitiator::SessionView,
-            SessionMutation::Prompt {
-                session_id: session_id.clone(),
-                session_mode: PromptSessionMode::Existing,
-                prompt: prompt.clone(),
+            CommandDelivery::Admission {
+                request: SessionMutation::Prompt {
+                    session_id: session_id.clone(),
+                    intent: MessageIntent::FollowUp,
+                    prompt: prompt.clone(),
+                },
+                response_tx: None,
             },
         ))
         .await
@@ -535,18 +560,38 @@ async fn message_plans_preserve_busy_queue_order_and_terminal_attachments() {
         let api_result = app
             .drive_session_request(service.send_message(&session_id, "then continue"))
             .await;
+        let (response_tx, response_rx) = oneshot::channel();
+        drop(response_rx);
+        let abandoned_reply = app
+            .admit_session_command(SessionCommand::new(
+                CommandInitiator::SessionApi,
+                CommandDelivery::Admission {
+                    request: SessionMutation::SendMessage {
+                        message: "accepted even without a listener".to_string(),
+                        session_id: session_id.clone(),
+                    },
+                    response_tx: Some(response_tx),
+                },
+            ))
+            .await;
         let session = app.sessions.session_for_id(&session_id).expect("session");
 
         // Assert
         assert_eq!(api_result, Ok(()));
+        assert_eq!(abandoned_reply, Ok(()));
         assert_eq!(session.status, status);
-        assert_eq!(session.queued_messages.len(), 2);
+        assert_eq!(session.queued_messages.len(), 3);
         assert_eq!(session.queued_messages[0].prompt(), &prompt);
         assert_eq!(
             session.queued_messages[1].transcript_text(),
             "then continue"
         );
         assert!(session.queued_messages[0].order() < session.queued_messages[1].order());
+        assert_eq!(
+            session.queued_messages[2].transcript_text(),
+            "accepted even without a listener"
+        );
+        assert!(session.queued_messages[1].order() < session.queued_messages[2].order());
     }
 }
 

@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
-    CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+    CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
 };
 
 /// Maximum number of accepted API commands waiting for foreground execution.
@@ -59,7 +59,7 @@ impl SessionRuntimeHandle {
         &self,
         request: CreateSessionRequest,
     ) -> Result<SessionId, SessionError> {
-        self.request_mutation(|response_tx| SessionMutation::Create {
+        self.request_mutation(|response_tx| CommandDelivery::Create {
             request,
             response_tx: Some(response_tx),
         })
@@ -88,9 +88,8 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| SessionMutation::SendMessage {
+        self.request_admission(SessionMutation::SendMessage {
             message,
-            response_tx,
             session_id,
         })
         .await
@@ -104,9 +103,8 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| SessionMutation::SubmitDurableMessage {
+        self.request_admission(SessionMutation::SubmitDurableMessage {
             request,
-            response_tx,
             session_id,
         })
         .await
@@ -121,9 +119,8 @@ impl SessionRuntimeHandle {
     ) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| SessionMutation::AnswerQuestions {
+        self.request_admission(SessionMutation::AnswerQuestions {
             request,
-            response_tx,
             session_id,
         })
         .await
@@ -133,22 +130,16 @@ impl SessionRuntimeHandle {
     pub(crate) async fn cancel_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| SessionMutation::Cancel {
-            response_tx,
-            session_id,
-        })
-        .await
+        self.request_admission(SessionMutation::Cancel { session_id })
+            .await
     }
 
     /// Enqueues one session for merge through the runtime actor.
     pub(crate) async fn merge_session(&self, session_id: &SessionId) -> Result<(), SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| SessionMutation::Merge {
-            response_tx,
-            session_id,
-        })
-        .await
+        self.request_admission(SessionMutation::Merge { session_id })
+            .await
     }
 
     /// Queues creation or refresh of one review request through the runtime
@@ -159,11 +150,18 @@ impl SessionRuntimeHandle {
     ) -> Result<ReviewRequest, SessionError> {
         let session_id = session_id.clone();
 
-        self.request_mutation(|response_tx| {
-            SessionMutation::CreateReviewRequest(ReviewRequestCommand::from_session_api(
-                session_id,
-                response_tx,
-            ))
+        self.request_mutation(|response_tx| CommandDelivery::Review {
+            request: ReviewRequestCommand::new(session_id, None),
+            response_tx: Some(response_tx),
+        })
+        .await
+    }
+
+    /// Delivers ordinary inputs with a reply that ends at admission.
+    async fn request_admission(&self, request: SessionMutation) -> Result<(), SessionError> {
+        self.request_mutation(|response_tx| CommandDelivery::Admission {
+            request,
+            response_tx: Some(response_tx),
         })
         .await
     }
@@ -171,12 +169,12 @@ impl SessionRuntimeHandle {
     /// Attaches identity before a mutation enters the bounded mailbox.
     async fn request_mutation<ResultValue>(
         &self,
-        request: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> SessionMutation,
+        delivery: impl FnOnce(oneshot::Sender<Result<ResultValue, SessionError>>) -> CommandDelivery,
     ) -> Result<ResultValue, SessionError> {
         self.request(|response_tx| {
             SessionRuntimeCommand::Mutation(SessionCommand::new(
                 self.initiator,
-                request(response_tx),
+                delivery(response_tx),
             ))
         })
         .await

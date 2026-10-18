@@ -9,7 +9,9 @@ use ratatui::backend::TestBackend;
 use tokio::sync::{Notify, oneshot};
 
 use super::PendingSessionCreation;
-use crate::app::command_gateway::{CommandInitiator, SessionCommand, SessionMutation};
+use crate::app::command_gateway::{
+    CommandDelivery, CommandInitiator, SessionCommand, SessionMutation,
+};
 use crate::app::prompt_intent::{PromptSessionMode, PromptSubmission, PromptWorkflowOutcome};
 use crate::app::{App, SessionManager, SessionRuntimeCommand};
 use crate::domain::session::Status;
@@ -730,7 +732,7 @@ async fn delayed_api_creation_allows_other_commands_before_answering() {
         Duration::from_secs(1),
         app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
             CommandInitiator::SessionApi,
-            SessionMutation::Create {
+            CommandDelivery::Create {
                 request,
                 response_tx: Some(response_tx),
             },
@@ -791,7 +793,7 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
     // Act
     app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
         CommandInitiator::SessionApi,
-        SessionMutation::Create {
+        CommandDelivery::Create {
             request,
             response_tx: Some(response_tx),
         },
@@ -806,10 +808,12 @@ async fn failed_api_setup_retries_its_reserved_session_through_the_first_message
     let (response_tx, response_rx) = oneshot::channel();
     app.apply_session_runtime_command(SessionRuntimeCommand::Mutation(SessionCommand::new(
         CommandInitiator::SessionApi,
-        SessionMutation::SendMessage {
-            message: "retry this session".to_string(),
-            response_tx,
-            session_id: session_id.clone(),
+        CommandDelivery::Admission {
+            request: SessionMutation::SendMessage {
+                message: "retry this session".to_string(),
+                session_id: session_id.clone(),
+            },
+            response_tx: Some(response_tx),
         },
     )))
     .await;

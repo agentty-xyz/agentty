@@ -30,6 +30,12 @@ bounded session-runtime mailbox. Terminal actions can enter directly or use that
 mailbox; actions using the mailbox retain their order behind previously accepted
 requests, while keeping terminal provenance.
 
+Command payloads contain application inputs, separate from response channels. The
+delivery envelope pairs each payload with its acknowledgement contract: admission,
+prepared creation, or publication completion. Terminal composer modes become explicit
+stage, start, or follow-up intent before admission; cancellation-only composer details
+do not enter the message planner.
+
 Acknowledgement follows the workflow. Ordinary message submissions return after
 acceptance, while API creation of a materialized session waits for workspace
 preparation. Terminal review publication returns after admission; API publication waits

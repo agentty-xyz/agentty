@@ -1,7 +1,6 @@
 use ag_session::SessionStatus;
 
-use crate::app::message_admission::MessagePlan;
-use crate::app::prompt_intent::PromptSessionMode;
+use crate::app::message_admission::{MessageIntent, MessagePlan};
 
 /// Explicit expectations include statuses whose eligibility belongs to the
 /// reply workflow, rather than introducing an admission transition graph.
@@ -21,12 +20,11 @@ const EXISTING_CASES: [(Option<SessionStatus>, MessagePlan); 12] = [
 ];
 
 #[test]
-fn terminal_composer_intent_takes_precedence_over_current_status() {
+fn explicit_message_intent_takes_precedence_over_current_status() {
     // Arrange
     let modes = [
-        (PromptSessionMode::NewDraft, MessagePlan::Stage),
-        (PromptSessionMode::NewDeletable, MessagePlan::Start),
-        (PromptSessionMode::NewRegular, MessagePlan::Start),
+        (MessageIntent::Stage, MessagePlan::Stage),
+        (MessageIntent::Start, MessagePlan::Start),
     ];
 
     for (mode, expected) in modes {
@@ -45,7 +43,7 @@ fn existing_terminal_prompts_queue_only_during_turns_and_rebases() {
     // Arrange
     for (status, expected) in EXISTING_CASES {
         // Act
-        let plan = MessagePlan::for_prompt(PromptSessionMode::Existing, status);
+        let plan = MessagePlan::for_prompt(MessageIntent::FollowUp, status);
 
         // Assert
         assert_eq!(plan, expected, "{status:?}");

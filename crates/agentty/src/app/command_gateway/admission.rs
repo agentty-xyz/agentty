@@ -1,11 +1,12 @@
 //! Foreground dispatch preserving each workflow's admission and reply policy.
 
-use ag_session::{CreateSessionRequest, SessionError, SessionId};
+use ag_session::{CreateSessionRequest, ReviewRequest, SessionError, SessionId};
 use tokio::sync::oneshot;
 
-use super::{CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation};
-use crate::app::message_admission::MessagePlan;
-use crate::app::prompt_intent::PromptSessionMode;
+use super::{
+    CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+};
+use crate::app::message_admission::{MessageIntent, MessagePlan};
 use crate::app::session_api::api_error_from_app;
 use crate::app::{App, AppError};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -23,9 +24,9 @@ impl App {
             id,
             correlation_id,
             initiator,
-            request,
+            delivery,
         } = command;
-        let (kind, session_id) = request.target();
+        let (kind, session_id) = delivery.target();
         tracing::debug!(
             kind,
             session_id = ?session_id,
@@ -34,65 +35,29 @@ impl App {
             initiator = ?initiator,
             "admitting session command"
         );
-        match request {
-            SessionMutation::Prompt {
-                session_id,
-                session_mode,
-                prompt,
-            } => {
-                self.execute_prompt_command(session_id, session_mode, prompt)
-                    .await;
-            }
-            SessionMutation::StartStaged { session_id } => {
-                return self
-                    .start_staged_session(&session_id)
-                    .await
-                    .map_err(api_error_from_app);
-            }
-            SessionMutation::Create {
+        match delivery {
+            CommandDelivery::Create {
                 request,
                 response_tx,
             } => {
                 self.begin_session_creation(request, response_tx).await;
             }
-            SessionMutation::SendMessage {
-                message,
-                response_tx,
-                session_id,
-            } => {
-                let _ = response_tx.send(self.send_api_message(&session_id, message).await);
-            }
-            SessionMutation::SubmitDurableMessage {
+            CommandDelivery::Admission {
                 request,
                 response_tx,
-                session_id,
             } => {
-                let _ =
-                    response_tx.send(self.submit_api_durable_message(&session_id, request).await);
+                let result = self.execute_session_mutation(request).await;
+                if let Some(response_tx) = response_tx {
+                    let _ = response_tx.send(result);
+                } else {
+                    return result;
+                }
             }
-            SessionMutation::AnswerQuestions {
+            CommandDelivery::Review {
                 request,
                 response_tx,
-                session_id,
             } => {
-                let _ = response_tx.send(self.answer_api_questions(&session_id, request).await);
-            }
-            SessionMutation::Cancel {
-                response_tx,
-                session_id,
-            } => {
-                let result = self.cancel_api_session(&session_id).await;
-                let _ = response_tx.send(result);
-            }
-            SessionMutation::Merge {
-                response_tx,
-                session_id,
-            } => {
-                let result = self.merge_api_session(&session_id).await;
-                let _ = response_tx.send(result);
-            }
-            SessionMutation::CreateReviewRequest(command) => {
-                return self.execute_review_request(command).await;
+                return self.execute_review_request(request, response_tx).await;
             }
         }
 
@@ -112,7 +77,7 @@ impl App {
         };
         let command = SessionCommand::new(
             initiator,
-            SessionMutation::Create {
+            CommandDelivery::Create {
                 request,
                 response_tx,
             },
@@ -124,10 +89,19 @@ impl App {
     pub(crate) async fn admit_review_request(
         &mut self,
         request: ReviewRequestCommand,
+        response_tx: Option<oneshot::Sender<Result<ReviewRequest, SessionError>>>,
     ) -> Result<(), SessionError> {
+        let initiator = if response_tx.is_some() {
+            CommandInitiator::SessionApi
+        } else {
+            CommandInitiator::SessionView
+        };
         let command = SessionCommand::new(
-            request.initiator(),
-            SessionMutation::CreateReviewRequest(request),
+            initiator,
+            CommandDelivery::Review {
+                request,
+                response_tx,
+            },
         );
 
         self.admit_session_command(command).await
@@ -140,35 +114,13 @@ impl App {
     ) -> Result<(), SessionError> {
         let command = SessionCommand::new(
             CommandInitiator::SessionView,
-            SessionMutation::StartStaged { session_id },
+            CommandDelivery::Admission {
+                request: SessionMutation::StartStaged { session_id },
+                response_tx: None,
+            },
         );
 
         self.admit_session_command(command).await
-    }
-
-    /// Routes one prepared turn prompt through the lifecycle path for the
-    /// active prompt session.
-    async fn execute_prompt_command(
-        &mut self,
-        session_id: SessionId,
-        session_mode: PromptSessionMode,
-        prompt: TurnPrompt,
-    ) {
-        let status = self
-            .sessions
-            .session_for_id(&session_id)
-            .map(|session| session.status);
-        let plan = MessagePlan::for_prompt(session_mode, status);
-
-        if let Err(error) = self.execute_message_plan(&session_id, prompt, plan).await {
-            let notice = if plan == MessagePlan::Queue {
-                TranscriptNotice::QueueError
-            } else {
-                TranscriptNotice::Error
-            };
-            self.append_output_for_session(&session_id, &notice.format(error))
-                .await;
-        }
     }
 
     /// Applies a pure routing decision through existing workflow boundaries.
@@ -192,5 +144,67 @@ impl App {
         }
 
         Ok(true)
+    }
+
+    /// Applies application inputs without owning transport acknowledgement.
+    async fn execute_session_mutation(
+        &mut self,
+        request: SessionMutation,
+    ) -> Result<(), SessionError> {
+        match request {
+            SessionMutation::Prompt {
+                session_id,
+                intent,
+                prompt,
+            } => {
+                self.execute_prompt_command(session_id, intent, prompt)
+                    .await;
+
+                Ok(())
+            }
+            SessionMutation::StartStaged { session_id } => self
+                .start_staged_session(&session_id)
+                .await
+                .map_err(api_error_from_app),
+            SessionMutation::SendMessage {
+                message,
+                session_id,
+            } => self.send_api_message(&session_id, message).await,
+            SessionMutation::SubmitDurableMessage {
+                request,
+                session_id,
+            } => self.submit_api_durable_message(&session_id, request).await,
+            SessionMutation::AnswerQuestions {
+                request,
+                session_id,
+            } => self.answer_api_questions(&session_id, request).await,
+            SessionMutation::Cancel { session_id } => self.cancel_api_session(&session_id).await,
+            SessionMutation::Merge { session_id } => self.merge_api_session(&session_id).await,
+        }
+    }
+
+    /// Routes one prepared turn prompt through the lifecycle path for the
+    /// active prompt session.
+    async fn execute_prompt_command(
+        &mut self,
+        session_id: SessionId,
+        intent: MessageIntent,
+        prompt: TurnPrompt,
+    ) {
+        let status = self
+            .sessions
+            .session_for_id(&session_id)
+            .map(|session| session.status);
+        let plan = MessagePlan::for_prompt(intent, status);
+
+        if let Err(error) = self.execute_message_plan(&session_id, prompt, plan).await {
+            let notice = if plan == MessagePlan::Queue {
+                TranscriptNotice::QueueError
+            } else {
+                TranscriptNotice::Error
+            };
+            self.append_output_for_session(&session_id, &notice.format(error))
+                .await;
+        }
     }
 }

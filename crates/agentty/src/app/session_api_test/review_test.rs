@@ -66,10 +66,10 @@ async fn review_request_runtime_handler_does_not_wait_for_branch_operation() {
     // Act
     let start_result = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        app.admit_review_request(ReviewRequestCommand::from_session_api(
-            session_id.clone(),
-            response_tx,
-        )),
+        app.admit_review_request(
+            ReviewRequestCommand::new(session_id.clone(), None),
+            Some(response_tx),
+        ),
     )
     .await;
     let response_before_unlock = response_rx.try_recv();
@@ -115,10 +115,10 @@ async fn review_request_runtime_handler_queues_on_existing_worker() {
     );
     let existing_operation_guard = Arc::clone(&branch_operation_lock).lock_owned().await;
     let (first_response_tx, _first_response_rx) = oneshot::channel();
-    app.admit_review_request(ReviewRequestCommand::from_session_api(
-        session_id.clone(),
-        first_response_tx,
-    ))
+    app.admit_review_request(
+        ReviewRequestCommand::new(session_id.clone(), None),
+        Some(first_response_tx),
+    )
     .await
     .expect("first command should be admitted");
     crate::test_support::set_session_status_for_test(
@@ -129,10 +129,10 @@ async fn review_request_runtime_handler_queues_on_existing_worker() {
     let (queued_response_tx, _queued_response_rx) = oneshot::channel();
 
     // Act
-    app.admit_review_request(ReviewRequestCommand::from_session_api(
-        session_id.clone(),
-        queued_response_tx,
-    ))
+    app.admit_review_request(
+        ReviewRequestCommand::new(session_id.clone(), None),
+        Some(queued_response_tx),
+    )
     .await
     .expect("queued command should be admitted");
     let publish_body = app.sessions.state().sessions()[0]

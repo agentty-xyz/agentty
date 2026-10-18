@@ -167,9 +167,11 @@ frontend-neutral lifecycle API. Agentty's bounded session-runtime mailbox execut
 requests against the foreground session manager without sharing `App` behind a mutex.
 The [Command Gateway](@/docs/core-components/command-gateway.md) routes terminal and
 programmatic mutations through shared foreground admission while preserving each
-workflow's queueing and acknowledgement contract. Ordinary messages pass through a pure
-planner before effects run: terminal composer intent controls staging and first starts,
-while API messages use current session state and start staged drafts automatically. Busy
+workflow's queueing and acknowledgement contract. Delivery envelopes own response
+channels separately from application payloads and transfer deferred replies to workspace
+preparation or the publication worker. Ordinary messages pass through a pure planner
+before effects run: terminal composer intent controls staging and first starts, while
+API messages use current session state and start staged drafts automatically. Busy
 messages queue; other follow-ups retain the reply workflow's eligibility checks. Reads
 remain separate queries. Accepted workflows update
 [messages](@/docs/core-components/durable-components/message.md) and operation records
