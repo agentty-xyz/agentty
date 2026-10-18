@@ -27,61 +27,59 @@ const BINARY_DIFF_SESSION_ID: &str = "binary-diff-0001";
 /// File and changed-line selection remain distinct while moving focus.
 #[tokio::test]
 async fn selection_visibility_in_diff_views() -> E2eResult {
-    for theme in ColorTheme::ALL {
-        for colors_enabled in [false, true] {
-            // Arrange
-            FeatureTest::new(format!(
-                "selection_visibility_diff_{}_{}",
-                theme.as_str(),
-                colors_enabled
-            ))
-            .with_git()
-            .with_terminal_size(120, 30)
-            .env("NO_COLOR", if colors_enabled { "" } else { "1" })
-            .setup(move |env| {
-                Box::pin(async move {
-                    seed_scrollable_diff_session(env).await?;
-                    let database = common::open_database(env).await?;
-                    database
-                        .settings()
-                        .upsert_setting(SettingName::Theme, theme.as_str())
-                        .await?;
+    for (theme, colors_enabled) in selection::SELECTION_COLOR_CASES {
+        // Arrange
+        FeatureTest::new(format!(
+            "selection_visibility_diff_{}_{}",
+            theme.as_str(),
+            colors_enabled
+        ))
+        .with_git()
+        .with_terminal_size(120, 30)
+        .env("NO_COLOR", if colors_enabled { "" } else { "1" })
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_scrollable_diff_session(env).await?;
+                let database = common::open_database(env).await?;
+                database
+                    .settings()
+                    .upsert_setting(SettingName::Theme, theme.as_str())
+                    .await?;
 
-                    Ok(())
-                })
+                Ok(())
             })
-            .run(
-                |scenario| {
-                    // Act
-                    scenario
-                        .compose(&common::wait_for_agentty_startup())
-                        .compose(&common::switch_to_tab("Sessions"))
-                        .compose(&common::open_selected_session_view())
-                        .press_key("d")
-                        .wait_for_text("main.rs", 5000)
-                        .press_key("j")
-                        .wait_for_stable_frame(200, 3000)
-                        .capture_labeled("files", "Selected file highlighted")
-                        .press_key("l")
-                        .wait_for_text("Esc/Left: files", 5000)
-                        .wait_for_stable_frame(200, 3000)
-                        .capture_labeled("lines", "Changed-line selection owns focus")
-                        .press_key("j")
-                        .wait_for_stable_frame(200, 3000)
-                        .capture_labeled("next_line", "Highlight moves to the next source row")
-                        .press_key("Esc")
-                        .wait_for_text("j/k: select file", 5000)
-                        .capture_labeled("files_again", "File highlight restored")
-                },
-                move |_frame, report| {
-                    Box::pin(async move {
-                        // Assert
-                        assert_diff_selection_report(report, theme, colors_enabled);
-                    })
-                },
-            )
-            .await?;
-        }
+        })
+        .run(
+            |scenario| {
+                // Act
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .compose(&common::open_selected_session_view())
+                    .press_key("d")
+                    .wait_for_text("main.rs", 5000)
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("files", "Selected file highlighted")
+                    .press_key("l")
+                    .wait_for_text("Esc/Left: files", 5000)
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("lines", "Changed-line selection owns focus")
+                    .press_key("j")
+                    .wait_for_stable_frame(200, 3000)
+                    .capture_labeled("next_line", "Highlight moves to the next source row")
+                    .press_key("Esc")
+                    .wait_for_text("j/k: select file", 5000)
+                    .capture_labeled("files_again", "File highlight restored")
+            },
+            move |_frame, report| {
+                Box::pin(async move {
+                    // Assert
+                    assert_diff_selection_report(report, theme, colors_enabled);
+                })
+            },
+        )
+        .await?;
     }
 
     Ok(())
