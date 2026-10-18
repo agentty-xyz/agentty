@@ -40,11 +40,34 @@ runs:
         name: coverage-test-results
         build-directory: target/llvm-cov-target
 
+    # The scanner CLI, its provisioned JRE, and analyzer plugins are otherwise
+    # downloaded on every run. Only `main` saves the cache so pull requests
+    # reuse one shared entry.
+    - name: Restore SonarQube scanner cache
+      id: sonar-cache
+      if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: sonar-${{ runner.os }}-${{ runner.arch }}-v1
+        path: |
+          ~/.sonar/cache
+          ${{ runner.tool_cache }}/sonar-scanner-cli
+
     - name: SonarQube Scan
+      id: sonar-scan
       if: ${{ !cancelled() && hashFiles('coverage.lcov') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
       uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
       env:
         SONAR_TOKEN: ${{ inputs.sonar-token }}
+
+    - name: Save SonarQube scanner cache
+      if: ${{ steps.sonar-scan.outcome == 'success' && steps.sonar-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        key: ${{ steps.sonar-cache.outputs.cache-primary-key }}
+        path: |
+          ~/.sonar/cache
+          ${{ runner.tool_cache }}/sonar-scanner-cli
 
     - name: Summarize coverage
       if: ${{ inputs.summarize == 'true' && !cancelled() && hashFiles('coverage.lcov') != '' }}
