@@ -341,7 +341,9 @@ GitLab merge request. During a turn or rebase, publishing waits in the session q
 1. Agentty pushes with a force-with-lease check, then creates or refreshes an open
    review request. Stacked children target their parent's review branch.
 1. The forge URL appears in chat. Later completed turns automatically push to the same
-   branch when no chat or sync is queued. Failed pushes remain retryable with `p`.
+   branch when no chat or sync is queued. If the remote already has the current commit,
+   Agentty reports that the branch is already up to date. Failed pushes remain retryable
+   with `p`.
 
 Review-request titles stay stable unless the primary objective changes. Description
 updates preserve existing content and append new details. Agentty checks for concurrent

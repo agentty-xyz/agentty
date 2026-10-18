@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::OneShotSubmission;
 use ag_forge as forge;
 use ag_forge::{MockReviewRequestClient, ReviewCommentAnchorSide, ReviewCommentThread};
-use ag_git::{GitError, MockGitClient};
+use ag_git::{BranchPushOutcome, GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
@@ -288,9 +288,16 @@ async fn manual_push_retries_all_saved_replies_and_resolves_only_fixed() {
         .once()
         .returning(|_| Box::pin(async { Some(session_branch("session-id")) }));
     git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .once()
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-id".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".to_string(),
+                })
+            })
+        });
     db.reviews()
         .prepare_session_review_comment_turn(
             "session-id",
@@ -359,15 +366,13 @@ async fn manual_push_retries_all_saved_replies_and_resolves_only_fixed() {
 
     // Assert
     assert!(result.is_ok());
-    assert_eq!(
-        input
-            .db
-            .reviews()
-            .load_session_review_comment_targets("session-id")
-            .await
-            .expect("targets"),
-        Vec::<String>::new()
-    );
+    let targets = input
+        .db
+        .reviews()
+        .load_session_review_comment_targets("session-id")
+        .await
+        .expect("targets");
+    assert_eq!(targets, Vec::<String>::new());
     assert_eq!(
         last_transcript_message(&transcript),
         "[Review Comments] Replied to 2 review thread(s) and resolved 1 fixed thread(s)."

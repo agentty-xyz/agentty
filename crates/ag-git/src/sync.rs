@@ -25,6 +25,15 @@ use super::repo::{
 /// tracked upstream branch. `None` indicates no upstream or a gone upstream.
 pub type BranchTrackingMap = HashMap<String, Option<(u32, u32)>>;
 
+/// Result of pushing one explicit remote branch.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BranchPushOutcome {
+    /// Whether Git updated the destination ref rather than finding it current.
+    pub updated: bool,
+    /// Remote-tracking reference configured by the successful push.
+    pub upstream_reference: String,
+}
+
 const COMMIT_ALL_HOOK_RETRY_ATTEMPTS: usize = 5;
 const MAX_WORKTREE_FILE_BYTE_COUNT: usize = 1024 * 1024;
 const PRE_COMMIT_CONFIG_FILES: [&str; 2] = [".pre-commit-config.yaml", ".pre-commit-config.yml"];
@@ -988,6 +997,16 @@ pub(crate) async fn push_current_branch_to_remote_branch(
     repo_path: PathBuf,
     remote_branch_name: String,
 ) -> Result<String, GitError> {
+    push_current_branch_to_remote_branch_with_outcome(repo_path, remote_branch_name)
+        .await
+        .map(|outcome| outcome.upstream_reference)
+}
+
+/// Pushes an explicit branch and preserves whether the remote ref changed.
+pub(crate) async fn push_current_branch_to_remote_branch_with_outcome(
+    repo_path: PathBuf,
+    remote_branch_name: String,
+) -> Result<BranchPushOutcome, GitError> {
     let command_runner = ProcessAsyncGitCommandRunner;
 
     push_current_branch_to_remote_branch_with_runner(repo_path, remote_branch_name, &command_runner)
@@ -1052,26 +1071,54 @@ async fn push_current_branch_to_remote_branch_with_runner(
     repo_path: PathBuf,
     remote_branch_name: String,
     command_runner: &dyn AsyncGitCommandRunner,
-) -> Result<String, GitError> {
+) -> Result<BranchPushOutcome, GitError> {
     let remote_name = current_branch_remote_name(&repo_path, command_runner)
         .await?
         .unwrap_or_else(|| "origin".to_string());
     let push_refspec = format!("HEAD:{remote_branch_name}");
     let arguments = vec![
         "push".to_string(),
+        "--porcelain".to_string(),
         "--force-with-lease".to_string(),
         "--set-upstream".to_string(),
         remote_name.clone(),
         push_refspec,
     ];
-    run_git_command_with_runner(
+    let output = run_git_command_with_runner(
         AsyncGitCommand::new(repo_path, arguments),
         "Git push failed",
         command_runner,
     )
     .await?;
 
-    Ok(format!("{remote_name}/{remote_branch_name}"))
+    let updated = parse_branch_push_updated(&output, &remote_branch_name)?;
+
+    Ok(BranchPushOutcome {
+        updated,
+        upstream_reference: format!("{remote_name}/{remote_branch_name}"),
+    })
+}
+
+/// Reads only the requested branch's status from Git's porcelain output.
+fn parse_branch_push_updated(output: &str, remote_branch_name: &str) -> Result<bool, GitError> {
+    let destination = format!("refs/heads/{remote_branch_name}");
+    for line in output.lines() {
+        let mut fields = line.split('\t');
+        let flag = fields.next();
+        let target = fields.next().and_then(|refs| refs.split_once(':'));
+        if target.is_some_and(|(_, target)| target == destination) {
+            match flag {
+                Some("=") => return Ok(false),
+                Some(" " | "+" | "*") => return Ok(true),
+                _ => break,
+            }
+        }
+    }
+
+    Err(GitError::CommandFailed {
+        command: "git push --porcelain".to_string(),
+        stderr: format!("Missing or invalid push status for {destination}: {output}"),
+    })
 }
 
 /// Pushes one explicit branch while requiring its remote ref to be absent.

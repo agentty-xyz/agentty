@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ag_forge as forge;
+use ag_git::BranchPushOutcome;
 use ag_session::test_support as model_fixture;
 use app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskFailure, BranchPublishTaskSession,
@@ -62,13 +63,20 @@ async fn push_session_branch_succeeds_without_review_request_link_for_unsupporte
         .once()
         .returning(|_| Box::pin(async { Some(session::session_branch("session-1")) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .with(
             mockall::predicate::eq(PathBuf::from("/tmp/review-session")),
             mockall::predicate::eq(session::session_branch("session-1")),
         )
         .once()
-        .returning(|_, _| Box::pin(async { Ok("origin/wt/session-1".to_string()) }));
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-1".to_string(),
+                })
+            })
+        });
     mock_git_client
         .expect_repo_url()
         .with(mockall::predicate::eq(PathBuf::from("/tmp/review-session")))

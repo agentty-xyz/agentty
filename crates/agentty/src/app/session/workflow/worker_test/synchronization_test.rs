@@ -247,7 +247,7 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         .times(1)
         .returning(|_| Box::pin(async { Ok(true) }));
     mock_git_client
-        .expect_push_current_branch_to_remote_branch()
+        .expect_push_current_branch_to_remote_branch_with_outcome()
         .never();
     let context = SessionWorkerContext {
         app_event_tx,

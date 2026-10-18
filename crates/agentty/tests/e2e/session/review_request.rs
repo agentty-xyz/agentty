@@ -105,6 +105,9 @@ fi
         r#"#!/bin/sh
 {remote_lookup}if [ "$1" = "push" ]; then
 {push_lease_guard}  sleep {push_delay_seconds}
+  case " $* " in
+    *" --porcelain "*) printf '*\tHEAD:refs/heads/{review_branch_name}\t[new branch]\n' ;;
+  esac
   exit 0
 fi
 exec '{}' "$@"

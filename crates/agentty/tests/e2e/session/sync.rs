@@ -566,8 +566,8 @@ async fn session_sync_remains_responsive_during_auto_push() -> E2eResult {
     Ok(())
 }
 
-/// Verify a completed automatic branch push remains visible after its owning
-/// project is switched out while the push is running and then restored.
+/// Verify an already-current branch is reported without claiming an update,
+/// even after switching projects while the automatic push is running.
 #[tokio::test]
 async fn published_branch_push_survives_project_switching() -> E2eResult {
     // Arrange
@@ -576,7 +576,7 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
     let (database_tx, database_rx) = oneshot::channel();
     let notice_persisted = Arc::new(AtomicBool::new(false));
     let scenario_notice_persisted = Arc::clone(&notice_persisted);
-    let push_notice = "[Branch Push] Auto-pushed published branch after completed turn.";
+    let push_notice = "[Branch Push] Published branch already up to date; no remote update needed.";
     let scenario = FeatureTest::new("published_branch_push_survives_project_switching")
         .with_git()
         .env("AGENTTY_TEST_PUSH_GATE", push_gate.path().to_string_lossy())
@@ -636,7 +636,7 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     .press_key("j")
                     .press_key("Enter")
                     .wait_for_text("[Branch Push]", 5000)
-                    .wait_for_text("Auto-pushed published branch after completed turn.", 5000)
+                    .wait_for_text("Published branch already up to date", 5000)
             },
             |frame, _report| {
                 Box::pin(async move {
@@ -645,9 +645,10 @@ async fn published_branch_push_survives_project_switching() -> E2eResult {
                     assertion::assert_text_in_region(frame, "[Branch Push]", &full);
                     assertion::assert_text_in_region(
                         frame,
-                        "Auto-pushed published branch after completed turn.",
+                        "Published branch already up to date",
                         &full,
                     );
+                    assertion::assert_not_visible(frame, "Auto-pushed published branch");
                 })
             },
         );
