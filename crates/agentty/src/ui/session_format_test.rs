@@ -168,6 +168,30 @@ fn test_session_header_lines_show_red_merge_conflict_alert() {
 }
 
 #[test]
+fn session_header_keeps_in_progress_highlight_in_every_status() {
+    for status in Status::ALL {
+        // Arrange
+        let mut session = SessionFixtureBuilder::new().build();
+        session.status = status;
+        session.title = Some("Consistent session title".to_string());
+
+        // Act
+        let header = session_header_lines(&session, 80, false);
+
+        // Assert
+        for span in &header[0].spans[..2] {
+            assert_eq!(
+                span.style.fg,
+                Some(style::palette::warning()),
+                "title and size should keep the in-progress color for {status:?}"
+            );
+            assert!(span.style.add_modifier.contains(Modifier::BOLD));
+        }
+        assert!(header[0].to_string().contains("Consistent session title"));
+    }
+}
+
+#[test]
 fn test_session_header_shows_colored_totals_without_composer_fields() {
     // Arrange
     let mut session = SessionFixtureBuilder::new().build();

@@ -487,6 +487,7 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("session_chat_header_and_composer_metadata")
         .with_git()
+        .env("NO_COLOR", "")
         .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
         .run(
             |scenario| {
@@ -526,6 +527,11 @@ async fn session_chat_header_and_composer_metadata() -> E2eResult {
                         assertion::assert_text_in_region(captured_frame, &settings, &full);
                         assertion::assert_not_visible(captured_frame, "zzzz");
                         assertion::assert_not_visible(captured_frame, "Tokens:");
+                        assertion::assert_text_has_fg_color(
+                            captured_frame,
+                            "[M] Review-ready session shortcuts",
+                            &CellColor::new(128, 128, 0),
+                        );
                         let title_row = (0..captured_frame.rows())
                             .map(|row| captured_frame.row_text(row))
                             .find(|row| row.contains("[M] Review-ready session shortcuts"))
