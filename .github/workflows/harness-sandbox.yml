@@ -1,6 +1,10 @@
 name: Native Harness Sandbox
 
 on:
+  # Runs on `main` so its Rust caches exist for pull requests to restore.
+  push:
+    branches:
+      - main
   pull_request:
   merge_group:
     types: [checks_requested]

@@ -79,3 +79,7 @@ runs:
 
     - name: Restore Rust cache
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        # PRs restore main's cache without uploading competing archives that
+        # other PRs cannot read and that evict main's entries.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
