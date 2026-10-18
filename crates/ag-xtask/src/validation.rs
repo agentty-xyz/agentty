@@ -117,7 +117,8 @@ struct Metadata {
 }
 
 impl Metadata {
-    /// Includes transitive dependencies and dependents of the changed packages.
+    /// Includes the changed packages and their transitive dependents. Cargo
+    /// still compiles dependencies, but their unchanged tests are not rerun.
     fn affected(&self, seeds: &[String]) -> Result<Vec<String>, String> {
         let graph = self
             .packages
@@ -139,36 +140,15 @@ impl Metadata {
             }
         }
         let mut affected = BTreeSet::new();
-        for reverse in [true, false] {
-            let mut pending = if reverse {
-                seeds.to_vec()
-            } else {
-                affected.iter().cloned().collect()
-            };
-            let mut visited = BTreeSet::new();
-            while let Some(package) = pending.pop() {
-                if !visited.insert(package.clone()) {
-                    continue;
-                }
-                affected.insert(package.clone());
-                if reverse {
-                    pending.extend(
-                        graph
-                            .iter()
-                            .filter(|(_, dependencies)| dependencies.contains(&package))
-                            .map(|(name, _)| name.clone()),
-                    );
-                } else {
-                    // Pending entries are validated seeds or existing graph
-                    // keys.
-                    let dependencies = &graph[&package];
-                    pending.extend(
-                        dependencies
-                            .iter()
-                            .filter(|name| graph.contains_key(*name))
-                            .cloned(),
-                    );
-                }
+        let mut pending = seeds.to_vec();
+        while let Some(package) = pending.pop() {
+            if affected.insert(package.clone()) {
+                pending.extend(
+                    graph
+                        .iter()
+                        .filter(|(_, dependencies)| dependencies.contains(&package))
+                        .map(|(name, _)| name.clone()),
+                );
             }
         }
 

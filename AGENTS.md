@@ -87,7 +87,7 @@ implementations elsewhere.
   images, or wrapper scripts.
 - Handoff means the task's final state, not each reply in a multi-turn session. Before
   handoff, run one impact-based validation rung covering every touched file and all
-  affected dependencies and dependents:
+  affected dependents:
   - Markdown: `mdformat` and the default hooks for the touched paths.
   - Docs site: the Markdown checks plus `zola-check`; reformat touched templates with
     `djlint-reformat`.
@@ -100,12 +100,13 @@ implementations elsewhere.
   remain unchanged; rerun after invalidating edits, failures, or new evidence. Record
   the command, scope, and result so the handoff shows what was covered.
 - Preserve public-contract integration tests when selecting affected suites. Source test
-  hooks do not replace them; use `test-focused` without a test-name restriction for
-  affected packages, dependencies, and dependents, or `test-workspace`.
+  hooks do not replace them; use `test-focused` without a test-name restriction for the
+  changed packages and their dependents, or `test-workspace`. Unchanged dependencies
+  need no retest.
 - For cross-cutting changes, run `prek run --all-files` and `test-focused` for the
-  affected dependency graph, only after the touched paths pass their formatters and
-  focused tests. Run `test-workspace` locally when the impact cannot be bounded
-  confidently.
+  changed packages and their dependents, only after the touched paths pass their
+  formatters and focused tests. Run `test-workspace` locally when the impact cannot be
+  bounded confidently.
 - Run mutating fixers one at a time and inspect their diffs before continuing. When a
   fixer reports that it modified files, rerun only that hook, not the whole hook set.
 - Pull-request CI runs `cargo-check`, `coverage` (which runs the `test-workspace`
