@@ -503,3 +503,92 @@ async fn staged_start_admission_retains_missing_session_error() {
     // Assert
     assert_eq!(actual.to_string(), expected);
 }
+
+#[tokio::test]
+async fn message_plans_preserve_busy_queue_order_and_terminal_attachments() {
+    // Arrange
+    let (mut app, _directory) = new_git_test_app().await;
+    let service = app.session_service();
+    for status in [SessionStatus::InProgress, SessionStatus::Rebasing] {
+        let session_id = SessionId::from(app.create_session().await.expect("session"));
+        set_session_status_for_test(&mut app, &session_id, status);
+        let prompt = TurnPrompt {
+            text: "Inspect [Image #1]".to_string(),
+            attachments: vec![TurnPromptAttachment {
+                local_image_path: "image.png".into(),
+                placeholder: "[Image #1]".to_string(),
+            }],
+            text_source: TurnPromptTextSource::AgentData,
+        };
+
+        // Act
+        app.admit_session_command(SessionCommand::new(
+            CommandInitiator::SessionView,
+            SessionMutation::Prompt {
+                session_id: session_id.clone(),
+                session_mode: PromptSessionMode::Existing,
+                prompt: prompt.clone(),
+            },
+        ))
+        .await
+        .expect("terminal admission");
+        let api_result = app
+            .drive_session_request(service.send_message(&session_id, "then continue"))
+            .await;
+        let session = app.sessions.session_for_id(&session_id).expect("session");
+
+        // Assert
+        assert_eq!(api_result, Ok(()));
+        assert_eq!(session.status, status);
+        assert_eq!(session.queued_messages.len(), 2);
+        assert_eq!(session.queued_messages[0].prompt(), &prompt);
+        assert_eq!(
+            session.queued_messages[1].transcript_text(),
+            "then continue"
+        );
+        assert!(session.queued_messages[0].order() < session.queued_messages[1].order());
+    }
+}
+
+#[tokio::test]
+async fn message_planning_preserves_api_validation_precedence_and_reply_rejection() {
+    // Arrange
+    let (mut app, _directory) = new_git_test_app().await;
+    let service = app.session_service();
+    let missing_id = SessionId::from("missing");
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    set_session_status_for_test(&mut app, &session_id, SessionStatus::Merged);
+
+    // Act
+    let empty = app
+        .drive_session_request(service.send_message(&missing_id, " \n "))
+        .await;
+    let missing = app
+        .drive_session_request(service.send_message(&missing_id, "continue"))
+        .await;
+    let rejected = app
+        .drive_session_request(service.send_message(&session_id, "continue"))
+        .await;
+
+    // Assert
+    assert_eq!(
+        empty,
+        Err(SessionError::Operation(
+            "Cannot send an empty session message".to_string()
+        ))
+    );
+    assert_eq!(missing, Err(SessionError::NotFound));
+    assert_eq!(
+        rejected,
+        Err(SessionError::Operation(format!(
+            "Session `{session_id}` cannot accept a message in status `Merged`"
+        )))
+    );
+    assert_eq!(
+        app.sessions
+            .session_for_id(&session_id)
+            .expect("session")
+            .queued_messages,
+        []
+    );
+}

@@ -5,8 +5,11 @@ weight = 3
 +++
 
 The Command Gateway gives terminal and programmatic callers a shared entry point for
-session workflow mutations. It dispatches typed requests to existing workflow handlers,
-which retain their validation, persistence, and execution responsibilities.
+session workflow mutations. For ordinary messages, a pure application-layer planner
+selects staging, starting, queueing, or resuming from submission intent and session
+state. The gateway applies that plan through existing workflow handlers, which retain
+their validation, persistence, and execution responsibilities. Other commands dispatch
+directly to their existing handlers.
 
 ## Commands and Identity
 

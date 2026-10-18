@@ -11,6 +11,7 @@ mod core;
 mod diff_prompt;
 mod error;
 mod merge_queue;
+mod message_admission;
 mod project;
 mod project_catalog;
 pub(crate) mod prompt_intent;

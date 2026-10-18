@@ -1,16 +1,20 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use ag_contracts::MockAgentChannel;
 use ag_session::{
     AnswerQuestionsRequest, CreateSessionMode, CreateSessionRequest, DurableMessageRequest,
     DurableMessageVisibility, QuestionAnswer, SessionError as ApiSessionError, SessionId,
     SessionMessageKind, SessionStatus,
 };
+use tokio::sync::Notify;
 
 use super::super::{api_error_from_app, api_error_from_session};
 use super::support::{
     request_cancellation, request_durable_message, request_merge, request_message,
     request_question_answers, request_review_request, request_session, request_session_creation,
 };
+use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{AppError, SessionError};
 use crate::domain::session::Status;
 use crate::presentation::app_mode::{DiffCommentTarget, DiffLineComments};
@@ -39,6 +43,19 @@ async fn runtime_backend_durable_turn_clears_diff_comments() {
         .insert_text("Review the controller change");
     line_comments.finish_editing();
     app.save_diff_comment_progress(session_id.clone(), line_comments);
+    let started = Arc::new(Notify::new());
+    let started_for_agent = Arc::clone(&started);
+    let mut channel = MockAgentChannel::new();
+    channel
+        .expect_run_turn()
+        .once()
+        .returning(move |_, request, _| {
+            assert_eq!(request.prompt.text, "Summarize the worker results");
+            started_for_agent.notify_one();
+
+            Box::pin(std::future::pending())
+        });
+    TestSessionRunFactory::install(&mut app.services).register(&session_id, Arc::new(channel));
 
     // Act
     request_durable_message(
@@ -53,6 +70,7 @@ async fn runtime_backend_durable_turn_clears_diff_comments() {
     .await
     .expect("durable turn should be accepted");
     tokio::time::timeout(Duration::from_secs(1), async {
+        started.notified().await;
         while app.diff_comment_progress.contains_key(&session_id) {
             app.process_pending_app_events().await;
             tokio::task::yield_now().await;
