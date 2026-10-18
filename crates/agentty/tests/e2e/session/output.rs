@@ -421,7 +421,7 @@ async fn seed_session_with_typed_marker_collision(
 }
 
 /// Seeds one in-progress session so the session view can show the active
-/// Tachyonfx loader without launching a live agent backend.
+/// Tachyonfx loader at the bottom of a full transcript without a live backend.
 async fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     common::seed_session(
         env,
@@ -434,6 +434,16 @@ async fn seed_active_loader_session(env: &BuilderEnv) -> Result<(), Box<dyn std:
         .with_title("Loader session"),
     )
     .await?;
+
+    let database = common::open_database(env).await?;
+    database
+        .sessions()
+        .append_session_message(
+            LOADER_SESSION_ID,
+            SessionMessageKind::AssistantAnswer,
+            &"Completed output line\n".repeat(60),
+        )
+        .await?;
 
     std::fs::create_dir_all(test_support::session_folder(
         &env.agentty_root.join("wt"),
@@ -776,7 +786,7 @@ async fn session_view_preserves_typed_assistant_marker_lines() -> E2eResult {
 }
 
 /// Verify that active session output uses the Tachyonfx loader glyph instead
-/// of dot-based working copy.
+/// of dot-based working copy, with a fixed blank row before the composer.
 #[tokio::test]
 async fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
     // Arrange, Act, Assert
@@ -794,11 +804,26 @@ async fn session_active_loader_uses_tachyonfx_glyph() -> E2eResult {
                         "session_active_loader",
                         "Active session view with Tachyonfx loader",
                     )
+                    .press_key("g")
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled(
+                        "scrolled_transcript",
+                        "Composer margin remains blank while reading earlier output",
+                    )
             },
-            |frame, _report| {
+            |frame, report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "▌▌▌ Working...", &full);
+                    let active_frame = common::frame_from_capture(&report.captures[0]);
+                    let full = Region::full(active_frame.cols(), active_frame.rows());
+                    assertion::assert_text_in_region(&active_frame, "▌▌▌ Working...", &full);
+                    let loader_row = active_frame.find_text("Working...")[0].rect.row;
+                    let composer_row = (0..frame.rows())
+                        .find(|row| frame.cell_text(*row, 1) == "╭")
+                        .expect("composer top border");
+                    assert_eq!(composer_row, loader_row + 2);
+                    assert_eq!(active_frame.row_text(composer_row - 1).trim(), "");
+                    assertion::assert_not_visible(frame, "Working...");
+                    assert_eq!(frame.row_text(composer_row - 1).trim(), "");
                 })
             },
         )
