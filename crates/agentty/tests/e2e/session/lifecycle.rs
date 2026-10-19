@@ -1,7 +1,9 @@
 //! Session creation, navigation, continuation, and cancellation.
 
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
@@ -16,6 +18,7 @@ use sqlx::{ConnectOptions, Connection, Executor};
 use testty::assertion;
 use testty::frame::CellColor;
 use testty::region::Region;
+use testty::step::Step;
 
 use super::fixture::{
     CLAUDE_STRUCTURED_RESPONSE_TEXT, E2eResult, seed_claude_structured_output_project,
@@ -786,9 +789,8 @@ async fn session_stop_turn_returns_to_review() -> E2eResult {
 
 /// Delays the checkout hook so navigation must work before creation finishes.
 ///
-/// `hold_checkout` is the shell statement the hook runs: a
-/// [`ReleaseGate::shell_wait`] when the scenario can release it, or a fixed
-/// `sleep` when no visible signal marks creation completion.
+/// `hold_checkout` accepts [`ReleaseGate::shell_wait`] so the scenario can
+/// choose when setup completes.
 async fn seed_delayed_session_creation(env: &BuilderEnv, hold_checkout: &str) -> E2eResult {
     seed_sessions_tab(env).await?;
     let hook = env.workdir.join(".git/hooks/post-checkout");
@@ -799,15 +801,53 @@ async fn seed_delayed_session_creation(env: &BuilderEnv, hold_checkout: &str) ->
     Ok(())
 }
 
+/// Signals agent dispatch after checkout completes, excluding startup probes.
+async fn seed_signaled_session_creation(
+    env: &BuilderEnv,
+    hold_checkout: &str,
+    started: &Path,
+) -> E2eResult {
+    seed_delayed_session_creation(env, hold_checkout).await?;
+    seed_claude_structured_output_project(env).await?;
+    let stub = env.stub_bin.join("claude");
+    let response = env.stub_bin.join("claude-response");
+    std::fs::rename(&stub, &response)?;
+    let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    // Only a queued prompt reaching the agent proves that the app has
+    // handled workspace completion, beyond the checkout hook returning.
+    std::fs::write(
+        &stub,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" != --version ] && [ \"$1\" != update ]; then\n  touch {} || \
+             exit 1\nfi\nexec {} \"$@\"\n",
+            quote(started),
+            quote(&response),
+        ),
+    )?;
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
 /// Navigation and painting remain available during slow worktree setup.
 #[tokio::test]
 async fn session_creation_keeps_navigation_responsive() -> E2eResult {
     // Arrange
+    let checkout = ReleaseGate::new()?;
+    let hold_checkout = checkout.shell_wait();
+    let signals = tempfile::tempdir()?;
+    let started = signals.path().join("prompt-started");
+    let setup_started = started.clone();
+    let held_started = started.clone();
     FeatureTest::new("session_creation_responsive")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_delayed_session_creation(env, "sleep 8").await }))
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_signaled_session_creation(env, &hold_checkout, &setup_started).await
+            })
+        })
         .run(
-            |scenario| {
+            move |scenario| {
                 // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
@@ -819,11 +859,43 @@ async fn session_creation_keeps_navigation_responsive() -> E2eResult {
                     .capture_labeled("creating", "Composer accepts input during setup")
                     .press_key("Tab")
                     .wait_for_text("q: sessions", 2000)
+                    .press_key("Tab")
+                    .wait_for_text("Enter: send", 2000)
+                    .press_key("Enter")
+                    .wait_for_text("Saved prompt:", 2000)
                     .press_key("q")
                     .press_key("?")
                     .wait_for_text("Keybindings", 2000)
                     .capture_labeled("navigation", "Help opens before worktree setup finishes")
-                    .sleep_ms(9000)
+                    .step(Step::eventually(
+                        Duration::from_secs(1),
+                        Duration::from_millis(10),
+                        move |_| {
+                            assert!(
+                                !held_started.exists(),
+                                "queued prompt must wait for checkout release"
+                            );
+
+                            Ok(())
+                        },
+                    ))
+                    .compose(&checkout.release())
+                    .step(Step::eventually(
+                        Duration::from_secs(10),
+                        Duration::from_millis(20),
+                        move |frame| {
+                            if started.is_file() {
+                                return Ok(());
+                            }
+
+                            assertion::match_text_in_region(
+                                frame,
+                                "queued prompt reached the agent after workspace completion",
+                                &Region::full(frame.cols(), frame.rows()),
+                            )
+                        },
+                    ))
+                    .wait_for_stable_frame(100, 3000)
                     .capture_labeled("completed", "Creation completion preserves help")
             },
             |frame, report| {
