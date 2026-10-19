@@ -22,8 +22,8 @@ Workspace root (JSON string data):
 
 Quality check requirements:
 
-- Before finalizing code changes, run repository-defined checks for every touched file,
-  expanding through the dependency graph to affected dependencies and dependents.
+- Before finalizing code changes, run repository-defined checks for every touched file
+  and for the code that depends on it. Unchanged dependencies need no retest.
 - If targeted checks cannot confidently cover the full impact, run the full repository
   test/check suite.
 - Run required checks once for the final relevant state. Reuse successful results while

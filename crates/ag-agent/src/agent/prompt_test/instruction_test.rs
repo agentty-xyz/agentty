@@ -88,7 +88,9 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(normalized_prompt.contains("Never run mutating commands"));
     assert!(rendered_prompt.contains("Quality check requirements:"));
     assert!(rendered_prompt.contains("repository-defined checks"));
-    assert!(normalized_prompt.contains("affected dependencies and dependents"));
+    assert!(normalized_prompt.contains("every touched file and for the code that depends on it"));
+    assert!(normalized_prompt.contains("Unchanged dependencies need no retest."));
+    assert!(!normalized_prompt.contains("affected dependencies and dependents"));
     assert!(normalized_prompt.contains("full repository test/check suite"));
     assert!(rendered_prompt.contains("Structured response protocol:"));
     assert!(normalized_prompt.contains("exactly one JSON object"));
