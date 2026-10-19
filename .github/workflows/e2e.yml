@@ -38,8 +38,9 @@ jobs:
       - name: Restore E2E Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: agentty-e2e
-          key: ${{ hashFiles('container/e2e.Containerfile', '.github/workflows/e2e.yml') }}
+          # This action ignores `key` when `shared-key` is set, so include
+          # container and workflow changes in the effective shared prefix.
+          shared-key: agentty-e2e-${{ hashFiles('container/e2e.Containerfile', '.github/workflows/e2e.yml') }}
           cache-bin: "false"
           cache-workspace-crates: "true"
           # PRs restore main's cache without uploading competing archives.
