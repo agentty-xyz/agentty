@@ -1,8 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{handle, settings_input_for_key};
+use super::{
+    cancel_confirmation_mode, handle, settings_input_for_key, settings_overlay_action_for_key,
+};
 use crate::app::test_support::{MockSyncMainRunner, SyncMainOutcome, SyncSessionStartError};
 use crate::app::{App, AppEvent, ProjectSyncPhase, Tab};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::input::{InputCommand, InputState};
 use crate::domain::question::QuestionItem;
 use crate::domain::session::Status;
@@ -12,9 +15,12 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, ConfirmationIntent, HelpContext, PromptModeSnapshot,
 };
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
-use crate::presentation::setting::SettingsInput;
+use crate::presentation::setting::{
+    SettingsAction, SettingsInput, SettingsOperation, SettingsPresentationState, SettingsView,
+};
 use crate::runtime::EventResult;
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
+use crate::test_support::SessionFixtureBuilder;
 
 /// Builds a settings-focused test app with the `Launch Configurations` row
 /// selected.
@@ -49,6 +55,65 @@ async fn new_test_app_for_settings() -> (App, tempfile::TempDir) {
     }
 
     (app, base_dir)
+}
+
+/// Owns only the values and presentation state read by settings key handling.
+struct SettingsFixture {
+    state: SettingsPresentationState,
+    view: SettingsView,
+}
+
+impl SettingsFixture {
+    /// Opens the theme selector or the launch editor without application
+    /// startup.
+    fn new(launch_configuration: Option<&str>) -> Self {
+        let selection = AgentSelection::new(AgentKind::Claude, AgentKind::Claude.default_model());
+        let view = SettingsView {
+            available_model_selections: vec![selection],
+            default_fast_reasoning_level: ReasoningLevel::Low,
+            default_fast_selection: selection,
+            default_fast_speed_mode: SpeedMode::Normal,
+            default_response_style: ResponseStyle::Balanced,
+            default_review_reasoning_level: ReasoningLevel::High,
+            default_review_selection: selection,
+            default_review_speed_mode: SpeedMode::Normal,
+            default_smart_reasoning_level: ReasoningLevel::High,
+            default_smart_selection: selection,
+            default_smart_speed_mode: SpeedMode::Normal,
+            include_coauthored_by_agentty: false,
+            launch_configuration: launch_configuration.unwrap_or_default().to_string(),
+            theme: ColorTheme::Current,
+            use_last_used_model_as_default: false,
+        };
+        let mut state = SettingsPresentationState::default();
+        if launch_configuration.is_some() {
+            let snapshot = state.snapshot(&view);
+            let row = snapshot.global_rows.len()
+                + snapshot
+                    .project_rows
+                    .iter()
+                    .position(|(name, _)| *name == "Launch Configurations")
+                    .expect("launch configuration row");
+            for _ in 0..row {
+                assert_eq!(state.apply(&view, SettingsAction::Next), None);
+            }
+        }
+        assert_eq!(state.apply(&view, SettingsAction::Activate), None);
+
+        Self { state, view }
+    }
+
+    /// Exercises the production terminal-to-action adapter and pure reducer.
+    fn press(&mut self, code: KeyCode) -> Option<SettingsOperation> {
+        let modifiers = if matches!(code, KeyCode::Char('J' | 'K')) {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        let action = settings_overlay_action_for_key(&self.state, KeyEvent::new(code, modifiers))?;
+
+        self.state.apply(&self.view, action)
+    }
 }
 
 /// Replaces sync background execution with one immediate completion event.
@@ -730,28 +795,25 @@ async fn test_handle_enter_key_opens_settings_selector_dropdown() {
     assert_eq!(selector_dropdown.options[0].label, "Agentty Default");
 }
 
-#[tokio::test]
-async fn test_settings_selector_dropdown_ignores_unmapped_key() {
+#[test]
+fn test_settings_selector_dropdown_ignores_unmapped_key() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.tabs.set(Tab::Settings);
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings selector dropdown");
+    let mut fixture = SettingsFixture::new(None);
 
     // Act
-    let event_result = handle(&mut app, KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE))
-        .await
-        .expect("failed to ignore unmapped settings key");
-    let selector_dropdown = app
-        .settings_presentation
-        .snapshot(&app.settings.view())
-        .selector_dropdown
-        .expect("settings selector dropdown should remain open");
+    let operation = fixture.press(KeyCode::F(1));
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(selector_dropdown.selected_index, 0);
+    assert_eq!(operation, None);
+    assert_eq!(
+        fixture
+            .state
+            .snapshot(&fixture.view)
+            .selector_dropdown
+            .expect("selector")
+            .selected_index,
+        0
+    );
 }
 
 #[tokio::test]
@@ -803,35 +865,27 @@ async fn test_settings_selector_dropdown_q_closes_without_quit_confirmation() {
     assert!(matches!(app.mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_settings_selector_previous_and_escape_close_dropdown() {
+#[test]
+fn test_settings_selector_previous_and_escape_close_dropdown() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.tabs.set(Tab::Settings);
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings selector dropdown");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to move selector forward");
+    let mut fixture = SettingsFixture::new(None);
+    assert_eq!(fixture.press(KeyCode::Char('j')), None);
 
     // Act
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to move selector backward");
-    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await
-        .expect("failed to close selector dropdown");
+    let previous = fixture.press(KeyCode::Char('k'));
+    let selected = fixture
+        .state
+        .snapshot(&fixture.view)
+        .selector_dropdown
+        .expect("selector")
+        .selected_index;
+    let canceled = fixture.press(KeyCode::Esc);
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(!app.settings_presentation.is_selector_dropdown_open());
+    assert_eq!(previous, None);
+    assert_eq!(selected, 0);
+    assert_eq!(canceled, None);
+    assert!(!fixture.state.is_selector_dropdown_open());
 }
 
 #[tokio::test]
@@ -869,254 +923,154 @@ async fn test_launch_configuration_list_editor_adds_command_on_confirm() {
     assert_eq!(app.sessions.sessions().len(), 1);
 }
 
-#[tokio::test]
-async fn test_launch_configuration_list_editor_backspace_updates_pending_input_only() {
+#[test]
+fn test_launch_configuration_list_editor_backspace_updates_pending_input_only() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to start adding launch configuration");
+    let mut fixture = SettingsFixture::new(Some(""));
+    assert_eq!(fixture.press(KeyCode::Char('a')), None);
     for character in "abc".chars() {
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to type launch configuration");
+        assert_eq!(fixture.press(KeyCode::Char(character)), None);
     }
 
     // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to handle key");
-    let editor = app
-        .settings_presentation
-        .snapshot(&app.settings.view())
+    let operation = fixture.press(KeyCode::Backspace);
+    let editor = fixture
+        .state
+        .snapshot(&fixture.view)
         .launch_configuration_list_editor
-        .expect("expected launch-configuration list editor");
-    let input = editor.input.expect("expected active input");
+        .expect("editor");
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(input.text(), "ab");
-    assert_eq!(app.settings.launch_configuration, "");
+    assert_eq!(operation, None);
+    assert_eq!(editor.input.expect("input").text(), "ab");
+    assert_eq!(fixture.view.launch_configuration, "");
 }
 
-#[tokio::test]
-async fn test_launch_configuration_list_editor_edits_selected_command() {
+#[test]
+fn test_launch_configuration_list_editor_edits_selected_command() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to select second command");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to start editing launch configuration");
+    let mut fixture = SettingsFixture::new(Some("cargo test\nnpm run dev"));
+    assert_eq!(fixture.press(KeyCode::Char('j')), None);
+    assert_eq!(fixture.press(KeyCode::Char('e')), None);
     for _ in 0.."npm run dev".chars().count() {
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to clear command");
+        assert_eq!(fixture.press(KeyCode::Backspace), None);
     }
 
     // Act
     for character in "lazygit".chars() {
-        handle(
-            &mut app,
-            KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE),
-        )
-        .await
-        .expect("failed to type replacement command");
+        assert_eq!(fixture.press(KeyCode::Char(character)), None);
     }
-    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to confirm edited launch configuration");
+    let operation = fixture.press(KeyCode::Enter);
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(app.settings.launch_configuration, "cargo test\nlazygit");
-}
-
-#[tokio::test]
-async fn test_launch_configuration_list_editor_delete_removes_selected_command() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to select second command");
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to handle key");
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(app.settings.launch_configuration, "cargo test");
-}
-
-#[tokio::test]
-async fn test_launch_configuration_list_editor_reorders_selected_command() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
-    )
-    .await
-    .expect("failed to reorder launch configuration");
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(app.settings.launch_configuration, "npm run dev\ncargo test");
-}
-
-#[tokio::test]
-async fn test_launch_configuration_editor_previous_move_up_and_q_close() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    app.settings.launch_configuration = "cargo test\nnpm run dev".to_string();
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to select second command");
-
-    // Act
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to select previous command");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to reselect second command");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
-    )
-    .await
-    .expect("failed to move command up");
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to close launch-configuration editor");
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert_eq!(app.settings.launch_configuration, "npm run dev\ncargo test");
-    assert!(
-        !app.settings_presentation
-            .is_launch_configuration_list_editor_open()
+    assert_eq!(
+        operation,
+        Some(SettingsOperation::LaunchConfiguration(
+            "cargo test\nlazygit".to_string()
+        ))
     );
 }
 
-#[tokio::test]
-async fn test_launch_configuration_list_editor_esc_closes_from_browse() {
+#[test]
+fn test_launch_configuration_list_editor_delete_removes_selected_command() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
+    let mut fixture = SettingsFixture::new(Some("cargo test\nnpm run dev"));
+    assert_eq!(fixture.press(KeyCode::Char('j')), None);
 
     // Act
-    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await
-        .expect("failed to handle Esc key");
+    let operation = fixture.press(KeyCode::Char('d'));
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(
-        !app.settings_presentation
-            .is_launch_configuration_list_editor_open()
+    assert_eq!(
+        operation,
+        Some(SettingsOperation::LaunchConfiguration(
+            "cargo test".to_string()
+        ))
     );
 }
 
-#[tokio::test]
-async fn test_launch_configuration_list_editor_esc_cancels_input_without_closing() {
+#[test]
+fn test_launch_configuration_list_editor_reorders_selected_command() {
     // Arrange
-    let (mut app, _base_dir) = new_test_app_for_settings().await;
-    handle(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-        .await
-        .expect("failed to open settings command editor");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to start adding launch configuration");
-    handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to type launch configuration");
+    let mut fixture = SettingsFixture::new(Some("cargo test\nnpm run dev"));
 
     // Act
-    let event_result = handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-        .await
-        .expect("failed to handle Esc key");
-    let editor = app
-        .settings_presentation
-        .snapshot(&app.settings.view())
+    let operation = fixture.press(KeyCode::Char('J'));
+
+    // Assert
+    assert_eq!(
+        operation,
+        Some(SettingsOperation::LaunchConfiguration(
+            "npm run dev\ncargo test".to_string()
+        ))
+    );
+}
+
+#[test]
+fn test_launch_configuration_editor_previous_move_up_and_q_close() {
+    // Arrange
+    let mut fixture = SettingsFixture::new(Some("cargo test\nnpm run dev"));
+    assert_eq!(fixture.press(KeyCode::Char('j')), None);
+
+    // Act
+    assert_eq!(fixture.press(KeyCode::Char('k')), None);
+    assert_eq!(
+        fixture
+            .state
+            .snapshot(&fixture.view)
+            .launch_configuration_list_editor
+            .expect("editor")
+            .selected_index,
+        0
+    );
+    assert_eq!(fixture.press(KeyCode::Char('j')), None);
+    let operation = fixture.press(KeyCode::Char('K'));
+    let closed = fixture.press(KeyCode::Char('q'));
+
+    // Assert
+    assert_eq!(
+        operation,
+        Some(SettingsOperation::LaunchConfiguration(
+            "npm run dev\ncargo test".to_string()
+        ))
+    );
+    assert_eq!(closed, None);
+    assert!(!fixture.state.is_launch_configuration_list_editor_open());
+}
+
+#[test]
+fn test_launch_configuration_list_editor_esc_closes_from_browse() {
+    // Arrange
+    let mut fixture = SettingsFixture::new(Some(""));
+
+    // Act
+    let operation = fixture.press(KeyCode::Esc);
+
+    // Assert
+    assert_eq!(operation, None);
+    assert!(!fixture.state.is_launch_configuration_list_editor_open());
+}
+
+#[test]
+fn test_launch_configuration_list_editor_esc_cancels_input_without_closing() {
+    // Arrange
+    let mut fixture = SettingsFixture::new(Some(""));
+    assert_eq!(fixture.press(KeyCode::Char('a')), None);
+    assert_eq!(fixture.press(KeyCode::Char('n')), None);
+
+    // Act
+    let operation = fixture.press(KeyCode::Esc);
+    let editor = fixture
+        .state
+        .snapshot(&fixture.view)
         .launch_configuration_list_editor
-        .expect("expected launch-configuration list editor");
+        .expect("editor");
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(
-        app.settings_presentation
-            .is_launch_configuration_list_editor_open()
-    );
+    assert_eq!(operation, None);
+    assert!(fixture.state.is_launch_configuration_list_editor_open());
     assert!(editor.input.is_none());
-    assert_eq!(app.settings.launch_configuration, "");
+    assert_eq!(fixture.view.launch_configuration, "");
 }
 
 #[tokio::test]
@@ -1140,13 +1094,10 @@ async fn test_handle_enter_key_without_session_selection_keeps_list_mode() {
 #[tokio::test]
 async fn test_handle_cancel_key_opens_cancel_confirmation_for_review_session() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let expected_session_id = app
-        .create_session()
-        .await
-        .expect("failed to create session");
-    app.sessions.sessions_mut()[0].status = Status::Review;
-    let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let session = SessionFixtureBuilder::new().status(Status::Review).build();
+    let expected_session_id = session.id.clone();
+    app.sessions.push_session(session);
     app.tabs.set(Tab::Sessions);
     app.sessions.select_session_index(Some(0));
 
@@ -1164,90 +1115,51 @@ async fn test_handle_cancel_key_opens_cancel_confirmation_for_review_session() {
         app.mode,
         AppMode::Confirmation {
             confirmation_intent: ConfirmationIntent::CancelSession,
-            ref confirmation_message,
-            ref confirmation_title,
-            restore_view: None,
             session_id: Some(ref mode_session_id),
-            selected_confirmation_index: DEFAULT_OPTION_INDEX,
+            ..
         } if mode_session_id == &expected_session_id
-            && confirmation_title == "Confirm Cancel"
-            && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
     ));
 }
 
-#[tokio::test]
-async fn test_handle_cancel_key_opens_cancel_confirmation_for_draft_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let expected_session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
-    app.tabs.set(Tab::Sessions);
-    app.sessions.select_session_index(Some(0));
+#[test]
+fn cancel_confirmation_preserves_session_and_default_for_allowed_statuses() {
+    for (status, is_draft, allowed) in [
+        (Status::Draft, true, true),
+        (Status::InProgress, false, true),
+        (Status::Review, false, true),
+        (Status::Draft, false, false),
+        (Status::Done, false, false),
+        (Status::Canceled, false, false),
+    ] {
+        // Arrange
+        let session = SessionFixtureBuilder::new()
+            .status(status)
+            .draft(is_draft)
+            .title(Some("Example session".to_string()))
+            .build();
 
-    // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to handle key");
+        // Act
+        let mode = cancel_confirmation_mode(&session);
 
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::CancelSession,
-            ref confirmation_message,
-            ref confirmation_title,
-            restore_view: None,
-            session_id: Some(ref mode_session_id),
-            selected_confirmation_index: DEFAULT_OPTION_INDEX,
-        } if mode_session_id == &expected_session_id
-            && confirmation_title == "Confirm Cancel"
-            && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_cancel_key_opens_cancel_confirmation_for_running_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let expected_session_id = app
-        .create_session()
-        .await
-        .expect("failed to create session");
-    app.sessions.sessions_mut()[0].status = Status::InProgress;
-    let expected_session_title = app.sessions.sessions()[0].display_title().to_string();
-    app.tabs.set(Tab::Sessions);
-    app.sessions.select_session_index(Some(0));
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
-    )
-    .await
-    .expect("failed to handle key");
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Confirmation {
-            confirmation_intent: ConfirmationIntent::CancelSession,
-            ref confirmation_message,
-            ref confirmation_title,
-            restore_view: None,
-            session_id: Some(ref mode_session_id),
-            selected_confirmation_index: DEFAULT_OPTION_INDEX,
-        } if mode_session_id == &expected_session_id
-            && confirmation_title == "Confirm Cancel"
-            && confirmation_message == &format!("Cancel session \"{expected_session_title}\"?")
-    ));
+        // Assert
+        if allowed {
+            assert!(matches!(
+                mode,
+                Some(AppMode::Confirmation {
+                    confirmation_intent: ConfirmationIntent::CancelSession,
+                    ref confirmation_message,
+                    ref confirmation_title,
+                    restore_view: None,
+                    session_id: Some(ref session_id),
+                    selected_confirmation_index: DEFAULT_OPTION_INDEX,
+                }) if session_id == &session.id
+                    && confirmation_title == "Confirm Cancel"
+                    && confirmation_message == "Cancel session \"Example session\"?"
+            ));
+        } else {
+            assert!(mode.is_none());
+        }
+    }
 }
 
 #[tokio::test]

@@ -11,7 +11,7 @@ use crate::presentation::app_mode::{AppMode, ConfirmationIntent, HelpContext};
 use crate::presentation::help_action::{
     HelpAction, archive_action, project_list_actions, session_list_actions, settings_actions,
 };
-use crate::presentation::setting::{SettingsAction, SettingsInput};
+use crate::presentation::setting::{SettingsAction, SettingsInput, SettingsPresentationState};
 use crate::runtime::mode::confirmation::DEFAULT_OPTION_INDEX;
 use crate::runtime::mode::input_key;
 use crate::runtime::{EventResult, key_handler};
@@ -31,9 +31,7 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
             .is_launch_configuration_list_editor_open()
             || app.settings_presentation.is_selector_dropdown_open())
     {
-        if let Some(input) = settings_input_for_key(key)
-            && let Some(action) = app.settings_presentation.action_for_input(input)
-        {
+        if let Some(action) = settings_overlay_action_for_key(&app.settings_presentation, key) {
             apply_settings_action(app, action).await;
         }
 
@@ -91,21 +89,8 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
         },
         KeyCode::Enter => return handle_enter_key(app).await,
         KeyCode::Char('c') if app.tabs.current() == Tab::Sessions => {
-            let selected_session = app.selected_session().and_then(|session| {
-                session
-                    .allows_cancel_action()
-                    .then(|| (session.id.clone(), inline_text(session.display_title())))
-            });
-            if let Some((session_id, session_title)) = selected_session {
-                let confirmation_message = cancel_confirmation_message(&session_title);
-                app.mode = AppMode::Confirmation {
-                    confirmation_intent: ConfirmationIntent::CancelSession,
-                    confirmation_message,
-                    confirmation_title: "Confirm Cancel".to_string(),
-                    restore_view: None,
-                    session_id: Some(session_id),
-                    selected_confirmation_index: DEFAULT_OPTION_INDEX,
-                };
+            if let Some(mode) = app.selected_session().and_then(cancel_confirmation_mode) {
+                app.mode = mode;
             }
         }
         KeyCode::Char(character) if character.eq_ignore_ascii_case(&'s') => sync_list_context(app),
@@ -116,6 +101,14 @@ pub(crate) async fn handle(app: &mut App, key: KeyEvent) -> io::Result<EventResu
     }
 
     Ok(EventResult::Continue)
+}
+
+/// Resolves a terminal key through the active settings overlay's input policy.
+fn settings_overlay_action_for_key(
+    state: &SettingsPresentationState,
+    key: KeyEvent,
+) -> Option<SettingsAction> {
+    settings_input_for_key(key).and_then(|input| state.action_for_input(input))
 }
 
 /// Translates terminal-specific keys into frontend-neutral settings input.
@@ -135,8 +128,22 @@ fn settings_input_for_key(key: KeyEvent) -> Option<SettingsInput> {
     }
 }
 
-fn cancel_confirmation_message(session_title: &str) -> String {
-    format!("Cancel session \"{session_title}\"?")
+/// Projects a cancelable session into its confirmation without starting a
+/// workflow.
+fn cancel_confirmation_mode(session: &Session) -> Option<AppMode> {
+    if !session.allows_cancel_action() {
+        return None;
+    }
+    let session_title = inline_text(session.display_title());
+
+    Some(AppMode::Confirmation {
+        confirmation_intent: ConfirmationIntent::CancelSession,
+        confirmation_message: format!("Cancel session \"{session_title}\"?"),
+        confirmation_title: "Confirm Cancel".to_string(),
+        restore_view: None,
+        session_id: Some(session.id.clone()),
+        selected_confirmation_index: DEFAULT_OPTION_INDEX,
+    })
 }
 
 /// Opens the session selector, preceded by an advisory when configured
