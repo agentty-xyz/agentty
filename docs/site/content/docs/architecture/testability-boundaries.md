@@ -73,6 +73,11 @@ Resource tests inject process identities and readings to cover PID reuse, stale 
 and sensor stalls. Host tests separately verify native access. A stalled sensor must not
 block process accounting or shutdown.
 
+PTY expiration scenarios can advance monotonic time through the pinned `Clock` adapter
+after observing the state whose deadline they exercise. Wall time stays fixed for
+captures; monotonic advances never rewind and retain normal host-clock progress.
+Production clocks and timeout durations keep their normal defaults.
+
 Harness conformance tests exercise every supported store and executor through public
 APIs. Store tests cover ownership, recovery, admission, and persistence; executor tests
 cover capture, cancellation, cleanup, and confinement. Native enforcement requires real

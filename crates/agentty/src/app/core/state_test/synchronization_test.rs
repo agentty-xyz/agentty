@@ -284,11 +284,19 @@ async fn project_sync_terminal_status_expires_at_its_deadline() {
         },
         phase: sync::ProjectSyncPhase::Running,
     });
+    let before_completion = app.services.clock().now_instant();
     app.apply_app_events(successful_manual_sync(project_id, "main", 2))
         .await;
+    let after_completion = app.services.clock().now_instant();
     let expires_at = app
         .project_sync_status_expires_at
         .expect("terminal sync status should have an expiry");
+
+    // Assert
+    assert!(
+        (before_completion + Duration::from_secs(10)..=after_completion + Duration::from_secs(10))
+            .contains(&expires_at)
+    );
 
     // Act
     app.expire_project_sync_status(

@@ -5,7 +5,9 @@
 //! `SystemTime::now()` calls. Use [`from_environment`] to wire production
 //! code and mock the [`Clock`] trait in tests for deterministic time control.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use time::{OffsetDateTime, UtcOffset};
@@ -24,6 +26,13 @@ pub(crate) const CLOCK_UNIX_ENV_VAR: &str = "AGENTTY_CLOCK_UNIX";
 /// [`CLOCK_UNIX_ENV_VAR`] selects a fixed clock. Fixed clocks default to UTC
 /// when this variable is unset or invalid.
 pub(crate) const CLOCK_UTC_OFFSET_SECONDS_ENV_VAR: &str = "AGENTTY_CLOCK_UTC_OFFSET_SECONDS";
+
+/// Optional cumulative monotonic advance for explicitly pinned feature clocks.
+///
+/// The file contains unsigned 32-bit milliseconds. Missing, invalid, and
+/// decreasing values preserve the last advance. Normal clocks ignore this
+/// variable; bounded advances keep `Instant` arithmetic within 50 days.
+const CLOCK_ADVANCE_FILE_ENV_VAR: &str = "AGENTTY_CLOCK_ADVANCE_FILE";
 
 /// Provides monotonic and system-time values used by runtime and persistence
 /// adapters.
@@ -51,22 +60,39 @@ pub(crate) trait Clock: Send + Sync {
 pub(crate) fn from_environment() -> Arc<dyn Clock> {
     let unix_seconds = std::env::var(CLOCK_UNIX_ENV_VAR).ok();
     let utc_offset_seconds = std::env::var(CLOCK_UTC_OFFSET_SECONDS_ENV_VAR).ok();
+    let advance_file = std::env::var_os(CLOCK_ADVANCE_FILE_ENV_VAR).map(PathBuf::from);
 
-    from_environment_values(unix_seconds.as_deref(), utc_offset_seconds.as_deref())
+    from_environment_values(
+        unix_seconds.as_deref(),
+        utc_offset_seconds.as_deref(),
+        advance_file,
+    )
 }
 
 /// Builds the selected clock from optional environment-variable values.
 fn from_environment_values(
     unix_seconds: Option<&str>,
     utc_offset_seconds: Option<&str>,
+    advance_file: Option<PathBuf>,
 ) -> Arc<dyn Clock> {
     match parse_pinned_system_time(unix_seconds) {
-        Some(system_time) => Arc::new(FixedClock {
-            local_utc_offset_seconds: utc_offset_seconds
-                .and_then(parse_utc_offset_seconds)
-                .unwrap_or_default(),
-            system_time,
-        }),
+        Some(system_time) => {
+            let clock = FixedClock {
+                local_utc_offset_seconds: utc_offset_seconds
+                    .and_then(parse_utc_offset_seconds)
+                    .unwrap_or_default(),
+                system_time,
+            };
+
+            match advance_file {
+                Some(path) => Arc::new(ControlledClock {
+                    clock,
+                    offset_millis: AtomicU32::new(0),
+                    path,
+                }),
+                None => Arc::new(clock),
+            }
+        }
         None => Arc::new(RealClock),
     }
 }
@@ -132,6 +158,39 @@ impl Clock for FixedClock {
 
     fn now_system_time(&self) -> SystemTime {
         self.system_time
+    }
+}
+
+/// Pinned clock with a forward-only offset controlled by a fixture file.
+///
+/// Real monotonic time still advances, so rendering and polling keep working.
+struct ControlledClock {
+    clock: FixedClock,
+    offset_millis: AtomicU32,
+    path: PathBuf,
+}
+
+impl Clock for ControlledClock {
+    fn local_utc_offset_seconds(&self, timestamp_seconds: i64) -> i64 {
+        self.clock.local_utc_offset_seconds(timestamp_seconds)
+    }
+
+    fn now_instant(&self) -> Instant {
+        let requested = std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .unwrap_or_default();
+        // The atomic only tracks a numeric maximum, not associated memory.
+        let offset = self
+            .offset_millis
+            .fetch_max(requested, Ordering::Relaxed)
+            .max(requested);
+
+        self.clock.now_instant() + Duration::from_millis(u64::from(offset))
+    }
+
+    fn now_system_time(&self) -> SystemTime {
+        self.clock.now_system_time()
     }
 }
 
