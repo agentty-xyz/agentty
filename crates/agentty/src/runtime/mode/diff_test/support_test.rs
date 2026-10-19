@@ -4,7 +4,9 @@ use std::sync::Arc;
 use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 
-use super::super::handle_with_cache;
+use super::super::{
+    DiffKeyNavigation, DiffNavigationAction, apply_navigation_key, handle_with_cache,
+};
 use crate::app::{App, AppEvent};
 use crate::domain::agent::AgentKind;
 use crate::domain::input::InputState;
@@ -189,6 +191,48 @@ pub(super) fn assert_restored_prompt_composer(mode: &AppMode) {
 
 pub(super) fn handle(app: &mut App, content_area: Rect, key: KeyEvent) -> EventResult {
     handle_with_cache(app, &RenderCacheStore::default(), content_area, key)
+}
+
+/// Applies navigation to an in-memory mode, leaving requested preview work
+/// to the application-boundary tests.
+pub(super) fn navigate(
+    mode: &mut AppMode,
+    content_area: Rect,
+    key: KeyEvent,
+) -> DiffNavigationAction {
+    let AppMode::Diff {
+        diff,
+        file_explorer_selected_index,
+        focus,
+        line_comments,
+        preview,
+        review_comments,
+        scroll_cache,
+        scroll_offset,
+        selected_diff_line_index,
+        ..
+    } = mode
+    else {
+        unreachable!("navigation fixture must be a diff mode");
+    };
+    let mut navigation = DiffKeyNavigation {
+        diff,
+        file_explorer_selected_index,
+        focus,
+        line_comments,
+        preview,
+        review_comments,
+        scroll_cache,
+        scroll_offset,
+        selected_diff_line_index,
+    };
+
+    apply_navigation_key(
+        &RenderCacheStore::default(),
+        content_area,
+        key,
+        &mut navigation,
+    )
 }
 
 /// Enters `AppMode::Diff` for `session_id` with a preloaded `diff`.

@@ -2,7 +2,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::{selected_preview_is_visible, viewport_rect};
 use super::support::{
-    TEST_TERMINAL_SIZE, diff_mode_fixture, handle, next_diff_preview_event, preview_test_app,
+    TEST_TERMINAL_SIZE, diff_mode_fixture, handle, navigate, next_diff_preview_event,
+    preview_test_app,
 };
 use crate::presentation::app_mode::{
     AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffPreviewUnavailableReason,
@@ -39,11 +40,10 @@ fn test_selected_preview_is_visible_only_for_matching_markdown_selection() {
     assert!(!unsupported_is_visible);
 }
 
-#[tokio::test]
-async fn test_handle_l_focuses_visible_markdown_preview() {
+#[test]
+fn test_navigation_l_focuses_visible_markdown_preview() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = diff_mode_fixture(
+    let mut mode = diff_mode_fixture(
         "diff --git a/README.md b/README.md\n+changed",
         0,
         DiffFocus::Files,
@@ -55,15 +55,15 @@ async fn test_handle_l_focuses_visible_markdown_preview() {
     );
 
     // Act
-    handle(
-        &mut app,
+    navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             focus: DiffFocus::Content,
             selected_diff_line_index: 0,
@@ -72,11 +72,10 @@ async fn test_handle_l_focuses_visible_markdown_preview() {
     ));
 }
 
-#[tokio::test]
-async fn test_handle_c_focuses_linked_review_comments() {
+#[test]
+fn test_navigation_c_focuses_linked_review_comments() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
+    let mut mode = AppMode::Diff {
         diff: "diff output".to_string(),
         file_explorer_selected_index: 0,
         focus: DiffFocus::Files,
@@ -95,15 +94,15 @@ async fn test_handle_c_focuses_linked_review_comments() {
     };
 
     // Act
-    handle(
-        &mut app,
+    navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             review_comments: Some(DiffReviewComments {
                 sidebar_focus: DiffSidebarFocus::Comments,
@@ -116,15 +115,14 @@ async fn test_handle_c_focuses_linked_review_comments() {
     ));
 }
 
-#[tokio::test]
-async fn test_handle_preview_arrow_keys_scroll_both_directions() {
+#[test]
+fn test_navigation_preview_arrow_keys_scroll_both_directions() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let preview_content = (0..40)
         .map(|index| format!("preview line {index}"))
         .collect::<Vec<_>>()
         .join("\n");
-    app.mode = diff_mode_fixture(
+    let mut mode = diff_mode_fixture(
         "diff --git a/README.md b/README.md\n+changed",
         0,
         DiffFocus::Content,
@@ -136,20 +134,20 @@ async fn test_handle_preview_arrow_keys_scroll_both_directions() {
     );
 
     // Act
-    handle(
-        &mut app,
+    navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
     );
-    handle(
-        &mut app,
+    navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             focus: DiffFocus::Content,
             scroll_offset: 0,
