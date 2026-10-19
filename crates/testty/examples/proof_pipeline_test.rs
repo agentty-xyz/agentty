@@ -6,6 +6,7 @@ use std::process::Command;
 use std::{fs, io};
 
 use tempfile::tempdir;
+use testty::proof::report::{ProofError, ProofReport};
 
 use super::{main, output_dir, print_file_preview, run};
 
@@ -16,7 +17,7 @@ fn creates_all_five_proof_formats() {
     let mut output = Vec::new();
 
     // Act
-    run(directory.path(), &mut output).expect("proof pipeline");
+    run(directory.path(), &mut output, ProofReport::save).expect("proof pipeline");
 
     // Assert
     for name in [
@@ -84,8 +85,8 @@ fn reports_filesystem_and_output_failures() {
     let mut output = io::Cursor::new([]);
 
     // Act
-    let invalid_directory = run(&file, &mut Vec::new());
-    let failed_output = run(directory.path(), &mut output);
+    let invalid_directory = run(&file, &mut Vec::new(), ProofReport::save);
+    let failed_output = run(directory.path(), &mut output, ProofReport::save);
     let missing_preview = print_file_preview(&file.join("missing"), 1, &mut Vec::new());
     let failed_preview = print_file_preview(&file, 1, &mut output);
 
@@ -134,9 +135,55 @@ fn entry_point_creates_artifacts_in_an_isolated_process() {
 fn propagates_disconnections_at_every_output_write() {
     // Arrange
     let directory = tempdir().expect("proof directory");
+    // Keep the full and truncated preview writes without rerendering images
+    // for every disconnected writer. Real backends are covered above.
+    fs::write(directory.path().join("proof.txt"), "preview\n".repeat(21)).expect("preview input");
 
     // Act / Assert
-    support::assert_output_failures(|output| run(directory.path(), output));
+    support::assert_output_failures(|output| run(directory.path(), output, |_, _, _| Ok(())));
+}
+
+#[test]
+fn propagates_renderer_failures_at_each_stage_without_continuing() {
+    // Arrange
+    let directory = tempdir().expect("proof directory");
+    fs::write(directory.path().join("proof.txt"), "preview\n").expect("preview input");
+    let stages = [
+        "proof.txt",
+        "proof_strip.png",
+        "proof.gif",
+        "proof.html",
+        "proof.xml",
+    ];
+    for failed_stage in 0..stages.len() {
+        let mut rendered = Vec::new();
+        let mut output = Vec::new();
+
+        // Act
+        let error = run(directory.path(), &mut output, |_, _, path| {
+            rendered.push(
+                path.file_name()
+                    .expect("artifact name")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            if rendered.len() == failed_stage + 1 {
+                return Err(ProofError::Io(io::Error::other("renderer failed")));
+            }
+
+            Ok(())
+        })
+        .expect_err("renderer error must propagate");
+
+        // Assert
+        assert_eq!(rendered, stages[..=failed_stage]);
+        assert!(error.to_string().contains("renderer failed"));
+        assert!(
+            !String::from_utf8(output)
+                .expect("UTF-8 output")
+                .contains("All five proof formats generated")
+        );
+    }
 }
 
 #[test]
