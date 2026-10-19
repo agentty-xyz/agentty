@@ -33,6 +33,14 @@ mod model_profile_fixture;
 mod store_conformance_test;
 
 #[cfg(test)]
+#[path = "support/store_fixture.rs"]
+mod store_fixture;
+
+#[cfg(test)]
+#[path = "support/store_gate.rs"]
+mod store_gate;
+
+#[cfg(test)]
 #[path = "support/compaction.rs"]
 mod compaction_test;
 
@@ -196,7 +204,7 @@ fn external_repository_configuration_rejects_relative_git_executable() -> Result
 async fn external_model_reads_tool_results_and_retains_chat_history() -> Result<(), Box<dyn Error>>
 {
     for batched in [false, true] {
-        for store in store_conformance_test::stores().await {
+        for store in store_fixture::stores().await {
             // Arrange
             let requests = Arc::new(Mutex::new(Vec::new()));
             let model = ExternalToolModel {

@@ -10,7 +10,7 @@ use crate::context::HistoryTurn;
 use crate::model::{ModelMessage, ModelMetadata};
 use crate::session::{Database, EncodedMessage, NewSession, SessionError, TimestampSource};
 use crate::store::{SessionCheckpoint, SessionStore as _};
-use crate::store_conformance_test::image_input;
+use crate::store_fixture::image_input;
 use crate::tool::ToolCall;
 
 #[test]

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_conformance_test::{schema, stores};
+use crate::store_fixture::{schema, stores};
 
 /// Model that answers ordinary turns and, when it sees the compaction system
 /// instruction, returns a configurable structured summary. Generation can be

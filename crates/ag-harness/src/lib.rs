@@ -60,26 +60,14 @@
 //! | [`lifecycle`] | Content-free events and OpenTelemetry observers            |
 
 #[cfg(test)]
-#[path = "../tests/support/model_switch.rs"]
-mod model_switch_test;
-
-#[cfg(test)]
-#[path = "../tests/support/recovery.rs"]
-mod recovery_test;
-
-#[cfg(test)]
 extern crate self as ag_harness;
 
 #[cfg(test)]
-#[path = "../tests/support/store_conformance.rs"]
-mod store_conformance_test;
+#[path = "../tests/support/store_fixture.rs"]
+mod store_fixture;
 
 #[cfg(test)]
 mod gated_store_test;
-
-#[cfg(test)]
-#[path = "../tests/support/repository.rs"]
-mod repository_fixture;
 
 #[cfg(test)]
 #[path = "../tests/support/context_budget.rs"]
@@ -93,16 +81,10 @@ mod admission;
 pub mod bash;
 mod calibration;
 mod cancellation;
-#[cfg(test)]
-#[path = "../tests/support/cancellation.rs"]
-mod cancellation_test;
 
 mod command_journal;
 mod command_settlement;
 mod compaction;
-#[cfg(test)]
-#[path = "../tests/support/compaction.rs"]
-mod compaction_projection_test;
 mod comparison;
 mod context;
 #[cfg(test)]
@@ -119,9 +101,6 @@ mod memory_store;
 pub mod model;
 mod model_profile;
 mod model_registry;
-#[cfg(test)]
-#[path = "../tests/support/model_registry.rs"]
-mod model_registry_test;
 mod policy;
 pub mod provider;
 mod read;

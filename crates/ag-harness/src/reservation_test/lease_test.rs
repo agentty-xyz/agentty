@@ -10,7 +10,7 @@ use crate::input::TurnInput;
 use crate::model::{ModelError, ModelMessage};
 use crate::session::{Database, NewSession, SessionError};
 use crate::store::{AcquiredTurn, SessionStore};
-use crate::store_conformance_test::{options, schema};
+use crate::store_fixture::{options, schema};
 
 #[tokio::test]
 async fn stalled_renewal_cannot_extend_the_last_confirmed_deadline() {

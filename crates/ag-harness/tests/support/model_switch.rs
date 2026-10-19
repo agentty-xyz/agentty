@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_conformance_test::{Gate, image_input, options, schema, stores};
+use crate::store_fixture::{image_input, options, schema, stores};
+use crate::store_gate::Gate;
 
 struct RecordingModel {
     name: &'static str,
