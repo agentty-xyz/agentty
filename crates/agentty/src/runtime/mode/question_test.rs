@@ -6,6 +6,9 @@ pub(crate) mod support;
 #[path = "question_test/display_test.rs"]
 mod display;
 
+#[path = "question_test/input_test.rs"]
+mod input;
+
 #[path = "question_test/lifecycle_test.rs"]
 mod lifecycle;
 
