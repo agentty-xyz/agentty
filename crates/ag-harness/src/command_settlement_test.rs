@@ -13,7 +13,7 @@ use crate::command_settlement::{Commands, retained};
 use crate::effect::Effects;
 use crate::execution::{ExecutionControl, ExecutionError};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore, SqliteStore};
-use crate::store_conformance_test::{options, schema};
+use crate::store_fixture::{options, schema};
 use crate::{OutputSchema, ToolPolicy, TurnError, TurnInput, TurnOptions, reservation};
 
 struct Control {

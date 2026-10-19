@@ -12,7 +12,7 @@ use super::{
 use crate::model::{CompletionMetadata, Model};
 use crate::provider::catalog::ModelConfigurationError;
 use crate::schema_contract::OutputSchema;
-use crate::store_conformance_test::image_input;
+use crate::store_fixture::image_input;
 use crate::{model, tool};
 
 fn person_schema_value() -> Value {

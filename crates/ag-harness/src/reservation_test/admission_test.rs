@@ -6,7 +6,7 @@ use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::{HostRequest, HostTurnAcquisition, HostTurnStatus};
 use crate::reservation::{AdmittedStore, admit};
 use crate::store::{AcquiredTurn, ModelSwitch, NewSession, SessionStore};
-use crate::store_conformance_test::{lifecycle, options, schema, stores};
+use crate::store_fixture::{lifecycle, options, schema, stores};
 
 #[tokio::test]
 async fn admission_decorator_forwards_the_complete_store_contract() {

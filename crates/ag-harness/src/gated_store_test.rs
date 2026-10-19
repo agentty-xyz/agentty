@@ -18,7 +18,7 @@ use crate::session::{Database, LoadedSession, NewSession, SessionError, StoreIde
 use crate::store::{
     AcquiredTurn, ModelSwitch, Reservation, SessionStore, TurnAdmission, WriteRecord,
 };
-use crate::store_conformance_test::{options, schema};
+use crate::store_fixture::{options, schema};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum PauseAt {

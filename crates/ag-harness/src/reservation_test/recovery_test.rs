@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::effect::Effects;
 use crate::reservation::{self, abandon, recover_session, retained_store};
 use crate::store::{AcquiredTurn, MemoryStore, NewSession, SessionStore};
-use crate::store_conformance_test::{options, schema, stores};
+use crate::store_fixture::{options, schema, stores};
 use crate::{SessionError, TurnInput};
 
 async fn acquire(store: &Arc<dyn SessionStore>, prompt: &str) -> AcquiredTurn {

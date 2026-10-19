@@ -15,7 +15,7 @@ use crate::store::{
     AcquiredTurn, HistoryTurn, MemoryStore, NewSession, SessionStore, StoreIdentity, TurnOwner,
     TurnStop, WriteRecord, WriteStatus,
 };
-use crate::store_conformance_test::{harness, options, schema};
+use crate::store_fixture::{harness, options, schema};
 use crate::{ModelError, SessionError, TurnError, TurnInput};
 
 #[tokio::test]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::TurnInput;
 use crate::session::{Database, NewSession};
 use crate::store::{AcquiredTurn, SessionStore, WriteStatus};
-use crate::store_conformance_test::{options, schema};
+use crate::store_fixture::{options, schema};
 
 async fn create_session(database: &Database) {
     database

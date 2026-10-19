@@ -13,7 +13,7 @@ use crate::model_profile_fixture::unbounded_model_profile;
 use crate::recovery::ExecutionIdentity;
 use crate::repository::Repository;
 use crate::store::MemoryStore;
-use crate::store_conformance_test::{image_input, png_image};
+use crate::store_fixture::{image_input, png_image};
 use crate::{
     InputBlock, OutputSchema, SessionError, Tool, ToolPolicy, TurnError, TurnInput, TurnOptions,
 };

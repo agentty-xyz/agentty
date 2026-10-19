@@ -20,7 +20,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::context_budget_fixture::unbounded_context_budget;
-use crate::store_conformance_test::{options, schema, stores};
+use crate::store_fixture::{options, schema, stores};
 
 #[derive(Clone, Default)]
 struct EventRecorder(Arc<Mutex<Vec<LifecycleEvent>>>);

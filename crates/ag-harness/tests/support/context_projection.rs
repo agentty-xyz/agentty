@@ -14,7 +14,7 @@ use ag_harness::{Harness, Model, ModelError, OutputSchema, SessionError, TurnErr
 use async_trait::async_trait;
 use serde_json::json;
 
-use crate::store_conformance_test::{image_input, options, schema, stores};
+use crate::store_fixture::{image_input, options, schema, stores};
 
 /// Deterministic flat weights so budget arithmetic stays readable in tests.
 struct FlatEstimator;

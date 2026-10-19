@@ -18,7 +18,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::model_profile_fixture::unbounded_model_profile;
-use crate::store_conformance_test::{options, schema, stores};
+use crate::store_fixture::{options, schema, stores};
 
 struct CountingModel {
     calls: Arc<AtomicUsize>,

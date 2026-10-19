@@ -15,7 +15,7 @@ use crate::input::StoredTurnInput;
 use crate::lifecycle::LifecycleEventKind;
 use crate::provider::{KimiConfig, MuseConfig, QwenConfig};
 use crate::schema_contract::{OutputSchema, OutputValidationError};
-use crate::store_conformance_test::image_input;
+use crate::store_fixture::image_input;
 use crate::tool::{ReadArguments, ToolCall};
 use crate::{ImageContent, ImageMediaType, InputBlock, TurnInput, tool};
 

@@ -30,7 +30,7 @@ use tokio::time::{Instant, timeout};
 
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::repository_fixture::repository_with_host_git;
-use crate::store_conformance_test::ExternalStore;
+use crate::store_fixture::ExternalStore;
 
 fn schema() -> OutputSchema {
     OutputSchema::new(json!({"type":"object"})).expect("schema")
@@ -1420,7 +1420,7 @@ async fn successful_controlled_writes_settle_once() {
 #[tokio::test]
 async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgments() {
     // Arrange
-    for store in crate::store_conformance_test::stores().await {
+    for store in crate::store_fixture::stores().await {
         for (index, phase) in [
             Phase::Acquire,
             Phase::AcquireAck,
@@ -1506,7 +1506,7 @@ async fn host_recovery_survives_cancelled_acquisition_and_terminal_acknowledgmen
 #[tokio::test]
 async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
     // Arrange
-    for store in crate::store_conformance_test::stores().await {
+    for store in crate::store_fixture::stores().await {
         let gate = Arc::new(Gate::new(store, Phase::Acquire));
         let probe = Arc::new(Probe::default());
         let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
@@ -1554,7 +1554,7 @@ async fn host_retry_waiting_before_reservation_gets_recorded_classification() {
 #[tokio::test]
 async fn host_acquisition_panic_releases_admission_without_execution() {
     // Arrange
-    for store in crate::store_conformance_test::stores().await {
+    for store in crate::store_fixture::stores().await {
         let gate = Arc::new(Gate::new(store, Phase::AcquirePanic));
         let probe = Arc::new(Probe::default());
         let harness = Harness::new(TestModel(Arc::clone(&probe)), unbounded_context_budget())
