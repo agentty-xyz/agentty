@@ -674,13 +674,17 @@ pub(crate) fn endpoint(base_url: &str) -> String {
 pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
     Arc::new(ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: MAX_RETRY_DELAY,
         request_timeout: REQUEST_TIMEOUT,
+        retry_delay: RETRY_DELAY,
     })
 }
 
 struct ReqwestChatCompletionClient {
     client: reqwest::Client,
+    max_retry_delay: Duration,
     request_timeout: Duration,
+    retry_delay: Duration,
 }
 
 #[async_trait]
@@ -704,7 +708,7 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
                 Ok(response) => response,
                 Err(error) if !error.is_timeout() && transport_retries < MAX_TRANSPORT_RETRIES => {
                     transport_retries += 1;
-                    tokio::time::sleep(RETRY_DELAY).await;
+                    tokio::time::sleep(self.retry_delay).await;
 
                     continue;
                 }
@@ -714,7 +718,12 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
             if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
                 && rate_limit_retries < MAX_RATE_LIMIT_RETRIES
             {
-                let delay = rate_limit_retry_delay(response.headers(), rate_limit_retries);
+                let delay = rate_limit_retry_delay(
+                    response.headers(),
+                    rate_limit_retries,
+                    self.retry_delay,
+                    self.max_retry_delay,
+                );
                 rate_limit_retries += 1;
                 drop(response);
                 tokio::time::sleep(delay).await;
@@ -750,15 +759,20 @@ impl ChatCompletionClient for ReqwestChatCompletionClient {
     }
 }
 
-fn rate_limit_retry_delay(headers: &reqwest::header::HeaderMap, retry: usize) -> Duration {
+fn rate_limit_retry_delay(
+    headers: &reqwest::header::HeaderMap,
+    retry: usize,
+    retry_delay: Duration,
+    max_retry_delay: Duration,
+) -> Duration {
     let provider_delay = headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .map_or_default(Duration::from_secs);
-    let backoff = RETRY_DELAY
+    let backoff = retry_delay
         .saturating_mul(1_u32 << retry.min(31))
-        .min(MAX_RETRY_DELAY);
+        .min(max_retry_delay);
 
     provider_delay.min(MAX_PROVIDER_RETRY_DELAY).max(backoff)
 }
