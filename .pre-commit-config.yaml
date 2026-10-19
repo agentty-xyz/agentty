@@ -53,7 +53,14 @@ repos:
       - id: test-timing-action
         name: test timing artifact lifecycle
         description: Verify artifact freshness and provenance with complete JavaScript line coverage.
-        entry: node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-include=.github/actions/test-timing/*.mjs --test-coverage-exclude=**/*.test.mjs .github/actions/test-timing/timing.test.mjs
+        entry: >-
+          bash -eu -o pipefail -c 'rm -f timing-action.lcov;
+          node --test --experimental-test-coverage --test-coverage-lines=100
+          --test-coverage-include=.github/actions/test-timing/index.mjs
+          --test-coverage-include=.github/actions/test-timing/timing.mjs
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=lcov --test-reporter-destination=timing-action.lcov
+          .github/actions/test-timing/timing.test.mjs && test -s timing-action.lcov'
         language: system
         files: ^(\.github/actions/test-timing/|\.pre-commit-config\.yaml$)
         pass_filenames: false

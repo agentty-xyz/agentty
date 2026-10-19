@@ -105,7 +105,9 @@ collector steps. Cargo's rounded timing report cannot resolve subsecond warm-bui
 differences. E2E caches remain isolated by their pinned container and Rust environment.
 The collector's lifecycle and failure paths are checked by `test-timing-action`,
 including 100% JavaScript line coverage; Rust report parsing and comparison are covered
-by the ordinary `ag-xtask` suites and coverage gate.
+by the ordinary `ag-xtask` suites and coverage gate. The collector hook writes a fresh
+`timing-action.lcov` for SonarCloud; the coverage job runs that hook before scanning so
+JavaScript coverage is imported alongside Rust.
 
 ## Coverage
 

@@ -118,6 +118,9 @@ test('invalid inputs and corrupt preparation fail visibly', () => {
   start.started_at = '2027-01-01';
   current.files.set(`${directory}/start.json`, JSON.stringify(start));
   assert.throws(() => current.finish(), /Invalid timing interval/);
+  start.started_at = 'invalid';
+  current.files.set(`${directory}/start.json`, JSON.stringify(start));
+  assert.throws(() => current.finish(), /Invalid timing interval/);
 });
 
 test('real adapter and action entry preserve reports and propagate failures', t => {
@@ -143,6 +146,8 @@ test('real adapter and action entry preserve reports and propagate failures', t 
   assert.ok(result.environment.available_parallelism > 0);
   assert.equal(fs.readFileSync(resolve(directory, 'target/test-results/workspace/junit.xml'), 'utf8'), '<testsuites/>');
   assert.equal(host.version(process.execPath, ['--version']), process.version);
+  assert.deepEqual(host.hardware([{ model: 'Z' }, { model: 'A' }, { model: 'Z' }], 2),
+    { cpu_models: ['A', 'Z'], available_parallelism: 2 });
   assert.equal(host.version('/nonexistent-agentty-program', []), null);
   assert.equal(host.read(resolve(directory, 'missing')), null);
   assert.throws(() => host.read(directory));

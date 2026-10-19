@@ -19,8 +19,11 @@ export const host = {
   remove: path => fs.rmSync(path, { force: true, recursive: true }),
   mkdir: path => fs.mkdirSync(path, { recursive: true }),
   now: () => new Date().toISOString(),
-  hardware: () => ({ cpu_models: [...new Set(cpus().map(cpu => cpu.model))].sort(),
-    available_parallelism: availableParallelism() }),
+  hardware(cpuInfo = cpus(), parallelism = availableParallelism()) {
+    return { cpu_models: [...new Set(cpuInfo.map(cpu => cpu.model))]
+      .sort((left, right) => left.localeCompare(right, 'en')),
+    available_parallelism: parallelism };
+  },
   version(program, args) {
     const result = spawnSync(program, args, { encoding: 'utf8' });
     return result.status === 0 ? result.stdout.trim() : null;
@@ -62,8 +65,7 @@ function relativePath(value) {
   return value;
 }
 
-// Also callable from the postsubmit loop: no extra Cargo build before each hook.
-export function run(env, io = host) {
+function configuration(env) {
   const phase = env.INPUT_PHASE;
   if (!['prepare', 'finish'].includes(phase)) throw new Error('Expected prepare or finish');
   const suite = env.INPUT_SUITE;
@@ -77,45 +79,64 @@ export function run(env, io = host) {
     'cargo-timing.html': resolve(env.GITHUB_WORKSPACE, build, 'cargo-timings/cargo-timing.html'),
   };
   const startPath = `${directory}/start.json`;
+  return { phase, current, build, directory, reports, startPath };
+}
+
+function prepare(config, env, io) {
+  const { directory, reports, startPath, current, build } = config;
+  io.remove(directory);
+  io.mkdir(directory);
+  for (const path of Object.values(reports)) io.remove(path);
+  io.write(startPath, JSON.stringify({
+    schema: 1, identity: current, environment: environment(env, io),
+    started_at: io.now(), build_directory: build,
+  }));
+}
+
+function finish(config, env, io) {
+  const { directory, reports, startPath, current, build } = config;
   const timestamp = io.now();
-  if (phase === 'prepare') {
-    io.remove(directory);
-    io.mkdir(directory);
-    for (const path of Object.values(reports)) io.remove(path);
-    io.write(startPath, JSON.stringify({
-      schema: 1, identity: current, environment: environment(env, io),
-      started_at: io.now(), build_directory: build,
-    }));
-  } else {
-    const raw = io.read(startPath);
-    const start = raw === null ? null : JSON.parse(raw.toString());
-    const prepared = start !== null
-      && JSON.stringify(start.identity) === JSON.stringify(current)
-      && start.build_directory === build;
-    io.remove(startPath);
-    const result = {
-      schema: 1, identity: current,
-      environment: prepared ? start.environment : environment(env, io),
-      started_at: prepared ? start.started_at : null,
-      finished_at: timestamp,
-      hook_seconds: prepared ? (Date.parse(timestamp) - Date.parse(start.started_at)) / 1000 : null,
-      outcome: env.INPUT_OUTCOME || 'unknown',
-      prepared,
-      reports: {},
-    };
-    if (result.hook_seconds !== null && !(result.hook_seconds >= 0)) {
-      throw new Error('Invalid timing interval');
-    }
-    io.mkdir(directory);
-    for (const [name, path] of Object.entries(reports)) {
-      const data = prepared ? io.read(path) : null;
-      result.reports[name] = data === null ? null : createHash('sha256').update(data).digest('hex');
-      const destination = `${directory}/${name}`;
-      if (data === null) io.remove(destination);
-      else io.write(destination, data);
-    }
-    io.write(`${directory}/metadata.json`, JSON.stringify(result, null, 2) + '\n');
+  const raw = io.read(startPath);
+  const start = raw === null ? null : JSON.parse(raw.toString());
+  const prepared = start !== null
+    && JSON.stringify(start.identity) === JSON.stringify(current)
+    && start.build_directory === build;
+  io.remove(startPath);
+  const result = {
+    schema: 1, identity: current,
+    environment: prepared ? start.environment : environment(env, io),
+    started_at: prepared ? start.started_at : null,
+    finished_at: timestamp,
+    hook_seconds: prepared ? (Date.parse(timestamp) - Date.parse(start.started_at)) / 1000 : null,
+    outcome: env.INPUT_OUTCOME || 'unknown',
+    prepared,
+  };
+  if (result.hook_seconds !== null && (!Number.isFinite(result.hook_seconds) || result.hook_seconds < 0)) {
+    throw new Error('Invalid timing interval');
   }
+  io.mkdir(directory);
+  result.reports = snapshotReports(reports, directory, prepared, io);
+  io.write(`${directory}/metadata.json`, JSON.stringify(result, null, 2) + '\n');
+}
+
+function snapshotReports(reports, directory, prepared, io) {
+  const hashes = {};
+  for (const [name, path] of Object.entries(reports)) {
+    const data = prepared ? io.read(path) : null;
+    hashes[name] = data === null ? null : createHash('sha256').update(data).digest('hex');
+    const destination = `${directory}/${name}`;
+    if (data === null) io.remove(destination);
+    else io.write(destination, data);
+  }
+  return hashes;
+}
+
+// Also callable from the postsubmit loop: no extra Cargo build before each hook.
+export function run(env, io = host) {
+  const config = configuration(env);
+  if (config.phase === 'prepare') prepare(config, env, io);
+  else finish(config, env, io);
+  const { directory } = config;
   if (env.GITHUB_OUTPUT) io.append(env.GITHUB_OUTPUT, `directory=${directory}\n`);
   return directory;
 }

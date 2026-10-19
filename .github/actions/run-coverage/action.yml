@@ -27,6 +27,10 @@ runs:
       if: runner.os == 'Linux'
       uses: $/.github/actions/setup-native-sandbox
 
+    - name: Check timing collector and generate JavaScript coverage
+      shell: bash
+      run: prek run test-timing-action --all-files
+
     - name: Prepare coverage timing reports
       uses: $/.github/actions/test-timing
       with:
