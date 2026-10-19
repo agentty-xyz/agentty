@@ -558,15 +558,20 @@ impl Host for ProcessHost {
             .map(|package| format!("package(={package})"))
             .collect::<Vec<_>>()
             .join(" or ");
-        let status = Command::new("prek")
+        let mut command = Command::new("prek");
+        command
             .args(["run", &hook.id, "--all-files", "--hook-stage", stage])
             .env_remove("SKIP")
             .env_remove("PREK_SKIP")
             .env("CARGO_TARGET_DIR", target)
             .env("AGENTTY_TEST_PACKAGES", packages.join(" "))
-            .env("AGENTTY_TEST_FILTER", filter)
-            .status()
-            .map_err(|error| error.to_string())?;
+            .env("AGENTTY_TEST_FILTER", filter);
+        if hook.id == "clippy" {
+            command.env(crate::affected_clippy::PACKAGES_ENV, packages.join(" "));
+        } else {
+            command.env_remove(crate::affected_clippy::PACKAGES_ENV);
+        }
+        let status = command.status().map_err(|error| error.to_string())?;
         if !status.success() {
             return Err(format!("Validation hook {} failed", hook.id));
         }

@@ -7,6 +7,9 @@ use clap::Args;
 
 use crate::validation::Metadata;
 
+/// Explicit package selection supplied only to a coordinated Clippy hook.
+pub(crate) const PACKAGES_ENV: &str = "AGENTTY_CLIPPY_PACKAGES";
+
 /// Arguments for affected-package Clippy.
 #[derive(Args)]
 pub(crate) struct Options {
@@ -15,13 +18,26 @@ pub(crate) struct Options {
 }
 
 /// Lints the packages owning `files` and their dependents, or the whole
-/// workspace when a file belongs to no package.
+/// workspace when a file belongs to no package. Coordinated validation
+/// supplies an authoritative package selection through [`PACKAGES_ENV`].
 pub(crate) fn run(options: &Options) -> Result<(), String> {
     let metadata = Metadata::load()?;
-    let root = std::env::current_dir().map_err(|error| error.to_string())?;
-    let packages = match metadata.owners(&options.files, &root) {
-        Some(owners) => Some(metadata.affected(&owners)?),
-        None => None,
+    let packages = if let Ok(packages) = std::env::var(PACKAGES_ENV) {
+        let packages = packages
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if packages.is_empty() {
+            return Err(format!("{PACKAGES_ENV} must contain package names"));
+        }
+
+        Some(metadata.affected(&packages)?)
+    } else {
+        let root = std::env::current_dir().map_err(|error| error.to_string())?;
+        match metadata.owners(&options.files, &root) {
+            Some(owners) => Some(metadata.affected(&owners)?),
+            None => None,
+        }
     };
     let status = Command::new("cargo")
         .args(clippy_arguments(packages.as_deref()))

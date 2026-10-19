@@ -8,6 +8,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
+use serde_yaml_ng::Value;
 use tempfile::TempDir;
 
 struct Fixture {
@@ -400,6 +401,62 @@ fn targets_cannot_hide_the_workspace_or_tracked_sources() -> Result<(), Box<dyn 
         );
         assert!(!path.join("calls").exists());
     }
+
+    Ok(())
+}
+
+#[test]
+fn coordinated_clippy_keeps_its_scope_through_the_cataloged_command() -> Result<(), Box<dyn Error>>
+{
+    // Arrange
+    let fixture = Fixture::new()?;
+    let path = fixture.directory.path();
+    let catalog: Value = serde_yaml_ng::from_str(include_str!("../../../.pre-commit-config.yaml"))?;
+    let hook = catalog["repos"]
+        .as_sequence()
+        .expect("repository list")
+        .iter()
+        .flat_map(|repository| repository["hooks"].as_sequence().expect("hook list"))
+        .find(|hook| hook["id"].as_str() == Some("clippy"))
+        .expect("Clippy hook");
+    let entry = hook["entry"].as_str().expect("Clippy command");
+    fs::write(path.join("clippy-hook"), format!("{entry} \"$@\"\n"))?;
+    fs::write(
+        path.join("prek"),
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then echo prek-version; else
+    exec sh clippy-hook Cargo.toml crates/other/src/lib.rs
+fi
+"#,
+    )?;
+    fs::write(
+        path.join("cargo"),
+        r#"#!/bin/sh
+case "$1" in
+    metadata) cat metadata.json ;;
+    run)
+        while [ "$1" != -- ]; do shift; done
+        shift
+        exec "$AGENTTY_XTASK" "$@"
+        ;;
+    clippy) printf '%s\n' "$*" >> lint-calls ;;
+    *) echo nextest-version ;;
+esac
+"#,
+    )?;
+
+    // Act
+    let output = fixture
+        .command(&["--hook", "clippy"], 0)
+        .env("AGENTTY_XTASK", env!("CARGO_BIN_EXE_ag-xtask"))
+        .output()?;
+
+    // Assert
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        fs::read_to_string(path.join("lint-calls"))?,
+        "clippy -q --locked --all-targets --all-features -p app -p core -- -D warnings\n"
+    );
 
     Ok(())
 }
