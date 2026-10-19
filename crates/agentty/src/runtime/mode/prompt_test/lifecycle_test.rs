@@ -1,34 +1,41 @@
 use std::path::PathBuf;
 
 use super::super::{
-    apply_prompt_input_command, handle_paste, handle_prompt_cancel_key, handle_prompt_submit_key,
-    navigate_prompt_history_down, navigate_prompt_history_up, prompt_context,
-    take_submitted_turn_prompt,
+    apply_prompt_input_command, apply_prompt_input_to_mode, apply_prompt_paste_to_mode,
+    handle_prompt_cancel_key, handle_prompt_submit_key, navigate_prompt_history_down,
+    navigate_prompt_history_up, prompt_context, take_submitted_turn_prompt,
 };
 use super::support::{
-    PromptTestAppExt, new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode,
-    wait_for_at_mention_entries_event,
+    PromptTestAppExt, PromptTestModeExt, new_test_draft_prompt_app, new_test_prompt_app,
+    new_test_prompt_mode, wait_for_at_mention_entries_event,
 };
 use crate::app::prompt_intent::PromptSessionMode;
+use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::InputCommand;
 use crate::domain::session::SessionId;
 use crate::presentation::app_mode::AppMode;
 
-#[tokio::test]
-async fn test_prompt_undo_restores_deleted_image_attachment() {
+#[test]
+fn test_prompt_undo_restores_deleted_image_attachment() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let mut mode = new_test_prompt_mode("Review ");
     let image_path = PathBuf::from("/tmp/image-1.png");
-    app.insert_pasted_image_placeholder(image_path.clone());
+    mode.insert_pasted_image_placeholder(image_path.clone());
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
-    apply_prompt_input_command(&mut app, InputCommand::Undo).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteBackward),
+        [] as [PromptAttachment; 0]
+    );
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::Undo),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt {
             attachment_state,
             input,
@@ -142,39 +149,45 @@ fn history_navigation_ignores_non_prompt_modes() {
     assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_prompt_shared_commands_insert_text_and_delete_to_line_end() {
+#[test]
+fn test_prompt_shared_commands_insert_text_and_delete_to_line_end() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("first\nsecond", None).await;
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("first\nsecond");
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "first\nse".chars().count();
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::InsertText("X".to_string())).await;
-    apply_prompt_input_command(&mut app, InputCommand::DeleteToLineEnd).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::InsertText("X".to_string())),
+        [] as [PromptAttachment; 0]
+    );
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteToLineEnd),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     assert!(matches!(
-        &app.mode,
+        &mode,
         AppMode::Prompt { input, .. } if input.text() == "first\nseX"
     ));
 }
 
-#[tokio::test]
-async fn test_prompt_history_round_trip_restores_image_draft_attachment() {
+#[test]
+fn test_prompt_history_round_trip_restores_image_draft_attachment() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let mut mode = new_test_prompt_mode("Review ");
     let image_path = PathBuf::from("/tmp/image-1.png");
-    app.insert_pasted_image_placeholder(image_path.clone());
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    mode.insert_pasted_image_placeholder(image_path.clone());
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.entries = vec!["Earlier prompt".to_string()];
     }
 
     // Act
-    navigate_prompt_history_up(&mut app.mode);
-    navigate_prompt_history_down(&mut app.mode);
-    let prompt = app.take_submitted_turn_prompt();
+    navigate_prompt_history_up(&mut mode);
+    navigate_prompt_history_down(&mut mode);
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, "Review [Image #1]");
@@ -182,16 +195,16 @@ async fn test_prompt_history_round_trip_restores_image_draft_attachment() {
     assert_eq!(prompt.attachments[0].local_image_path, image_path);
 }
 
-#[tokio::test]
-async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment() {
+#[test]
+fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    let mut mode = new_test_prompt_mode("Review ");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &mut app.mode
+    } = &mut mode
     {
         history_state.selected_index = Some(0);
         history_state.draft_text = Some("draft".to_string());
@@ -199,7 +212,10 @@ async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment()
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteBackward),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     if let AppMode::Prompt {
@@ -207,7 +223,7 @@ async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment()
         history_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "Review ");
         assert_eq!(
@@ -220,16 +236,16 @@ async fn test_handle_prompt_backspace_removes_whole_image_token_and_attachment()
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
+#[test]
+fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    let mut mode = new_test_prompt_mode("Review ");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &mut app.mode
+    } = &mut mode
     {
         history_state.selected_index = Some(0);
         history_state.draft_text = Some("draft".to_string());
@@ -237,7 +253,10 @@ async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteForward),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     if let AppMode::Prompt {
@@ -245,7 +264,7 @@ async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
         history_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "Review ");
         assert_eq!(
@@ -258,27 +277,30 @@ async fn test_handle_prompt_delete_removes_whole_image_token_and_attachment() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_delete_keeps_new_image_number_unique_for_undo() {
+#[test]
+fn test_handle_prompt_delete_keeps_new_image_number_unique_for_undo() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-3.png"));
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-3.png"));
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "[Image #1][Image #2]".chars().count();
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-4.png"));
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteForward),
+        [] as [PromptAttachment; 0]
+    );
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-4.png"));
 
     // Assert
     if let AppMode::Prompt {
         attachment_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "[Image #1][Image #2][Image #4]");
         assert_eq!(attachment_state.attachments.len(), 3);
@@ -291,25 +313,28 @@ async fn test_handle_prompt_delete_keeps_new_image_number_unique_for_undo() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_backspace_with_alt_removes_whole_word() {
+#[test]
+fn test_handle_prompt_backspace_with_alt_removes_whole_word() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("hello brave world", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("hello brave world");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.draft_text = Some("draft".to_string());
         history_state.entries = vec!["first".to_string(), "second".to_string()];
         history_state.selected_index = Some(1);
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteWordBackward).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteWordBackward),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "hello brave");
         assert_eq!(history_state.selected_index, None);
@@ -317,28 +342,31 @@ async fn test_handle_prompt_backspace_with_alt_removes_whole_word() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_backspace_with_super_deletes_full_line() {
+#[test]
+fn test_handle_prompt_backspace_with_super_deletes_full_line() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("first line\nsecond line", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("first line\nsecond line");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.draft_text = Some("draft".to_string());
         history_state.entries = vec!["first".to_string(), "second".to_string()];
         history_state.selected_index = Some(1);
     }
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "first line\nsecond".chars().count();
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteCurrentLine).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteCurrentLine),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "first line");
         assert_eq!(history_state.selected_index, None);
@@ -346,28 +374,31 @@ async fn test_handle_prompt_backspace_with_super_deletes_full_line() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_prompt_line_delete_with_ctrl_u_deletes_full_line() {
+#[test]
+fn test_handle_prompt_line_delete_with_ctrl_u_deletes_full_line() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("first line\nsecond line", None).await;
-    if let AppMode::Prompt { history_state, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("first line\nsecond line");
+    if let AppMode::Prompt { history_state, .. } = &mut mode {
         history_state.draft_text = Some("draft".to_string());
         history_state.entries = vec!["first".to_string(), "second".to_string()];
         history_state.selected_index = Some(1);
     }
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "first line\nsecond".chars().count();
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteCurrentLine).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteCurrentLine),
+        [] as [PromptAttachment; 0]
+    );
 
     // Assert
     if let AppMode::Prompt {
         history_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "first line");
         assert_eq!(history_state.selected_index, None);
@@ -533,19 +564,25 @@ async fn test_handle_prompt_cancel_key_resets_existing_session_draft_attachments
     assert!(image_directory.exists());
 }
 
-#[tokio::test]
-async fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
+#[test]
+fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
     // Arrange
-    let (mut app, _base_dir) = new_test_draft_prompt_app("", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
-    handle_paste(&mut app, "[Image #1]").await;
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    assert_eq!(
+        apply_prompt_paste_to_mode(&mut mode, "[Image #1]"),
+        Some(Vec::new())
+    );
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = 0;
     }
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
-    let prompt = app.take_submitted_turn_prompt();
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteForward),
+        [] as [PromptAttachment; 0]
+    );
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, "[Image #1]");
@@ -555,19 +592,22 @@ async fn test_deleting_original_duplicate_placeholder_does_not_submit_image() {
     );
 }
 
-#[tokio::test]
-async fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders() {
+#[test]
+fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
-    app.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
-    if let AppMode::Prompt { input, .. } = &mut app.mode {
+    let mut mode = new_test_prompt_mode("Review ");
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-1.png"));
+    mode.insert_pasted_image_placeholder(PathBuf::from("/tmp/image-2.png"));
+    if let AppMode::Prompt { input, .. } = &mut mode {
         input.cursor = "Review ".chars().count();
     }
-    apply_prompt_input_command(&mut app, InputCommand::DeleteForward).await;
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteForward),
+        [] as [PromptAttachment; 0]
+    );
 
     // Act
-    let prompt = app.take_submitted_turn_prompt();
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, "Review [Image #2]");
@@ -581,7 +621,7 @@ async fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders
         attachment_state,
         input,
         ..
-    } = &app.mode
+    } = &mode
     {
         assert_eq!(input.text(), "");
         assert_eq!(
@@ -592,16 +632,19 @@ async fn test_take_submitted_turn_prompt_filters_deleted_attachment_placeholders
     }
 }
 
-#[tokio::test]
-async fn test_take_submitted_turn_prompt_returns_archived_attachments_for_cleanup() {
+#[test]
+fn test_take_submitted_turn_prompt_returns_archived_attachments_for_cleanup() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("Review ", None).await;
+    let mut mode = new_test_prompt_mode("Review ");
     let image_path = PathBuf::from("/tmp/image-1.png");
-    app.insert_pasted_image_placeholder(image_path.clone());
-    apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
+    mode.insert_pasted_image_placeholder(image_path.clone());
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteBackward),
+        [] as [PromptAttachment; 0]
+    );
 
     // Act
-    let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app);
+    let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut mode);
 
     // Assert
     assert_eq!(prompt.text, "Review ");
@@ -614,17 +657,23 @@ async fn test_take_submitted_turn_prompt_returns_archived_attachments_for_cleanu
     assert_eq!(archived_attachments[0].placeholder, "[Image #1]");
 }
 
-#[tokio::test]
-async fn test_deleting_duplicate_lookalike_keeps_original_image() {
+#[test]
+fn test_deleting_duplicate_lookalike_keeps_original_image() {
     // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("", None).await;
+    let mut mode = new_test_prompt_mode("");
     let image_path = PathBuf::from("/tmp/image-1.png");
-    app.insert_pasted_image_placeholder(image_path.clone());
-    handle_paste(&mut app, "[Image #1]").await;
+    mode.insert_pasted_image_placeholder(image_path.clone());
+    assert_eq!(
+        apply_prompt_paste_to_mode(&mut mode, "[Image #1]"),
+        Some(Vec::new())
+    );
 
     // Act
-    apply_prompt_input_command(&mut app, InputCommand::DeleteBackward).await;
-    let prompt = app.take_submitted_turn_prompt();
+    assert_eq!(
+        apply_prompt_input_to_mode(&mut mode, InputCommand::DeleteBackward),
+        [] as [PromptAttachment; 0]
+    );
+    let prompt = mode.take_submitted_turn_prompt();
 
     // Assert
     assert_eq!(prompt.text, "[Image #1]");

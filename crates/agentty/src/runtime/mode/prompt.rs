@@ -125,7 +125,7 @@ fn prompt_chat_is_focused(app: &App) -> bool {
 
 /// Saves the complete prompt composer and returns to the sessions list.
 fn exit_to_list_saving_progress(app: &mut App) {
-    if let Some(snapshot) = take_prompt_snapshot(app) {
+    if let Some(snapshot) = take_prompt_snapshot(&mut app.mode) {
         app.save_prompt_progress(snapshot);
     }
 }
@@ -194,7 +194,7 @@ where
 /// the prompt with its draft, attachments, and history intact instead of
 /// falling back to session view.
 fn show_prompt_diff(app: &mut App, session_id: &str) {
-    let restore = take_prompt_snapshot(app).map(DiffRestoreTarget::Prompt);
+    let restore = take_prompt_snapshot(&mut app.mode).map(DiffRestoreTarget::Prompt);
     app.start_diff_view_load(
         &SessionId::from(session_id),
         restore,
@@ -208,9 +208,9 @@ fn show_prompt_diff(app: &mut App, session_id: &str) {
 /// Abandons any running clipboard image capture, so a restored composer is
 /// idle and the late capture is removed as orphaned.
 ///
-/// Returns `None` if the app is not in prompt mode.
-fn take_prompt_snapshot(app: &mut App) -> Option<PromptModeSnapshot> {
-    let mode = std::mem::replace(&mut app.mode, AppMode::List);
+/// Returns `None` and preserves the mode when it is not a prompt.
+fn take_prompt_snapshot(mode: &mut AppMode) -> Option<PromptModeSnapshot> {
+    let previous_mode = std::mem::replace(mode, AppMode::List);
 
     if let AppMode::Prompt {
         at_mention_state,
@@ -221,7 +221,7 @@ fn take_prompt_snapshot(app: &mut App) -> Option<PromptModeSnapshot> {
         session_id,
         slash_state,
         ..
-    } = mode
+    } = previous_mode
     {
         attachment_state.pending_image_paste = None;
 
@@ -235,7 +235,7 @@ fn take_prompt_snapshot(app: &mut App) -> Option<PromptModeSnapshot> {
             slash_state,
         })
     } else {
-        app.mode = mode;
+        *mode = previous_mode;
 
         None
     }
@@ -311,16 +311,24 @@ where
 /// Applies one shared input command while preserving prompt-specific
 /// attachment, history, slash-command, and `@`-mention behavior.
 async fn apply_prompt_input_command(app: &mut App, command: InputCommand) {
-    let delete_range = if let AppMode::Prompt { input, .. } = &app.mode {
+    let unreachable_attachments = apply_prompt_input_to_mode(&mut app.mode, command);
+
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
+    sync_prompt_at_mention_state(app);
+}
+
+/// Reduces one editing command and returns attachments that require file
+/// cleanup.
+fn apply_prompt_input_to_mode(mode: &mut AppMode, command: InputCommand) -> Vec<PromptAttachment> {
+    let delete_range = if let AppMode::Prompt { input, .. } = mode {
         prompt_command_delete_range(input, &command)
     } else {
         None
     };
 
     if let Some((start, end)) = delete_range {
-        apply_prompt_delete_range(app, start, end).await;
-
-        return;
+        return apply_prompt_delete_to_mode(mode, start, end);
     }
 
     let is_history_restore = matches!(command, InputCommand::Undo | InputCommand::Redo);
@@ -331,7 +339,7 @@ async fn apply_prompt_input_command(app: &mut App, command: InputCommand) {
         input,
         slash_state,
         ..
-    } = &mut app.mode
+    } = mode
     {
         attachment_state.remember_current_revision(input);
         let edit_span = prompt_command_edit_span(input, &command);
@@ -348,9 +356,7 @@ async fn apply_prompt_input_command(app: &mut App, command: InputCommand) {
         }
     }
 
-    app.cleanup_prompt_attachments(unreachable_attachments)
-        .await;
-    sync_prompt_at_mention_state(app);
+    unreachable_attachments
 }
 
 /// Returns the prompt-aware range for shared deletion commands.
@@ -402,17 +408,32 @@ fn prompt_command_edit_span(
 /// Pastes are dropped while the chat transcript holds focus so scrolling the
 /// conversation never rewrites the typed draft.
 pub(crate) async fn handle_paste(app: &mut App, pasted_text: &str) {
+    let Some(unreachable_attachments) = apply_prompt_paste_to_mode(&mut app.mode, pasted_text)
+    else {
+        return;
+    };
+
+    app.cleanup_prompt_attachments(unreachable_attachments)
+        .await;
+    sync_prompt_at_mention_state(app);
+}
+
+/// Reduces accepted paste input, or returns `None` when the paste is ignored.
+fn apply_prompt_paste_to_mode(
+    mode: &mut AppMode,
+    pasted_text: &str,
+) -> Option<Vec<PromptAttachment>> {
     let normalized_text = input_key::normalize_pasted_text(pasted_text);
     if normalized_text.is_empty() {
-        return;
+        return None;
     }
 
     if let AppMode::Prompt {
         focus: ChatFocus::Chat,
         ..
-    } = &app.mode
+    } = mode
     {
-        return;
+        return None;
     }
 
     let mut unreachable_attachments = Vec::new();
@@ -422,7 +443,7 @@ pub(crate) async fn handle_paste(app: &mut App, pasted_text: &str) {
         input,
         slash_state,
         ..
-    } = &mut app.mode
+    } = mode
     {
         attachment_state.remember_current_revision(input);
         let insert_start = input.cursor;
@@ -431,9 +452,7 @@ pub(crate) async fn handle_paste(app: &mut App, pasted_text: &str) {
         unreachable_attachments = attachment_state.prune_unreachable(input);
     }
 
-    app.cleanup_prompt_attachments(unreachable_attachments)
-        .await;
-    sync_prompt_at_mention_state(app);
+    Some(unreachable_attachments)
 }
 
 /// Returns the active prompt context for the currently edited session.
@@ -795,7 +814,7 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         } => Some((input.clone(), attachment_state.clone())),
         _ => None,
     };
-    let (prompt, archived_attachments) = take_submitted_turn_prompt(app);
+    let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app.mode);
     let outcome = app
         .submit_prompt(PromptSubmission {
             prompt,
@@ -1138,12 +1157,12 @@ pub(crate) fn paste_image_into_active_prompt(app: &mut App, session_id: &Session
 
 /// Drains presentation-owned prompt input into an app-layer submission and
 /// returns archived attachment files that require cleanup.
-fn take_submitted_turn_prompt(app: &mut App) -> (TurnPrompt, Vec<PromptAttachment>) {
+fn take_submitted_turn_prompt(mode: &mut AppMode) -> (TurnPrompt, Vec<PromptAttachment>) {
     let AppMode::Prompt {
         attachment_state,
         input,
         ..
-    } = &mut app.mode
+    } = mode
     else {
         return (TurnPrompt::from_text(String::new()), Vec::new());
     };
@@ -1230,7 +1249,11 @@ where
 
 /// Applies one prompt deletion range, expanding it to cover full image
 /// placeholder tokens and removing orphaned attachments from prompt state.
-async fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
+fn apply_prompt_delete_to_mode(
+    mode: &mut AppMode,
+    start: usize,
+    end: usize,
+) -> Vec<PromptAttachment> {
     let mut unreachable_attachments = Vec::new();
     if let AppMode::Prompt {
         attachment_state,
@@ -1238,7 +1261,7 @@ async fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
         input,
         slash_state,
         ..
-    } = &mut app.mode
+    } = mode
     {
         apply_prompt_delete_range_components(
             attachment_state,
@@ -1251,9 +1274,7 @@ async fn apply_prompt_delete_range(app: &mut App, start: usize, end: usize) {
         unreachable_attachments = attachment_state.prune_unreachable(input);
     }
 
-    app.cleanup_prompt_attachments(unreachable_attachments)
-        .await;
-    sync_prompt_at_mention_state(app);
+    unreachable_attachments
 }
 
 /// Starts asynchronous loading of at-mention file entries for the prompt

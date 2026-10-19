@@ -16,6 +16,7 @@ use crate::infra::fs;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
+    insert_prompt_local_image_at,
 };
 use crate::test_support::setup_test_git_repo;
 use crate::ui::RenderCacheStore;
@@ -28,6 +29,42 @@ pub(super) trait PromptTestAppExt {
 impl PromptTestAppExt for App {
     fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
         let _ = self.insert_prompt_image_placeholder(local_image_path, None);
+    }
+
+    fn take_submitted_turn_prompt(&mut self) -> TurnPrompt {
+        let (prompt, _) = take_submitted_turn_prompt(&mut self.mode);
+
+        prompt
+    }
+}
+
+/// Arranges attachments and drains submissions without application services.
+pub(super) trait PromptTestModeExt {
+    fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf);
+    fn take_submitted_turn_prompt(&mut self) -> TurnPrompt;
+}
+
+impl PromptTestModeExt for AppMode {
+    fn insert_pasted_image_placeholder(&mut self, local_image_path: PathBuf) {
+        let AppMode::Prompt {
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            ..
+        } = self
+        else {
+            unreachable!("prompt fixture required");
+        };
+        let anchor = input.cursor;
+        insert_prompt_local_image_at(
+            attachment_state,
+            history_state,
+            input,
+            slash_state,
+            local_image_path,
+            anchor,
+        );
     }
 
     fn take_submitted_turn_prompt(&mut self) -> TurnPrompt {

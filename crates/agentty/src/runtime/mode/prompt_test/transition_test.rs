@@ -200,7 +200,7 @@ async fn test_diff_round_trip_from_chat_focus_preserves_composer_context() {
     slash_state.selected_index = 2;
     let expected_slash_state = slash_state.clone();
 
-    let session_id = take_prompt_snapshot(&mut app)
+    let session_id = take_prompt_snapshot(&mut app.mode)
         .expect("expected AppMode::Prompt")
         .session_id;
     app.mode = AppMode::Prompt {
@@ -230,7 +230,7 @@ async fn test_diff_round_trip_from_chat_focus_preserves_composer_context() {
     // Assert — every durable composer field survives the round-trip.
     assert_eq!(prompt_focus(&app), ChatFocus::Input);
     let snapshot =
-        take_prompt_snapshot(&mut app).expect("expected AppMode::Prompt after leaving diff");
+        take_prompt_snapshot(&mut app.mode).expect("expected AppMode::Prompt after leaving diff");
     assert_eq!(snapshot.input.text(), "/keep-draft");
     assert_eq!(snapshot.scroll_offset, Some(4));
     assert_eq!(snapshot.attachment_state, expected_attachment_state);
