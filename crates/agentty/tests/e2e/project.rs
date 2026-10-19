@@ -4,11 +4,13 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use ag_session::SettingName;
 use testty::assertion;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
+use testty::step::Step;
 
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
@@ -421,9 +423,15 @@ async fn test_project_switcher() {
 /// navigation remains available, then runs a queued sync for another project.
 #[tokio::test]
 async fn test_project_sync_non_modal() {
-    // Arrange, Act, Assert
+    // Arrange
+    let clock_directory = tempfile::tempdir().expect("clock fixture directory");
+    let clock_file = clock_directory.path().join("advance");
+    std::fs::write(&clock_file, "0").expect("initial clock advance");
+
+    // Act, Assert
     FeatureTest::new("project_sync_non_modal")
         .with_git()
+        .env("AGENTTY_CLOCK_ADVANCE_FILE", clock_file.to_string_lossy())
         .setup(|env| Box::pin(async move { seed_delayed_project_sync(env).await }))
         .zola(
             "Non-modal project sync",
@@ -467,7 +475,21 @@ async fn test_project_sync_non_modal() {
                         "sync_complete",
                         "Project sync completes in the status bar without a popup",
                     )
-                    .sleep_ms(10_500)
+                    .viewing_pause_ms(10_500)
+                    .step(Step::eventually(
+                        Duration::from_secs(2),
+                        Duration::from_millis(20),
+                        move |frame| match std::fs::write(&clock_file, "10500") {
+                            Ok(()) => {
+                                assertion::match_not_visible(frame, "Synced zeta-project/main")
+                            }
+                            Err(error) => assertion::match_text_in_region(
+                                frame,
+                                &format!("Clock advance written ({error})"),
+                                &Region::full(frame.cols(), frame.rows()),
+                            ),
+                        },
+                    ))
                     .capture_labeled(
                         "sync_status_expired",
                         "The status bar returns to its normal page hint",

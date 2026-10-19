@@ -117,7 +117,7 @@ fn environment_values_build_fixed_clock_with_pinned_offset() {
     let utc_offset_seconds = Some("-28800");
 
     // Act
-    let clock = from_environment_values(unix_seconds, utc_offset_seconds);
+    let clock = from_environment_values(unix_seconds, utc_offset_seconds, None);
 
     // Assert
     assert_eq!(
@@ -128,16 +128,23 @@ fn environment_values_build_fixed_clock_with_pinned_offset() {
 }
 
 #[test]
-fn environment_values_ignore_offset_without_valid_fixed_time() {
+fn environment_values_ignore_controls_without_valid_fixed_time() {
     // Arrange
-    let unix_seconds = Some("invalid");
-    let utc_offset_seconds = Some("-28800");
+    let directory = tempfile::tempdir().expect("clock fixture directory");
+    let path = directory.path().join("advance");
+    std::fs::write(&path, "10000").expect("clock fixture advance");
 
-    // Act
-    let clock = from_environment_values(unix_seconds, utc_offset_seconds);
+    for unix_seconds in [None, Some("invalid")] {
+        // Act
+        let before = Instant::now();
+        let clock = from_environment_values(unix_seconds, Some("-28800"), Some(path.clone()));
+        let instant = clock.now_instant();
+        let after = Instant::now();
 
-    // Assert
-    assert!(clock.now_system_time() > SystemTime::UNIX_EPOCH);
+        // Assert
+        assert!(clock.now_system_time() > SystemTime::UNIX_EPOCH);
+        assert!((before..=after).contains(&instant));
+    }
 }
 
 #[test]
@@ -147,10 +154,54 @@ fn environment_values_default_invalid_offset_to_utc() {
     let utc_offset_seconds = Some("invalid");
 
     // Act
-    let clock = from_environment_values(unix_seconds, utc_offset_seconds);
+    let clock = from_environment_values(unix_seconds, utc_offset_seconds, None);
 
     // Assert
     assert_eq!(clock.local_utc_offset_seconds(123), 0);
+}
+
+#[test]
+fn pinned_clock_accepts_only_forward_bounded_file_advances() {
+    // Arrange
+    let directory = tempfile::tempdir().expect("clock fixture directory");
+    let path = directory.path().join("advance");
+    let clock = from_environment_values(Some("90"), Some("-28800"), Some(path.clone()));
+    let mut previous = clock.now_instant();
+
+    for (contents, expected_millis) in [
+        (None, 0),
+        (Some("invalid"), 0),
+        (Some("-1"), 0),
+        (Some("4294967296"), 0),
+        (Some(" 10500\n"), 10_500),
+        (Some("4"), 10_500),
+        (Some(""), 10_500),
+        (Some("20000"), 20_000),
+        (None, 20_000),
+        (Some("4294967295"), u64::from(u32::MAX)),
+    ] {
+        if let Some(contents) = contents {
+            std::fs::write(&path, contents).expect("write clock advance");
+        } else if path.exists() {
+            std::fs::remove_file(&path).expect("remove clock advance");
+        }
+
+        // Act
+        let offset = Duration::from_millis(expected_millis);
+        let before = Instant::now() + offset;
+        let instant = clock.now_instant();
+        let after = Instant::now() + offset;
+
+        // Assert
+        assert!((before..=after).contains(&instant), "advance: {contents:?}");
+        assert!(instant >= previous);
+        assert_eq!(
+            clock.now_system_time(),
+            UNIX_EPOCH + Duration::from_secs(90)
+        );
+        assert_eq!(clock.local_utc_offset_seconds(123), -28_800);
+        previous = instant;
+    }
 }
 
 #[test]
