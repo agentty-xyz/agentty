@@ -7,7 +7,7 @@ use ratatui::layout::Rect;
 use tracing::warn;
 
 use crate::app::session::{SessionTaskService, remote_branch_name_from_upstream_ref};
-use crate::app::{self, App, AppEvent, ReviewCacheEntry};
+use crate::app::{self, App, AppEvent, ReviewCacheEntry, SessionManager};
 use crate::domain::input::InputState;
 use crate::domain::session::{FollowUpTaskAction, PublishBranchAction, SessionId, Status};
 use crate::domain::session_message::SessionMessageKind;
@@ -30,6 +30,31 @@ struct ViewContext {
     scroll_offset: Option<u16>,
     session_id: SessionId,
     session_index: usize,
+}
+
+impl ViewContext {
+    /// Resolves view identity and scroll from in-memory session state.
+    fn from_mode(mode: &mut AppMode, sessions: &SessionManager) -> Option<Self> {
+        let (session_id, scroll_offset) = match mode {
+            AppMode::View {
+                session_id,
+                scroll_offset,
+            } => (session_id.clone(), *scroll_offset),
+            _ => return None,
+        };
+
+        let Some(session_index) = sessions.session_index_for_id(&session_id) else {
+            *mode = AppMode::List;
+
+            return None;
+        };
+
+        Some(Self {
+            scroll_offset,
+            session_id,
+            session_index,
+        })
+    }
 }
 
 /// Pending review and scroll updates produced by one key event in session-view
@@ -95,6 +120,58 @@ struct ViewSessionSnapshot {
 }
 
 impl ViewSessionSnapshot {
+    /// Projects cached session and stack state without querying host services.
+    fn from_sessions(
+        sessions: &SessionManager,
+        view_context: &ViewContext,
+        is_tmux_session: bool,
+    ) -> Option<Self> {
+        let session = sessions.session_at(view_context.session_index)?;
+        let session_status = session.status;
+        let can_open_worktree = is_tmux_session
+            && session.allows_worktree_open_action()
+            && *sessions
+                .session_worktree_availability()
+                .get(view_context.session_id.as_str())
+                .unwrap_or(&false);
+
+        Some(Self {
+            continue_terminal_session: ViewActionState::from_bool(
+                session.allows_terminal_continuation(),
+            ),
+            fork_session: ViewActionState::from_bool(session.allows_fork_action()),
+            follow_up_task_action: sessions
+                .selected_follow_up_task_action(&view_context.session_id),
+            inspect_diff: ViewActionState::from_bool(session.allows_diff_view()),
+            merge_session_branch: ViewActionState::from_bool(
+                sessions.can_merge_session_branch_in_stack(view_context.session_id.as_str()),
+            ),
+            mutate_session_branch: ViewActionState::from_bool(
+                sessions.can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
+            ),
+            open_worktree: ViewActionState::from_bool(can_open_worktree),
+            publish_pull_request_action: session.publish_pull_request_action(),
+            rebase_session_branch: ViewActionState::from_bool(
+                sessions.can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
+            ),
+            reply_to_session: ViewActionState::from_bool(
+                sessions.can_reply_to_session_in_stack(view_context.session_id.as_str()),
+            ),
+            review_comments: ViewActionState::from_bool(
+                session.has_review_request() && session.allows_review_comment_reply(),
+            ),
+            session_state: help_action::session_view_state(session),
+            session_status,
+            start_staged_session: ViewActionState::from_bool(
+                sessions.can_start_staged_session(view_context.session_id.as_str())
+                    || (session
+                        .transient_messages
+                        .get(TransientMessageSlot::WorkspacePreparation)
+                        .is_some()),
+            ),
+        })
+    }
+
     /// Returns whether the active session can enter the merge queue from view
     /// mode.
     fn can_merge_session(&self) -> bool {
@@ -213,7 +290,7 @@ where
     if chat_scroll::is_scroll_key(key) {
         let metrics = view_metrics(app, render_cache_store, terminal, &view_context)?;
         chat_scroll::apply_scroll_key(&mut pending_update.scroll_offset, metrics, key);
-        apply_view_scroll_and_output_mode(app, pending_update.scroll_offset);
+        apply_view_scroll_and_output_mode(&mut app.mode, pending_update.scroll_offset);
 
         return Ok(EventResult::Continue);
     }
@@ -230,7 +307,7 @@ where
         return Ok(EventResult::Continue);
     }
 
-    apply_view_scroll_and_output_mode(app, pending_update.scroll_offset);
+    apply_view_scroll_and_output_mode(&mut app.mode, pending_update.scroll_offset);
 
     Ok(EventResult::Continue)
 }
@@ -433,7 +510,12 @@ async fn handle_workflow_view_key(
             else {
                 return Some(true);
             };
-            open_publish_branch_input(app, view_context, publish_pull_request_action);
+            open_publish_branch_input(
+                &mut app.mode,
+                &app.sessions,
+                view_context,
+                publish_pull_request_action,
+            );
 
             return Some(false);
         }
@@ -466,7 +548,7 @@ async fn handle_workflow_view_key(
             return Some(false);
         }
         KeyCode::Char('?') => {
-            open_view_help_overlay(app, view_context, view_session_snapshot);
+            open_view_help_overlay(&mut app.mode, view_context, view_session_snapshot);
             return Some(false);
         }
         _ => return None,
@@ -599,64 +681,16 @@ fn open_or_regenerate_review(
 /// Collects session-specific values used by `handle()` from the active view
 /// row.
 fn view_session_snapshot(app: &App, view_context: &ViewContext) -> Option<ViewSessionSnapshot> {
-    let session = app.sessions.session_at(view_context.session_index)?;
-    let session_status = session.status;
-    let can_open_worktree = app.is_tmux_session()
-        && session.allows_worktree_open_action()
-        && *app
-            .sessions
-            .session_worktree_availability()
-            .get(view_context.session_id.as_str())
-            .unwrap_or(&false);
-
-    Some(ViewSessionSnapshot {
-        continue_terminal_session: ViewActionState::from_bool(
-            session.allows_terminal_continuation(),
-        ),
-        fork_session: ViewActionState::from_bool(session.allows_fork_action()),
-        follow_up_task_action: app.selected_follow_up_task_action(&view_context.session_id),
-        inspect_diff: ViewActionState::from_bool(session.allows_diff_view()),
-        merge_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_merge_session_branch_in_stack(view_context.session_id.as_str()),
-        ),
-        mutate_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_mutate_session_branch_in_stack(view_context.session_id.as_str()),
-        ),
-        open_worktree: ViewActionState::from_bool(can_open_worktree),
-        publish_pull_request_action: session.publish_pull_request_action(),
-        rebase_session_branch: ViewActionState::from_bool(
-            app.sessions
-                .can_rebase_session_branch_in_stack(view_context.session_id.as_str()),
-        ),
-        reply_to_session: ViewActionState::from_bool(
-            app.sessions
-                .can_reply_to_session_in_stack(view_context.session_id.as_str()),
-        ),
-        review_comments: ViewActionState::from_bool(
-            session.has_review_request() && session.allows_review_comment_reply(),
-        ),
-        session_state: help_action::session_view_state(session),
-        session_status,
-        start_staged_session: ViewActionState::from_bool(
-            app.sessions
-                .can_start_staged_session(view_context.session_id.as_str())
-                || (session
-                    .transient_messages
-                    .get(TransientMessageSlot::WorkspacePreparation)
-                    .is_some()),
-        ),
-    })
+    ViewSessionSnapshot::from_sessions(&app.sessions, view_context, app.is_tmux_session())
 }
 
 /// Applies in-place updates for active view review status/text and scroll
 /// position.
-fn apply_view_scroll_and_output_mode(app: &mut App, scroll_offset: Option<u16>) {
+fn apply_view_scroll_and_output_mode(mode: &mut AppMode, scroll_offset: Option<u16>) {
     if let AppMode::View {
         scroll_offset: view_scroll_offset,
         ..
-    } = &mut app.mode
+    } = mode
     {
         *view_scroll_offset = scroll_offset;
     }
@@ -890,11 +924,11 @@ async fn open_draft_prompt_with_pasted_image(
 
 /// Opens the help overlay while preserving the currently viewed session state.
 fn open_view_help_overlay(
-    app: &mut App,
+    mode: &mut AppMode,
     view_context: &ViewContext,
     view_session_snapshot: &ViewSessionSnapshot,
 ) {
-    app.mode = AppMode::Help {
+    *mode = AppMode::Help {
         context: HelpContext::View {
             can_fork_session: view_session_snapshot.can_fork_session(),
             can_merge_session_branch: view_session_snapshot.can_merge_session_branch(),
@@ -917,11 +951,12 @@ fn open_view_help_overlay(
 /// Opens the session-view publish popup and preserves the current view state
 /// for cancel or submit.
 fn open_publish_branch_input(
-    app: &mut App,
+    mode: &mut AppMode,
+    sessions: &SessionManager,
     view_context: &ViewContext,
     publish_branch_action: PublishBranchAction,
 ) {
-    let Some(session) = app.sessions.session_at(view_context.session_index) else {
+    let Some(session) = sessions.session_at(view_context.session_index) else {
         return;
     };
     let default_branch_name = crate::app::session::session_branch(&session.id);
@@ -931,7 +966,7 @@ fn open_publish_branch_input(
         .map(remote_branch_name_from_upstream_ref)
         .map_or_default(InputState::with_text);
 
-    app.mode = AppMode::PublishBranchInput {
+    *mode = AppMode::PublishBranchInput {
         default_branch_name,
         input,
         locked_upstream_ref,
@@ -941,25 +976,7 @@ fn open_publish_branch_input(
 }
 
 fn view_context(app: &mut App) -> Option<ViewContext> {
-    let (session_id, scroll_offset) = match &app.mode {
-        AppMode::View {
-            session_id,
-            scroll_offset,
-        } => (session_id.clone(), *scroll_offset),
-        _ => return None,
-    };
-
-    let Some(session_index) = app.session_index_for_id(&session_id) else {
-        app.mode = AppMode::List;
-
-        return None;
-    };
-
-    Some(ViewContext {
-        scroll_offset,
-        session_id,
-        session_index,
-    })
+    ViewContext::from_mode(&mut app.mode, &app.sessions)
 }
 
 fn view_metrics<B: Backend>(

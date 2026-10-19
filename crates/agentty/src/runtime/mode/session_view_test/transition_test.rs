@@ -11,7 +11,7 @@ use super::super::{
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, handle, new_test_app_with_session,
-    new_test_app_with_session_and_tmux_client, reply_enabled_review_snapshot,
+    new_test_app_with_session_and_tmux_client, reply_enabled_review_snapshot, session_fixture,
 };
 use crate::domain::session::{PublishBranchAction, SessionDiffState, SessionId, Status};
 use crate::infra::tmux::MockTmuxClient;
@@ -20,49 +20,52 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::help_action::ViewSessionState;
 use crate::runtime::EventResult;
+use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
 
-#[tokio::test]
-async fn test_view_context_returns_none_for_non_view_mode() {
+#[test]
+fn test_view_context_returns_none_for_non_view_mode() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-    app.mode = AppMode::List;
+    let sessions = session_manager_with_sessions(Vec::new());
+    let mut mode = AppMode::List;
 
     // Act
-    let context = view_context(&mut app);
+    let context = ViewContext::from_mode(&mut mode, &sessions);
 
     // Assert
     assert!(context.is_none());
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_view_context_falls_back_to_list_when_session_is_missing() {
+#[test]
+fn test_view_context_falls_back_to_list_when_session_is_missing() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app_with_mock_tmux_client().await;
-    app.mode = AppMode::View {
+    let sessions = session_manager_with_sessions(Vec::new());
+    let mut mode = AppMode::View {
         session_id: "missing-session".into(),
         scroll_offset: Some(2),
     };
 
     // Act
-    let context = view_context(&mut app);
+    let context = ViewContext::from_mode(&mut mode, &sessions);
 
     // Assert
     assert!(context.is_none());
-    assert!(matches!(app.mode, AppMode::List));
+    assert!(matches!(mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_view_context_returns_existing_session_details() {
+#[test]
+fn test_view_context_returns_existing_session_details() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.mode = AppMode::View {
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let sessions = session_manager_with_sessions(vec![session]);
+    let mut mode = AppMode::View {
         session_id: session_id.clone().into(),
         scroll_offset: Some(4),
     };
 
     // Act
-    let context = view_context(&mut app);
+    let context = ViewContext::from_mode(&mut mode, &sessions);
 
     // Assert
     assert!(context.is_some());
@@ -134,30 +137,34 @@ async fn test_q_always_transitions_to_list() {
     assert_eq!(pending_update.scroll_offset, Some(10));
 }
 
-#[tokio::test]
-async fn diff_snapshot_hides_known_empty_session_diff() {
+#[test]
+fn diff_snapshot_hides_known_empty_session_diff() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    let session = &mut app.sessions.sessions_mut()[0];
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let mut sessions = session_manager_with_sessions(vec![session]);
+    let session = &mut sessions.sessions_mut()[0];
     session.status = Status::Review;
     session.stats.diff_state = SessionDiffState::Empty;
-    app.mode = AppMode::View {
+    let mut mode = AppMode::View {
         session_id: session_id.into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("expected view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert_eq!(snapshot.inspect_diff, ViewActionState::Disabled);
 }
 
-#[tokio::test]
-async fn test_open_view_help_overlay_preserves_view_context() {
+#[test]
+fn test_open_view_help_overlay_preserves_view_context() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    let session_id = "view-session".to_string();
+    let mut mode = AppMode::List;
     let view_context = ViewContext {
         scroll_offset: Some(3),
         session_id: session_id.clone().into(),
@@ -181,11 +188,11 @@ async fn test_open_view_help_overlay_preserves_view_context() {
     };
 
     // Act
-    open_view_help_overlay(&mut app, &view_context, &view_session_snapshot);
+    open_view_help_overlay(&mut mode, &view_context, &view_session_snapshot);
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Help {
             context: HelpContext::View {
                 can_fork_session: true,
@@ -301,19 +308,22 @@ async fn test_show_diff_for_view_session_rejects_stale_session_index() {
     assert!(!matches!(app.mode, AppMode::DiffLoading { .. }));
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_disables_actions_for_done_session() {
+#[test]
+fn test_view_session_snapshot_disables_actions_for_done_session() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.sessions.sessions_mut()[0].status = Status::Done;
-    app.mode = AppMode::View {
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let mut sessions = session_manager_with_sessions(vec![session]);
+    sessions.sessions_mut()[0].status = Status::Done;
+    let mut mode = AppMode::View {
         session_id: session_id.into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("expected view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert!(snapshot.can_continue_terminal_session());
@@ -322,19 +332,22 @@ async fn test_view_session_snapshot_disables_actions_for_done_session() {
     assert_eq!(snapshot.session_status, Status::Done);
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
+#[test]
+fn test_view_session_snapshot_enables_continue_for_canceled_session() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.sessions.sessions_mut()[0].status = Status::Canceled;
-    app.mode = AppMode::View {
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let mut sessions = session_manager_with_sessions(vec![session]);
+    sessions.sessions_mut()[0].status = Status::Canceled;
+    let mut mode = AppMode::View {
         session_id: session_id.into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("expected view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert!(snapshot.can_continue_terminal_session());
@@ -343,37 +356,31 @@ async fn test_view_session_snapshot_enables_continue_for_canceled_session() {
     assert_eq!(snapshot.session_status, Status::Canceled);
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_blocks_parent_reply_with_running_child() {
+#[test]
+fn test_view_session_snapshot_blocks_parent_reply_with_running_child() {
     // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    let child_session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::Review;
-    let child_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == child_session_id)
-        .expect("expected child session");
-    child_session.parent_session_id = Some(parent_session_id.clone().into());
-    child_session.status = Status::InProgress;
-    app.mode = AppMode::View {
-        session_id: parent_session_id.clone().into(),
+    let parent = SessionFixtureBuilder::new()
+        .id("parent")
+        .status(Status::Review)
+        .draft(false)
+        .build();
+    let mut child = SessionFixtureBuilder::new()
+        .id("child")
+        .status(Status::InProgress)
+        .draft(true)
+        .parent_session_id(Some("parent".into()))
+        .build();
+    child.prompt = "staged child draft".to_string();
+    let sessions = session_manager_with_sessions(vec![parent, child]);
+    let mut mode = AppMode::View {
+        session_id: "parent".into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert_eq!(snapshot.session_state, ViewSessionState::Review);
@@ -382,38 +389,51 @@ async fn test_view_session_snapshot_blocks_parent_reply_with_running_child() {
     assert!(!snapshot.can_rebase_session());
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_reads_cached_worktree_availability() {
-    // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.sessions
-        .set_session_worktree_available(&session_id, false);
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
-        scroll_offset: Some(1),
-    };
-    let context = view_context(&mut app).expect("expected view context");
+#[test]
+fn test_view_session_snapshot_reads_cached_worktree_availability() {
+    for (cached, in_tmux, expected) in [
+        (None, true, false),
+        (Some(false), true, false),
+        (Some(true), true, true),
+        (Some(true), false, false),
+    ] {
+        // Arrange
+        let session = session_fixture(Status::Review, false);
+        let session_id = session.id.clone();
+        let mut sessions = session_manager_with_sessions(vec![session]);
+        if let Some(available) = cached {
+            sessions.set_session_worktree_available(&session_id, available);
+        }
+        let mut mode = AppMode::View {
+            session_id,
+            scroll_offset: Some(1),
+        };
+        let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
-    // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+        // Act
+        let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, in_tmux)
+            .expect("view snapshot");
 
-    // Assert
-    assert!(!snapshot.can_open_worktree());
+        // Assert
+        assert_eq!(snapshot.can_open_worktree(), expected);
+    }
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_returns_none_for_stale_session_index() {
+#[test]
+fn test_view_session_snapshot_returns_none_for_stale_session_index() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.mode = AppMode::View {
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let sessions = session_manager_with_sessions(vec![session]);
+    let mut mode = AppMode::View {
         session_id: session_id.into(),
         scroll_offset: Some(1),
     };
-    let mut context = view_context(&mut app).expect("expected view context");
+    let mut context = ViewContext::from_mode(&mut mode, &sessions).expect("expected view context");
     context.session_index = 99;
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context);
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true);
 
     // Assert
     assert!(snapshot.is_none());

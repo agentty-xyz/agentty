@@ -41,9 +41,7 @@ use crate::app::{AppError, session};
 use crate::domain::agent::{AgentKind, ReasoningLevel};
 use crate::domain::input::InputState;
 use crate::domain::question::{QuestionItem, QuestionProgress, default_option_index};
-use crate::domain::session::{
-    FollowUpTaskAction, PublishBranchAction, Session, SessionDiffStats, SessionId, Status,
-};
+use crate::domain::session::{PublishBranchAction, Session, SessionDiffStats, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -1198,15 +1196,6 @@ impl App {
             .get(session_id)
             .copied()
             .unwrap_or_default()
-    }
-
-    /// Returns the selected follow-up task action for one session, if that
-    /// session currently exposes follow-up tasks.
-    pub(crate) fn selected_follow_up_task_action(
-        &self,
-        session_id: &str,
-    ) -> Option<FollowUpTaskAction> {
-        self.sessions.selected_follow_up_task_action(session_id)
     }
 
     /// Returns whether one session has multiple follow-up tasks to cycle

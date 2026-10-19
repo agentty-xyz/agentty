@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tracing::instrument::WithSubscriber;
 
 use super::super::{
-    ViewContext, ViewKeyContext, ViewPendingUpdate, handle_view_key,
+    ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot, handle_view_key,
     open_draft_prompt_with_pasted_image, show_diff_for_view_session, view_context,
     view_session_snapshot,
 };
@@ -18,6 +18,7 @@ use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::help_action;
 use crate::presentation::help_action::ViewSessionState;
+use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
 
 #[tokio::test]
 async fn start_key_rechecks_parent_readiness_and_preserves_staged_draft() {
@@ -89,24 +90,24 @@ async fn start_key_rechecks_parent_readiness_and_preserves_staged_draft() {
     );
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() {
+#[test]
+fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_session() {
     // Arrange
-    let (mut app, _base_dir) =
-        crate::test_support::new_git_test_app_with_tmux_client(Arc::new(MockTmuxClient::new()))
-            .await;
-    let session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
+    let session = SessionFixtureBuilder::new()
+        .id("draft")
+        .status(Status::Draft)
+        .draft(true)
+        .build();
+    let sessions = session_manager_with_sessions(vec![session]);
+    let mut mode = AppMode::View {
+        session_id: "draft".into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert!(!snapshot.can_open_worktree());
@@ -115,37 +116,31 @@ async fn test_view_session_snapshot_hides_worktree_open_for_unstarted_draft_sess
     assert!(!snapshot.can_rebase_session());
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_allows_start_for_stacked_draft() {
+#[test]
+fn test_view_session_snapshot_allows_start_for_stacked_draft() {
     // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    let session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::Review;
-    let session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-        .expect("expected draft session");
-    session.parent_session_id = Some(parent_session_id.clone().into());
-    session.prompt = "staged child draft".to_string();
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
+    let parent = SessionFixtureBuilder::new()
+        .id("parent")
+        .status(Status::Review)
+        .draft(false)
+        .build();
+    let mut child = SessionFixtureBuilder::new()
+        .id("child")
+        .status(Status::Draft)
+        .draft(true)
+        .parent_session_id(Some("parent".into()))
+        .build();
+    child.prompt = "staged child draft".to_string();
+    let sessions = session_manager_with_sessions(vec![parent, child]);
+    let mut mode = AppMode::View {
+        session_id: "child".into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);

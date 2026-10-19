@@ -9,7 +9,7 @@ use super::super::{
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, new_test_app_with_session,
-    reply_enabled_review_snapshot,
+    reply_enabled_review_snapshot, session_fixture,
 };
 use crate::app::ReviewCacheEntry;
 use crate::app::test_support::{REVIEW_NO_DIFF_MESSAGE, diff_content_hash, review_loading_message};
@@ -20,6 +20,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::help_action::ViewSessionState;
 use crate::runtime::mode::session_output_metric;
+use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
 use crate::ui::RenderCacheStore;
 use crate::ui::component::session_output::SessionOutputLineContext;
 use crate::ui::page::session_chat::SessionChatPage;
@@ -274,10 +275,13 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
     assert_eq!(total_lines, expected);
 }
 
-#[tokio::test]
-async fn test_open_publish_branch_input_preserves_view_context() {
+#[test]
+fn test_open_publish_branch_input_preserves_view_context() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let sessions = session_manager_with_sessions(vec![session]);
+    let mut mode = AppMode::List;
     let view_context = ViewContext {
         scroll_offset: Some(5),
         session_id: session_id.clone().into(),
@@ -286,14 +290,15 @@ async fn test_open_publish_branch_input_preserves_view_context() {
 
     // Act
     open_publish_branch_input(
-        &mut app,
+        &mut mode,
+        &sessions,
         &view_context,
         PublishBranchAction::PublishPullRequest,
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::PublishBranchInput {
             ref default_branch_name,
             input: ref input_state,
@@ -311,12 +316,14 @@ async fn test_open_publish_branch_input_preserves_view_context() {
     ));
 }
 
-#[tokio::test]
-async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
+#[test]
+fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
     // Arrange
-    let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
-    app.sessions.sessions_mut()[0].published_upstream_ref =
-        Some("origin/review/custom".to_string());
+    let session = session_fixture(Status::Draft, false);
+    let session_id = session.id.to_string();
+    let mut sessions = session_manager_with_sessions(vec![session]);
+    let mut mode = AppMode::List;
+    sessions.sessions_mut()[0].published_upstream_ref = Some("origin/review/custom".to_string());
     let view_context = ViewContext {
         scroll_offset: Some(1),
         session_id: session_id.into(),
@@ -325,14 +332,15 @@ async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
 
     // Act
     open_publish_branch_input(
-        &mut app,
+        &mut mode,
+        &sessions,
         &view_context,
         PublishBranchAction::PublishPullRequest,
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::PublishBranchInput {
             input: ref input_state,
             locked_upstream_ref: Some(ref upstream_ref),
@@ -342,37 +350,31 @@ async fn test_open_publish_branch_input_locks_existing_upstream_branch_name() {
     ));
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_blocks_stacked_draft_start_until_parent_review() {
+#[test]
+fn test_view_session_snapshot_blocks_stacked_draft_start_until_parent_review() {
     // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    let session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::InProgress;
-    let session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == session_id)
-        .expect("expected draft session");
-    session.parent_session_id = Some(parent_session_id.into());
-    session.prompt = "staged child draft".to_string();
-    app.mode = AppMode::View {
-        session_id: session_id.into(),
+    let parent = SessionFixtureBuilder::new()
+        .id("parent")
+        .status(Status::InProgress)
+        .draft(false)
+        .build();
+    let mut child = SessionFixtureBuilder::new()
+        .id("child")
+        .status(Status::Draft)
+        .draft(true)
+        .parent_session_id(Some("parent".into()))
+        .build();
+    child.prompt = "staged child draft".to_string();
+    let sessions = session_manager_with_sessions(vec![parent, child]);
+    let mut mode = AppMode::View {
+        session_id: "child".into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert_eq!(snapshot.session_state, ViewSessionState::StackedDraft);
@@ -380,37 +382,31 @@ async fn test_view_session_snapshot_blocks_stacked_draft_start_until_parent_revi
     assert!(snapshot.can_open_prompt_composer());
 }
 
-#[tokio::test]
-async fn test_view_session_snapshot_keeps_parent_reply_with_review_child() {
+#[test]
+fn test_view_session_snapshot_keeps_parent_reply_with_review_child() {
     // Arrange
-    let (mut app, _base_dir, parent_session_id) = new_test_app_with_session().await;
-    let child_session_id = app
-        .create_draft_session()
-        .await
-        .expect("failed to create draft session");
-    let parent_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == parent_session_id)
-        .expect("expected parent session");
-    parent_session.status = Status::Review;
-    let child_session = app
-        .sessions
-        .sessions_mut()
-        .iter_mut()
-        .find(|session| session.id == child_session_id)
-        .expect("expected child session");
-    child_session.parent_session_id = Some(parent_session_id.clone().into());
-    child_session.status = Status::Review;
-    app.mode = AppMode::View {
-        session_id: parent_session_id.clone().into(),
+    let parent = SessionFixtureBuilder::new()
+        .id("parent")
+        .status(Status::Review)
+        .draft(false)
+        .build();
+    let mut child = SessionFixtureBuilder::new()
+        .id("child")
+        .status(Status::Review)
+        .draft(true)
+        .parent_session_id(Some("parent".into()))
+        .build();
+    child.prompt = "staged child draft".to_string();
+    let sessions = session_manager_with_sessions(vec![parent, child]);
+    let mut mode = AppMode::View {
+        session_id: "parent".into(),
         scroll_offset: Some(1),
     };
-    let context = view_context(&mut app).expect("expected view context");
+    let context = ViewContext::from_mode(&mut mode, &sessions).expect("view context");
 
     // Act
-    let snapshot = view_session_snapshot(&app, &context).expect("expected view snapshot");
+    let snapshot = ViewSessionSnapshot::from_sessions(&sessions, &context, true)
+        .expect("expected view snapshot");
 
     // Assert
     assert_eq!(snapshot.session_state, ViewSessionState::Review);
