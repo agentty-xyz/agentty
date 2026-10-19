@@ -78,6 +78,11 @@ execution separately, and distinguish cold builds from cache restores before tun
 concurrency or partitioning suites. E2E builds use a cache isolated by the pinned
 container and Rust environment.
 
+A new PR push cancels that PR's obsolete Presubmit and Native Harness Sandbox runs.
+Compare timings from the same final head and completed run attempt; cancelled samples
+measure superseded work, not suite speed. Merge-group, main, and manual runs remain
+independent. Default-setup CodeQL runs are managed separately.
+
 ## Coverage
 
 ```sh
