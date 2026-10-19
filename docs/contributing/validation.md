@@ -75,10 +75,11 @@ compilation timings to the build directory's `cargo-timings/cargo-timing.html`. 
 retains both as artifacts for 14 days for workspace, source, coverage, native sandbox,
 and E2E jobs, including reports available after failures. Each artifact name includes
 the run ID, attempt, and job. Its `metadata.json` identifies the source SHA, suite,
-runner image, toolchain, container, exact cache-hit flag, hook outcome, elapsed hook
-time, and report hashes. Preparation deletes old reports after cache restoration;
-finalization accepts reports only from that prepared invocation. Missing preparation or
-reports remain explicit. Cancelled jobs may have no artifact at all.
+runner image, CPU models, available-parallelism estimate, toolchain, container, exact
+cache-hit flag, hook outcome, elapsed hook time, and report hashes. Preparation deletes
+old reports after cache restoration; finalization accepts reports only from that
+prepared invocation. Missing preparation or reports remain explicit. Cancelled jobs may
+have no artifact at all.
 
 Download at least three samples per revision and compare matching suites and
 environments:

@@ -18,7 +18,8 @@ pub(super) fn files() -> BTreeMap<PathBuf, String> {
             let metadata = json!({
                 "schema": 1, "prepared": true, "outcome": "success",
                 "identity": {"run_id": format!("{arm}-{index}"), "attempt": "1", "job": "tests", "suite": "workspace", "sha": arm},
-                "environment": {"runner_os": "Linux", "runner_arch": "X64", "rustc": "rustc pinned", "nextest": "nextest pinned", "exact_cache_hit": false},
+                "environment": {"runner_os": "Linux", "runner_arch": "X64", "rustc": "rustc pinned", "nextest": "nextest pinned", "exact_cache_hit": false,
+                    "cpu_models": ["fixture CPU"], "available_parallelism": 4},
                 "hook_seconds": duration + index,
                 "reports": {
                     "junit.xml": hash(JUNIT),

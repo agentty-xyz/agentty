@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { posix, resolve } from 'node:path';
+import { availableParallelism, cpus } from 'node:os';
 
 // Explicit boundary: orchestration tests use an in-memory filesystem and clock.
 export const host = {
@@ -18,6 +19,8 @@ export const host = {
   remove: path => fs.rmSync(path, { force: true, recursive: true }),
   mkdir: path => fs.mkdirSync(path, { recursive: true }),
   now: () => new Date().toISOString(),
+  hardware: () => ({ cpu_models: [...new Set(cpus().map(cpu => cpu.model))].sort(),
+    available_parallelism: availableParallelism() }),
   version(program, args) {
     const result = spawnSync(program, args, { encoding: 'utf8' });
     return result.status === 0 ? result.stdout.trim() : null;
@@ -38,6 +41,7 @@ function identity(env, suite) {
 
 function environment(env, io) {
   return {
+    ...io.hardware(),
     runner_os: env.RUNNER_OS ?? null,
     runner_arch: env.RUNNER_ARCH ?? null,
     image: env.ImageOS ?? null,
@@ -63,7 +67,7 @@ export function run(env, io = host) {
   const phase = env.INPUT_PHASE;
   if (!['prepare', 'finish'].includes(phase)) throw new Error('Expected prepare or finish');
   const suite = env.INPUT_SUITE;
-  if (!/^[a-zA-Z0-9_-]+$/.test(suite ?? '')) throw new Error('Invalid suite identifier');
+  if (!/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]*$/.test(suite ?? '')) throw new Error('Invalid suite identifier');
   if (!env.GITHUB_WORKSPACE) throw new Error('Missing GITHUB_WORKSPACE');
   const current = identity(env, suite);
   const build = relativePath(env['INPUT_BUILD-DIRECTORY'] || 'target');

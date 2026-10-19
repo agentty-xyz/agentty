@@ -20,6 +20,7 @@ function fixture(extra = {}) {
     append: (path, data) => files.set(path, (files.get(path) ?? '') + data),
     remove: path => { for (const key of files.keys()) if (key === path || key.startsWith(path + '/')) files.delete(key); },
     mkdir: () => {}, now: () => clock, version: program => `${program} pinned`,
+    hardware: () => ({ cpu_models: ['fixture CPU'], available_parallelism: 4 }),
   };
   return {
     env, files, io,
@@ -56,6 +57,8 @@ test('fresh reports retain hashes, identity, environment and separate hook durat
   assert.equal(result.environment.image_version, '123');
   assert.equal(result.environment.rustc, 'rustc pinned');
   assert.equal(result.environment.nextest, 'cargo pinned');
+  assert.deepEqual(result.environment.cpu_models, ['fixture CPU']);
+  assert.equal(result.environment.available_parallelism, 4);
   assert.equal(result.hook_seconds, 2.5);
   assert.equal(result.prepared, true);
   assert.equal(result.reports['junit.xml'].length, 64);
@@ -64,6 +67,9 @@ test('fresh reports retain hashes, identity, environment and separate hook durat
   // A second finalization cannot reuse a consumed preparation record.
   assert.equal(current.finish().prepared, false);
   assert.equal(current.files.has(`${directory}/junit.xml`), false);
+  const native = fixture({ INPUT_SUITE: 'native-sandbox-test-results-ubuntu-24.04' });
+  run(native.env, native.io);
+  assert.equal(native.finish().identity.suite, 'native-sandbox-test-results-ubuntu-24.04');
 });
 
 test('missing and failed results stay explicit and reruns cannot borrow old reports', () => {
@@ -98,6 +104,7 @@ test('invalid inputs and corrupt preparation fail visibly', () => {
   // Arrange / Act / Assert
   for (const changes of [
     { INPUT_PHASE: 'bad' }, { INPUT_SUITE: '../bad' }, { INPUT_SUITE: undefined },
+    { INPUT_SUITE: '.' }, { INPUT_SUITE: '..' },
     { GITHUB_WORKSPACE: '' }, { GITHUB_SHA: '' },
     ...['/tmp', '../tmp', 'target/../tmp', 'target/./tmp', 'target\n'].map(value => ({ 'INPUT_BUILD-DIRECTORY': value })),
   ]) assert.throws(() => run({ ...base, ...changes }, fixture().io));
@@ -133,6 +140,7 @@ test('real adapter and action entry preserve reports and propagate failures', t 
   const result = JSON.parse(fs.readFileSync(resolve(directory, 'target/test-results/workspace/metadata.json')));
   assert.equal(result.outcome, 'failure');
   assert.ok(result.hook_seconds >= 0);
+  assert.ok(result.environment.available_parallelism > 0);
   assert.equal(fs.readFileSync(resolve(directory, 'target/test-results/workspace/junit.xml'), 'utf8'), '<testsuites/>');
   assert.equal(host.version(process.execPath, ['--version']), process.version);
   assert.equal(host.version('/nonexistent-agentty-program', []), null);

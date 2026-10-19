@@ -140,6 +140,12 @@ fn load(paths: &[PathBuf], reader: &impl Reader) -> Result<Vec<Sample>, String> 
                 || metadata.outcome != "success"
                 || !metadata.hook_seconds.is_finite()
                 || metadata.hook_seconds < 0.0
+                || metadata.environment["cpu_models"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty)
+                || metadata.environment["available_parallelism"]
+                    .as_u64()
+                    .is_none_or(|count| count == 0)
                 || [
                     &metadata.identity.run_id,
                     &metadata.identity.attempt,
