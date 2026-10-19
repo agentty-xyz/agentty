@@ -128,9 +128,8 @@ pub fn app_frame_areas(area: Rect) -> AppFrameAreas {
 /// Splits a tab page area so content starts directly below the tab header.
 ///
 /// The tab header already provides the vertical separation through its bottom
-/// border, so tab pages keep only side and bottom insets. This prevents a
-/// blank row between the header border and the first table or panel while
-/// preserving the one-line footer convention.
+/// border, so tab pages keep only side insets. The one-line help footer sits
+/// flush with the page bottom, directly above the app's footer bar.
 pub fn tab_page_areas(area: Rect) -> TabPageAreas {
     let horizontal_inset = TAB_PAGE_INSET.min(area.width / 2);
     let content_x = area.x.saturating_add(horizontal_inset);
@@ -139,8 +138,8 @@ pub fn tab_page_areas(area: Rect) -> TabPageAreas {
         .saturating_sub(horizontal_inset.saturating_mul(2));
     let footer_y = area
         .y
-        .saturating_add(area.height.saturating_sub(TAB_PAGE_INSET + 1));
-    let main_height = area.height.saturating_sub(TAB_PAGE_INSET + 1);
+        .saturating_add(area.height.saturating_sub(SINGLE_LINE_FOOTER_HEIGHT));
+    let main_height = area.height.saturating_sub(SINGLE_LINE_FOOTER_HEIGHT);
 
     TabPageAreas {
         footer_area: Rect::new(content_x, footer_y, content_width, 1.min(area.height)),

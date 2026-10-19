@@ -1461,13 +1461,11 @@ const SESSION_TRANSITION_POLL: Duration = Duration::from_millis(50);
 /// Number of bottom rows scanned for footer help-action markers.
 ///
 /// Both the sessions list page and the session view page render their
-/// page-level help-action line two rows above the global worktree-status
-/// footer bar (a one-cell page margin sits between them). Scanning the
-/// bottom three rows therefore covers the page help row, the blank margin
-/// row, and the global footer bar without reaching up into the chat
-/// transcript or prompt input where agent output or user-typed text could
-/// contain a matching substring.
-const SESSION_TRANSITION_FOOTER_ROWS: u16 = 3;
+/// page-level help-action line directly above the global worktree-status
+/// footer bar. Scanning the bottom two rows covers both without reaching into
+/// the chat transcript or prompt input where agent output or user-typed text
+/// could contain a matching substring.
+const SESSION_TRANSITION_FOOTER_ROWS: u16 = 2;
 
 /// Build an `eventually` step that succeeds once `marker` appears in the
 /// live frame's bottom footer rows.

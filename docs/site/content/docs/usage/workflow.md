@@ -41,14 +41,14 @@ The composer shows `agent/model [reasoning]`, response style, speed when support
 permissions. Its border separates the input from the transcript without an extra
 horizontal rule. A fixed blank row above the composer stays clear while scrolling. While
 viewing an active session, the inactive composer collapses to its borders, hiding the
-empty input row. Press `Enter` to activate a reply when available. The help row sits
-directly above the bottom status bar. Archived sessions hide the composer and keep the
-frozen active-work timer and session age above the navigation and continuation controls.
-The session returns to transcript view if it is archived while you are typing; unsent
-drafts, partial answers, and their attached images are discarded. The footer shows the
-active directory, branch, and ahead/behind counts. Up to eight session agent turns can
-execute at once; additional turns wait for capacity while their sessions remain
-responsive.
+empty input row. Press `Enter` to activate a reply when available. On every page, the
+help row sits directly above the bottom status bar without a blank row between them.
+Archived sessions hide the composer and keep the frozen active-work timer and session
+age above the navigation and continuation controls. The session returns to transcript
+view if it is archived while you are typing; unsent drafts, partial answers, and their
+attached images are discarded. The footer shows the active directory, branch, and
+ahead/behind counts. Up to eight session agent turns can execute at once; additional
+turns wait for capacity while their sessions remain responsive.
 
 ### Projects and Discovery
 

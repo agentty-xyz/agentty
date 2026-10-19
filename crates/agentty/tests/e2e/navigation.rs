@@ -233,6 +233,10 @@ async fn tab_cycles_through_all_tabs() -> E2eResult {
                         "Default Smart Model",
                         &settings_full,
                     );
+                    for tab_frame in [&sessions_frame, &settings_frame] {
+                        let help_row = Region::new(0, tab_frame.rows() - 2, tab_frame.cols(), 1);
+                        assertion::assert_text_in_region(tab_frame, "?: help", &help_row);
+                    }
                 })
             },
         )
@@ -300,9 +304,9 @@ async fn startup_shows_footer_hints() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(frame, "q: quit", &full);
-                    assertion::assert_text_in_region(frame, "?: help", &full);
+                    let help_row = Region::new(0, frame.rows() - 2, frame.cols(), 1);
+                    assertion::assert_text_in_region(frame, "q: quit", &help_row);
+                    assertion::assert_text_in_region(frame, "?: help", &help_row);
                 })
             },
         )

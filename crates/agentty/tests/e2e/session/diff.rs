@@ -452,7 +452,8 @@ async fn diff_preview_opens_from_session() -> E2eResult {
 
                     assert_diff_file_tree_change_totals(frame);
                     assertion::assert_text_in_region(frame, "println!(\"review\")", &full);
-                    assertion::assert_text_in_region(frame, "j/k: select file", &full);
+                    let help_row = Region::new(0, frame.rows() - 2, frame.cols(), 1);
+                    assertion::assert_text_in_region(frame, "j/k: select file", &help_row);
                 })
             },
         )
@@ -660,12 +661,13 @@ async fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
 /// `l` moves focus into changed-line navigation without resetting the viewport.
 #[tokio::test]
 async fn test_diff_changed_line_navigation() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("diff_changed_line_navigation")
         .with_git()
         .setup(|env| Box::pin(async move { seed_scrollable_diff_session(env).await }))
         .run(
             |scenario| {
+                // Act
                 let scenario = scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -694,6 +696,7 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
+                    // Assert
                     let file_focus_frame = common::frame_from_capture(&report.captures[0]);
                     let file_focus_full =
                         Region::full(file_focus_frame.cols(), file_focus_frame.rows());
@@ -719,13 +722,9 @@ async fn test_diff_changed_line_navigation() -> E2eResult {
                         .rect
                         .row
                         .saturating_add(1);
-                    let aligned_changed_line_row = frame
-                        .find_text("changed line 65")
-                        .first()
-                        .expect("aligned changed line should remain visible")
-                        .rect
-                        .row;
-                    assert_eq!(aligned_changed_line_row, file_row);
+                    let aligned_changed_line = file_focus_frame.row_text(file_row);
+                    assert!(aligned_changed_line.contains("changed line"));
+                    assert_eq!(frame.row_text(file_row), aligned_changed_line);
                 })
             },
         )
@@ -799,7 +798,7 @@ async fn test_diff_comment_file_lookup() -> E2eResult {
 
 #[tokio::test]
 async fn test_diff_line_comments() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
     FeatureTest::new("diff_line_comments")
         .with_git()
         .zola(
@@ -817,7 +816,10 @@ async fn test_diff_line_comments() -> E2eResult {
             })
         })
         .run(diff_line_comments_scenario, |frame, report| {
-            Box::pin(async move { assert_diff_line_comments(frame, report) })
+            Box::pin(async move {
+                // Assert
+                assert_diff_line_comments(frame, report);
+            })
         })
         .await?;
 
@@ -829,6 +831,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
     // Ctrl+M emits Enter's carriage return consistently in PTY and VHS.
     const ENTER_KEY: &str = "Ctrl+m";
 
+    // Act
     let scenario = scenario
         .compose(&common::wait_for_agentty_startup())
         .compose(&common::open_selected_session_view())
@@ -838,6 +841,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .press_key("j")
         .wait_for_stable_frame(200, 3000)
         .wait_for_text("Enter/l: open", 5000)
+        .wait_for_text("println!(\"review\")", 5000)
         .write_text("C")
         .wait_for_text("File comment", 5000);
 
@@ -846,6 +850,7 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
         .press_key("Esc")
         .wait_for_text("Add regression coverage.", 3000)
         .wait_for_text("Enter: comment", 5000)
+        .wait_for_stable_frame(300, 3000)
         .capture_labeled(
             "whole_file_comment",
             "Multiline whole-file feedback appears above the selected patch",

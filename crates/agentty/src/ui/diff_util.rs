@@ -312,12 +312,19 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
     chunks
 }
 
-/// Returns the shared diff-page areas after applying the page margin, footer,
-/// and file-list split used by the diff view.
+/// Returns the shared diff-page areas with top and side margins, a help footer
+/// flush with the page bottom, and the file-list split used by the diff view.
 pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
+    let terminal_area = Rect {
+        y: terminal_area
+            .y
+            .saturating_add(LAYOUT_MARGIN.min(terminal_area.height)),
+        height: terminal_area.height.saturating_sub(LAYOUT_MARGIN),
+        ..terminal_area
+    };
     let page_chunks = Layout::default()
         .constraints([Constraint::Min(0), Constraint::Length(FOOTER_HEIGHT)])
-        .margin(LAYOUT_MARGIN)
+        .horizontal_margin(LAYOUT_MARGIN)
         .split(terminal_area);
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
