@@ -8,6 +8,7 @@
 mod agent;
 mod agent_definition;
 mod discovery;
+mod env;
 mod error;
 mod message;
 mod model;
@@ -36,6 +37,7 @@ pub use agent_definition::{AgentContextRequirement, AgentOutputKind, BuiltinAgen
 pub use discovery::{
     AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, StaticAgentAvailabilityProbe,
 };
+pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
 pub use message::{
     SessionMessage, SessionMessageKind, SessionMessageKindParseError, SessionTranscript,

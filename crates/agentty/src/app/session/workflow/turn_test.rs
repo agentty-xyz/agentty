@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel, PersonalityPrompt};
-use ag_session::test_support as model_fixture;
+use ag_session::{EnvId, ResolvedEnv, test_support as model_fixture};
 use ag_worker::SessionRunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -34,6 +34,7 @@ async fn prepared_turn_preserves_default_settings() {
         session_agent: context.session_agent,
     };
     let prompt = TurnPrompt::from_text("Explain this code".to_string());
+    let env = resolved_turn_test_env();
 
     // Act
     let prepared = prepare_turn_request(
@@ -42,7 +43,7 @@ async fn prepared_turn_preserves_default_settings() {
         AgentRequestKind::SessionResume,
         None,
         &prompt,
-        None,
+        &env,
     )
     .await
     .expect("default settings");
@@ -54,6 +55,8 @@ async fn prepared_turn_preserves_default_settings() {
     assert_eq!(prepared.request.speed_mode, SpeedMode::default());
     assert_eq!(prepared.request.personality, PersonalityPrompt::default());
     assert_eq!(prepared.request.prompt, prompt);
+    assert_eq!(prepared.request.folder, env.folder);
+    assert_eq!(prepared.request.main_checkout_root, env.main_checkout);
 }
 
 #[tokio::test]
@@ -92,7 +95,7 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
         AgentRequestKind::SessionResume,
         Some("earlier messages".to_string()),
         &prompt,
-        None,
+        &resolved_turn_test_env(),
     )
     .await
     .expect("current settings");
@@ -265,7 +268,7 @@ async fn permission_mode_load_propagates_query_errors() {
         AgentRequestKind::SessionStart,
         None,
         &TurnPrompt::from_text("hello".to_string()),
-        None,
+        &resolved_turn_test_env(),
     )
     .await;
 
@@ -274,6 +277,16 @@ async fn permission_mode_load_propagates_query_errors() {
         result,
         Err(SessionError::Db(DbError::Query(sqlx::Error::PoolClosed)))
     ));
+}
+
+/// Supplies resolved paths independently of the worker's cached folder.
+fn resolved_turn_test_env() -> ResolvedEnv {
+    ResolvedEnv {
+        branch: "wt/worker".to_string(),
+        folder: PathBuf::from("resolved/worktree"),
+        id: EnvId::SessionWorktree("worker".into()),
+        main_checkout: Some(PathBuf::from("resolved/main")),
+    }
 }
 
 #[tokio::test]

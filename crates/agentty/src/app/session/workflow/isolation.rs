@@ -3,21 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use ag_git::{GitClient, GitError};
+use ag_session::{EnvId, ResolvedEnv};
 
 use super::session_branch;
 use crate::app::session::SessionError;
 use crate::infra::fs::FsClient;
 
-/// Validated git metadata for one session worktree.
-#[derive(Debug)]
-pub(super) struct SessionWorktreeValidation {
-    /// Canonical main repository checkout that must remain unchanged, or
-    /// `None` when the shared repository is bare and therefore has no main
-    /// working checkout to guard against.
-    pub(super) main_checkout: Option<PathBuf>,
-}
-
-/// Verifies that `folder` is an isolated linked worktree for `session_id`.
+/// Resolves the session-owned local Env after validating its linked worktree.
 ///
 /// The guard checks the folder exists and the checked-out branch matches
 /// `wt/<session-id-prefix>`. When git resolves a main working checkout it must
@@ -35,7 +27,7 @@ pub(super) async fn validate_session_worktree(
     git_client: &dyn GitClient,
     folder: &Path,
     session_id: &str,
-) -> Result<SessionWorktreeValidation, SessionError> {
+) -> Result<ResolvedEnv, SessionError> {
     if !fs_client.is_dir(folder.to_path_buf()) {
         return Err(isolation_error(&format!(
             "session worktree folder is missing: {}",
@@ -65,7 +57,10 @@ pub(super) async fn validate_session_worktree(
         .await
         .map_err(|error| main_checkout_error(&error))?
     else {
-        return Ok(SessionWorktreeValidation {
+        return Ok(ResolvedEnv {
+            branch: detected_branch,
+            folder: folder.to_path_buf(),
+            id: EnvId::SessionWorktree(session_id.into()),
             main_checkout: None,
         });
     };
@@ -79,7 +74,10 @@ pub(super) async fn validate_session_worktree(
         )));
     }
 
-    Ok(SessionWorktreeValidation {
+    Ok(ResolvedEnv {
+        branch: detected_branch,
+        folder: folder.to_path_buf(),
+        id: EnvId::SessionWorktree(session_id.into()),
         main_checkout: Some(main_repo_root),
     })
 }

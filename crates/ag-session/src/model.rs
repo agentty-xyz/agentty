@@ -15,7 +15,7 @@ use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::message::SessionMessage;
-use crate::{AgentSelection, ReasoningLevel};
+use crate::{AgentSelection, EnvId, ReasoningLevel};
 
 /// Returns the default worktree branch name for a session.
 pub fn session_branch(session_id: &str) -> String {
@@ -393,6 +393,16 @@ pub struct Session {
     pub title: Option<String>,
     /// Last update timestamp in Unix seconds.
     pub updated_at: i64,
+}
+
+impl Session {
+    /// Returns the shared local environment owned by this session.
+    ///
+    /// Identity exists before workspace preparation and survives cleanup;
+    /// it does not imply that the workspace is available for execution.
+    pub fn env_id(&self) -> EnvId {
+        EnvId::SessionWorktree(self.id.clone())
+    }
 }
 
 /// Converts Unix timestamp seconds to a day key after applying a UTC offset.
