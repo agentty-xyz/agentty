@@ -230,6 +230,7 @@ impl Analytics {
     /// Builds a sender for an explicit project token, ingestion host, and
     /// event identity.
     pub fn new(token: &str, host: &str, distinct_id: &str) -> Option<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::builder()
             .timeout(Duration::from_secs(2))
             .build()

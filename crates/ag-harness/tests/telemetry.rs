@@ -1496,6 +1496,7 @@ async fn run_otlp_metric_contract_fixture() {
     // Arrange
     let _guard = TELEMETRY_TEST_LOCK.lock().await;
     let collector = OtlpCollector::start().await;
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let exporter = MetricExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -1982,6 +1983,7 @@ async fn run_otlp_lifecycle_contract_fixture() {
     // Arrange
     let _guard = TELEMETRY_TEST_LOCK.lock().await;
     let collector = OtlpCollector::start().await;
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let metric_exporter = MetricExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
@@ -1997,6 +1999,7 @@ async fn run_otlp_lifecycle_contract_fixture() {
         .with_resource(lifecycle_resource())
         .build();
     global::set_meter_provider(meter_provider.clone());
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let trace_exporter = SpanExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)

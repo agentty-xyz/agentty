@@ -46,6 +46,7 @@ struct Cli {
 /// database.
 #[tokio::main]
 async fn main() -> ExitCode {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
 
     match run(cli, agentty::runtime::run).await {

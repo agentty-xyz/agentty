@@ -70,6 +70,7 @@ opentelemetry-proto.workspace = true
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 prost.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
 

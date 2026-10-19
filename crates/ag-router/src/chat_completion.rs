@@ -672,6 +672,8 @@ pub(crate) fn endpoint(base_url: &str) -> String {
 
 /// Creates the production Chat Completions client implementation.
 pub(crate) fn default_client() -> Arc<dyn ChatCompletionClient> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     Arc::new(ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         request_timeout: REQUEST_TIMEOUT,
