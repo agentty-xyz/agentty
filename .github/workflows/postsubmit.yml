@@ -52,9 +52,13 @@ jobs:
 
       # Every hook rewrites the same JUnit and timing files, so each run's
       # reports are moved under its hook ID. A failing hook does not stop the
-      # remaining members.
+      # remaining members. Resolving features per selected package overrides
+      # the workspace unification in `.cargo/config.toml`, so a member that
+      # relies on a feature only another member enables fails here.
       - name: Run source tests
         id: source-tests
+        env:
+          CARGO_RESOLVER_FEATURE_UNIFICATION: selected
         run: |
           status=0
           for hook in $SOURCE_TEST_HOOKS; do
