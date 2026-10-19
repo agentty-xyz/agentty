@@ -3,6 +3,44 @@
 Select required gates from the root `AGENTS.md` and invoke their definitions through
 `prek`. Do not copy hook implementations into ad hoc commands.
 
+## Required Validation Procedure
+
+During iteration, run the relevant formatter or fixer on touched paths, inspect its
+diff, then run focused tests for the changed behavior. Use `test-focused` with an
+explicit `AGENTTY_TEST_FILTER`. Run mutating fixers one at a time; if a fixer modifies
+files, rerun only that hook rather than the entire hook set.
+
+Before handoff, choose one validation rung covering every touched file and all affected
+dependents. Handoff means the task's final state, not each reply in a multi-turn
+session.
+
+| Impact                              | Required final checks                                                                        |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| Markdown                            | `mdformat` and default hooks for touched paths                                               |
+| Docs site                           | Markdown checks plus `zola-check`; format touched templates with `djlint-reformat`           |
+| Rust                                | `rustfmt-fix`, `clippy`, and unrestricted `test-focused` for changed packages and dependents |
+| Manifests, migrations, hook catalog | Add their dedicated checks from `.pre-commit-config.yaml`                                    |
+
+Final Rust selection must retain public-contract integration tests. Source-only hooks do
+not replace them: remove test-name restrictions for affected packages, or use
+`test-workspace`. For cross-cutting changes, run `prek run --all-files` plus affected
+package tests after touched paths pass formatting and focused tests. If impact cannot be
+bounded confidently, run `test-workspace` locally. Reuse passing checks under the root
+guide's invalidation rule; record the command, scope, and result.
+
+### Diagnosing Failures and Long Checks
+
+Let the runner's configured timeouts govern individual tests. Run long checks in the
+foreground, redirect large output to a log, and read its summary after the command
+exits. Do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes
+without output, inspect build and process activity once; terminate and report a
+confirmed stall, not silence alone.
+
+Diagnose a CI failure with its single failing hook, using `--hook-stage manual` where
+required. Do not rerun every gate after each edit. After three failed repair attempts,
+stop and report the test, output, and attempted fixes; never skip, ignore, or delete the
+test.
+
 ## Focused and Affected-Package Tests
 
 During iteration, select the behavior being changed:
@@ -92,9 +130,6 @@ coverable Rust lines, including untracked files. The comparison defaults to loca
 request or merge group's remote base branch, falling back to the repository's default
 branch. A missing base or failed generation fails the gate; an old report cannot satisfy
 it.
-
-Source-only tests do not replace public integration tests. Reuse results and diagnose
-stalled runners according to `AGENTS.md`.
 
 ## Instruction and Hook Maintenance
 
