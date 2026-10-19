@@ -300,46 +300,57 @@ async fn test_handle_preview_key_reports_missing_session_worktree() {
 }
 
 #[tokio::test]
-async fn test_handle_selection_change_keeps_preview_sticky_for_unsupported_row() {
+async fn test_handle_selection_change_refreshes_only_enabled_preview() {
     // Arrange
     let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        diff: "diff --git a/docs/README.md b/docs/README.md\n+preview".to_string(),
-        file_explorer_selected_index: 1,
-        focus: DiffFocus::Files,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::Ready {
-            content: "# Preview".to_string(),
-            path: "docs/README.md".to_string(),
-            request_id: 4,
-        },
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-        scroll_offset: 6,
-        session_id: "session-id".into(),
-    };
-
-    // Act
-    handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            file_explorer_selected_index: 0,
+    for (preview, expected_preview) in [
+        (
+            DiffPreview::Off { request_id: 4 },
+            DiffPreview::Off { request_id: 4 },
+        ),
+        (
+            DiffPreview::Ready {
+                content: "# Preview".to_string(),
+                path: "docs/README.md".to_string(),
+                request_id: 4,
+            },
+            DiffPreview::Unsupported { request_id: 5 },
+        ),
+    ] {
+        app.mode = AppMode::Diff {
+            diff: "diff --git a/docs/README.md b/docs/README.md\n+preview".to_string(),
+            file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
+            line_comments: DiffLineComments::default(),
             selected_diff_line_index: 0,
-            preview: DiffPreview::Unsupported { request_id: 5 },
-            scroll_offset: 0,
-            ..
-        }
-    ));
+            preview,
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+            scroll_offset: 6,
+            session_id: "session-id".into(),
+        };
+
+        // Act
+        handle(
+            &mut app,
+            TEST_TERMINAL_SIZE,
+            KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+        );
+
+        // Assert
+        assert!(matches!(
+            &app.mode,
+            AppMode::Diff {
+                file_explorer_selected_index: 0,
+                focus: DiffFocus::Files,
+                selected_diff_line_index: 0,
+                preview,
+                scroll_offset: 0,
+                ..
+            } if *preview == expected_preview
+        ));
+    }
 }
 
 #[tokio::test]
