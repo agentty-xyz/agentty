@@ -1,11 +1,18 @@
+use std::collections::VecDeque;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
+use rustix::io::Errno;
 use rustix::process::{Pid, test_kill_process};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use rustix::process::{WaitId, WaitIdOptions, WaitOptions, waitid, waitpid};
 
-use super::{UnsandboxedExecutor, main_exit};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use super::UnsandboxedProcess;
+use super::{GroupControl, UnsandboxedExecutor, main_exit, signal_group};
 use crate::command_journal::CommandCleanupScope;
 use crate::execution::contract::{
     BashExecutor, BashProcess, ExecutionCommand, ExecutionError, ExecutionPolicy, Grants, MainExit,
@@ -184,6 +191,153 @@ async fn cleanup_terminates_a_running_process_group_and_start_failures_stay_type
     assert_eq!(unstarted.start().await, Err(ExecutionError::Setup));
     assert_eq!(missing.start().await, Err(ExecutionError::Setup));
     assert_eq!(missing.cleanup().await, Ok(()));
+}
+
+#[tokio::test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn cleanup_recovers_when_an_exited_leader_leaves_a_zombie_only_group() {
+    // Arrange
+    let (mut process, _) = exited_process().await;
+
+    // Act
+    let cleanup = process.cleanup().await;
+    // Reap the fixture even when running this regression against old code.
+    if let Some(child) = &mut process.child {
+        child.wait().await.expect("fixture reap");
+    }
+
+    // Assert
+    assert_eq!(cleanup, Ok(()));
+    assert_eq!(process.cleanup().await, Ok(()), "idempotent cleanup");
+}
+
+#[tokio::test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn reap_failure_remains_observable() {
+    // Arrange: another owner stole the child status; cleanup must not turn
+    // the unexpected wait failure into an acknowledged settlement.
+    let (mut process, pid) = exited_process().await;
+    assert!(
+        waitpid(Some(pid), WaitOptions::NOHANG)
+            .expect("external reap")
+            .is_some()
+    );
+
+    // Act
+    let cleanup = process.child.reap().await;
+
+    // Assert
+    assert_eq!(cleanup, Err(ExecutionError::Cleanup));
+    assert!(process.group.is_some());
+    assert!(process.child.is_some());
+}
+
+struct ScriptedGroup {
+    calls: Vec<&'static str>,
+    reap: Result<(), ExecutionError>,
+    signals: VecDeque<Result<(), Errno>>,
+}
+
+#[async_trait]
+impl GroupControl for ScriptedGroup {
+    fn kill(&mut self, _: Pid) -> Result<(), Errno> {
+        self.calls.push("kill");
+        self.signals.pop_front().expect("expected signal")
+    }
+
+    async fn reap(&mut self) -> Result<(), ExecutionError> {
+        self.calls.push("reap");
+        self.reap
+    }
+}
+
+#[tokio::test]
+async fn permission_failures_reap_then_retry_without_ignoring_live_groups() {
+    // Arrange
+    let pid = Pid::from_raw(42).expect("fixture pid");
+    let cleanup = Err(ExecutionError::Cleanup);
+    for (signals, reap, expected, calls) in [
+        (vec![Ok(())], Ok(()), Ok(()), vec!["kill"]),
+        (vec![Err(Errno::SRCH)], Ok(()), Ok(()), vec!["kill"]),
+        (vec![Err(Errno::INVAL)], Ok(()), cleanup, vec!["kill"]),
+        (
+            vec![Err(Errno::PERM), Ok(())],
+            Ok(()),
+            Ok(()),
+            vec!["kill", "reap", "kill"],
+        ),
+        (
+            vec![Err(Errno::PERM), Err(Errno::SRCH)],
+            Ok(()),
+            Ok(()),
+            vec!["kill", "reap", "kill"],
+        ),
+        (
+            vec![Err(Errno::PERM), Err(Errno::PERM)],
+            Ok(()),
+            cleanup,
+            vec!["kill", "reap", "kill"],
+        ),
+        (
+            vec![Err(Errno::PERM)],
+            cleanup,
+            cleanup,
+            vec!["kill", "reap"],
+        ),
+    ] {
+        let mut control = ScriptedGroup {
+            calls: Vec::new(),
+            reap,
+            signals: signals.into(),
+        };
+
+        // Act
+        let result = signal_group(&mut control, pid).await;
+
+        // Assert
+        assert_eq!(result, expected);
+        assert_eq!(control.calls, calls);
+    }
+    let mut unstarted = None;
+    assert_eq!(unstarted.reap().await, Ok(()));
+}
+
+/// Observes exit without reaping, making the macOS killpg race deterministic
+/// rather than depending on output-flood scheduling.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+async fn exited_process() -> (UnsandboxedProcess, Pid) {
+    let child = tokio::process::Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .process_group(0)
+        .spawn()
+        .expect("child");
+    let group = child.id().expect("unreaped leader");
+    let pid = Pid::from_raw(i32::try_from(group).expect("process identifier"))
+        .expect("nonzero process identifier");
+    let process = UnsandboxedProcess {
+        child: Some(child),
+        exit_delivered: false,
+        group: Some(group),
+        launch: None,
+        quiescent: false,
+        stderr: None,
+        stdout: None,
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG,
+        )
+        .expect("observe exit without reaping")
+        .is_none()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("child becomes a zombie");
+
+    (process, pid)
 }
 
 #[tokio::test]

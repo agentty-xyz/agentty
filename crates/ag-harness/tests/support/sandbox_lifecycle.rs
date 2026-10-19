@@ -181,8 +181,9 @@ async fn output_flood_cannot_prevent_deadline_cleanup() {
                 "while :; do printf 'output-flood'; printf 'stderr-flood' >&2; done",
                 options,
             )
-            .await
-            .expect("turn");
+            .await;
+        assert!(result.is_ok(), "{selected:?}: {result:?}");
+        let result = result.expect("successful command");
         let result: CommandOutcome = serde_json::from_value(result.into_output()).expect("outcome");
 
         // Assert

@@ -134,15 +134,50 @@ impl BashProcess for UnsandboxedProcess {
         if let Some(id) = self.group {
             let pid = Pid::from_raw(i32::try_from(id).map_err(|_| ExecutionError::Cleanup)?)
                 .ok_or(ExecutionError::Cleanup)?;
-            match kill_process_group(pid, Signal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
-                Err(_) => return Err(ExecutionError::Cleanup),
-            }
+            signal_group(&mut self.child, pid).await?;
             self.group = None;
         }
         if let Some(child) = &mut self.child {
             child.wait().await.map_err(|_| ExecutionError::Cleanup)?;
             self.child = None;
+        }
+
+        Ok(())
+    }
+}
+
+/// Signals the saved group even after reaping its leader. A macOS group
+/// containing only an exiting/zombie leader can reject killpg with EPERM.
+/// Waiting and retrying distinguishes that race from a live permission
+/// failure; the supervisor's existing cleanup deadline bounds the wait.
+async fn signal_group(control: &mut impl GroupControl, pid: Pid) -> Result<(), ExecutionError> {
+    let mut signal = control.kill(pid);
+    if signal == Err(rustix::io::Errno::PERM) {
+        control.reap().await?;
+        signal = control.kill(pid);
+    }
+    match signal {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(_) => Err(ExecutionError::Cleanup),
+    }
+}
+
+/// Process operations injected for deterministic cleanup ordering and errors.
+#[async_trait]
+trait GroupControl: Send {
+    fn kill(&mut self, pid: Pid) -> rustix::io::Result<()>;
+    async fn reap(&mut self) -> Result<(), ExecutionError>;
+}
+
+#[async_trait]
+impl GroupControl for Option<Child> {
+    fn kill(&mut self, pid: Pid) -> rustix::io::Result<()> {
+        kill_process_group(pid, Signal::KILL)
+    }
+
+    async fn reap(&mut self) -> Result<(), ExecutionError> {
+        if let Some(child) = self {
+            child.wait().await.map_err(|_| ExecutionError::Cleanup)?;
         }
 
         Ok(())
