@@ -82,7 +82,7 @@ repos:
         pass_filenames: false
       - id: clippy
         name: clippy
-        description: Run strict clippy across all targets and features of the packages owning changed files and their dependents; a changed file outside every package lints the whole workspace.
+        description: Lint affected packages across all targets and features, then Agentty's explicit PTY targets when affected; shared files select the workspace.
         entry: cargo run -q --locked -p ag-xtask -- clippy
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
@@ -96,11 +96,12 @@ repos:
         pass_filenames: false
       - id: clippy-agentty-e2e
         name: clippy agentty e2e
-        description: Lint the Agentty PTY suites, which `--all-targets` skips because only `test-agentty-e2e` runs them.
-        entry: cargo clippy -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test showcase -- -D warnings
+        description: Lint Agentty PTY suites when Agentty or its dependencies change; shared files select them conservatively.
+        entry: cargo run -q --locked -p ag-xtask -- clippy --agentty-e2e
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
-        pass_filenames: false
+        require_serial: true
+        stages: [manual]
       - id: test-workspace
         name: cargo nextest workspace
         description: Run workspace source and public API tests with `cargo-nextest`.
