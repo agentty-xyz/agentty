@@ -67,9 +67,10 @@ pub(crate) async fn handle_with_cache(
         return EventResult::Continue;
     }
 
-    let Some(action) = resolve_question_action(app, key) else {
+    let Some(action) = resolve_question_action(&mut app.mode, key) else {
         return EventResult::Continue;
     };
+    sync_question_at_mention_state(app);
 
     match action {
         QuestionAction::Submit(response) => submit_response(app, response).await,
@@ -326,7 +327,7 @@ enum QuestionAction {
 /// first) option automatically enters free-text mode where the text input is
 /// visible. In free-text mode, `Up` returns to the last predefined option
 /// and `Down` wraps to the first.
-fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionAction> {
+fn resolve_question_action(mode: &mut AppMode, key: KeyEvent) -> Option<QuestionAction> {
     let action = {
         let AppMode::Question {
             current_index,
@@ -334,7 +335,7 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
             questions,
             selected_option_index,
             ..
-        } = &mut app.mode
+        } = mode
         else {
             return None;
         };
@@ -387,8 +388,6 @@ fn resolve_question_action(app: &mut App, key: KeyEvent) -> Option<QuestionActio
             _ => QuestionAction::Continue,
         }
     };
-
-    sync_question_at_mention_state(app);
 
     Some(action)
 }
