@@ -89,10 +89,10 @@ rule against skipping or deleting a failing test during repair.
 
 ## Finding Slow Tests
 
-`--profile ci` writes per-test durations to `target/nextest/ci/junit.xml`. Sort tests by
-time, group them by module, and treat any level-1 or level-2 test over 0.5 s as a
-fixture problem first. CI keeps the same report as an artifact for workspace, coverage,
-and E2E jobs.
+`test-focused` writes per-test durations to `target/nextest/local/junit.xml`; CI hooks
+use `target/nextest/ci/junit.xml`. Sort tests by time, group them by module, and treat
+any level-1 or level-2 test over 0.5 s as a fixture problem first. CI keeps the same
+report as an artifact for workspace, coverage, and E2E jobs.
 
 ## Review Checklist
 

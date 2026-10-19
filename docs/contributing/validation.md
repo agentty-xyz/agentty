@@ -36,6 +36,12 @@ out: their `test = false` manifest entries reserve them for the separate
 `test-agentty-e2e` gate, so other runs do not compile them. A filter narrows execution,
 not necessarily compilation. Use `test-workspace` when impact is uncertain.
 
+`test-focused` uses the `local` nextest profile: after the first failure it stops
+scheduling tests and waits for running tests to finish. It inherits CI's resource
+groups, timeouts, and retry policy. CI hooks keep the exhaustive `ci` profile, so one
+failure does not prevent collection of other failures. A failing local run never
+satisfies final validation or creates a reusable success stamp.
+
 ## Coordinated Validation
 
 To expand changed packages through their workspace dependents, use the cataloged
@@ -70,13 +76,13 @@ always runs fresh. Repository-required hooks still apply.
 
 ## Test Timings
 
-Nextest hooks write test execution durations to `target/nextest/ci/junit.xml` and Cargo
-compilation timings to the build directory's `cargo-timings/cargo-timing.html`. CI
-retains both as artifacts for 14 days for workspace, source, coverage, native sandbox,
-and E2E jobs, including reports available after failures. Compare compilation and
-execution separately, and distinguish cold builds from cache restores before tuning
-concurrency or partitioning suites. E2E builds use a cache isolated by the pinned
-container and Rust environment.
+The focused hook writes test execution durations to `target/nextest/local/junit.xml`; CI
+hooks use `target/nextest/ci/junit.xml`. Cargo writes compilation timings to the build
+directory's `cargo-timings/cargo-timing.html`. CI retains both as artifacts for 14 days
+for workspace, source, coverage, native sandbox, and E2E jobs, including reports
+available after failures. Compare compilation and execution separately, and distinguish
+cold builds from cache restores before tuning concurrency or partitioning suites. E2E
+builds use a cache isolated by the pinned container and Rust environment.
 
 ## Coverage
 

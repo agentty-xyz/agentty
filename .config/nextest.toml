@@ -1,3 +1,5 @@
+nextest-version = "0.9.115"
+
 [profile.default]
 slow-timeout = "60s"
 
@@ -9,20 +11,28 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.ci.junit]
 path = "junit.xml"
 
+# Keep CI's resource limits, timeouts, and reports while shortening failed
+# local iterations. Running tests still finish before the command exits.
+[profile.local]
+inherits = "ci"
+fail-fast = true
+
 [test-groups]
 agentty-e2e = { max-threads = 4 }
 harness-sandbox = { max-threads = 1 }
 
-[[profile.ci.overrides]]
+# Keep shared overrides at the root: older nextest versions do not apply
+# overrides from intermediate profiles in an inheritance chain.
+[[profile.default.overrides]]
 filter = 'package(=ag-harness) and binary(=sandbox)'
 test-group = 'harness-sandbox'
 
-[[profile.ci.overrides]]
+[[profile.default.overrides]]
 filter = 'package(agentty) and kind(test) and binary(e2e)'
 slow-timeout = { period = "120s", terminate-after = 5 }
 test-group = 'agentty-e2e'
 
-[[profile.ci.overrides]]
+[[profile.default.overrides]]
 filter = 'package(agentty) and kind(test) and (binary(showcase) or binary(protocol_compliance_e2e))'
 slow-timeout = { period = "120s", terminate-after = 5 }
 test-group = 'agentty-e2e'

@@ -19,6 +19,9 @@ cargo install cargo-llvm-cov
 cargo install cargo-nextest --locked
 ```
 
+Use `cargo-nextest` 0.9.115 or newer so the local profile inherits CI's resource limits
+and timeouts. `.config/nextest.toml` enforces this minimum.
+
 `prek install -f` installs the fast `pre-commit` checks. CI runs the full validation
 gates. The coverage hook needs both Cargo subcommands. It also runs the native
 `ag-harness` sandbox qualification, which fails closed without enforcement. Linux hosts
