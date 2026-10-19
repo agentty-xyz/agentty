@@ -6,8 +6,9 @@ use testty::feature::{GifMode, GifStatus};
 use super::{
     BuilderEnv, FeatureTest, NO_COLOR_ENV_VALUE, NO_COLOR_ENV_VAR, PINNED_CLOCK_ENV_VAR,
     PINNED_CLOCK_UNIX_SECONDS, PINNED_CLOCK_UTC_OFFSET_ENV_VAR, PINNED_CLOCK_UTC_OFFSET_SECONDS,
-    PINNED_DISPLAY_VERSION_ENV_VAR, STUB_AGENT_EXECUTABLES, feature_gif_mode_for_artifacts,
-    gif_exists_on_disk, parse_gif_mode, tab_page_marker,
+    PINNED_DISPLAY_VERSION_ENV_VAR, STUB_AGENT_EXECUTABLES, VHS_REPLAY_ENV_VAR,
+    VHS_SETUP_SCRIPT_NAME, feature_gif_mode_for_artifacts, gif_exists_on_disk, parse_gif_mode,
+    tab_page_marker,
 };
 
 #[test]
@@ -186,25 +187,50 @@ fn builder_env_pins_vhs_terminal_environment() {
 }
 
 #[test]
-fn builder_env_vhs_launcher_uses_semantic_proof_workdir() {
+fn builder_env_vhs_launcher_restores_fixture_before_starting_replay() {
     // Arrange
     let temp = tempfile::TempDir::new().expect("failed to create temporary directory");
     let env = BuilderEnv::new(temp.path()).expect("failed to create builder environment");
-    let launcher = env
-        .create_vhs_launcher(Path::new("/bin/pwd"))
-        .expect("failed to create VHS launcher");
+    for setup_exit in [None, Some(0), Some(7)] {
+        // Arrange
+        let marker = env.workdir.join("replay-reset");
+        if marker.exists() {
+            std::fs::remove_file(&marker).expect("clear previous reset signal");
+        }
+        if let Some(code) = setup_exit {
+            std::fs::write(
+                env.stub_bin.join(VHS_SETUP_SCRIPT_NAME),
+                format!("printf reset > replay-reset\nexit {code}\n"),
+            )
+            .expect("write recording reset");
+        }
+        let launcher = env
+            .create_vhs_launcher(Path::new("/bin/sh"))
+            .expect("failed to create VHS launcher");
 
-    // Act
-    let output = std::process::Command::new(launcher)
-        .output()
-        .expect("failed to execute VHS launcher");
+        // Act
+        let output = std::process::Command::new(launcher)
+            .env(VHS_REPLAY_ENV_VAR, "0")
+            .args([
+                "-c",
+                &format!("printf '%s\\n' \"$PWD\" \"${VHS_REPLAY_ENV_VAR}\""),
+            ])
+            .output()
+            .expect("failed to execute VHS launcher");
 
-    // Assert
-    assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        env.workdir.to_string_lossy(),
-    );
+        // Assert
+        assert_eq!(marker.is_file(), setup_exit.is_some());
+        if setup_exit == Some(7) {
+            assert_eq!(output.status.code(), Some(7));
+            assert!(output.stdout.is_empty(), "failed reset must prevent replay");
+        } else {
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("{}\n1\n", env.workdir.display()),
+            );
+        }
+    }
 }
 
 #[test]

@@ -234,8 +234,14 @@ impl BuilderEnv {
         let launcher_path = self.stub_bin.join("agentty-vhs-launcher");
         let quote_path =
             |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+        let setup_path = self.stub_bin.join(VHS_SETUP_SCRIPT_NAME);
+        let setup = if setup_path.is_file() {
+            format!("/bin/sh {}\n", quote_path(&setup_path))
+        } else {
+            String::new()
+        };
         let launcher = format!(
-            "#!/bin/sh\ncd -- {}\nexec {} \"$@\"\n",
+            "#!/bin/sh\nset -e\nexport {VHS_REPLAY_ENV_VAR}=1\ncd -- {}\n{setup}exec {} \"$@\"\n",
             quote_path(&self.workdir),
             quote_path(binary_path),
         );
@@ -694,6 +700,15 @@ fn feature_output_dir() -> PathBuf {
 /// Check mode uses the same hash as a read-only freshness gate and fails when
 /// an existing committed sidecar is stale or the GIF itself is missing.
 pub(crate) const TESTTY_GIF_MODE_ENV_VAR: &str = "TESTTY_GIF_MODE";
+
+/// Marks VHS replay so fixtures can replace Rust-controlled gates with
+/// recording delays; VHS cannot execute the callbacks that release gates.
+pub(crate) const VHS_REPLAY_ENV_VAR: &str = "AGENTTY_E2E_VHS_REPLAY";
+
+/// Optional script under `stub_bin` that resets a fixture before VHS replay.
+/// The launcher runs it from the proof workdir and stops on failure.
+pub(crate) const VHS_SETUP_SCRIPT_NAME: &str = "agentty-vhs-setup";
+
 /// Environment variable that pins the agentty wall clock for feature runs.
 ///
 /// Mirrors `agentty::infra::clock::CLOCK_UNIX_ENV_VAR`, which is private to
@@ -1285,9 +1300,9 @@ impl BuilderEnv {
 ///
 /// Stub scripts block on [`ReleaseGate::shell_wait`] instead of a fixed
 /// `sleep`, so a turn stays active exactly until the scenario has asserted
-/// what it needs, however loaded the host is. VHS recordings skip the
-/// [`Step::Eventually`] step that releases the gate, so published scenarios
-/// keep fixed sleeps.
+/// what it needs, however loaded the host is. VHS replaces
+/// [`Step::Eventually`] callbacks with sleeps, so published fixtures use
+/// [`VHS_REPLAY_ENV_VAR`] to select recording delays during replay.
 #[derive(Clone)]
 pub(crate) struct ReleaseGate {
     directory: std::sync::Arc<tempfile::TempDir>,
