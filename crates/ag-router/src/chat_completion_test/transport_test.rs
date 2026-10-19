@@ -91,33 +91,51 @@ fn rate_limit_retry_delay_uses_bounded_headers_and_backoff() {
     let mut headers = reqwest::header::HeaderMap::new();
 
     // Act and Assert
-    assert_eq!(rate_limit_retry_delay(&headers, 0), Duration::from_secs(1));
-    assert_eq!(rate_limit_retry_delay(&headers, 1), Duration::from_secs(2));
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
+        Duration::from_secs(1)
+    );
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 1, RETRY_DELAY, MAX_RETRY_DELAY),
+        Duration::from_secs(2)
+    );
     headers.insert(
         reqwest::header::RETRY_AFTER,
         "1".parse().expect("valid header"),
     );
-    assert_eq!(rate_limit_retry_delay(&headers, 2), Duration::from_secs(4));
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 2, RETRY_DELAY, MAX_RETRY_DELAY),
+        Duration::from_secs(4)
+    );
     headers.insert(
         reqwest::header::RETRY_AFTER,
         "30".parse().expect("valid header"),
     );
-    assert_eq!(rate_limit_retry_delay(&headers, 0), Duration::from_secs(30));
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
+        Duration::from_secs(30)
+    );
     headers.insert(
         reqwest::header::RETRY_AFTER,
         "99".parse().expect("valid header"),
     );
     assert_eq!(
-        rate_limit_retry_delay(&headers, 0),
+        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
         MAX_PROVIDER_RETRY_DELAY
     );
     headers.remove(reqwest::header::RETRY_AFTER);
-    assert_eq!(rate_limit_retry_delay(&headers, 9), MAX_RETRY_DELAY);
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 9, RETRY_DELAY, MAX_RETRY_DELAY),
+        MAX_RETRY_DELAY
+    );
     headers.insert(
         reqwest::header::RETRY_AFTER,
         reqwest::header::HeaderValue::from_bytes(b"invalid").expect("valid header bytes"),
     );
-    assert_eq!(rate_limit_retry_delay(&headers, 0), RETRY_DELAY);
+    assert_eq!(
+        rate_limit_retry_delay(&headers, 0, RETRY_DELAY, MAX_RETRY_DELAY),
+        RETRY_DELAY
+    );
 }
 
 #[tokio::test]
@@ -161,7 +179,9 @@ async fn retries_rate_limit_response_before_decoding_success() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
         request_timeout: REQUEST_TIMEOUT,
+        retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -224,7 +244,9 @@ async fn retries_transport_failure_before_decoding_success() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
         request_timeout: REQUEST_TIMEOUT,
+        retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -271,7 +293,9 @@ async fn timed_out_request_is_reported_without_a_retry() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
         request_timeout: Duration::from_millis(50),
+        retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -339,7 +363,9 @@ async fn retains_http_status_when_error_body_read_fails() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
         request_timeout: REQUEST_TIMEOUT,
+        retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
         "test-key",
@@ -399,7 +425,9 @@ async fn reports_error_body_read_failure_without_partial_body() {
     });
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
+        max_retry_delay: Duration::from_millis(5),
         request_timeout: REQUEST_TIMEOUT,
+        retry_delay: Duration::from_millis(1),
     };
     let request = ChatCompletionRequest::new(
         "test-key",
