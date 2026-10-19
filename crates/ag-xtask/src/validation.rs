@@ -109,17 +109,27 @@ impl Runner<'_> {
     }
 }
 
+/// Workspace package graph read from `cargo metadata --no-deps`.
 #[derive(Deserialize)]
-struct Metadata {
+pub(crate) struct Metadata {
     packages: Vec<Package>,
     target_directory: PathBuf,
     workspace_members: Vec<String>,
 }
 
 impl Metadata {
+    /// Reads the workspace package graph from Cargo.
+    pub(crate) fn load() -> Result<Self, String> {
+        serde_json::from_slice(&ProcessHost::output(
+            "cargo",
+            &["metadata", "--locked", "--no-deps", "--format-version", "1"],
+        )?)
+        .map_err(|error| error.to_string())
+    }
+
     /// Includes the changed packages and their transitive dependents. Cargo
     /// still compiles dependencies, but their unchanged tests are not rerun.
-    fn affected(&self, seeds: &[String]) -> Result<Vec<String>, String> {
+    pub(crate) fn affected(&self, seeds: &[String]) -> Result<Vec<String>, String> {
         let graph = self
             .packages
             .iter()
@@ -154,12 +164,36 @@ impl Metadata {
 
         Ok(affected.into_iter().collect())
     }
+
+    /// Returns the workspace packages whose directories contain `files`, or
+    /// `None` when a file belongs to no package, such as the root manifest or
+    /// lockfile, and so can affect the whole workspace.
+    pub(crate) fn owners(&self, files: &[PathBuf], root: &Path) -> Option<Vec<String>> {
+        let directories = self
+            .packages
+            .iter()
+            .filter(|package| self.workspace_members.contains(&package.id))
+            .filter_map(|package| Some((package.manifest_path.parent()?, &package.name)))
+            .collect::<Vec<_>>();
+        let mut owners = BTreeSet::new();
+        for file in files {
+            let path = root.join(file);
+            let (_, owner) = directories
+                .iter()
+                .filter(|(directory, _)| path.starts_with(directory))
+                .max_by_key(|(directory, _)| directory.components().count())?;
+            owners.insert((*owner).clone());
+        }
+
+        Some(owners.into_iter().collect())
+    }
 }
 
 #[derive(Deserialize)]
 struct Package {
     dependencies: Vec<Dependency>,
     id: String,
+    manifest_path: PathBuf,
     name: String,
 }
 
@@ -351,11 +385,7 @@ impl Host for ProcessHost {
     }
 
     fn metadata(&self) -> Result<Metadata, String> {
-        let mut metadata: Metadata = serde_json::from_slice(&Self::output(
-            "cargo",
-            &["metadata", "--locked", "--no-deps", "--format-version", "1"],
-        )?)
-        .map_err(|error| error.to_string())?;
+        let mut metadata = Metadata::load()?;
         if metadata.target_directory.is_absolute() {
             let root = std::env::current_dir().map_err(|error| error.to_string())?;
             metadata.target_directory = metadata

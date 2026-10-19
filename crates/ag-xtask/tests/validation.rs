@@ -21,7 +21,7 @@ impl Fixture {
         fs::write(path.join("source.rs"), "first version")?;
         fs::write(
             path.join("metadata.json"),
-            r#"{"target_directory":"target","workspace_members":["core","app","other"],"packages":[{"id":"core","name":"core","dependencies":[]},{"id":"app","name":"app","dependencies":[{"name":"core","path":"core"}]},{"id":"other","name":"other","dependencies":[]}]}"#,
+            r#"{"target_directory":"target","workspace_members":["core","app","other"],"packages":[{"id":"core","name":"core","manifest_path":"/workspace/core/Cargo.toml","dependencies":[]},{"id":"app","name":"app","manifest_path":"/workspace/app/Cargo.toml","dependencies":[{"name":"core","path":"core"}]},{"id":"other","name":"other","manifest_path":"/workspace/other/Cargo.toml","dependencies":[]}]}"#,
         )?;
         fs::write(
             path.join(".pre-commit-config.yaml"),

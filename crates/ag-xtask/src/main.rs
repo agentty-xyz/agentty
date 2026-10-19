@@ -1,5 +1,6 @@
 //! Workspace maintenance command-line tasks.
 
+mod affected_clippy;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
@@ -20,6 +21,8 @@ struct Cli {
 /// Supported maintenance subcommands.
 #[derive(Subcommand)]
 enum Command {
+    /// Runs strict Clippy for the packages changed files can affect.
+    Clippy(affected_clippy::Options),
     /// Validates that model execution flows only through worker-owned crates.
     #[command(name = "check-execution-boundary")]
     ExecutionBoundary,
@@ -39,6 +42,7 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
     let result = match cli.command {
+        Some(Command::Clippy(options)) => affected_clippy::run(&options),
         Some(Command::ExecutionBoundary) => check_execution_boundary::run(),
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),
