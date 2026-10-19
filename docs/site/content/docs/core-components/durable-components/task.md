@@ -32,6 +32,26 @@ concurrently within existing capacity and workspace limits. Each task stays with
 owning session. Task management is programmatic; there is no dedicated task UI or
 dependency scheduler.
 
+## Built-in Agent Definitions
+
+`ag_session::BuiltinAgentDefinition` provides two role contracts for future task
+workflows:
+
+| Role          | Required context                               | Permissions                                     | Expected answer                        |
+| ------------- | ---------------------------------------------- | ----------------------------------------------- | -------------------------------------- |
+| `Planner`     | User request and clarification                 | Read only                                       | Proposed plan and validation steps     |
+| `Implementer` | User request, accepted plan, and clarification | Session permissions, including read-only limits | Observed changes, checks, and blockers |
+
+Each definition supplies role instructions and a permission resolver. Roles are separate
+from providers and personalities and do not select a model; a workflow can supply the
+same session Smart `AgentSelection` to both. Questions use the existing response
+protocol, and neither output automatically completes a task.
+
+These are library contracts only. Task submission does not yet assign roles or apply
+their instructions. A workflow must provide separate conversations, explicit accepted
+plan handoff, and worker-enforced permissions before running a chain. Definitions do not
+add a registry, editor, persistence, or automatic scheduling.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

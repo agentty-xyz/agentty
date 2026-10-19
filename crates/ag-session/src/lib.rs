@@ -6,6 +6,7 @@
 //! depending on terminal UI state.
 
 mod agent;
+mod agent_definition;
 mod discovery;
 mod error;
 mod message;
@@ -31,6 +32,7 @@ pub use agent::{
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
 };
+pub use agent_definition::{AgentContextRequirement, AgentOutputKind, BuiltinAgentDefinition};
 pub use discovery::{
     AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, StaticAgentAvailabilityProbe,
 };

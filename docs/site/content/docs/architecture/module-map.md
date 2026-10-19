@@ -61,6 +61,10 @@ contracts.
 - Keep frontend-neutral session and task models in `ag-session` and persistence in
   `ag-store`. Task attempts project execution state from worker-owned operations; task
   completion is explicit outcome acceptance.
+- Built-in agent role contracts belong to `ag-session`: instructions, context
+  requirements, expected output, and permission limits. They are independent of model
+  selection and personalities; workflow execution and runtime permission enforcement
+  remain with their existing owners.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
 - `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot
