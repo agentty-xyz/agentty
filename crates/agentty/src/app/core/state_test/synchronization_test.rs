@@ -84,7 +84,7 @@ async fn merged_session_rejects_unlaunched_follow_up_task() {
     app.sessions.push_session(source_session);
 
     // Act
-    let action = app.selected_follow_up_task_action("session-1");
+    let action = app.sessions.selected_follow_up_task_action("session-1");
     let reply_enqueued = app.reply("session-1", "must stay read-only").await;
     let result = app
         .launch_or_open_selected_follow_up_task("session-1")

@@ -74,21 +74,21 @@ async fn test_append_output_for_session_appends_text() {
     assert_eq!(output, "line one");
 }
 
-#[tokio::test]
-async fn test_apply_view_scroll_and_output_mode_updates_scroll_state() {
+#[test]
+fn test_apply_view_scroll_and_output_mode_updates_scroll_state() {
     // Arrange
-    let (mut app, _base_dir, expected_session_id) = new_test_app_with_session().await;
-    app.mode = AppMode::View {
+    let expected_session_id = "view-session".to_string();
+    let mut mode = AppMode::View {
         session_id: expected_session_id.clone().into(),
         scroll_offset: Some(3),
     };
 
     // Act
-    apply_view_scroll_and_output_mode(&mut app, Some(1));
+    apply_view_scroll_and_output_mode(&mut mode, Some(1));
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::View {
             ref session_id,
             scroll_offset: Some(1),
