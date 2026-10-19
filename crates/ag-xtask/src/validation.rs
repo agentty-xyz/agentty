@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -13,9 +14,9 @@ use tracing::info;
 /// Arguments for coordinated workspace validation.
 #[derive(Args)]
 pub(crate) struct Options {
-    /// Changed packages; defaults to `AGENTTY_TEST_PACKAGES`.
-    #[arg(long, value_delimiter = ',')]
-    packages: Vec<String>,
+    /// Base revision for automatic selection from the branch fork point.
+    #[arg(long, default_value = "origin/main")]
+    base: String,
     /// Hook IDs from the repository catalog, executed in order.
     #[arg(
         long = "hook",
@@ -23,6 +24,14 @@ pub(crate) struct Options {
         default_value = "clippy,test-focused"
     )]
     hooks: Vec<String>,
+    /// Changed packages; overrides automatic selection, as does
+    /// `AGENTTY_TEST_PACKAGES` when this option is omitted.
+    #[arg(long, value_delimiter = ',')]
+    packages: Vec<String>,
+    /// Print the validation plan without running checks or writing reuse
+    /// stamps.
+    #[arg(long)]
+    plan: bool,
     /// Reuse matching successful deterministic checks; fresh execution is
     /// default.
     #[arg(long)]
@@ -42,6 +51,7 @@ impl ValidationGuard for File {}
 /// External boundaries shared by local execution and deterministic tests.
 trait Host {
     fn packages(&self) -> Vec<String>;
+    fn changes(&self, base: &str) -> Result<Changes, String>;
     fn metadata(&self) -> Result<Metadata, String>;
     fn catalog(&self) -> Result<Catalog, String>;
     fn lock(&self, target: &Path) -> Result<Box<dyn ValidationGuard>, String>;
@@ -52,23 +62,48 @@ trait Host {
     fn save(&self, target: &Path, ledger: &Ledger) -> Result<(), String>;
 }
 
+struct Changes {
+    files: Vec<PathBuf>,
+    root: PathBuf,
+}
+
 struct Runner<'host> {
     host: &'host dyn Host,
 }
 
 impl Runner<'_> {
     fn run(&self, options: Options) -> Result<(), String> {
-        let seeds = if options.packages.is_empty() {
+        self.run_with_output(options, io::stdout().lock())
+    }
+
+    fn run_with_output(&self, options: Options, mut output: impl Write) -> Result<(), String> {
+        let metadata = self.host.metadata()?;
+        let mut seeds = if options.packages.is_empty() {
             self.host.packages()
         } else {
             options.packages
         };
+        let mut files = Vec::new();
+        let mut reason = "explicit packages and their dependents";
         if seeds.is_empty() {
-            return Err(
-                "Set --packages or AGENTTY_TEST_PACKAGES to the changed workspace packages".into(),
-            );
+            let changes = self.host.changes(&options.base)?;
+            files = changes.files;
+            if files.is_empty() {
+                return Err("No changed paths found; select --packages explicitly".into());
+            }
+            seeds = if let Some(owners) = metadata.owners(&files, &changes.root) {
+                reason = "changed path owners and their dependents";
+                owners
+            } else {
+                reason = "shared or unowned paths require the whole workspace";
+                metadata
+                    .packages
+                    .iter()
+                    .filter(|package| metadata.workspace_members.contains(&package.id))
+                    .map(|package| package.name.clone())
+                    .collect()
+            };
         }
-        let metadata = self.host.metadata()?;
         let packages = metadata.affected(&seeds)?;
         let catalog = self.host.catalog()?;
         let hooks = options
@@ -83,6 +118,24 @@ impl Runner<'_> {
                 .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
         {
             return Err("CARGO_TARGET_DIR must be a directory within the workspace".into());
+        }
+        writeln!(
+            output,
+            "{}",
+            serde_json::json!({
+                "base": options.base,
+                "changed_files": files,
+                "hooks": hooks.iter().map(|hook| hook.id.as_str()).collect::<Vec<_>>(),
+                "packages": packages,
+                "reason": reason,
+                "reuse": options.reuse,
+                "target_directory": target,
+            })
+        )
+        .and_then(|()| output.flush())
+        .map_err(|error| error.to_string())?;
+        if options.plan {
+            return Ok(());
         }
         let _guard = self.host.lock(&target)?;
         let mut ledger = self.host.load(&target)?;
@@ -266,6 +319,32 @@ impl Hook {
 struct ProcessHost;
 
 impl ProcessHost {
+    /// Reads a Git text response, rejecting non-UTF-8 rather than guessing
+    /// paths.
+    fn git_text(arguments: &[&str]) -> Result<String, String> {
+        String::from_utf8(Self::output("git", arguments)?).map_err(|error| error.to_string())
+    }
+
+    /// Decodes NUL-delimited relative paths without splitting spaces or
+    /// newlines.
+    fn git_paths(output: &str) -> Result<Vec<PathBuf>, String> {
+        output
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| {
+                let path = PathBuf::from(path);
+                if path
+                    .components()
+                    .any(|part| !matches!(part, Component::Normal(_)))
+                {
+                    return Err("Git returned a path outside the workspace".into());
+                }
+
+                Ok(path)
+            })
+            .collect()
+    }
+
     fn output(program: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
         let output = Command::new(program)
             .args(arguments)
@@ -382,6 +461,38 @@ impl Host for ProcessHost {
             .split_whitespace()
             .map(str::to_string)
             .collect()
+    }
+
+    fn changes(&self, base: &str) -> Result<Changes, String> {
+        let revision = Self::git_text(&[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ])?;
+        let fork = Self::git_text(&["merge-base", "HEAD", revision.trim()])?;
+        let root = Self::git_text(&["rev-parse", "--show-toplevel"])?;
+        let mut files = BTreeSet::new();
+        // Collect each transition so staged reversions and cross-package
+        // renames cannot hide an affected package. Disable external
+        // diff drivers.
+        for endpoints in [vec![fork.trim(), "HEAD"], vec!["--cached", "HEAD"], vec![]] {
+            let mut arguments = vec!["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z"];
+            arguments.extend(endpoints);
+            arguments.push("--");
+            files.extend(Self::git_paths(&Self::git_text(&arguments)?)?);
+        }
+        files.extend(Self::git_paths(&Self::git_text(&[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])?)?);
+
+        Ok(Changes {
+            files: files.into_iter().collect(),
+            root: PathBuf::from(root.trim_end_matches('\n')),
+        })
     }
 
     fn metadata(&self) -> Result<Metadata, String> {
