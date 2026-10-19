@@ -31,9 +31,11 @@ use crate::agent::model_profile;
 /// Revision of Agentty's harness model registrations. Durable sessions record
 /// it and require the same value on resume.
 const REGISTRATION_REVISION: &str = "agentty-native-2";
-/// Conservative profile for a harness model without a declared profile.
+/// Conservative profile for a harness model without a declared profile. Its
+/// default estimator runs up to 46% under dense content and further under
+/// small requests whose fixed provider cost it never weighs.
 const FALLBACK_MODEL_PROFILE: ModelProfile =
-    ModelProfile::new(128_000).with_estimate_margin(16_384);
+    ModelProfile::new(128_000).with_estimate_margin(16_384, 50);
 /// Placeholder endpoint for resume-only registrations, which never send
 /// requests.
 const RESUME_ONLY_BASE_URL: &str = "http://127.0.0.1";

@@ -1,6 +1,10 @@
 use std::num::NonZeroU64;
 
+use crate::calibration::CALIBRATED_CAPACITY_PERCENT;
 use crate::context::{ContextBudget, ContextBudgetError, HeuristicContextEstimator};
+
+/// Ten thousand, the scale of a percent of a percent.
+const PERMYRIAD: u64 = 10_000;
 
 /// Host-declared description of one model's context, in provider tokens.
 ///
@@ -53,19 +57,36 @@ impl ModelProfile {
         self
     }
 
-    /// Reserves `max_output_tokens` plus a quarter of the window, for a model
-    /// whose input is measured by an approximate estimator.
+    /// Reserves `max_output_tokens` plus the margin a request needs when its
+    /// estimate under-counts provider tokens by up to `under_count_percent`.
     ///
-    /// [`HeuristicContextEstimator::DEFAULT`] estimates one token per
-    /// four bytes, which under-counts real provider tokens: live probes
-    /// measured up to 29% more tokens than estimated on varied prose and 17%
-    /// on repository content. Holding back a quarter of the window keeps an
-    /// input that fills the budget beside the reserved output while real
-    /// tokens exceed the estimate by at least a third, and by more as the
-    /// output share grows. The reservation saturates instead of overflowing.
+    /// Requests fill at most 95% of the input budget once provider usage
+    /// calibrated the estimate, and 90% before. The margin shrinks the budget
+    /// so that a request filling that share still fits the window beside
+    /// `max_output_tokens` while its real tokens exceed the estimate by
+    /// `under_count_percent`. Calibration never predicts fewer tokens than
+    /// the estimate adds, so content the estimator under-counts is the error
+    /// left: declare the most the model's estimator under-counted measured
+    /// requests, plus a buffer. An estimator off by no more than the unfilled
+    /// share needs no margin. Denser content overflows the window instead,
+    /// and the harness re-sends the request reduced. The reservation
+    /// saturates instead of overflowing.
     #[must_use]
-    pub const fn with_estimate_margin(self, max_output_tokens: u64) -> Self {
-        let margin_tokens = self.context_window_tokens / 4;
+    pub const fn with_estimate_margin(
+        self,
+        max_output_tokens: u64,
+        under_count_percent: u64,
+    ) -> Self {
+        let output_free_tokens = self.context_window_tokens.saturating_sub(max_output_tokens);
+        let filled_permyriad =
+            CALIBRATED_CAPACITY_PERCENT.saturating_mul(100_u64.saturating_add(under_count_percent));
+        let input_tokens = (output_free_tokens / filled_permyriad)
+            .saturating_mul(PERMYRIAD)
+            .saturating_add(
+                (output_free_tokens % filled_permyriad).saturating_mul(PERMYRIAD)
+                    / filled_permyriad,
+            );
+        let margin_tokens = output_free_tokens.saturating_sub(input_tokens);
 
         self.with_reserved_tokens(max_output_tokens.saturating_add(margin_tokens))
     }

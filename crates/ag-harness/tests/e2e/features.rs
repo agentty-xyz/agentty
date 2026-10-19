@@ -1369,6 +1369,169 @@ async fn test_context_overflow_recovery() -> Result<(), DynError> {
 }
 
 // ---------------------------------------------------------------------------
+// Estimate margin near the provider window
+// ---------------------------------------------------------------------------
+
+/// Window, maximum output, tolerated under-count, and fitted estimator
+/// parameters (message t/KB, per message, tool t/KB, request tokens) of
+/// Agentty's declared harness profiles in `ag-agent`.
+type DeclaredProfile = (u64, u64, u64, (u64, u64, u64, u64));
+
+impl Provider {
+    /// Agentty's declared profile of the provider's selected model.
+    fn declared_profile(self) -> DeclaredProfile {
+        match self.model().as_str() {
+            "muse-spark-1.3" => (1_048_576, 131_072, 18, (225, 44, 339, 420)),
+            "qwen3.8-max" => (1_000_000, 131_072, 15, (239, 33, 373, 250)),
+            "qwen-plus" => (1_000_000, 32_768, 16, (236, 24, 372, 70)),
+            "kimi-k3" => (1_048_576, 131_072, 17, (223, 54, 307, 55)),
+            _ => (262_144, 32_768, 17, (224, 25, 312, 0)),
+        }
+    }
+}
+
+/// Appends every Rust source under `directory`, outside build output, to
+/// `files`.
+fn rust_sources(directory: &std::path::Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
+    for entry in std::fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.ends_with("target") {
+            continue;
+        }
+        if path.is_dir() {
+            rust_sources(&path, files)?;
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+/// Reads this repository's Rust sources into a turn under the model's
+/// declared profile until they outgrow its input budget, so the one request
+/// sent to the provider is fitted near the budget, and requires the provider
+/// to accept it within the window less the maximum output. The reported
+/// input tokens over the estimate measure the estimator's error at scale.
+async fn estimate_margin_near_window(provider: Provider) -> Result<String, DynError> {
+    let (window, max_output, under_count, rates) = provider.declared_profile();
+    let profile = ModelProfile::new(window)
+        .with_estimate_margin(max_output, under_count)
+        .with_estimator(
+            HeuristicContextEstimator::DEFAULT
+                .with_messages(rates.0, rates.1)
+                .with_tool_definitions(rates.2, 0)
+                .with_request_tokens(rates.3)
+                .with_output_schema_in_prompt(),
+        );
+    let workspace = tempfile::tempdir()?;
+    let root = workspace.path().canonicalize()?;
+    let init = tokio::process::Command::new(GIT_EXECUTABLE)
+        .args(["init", "--quiet"])
+        .current_dir(&root)
+        .status()
+        .await?;
+    if !init.success() {
+        return Err("git init failed".into());
+    }
+    let mut files = Vec::new();
+    rust_sources(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        &mut files,
+    )?;
+    files.sort();
+    let mut text = String::new();
+    for file in files {
+        text.push_str(&std::fs::read_to_string(file)?);
+    }
+    // A part reads as about 11,000 tokens; parts for a fifth more than the
+    // budget force the fitting to reduce the request.
+    let parts = usize::try_from(profile.input_token_budget())? * 6 / 5 / 11_000 + 1;
+    let mut remaining = text.as_str();
+    for part in 1..=parts {
+        let (chunk, rest) = remaining.split_at(remaining.floor_char_boundary(OVERFLOW_PART_BYTES));
+        remaining = rest;
+        std::fs::write(
+            root.join(format!("part{part}.txt")),
+            format!("The code word of part {part} is quill-{part}{part}.\n{chunk}\n"),
+        )?;
+    }
+    let mut registry = ModelRegistry::new();
+    registry.register(
+        ExecutionIdentity::new(provider.name(), "margin-1")?,
+        ScriptedPartReads {
+            inner: provider.client()?,
+            reads: parts,
+            served: std::sync::atomic::AtomicUsize::new(0),
+        },
+        capabilities(profile),
+    )?;
+    let harness = Harness::from_registry(&registry, provider.name())?
+        .repository(Repository::new(&root, GIT_EXECUTABLE)?)
+        .allow(Tool::Read);
+    provider.pace().await;
+    let outcome = harness
+        .run_once(
+            format!(
+                "Read part1.txt through part{parts}.txt with the read tool, one file per call. \
+                 Each file opens with a sentence naming its code word. After the last read, set \
+                 answer to the code word of part{parts}.txt."
+            ),
+            answer_schema()?,
+        )
+        .await?;
+    let report = outcome.report();
+    let sent = report
+        .model_requests()
+        .iter()
+        .filter_map(|request| {
+            let tokens = request
+                .completion()
+                .and_then(|completion| completion.usage())
+                .and_then(|usage| usage.input_tokens())?;
+
+            Some((request.estimated_weight(), request.budget_weight(), tokens))
+        })
+        .collect::<Vec<_>>();
+    let limit = window - max_output;
+    let summary = format!(
+        "model={} parts={parts} input_budget={} recoveries={} \
+         sent(estimated,budget,input)={sent:?} limit={limit} answer={}",
+        provider.model(),
+        profile.input_token_budget(),
+        report.context_overflow_recoveries(),
+        answer(outcome.output())
+    );
+    if sent.iter().any(|(_, _, tokens)| *tokens > limit) {
+        return Err(format!("a request exceeded the window less output: {summary}").into());
+    }
+    if answer(outcome.output()) != format!("quill-{parts}{parts}") {
+        return Err(format!("wrong code word: {summary}").into());
+    }
+
+    Ok(summary)
+}
+
+#[tokio::test]
+#[ignore = "requires live provider credentials"]
+async fn test_estimate_margin_near_window() -> Result<(), DynError> {
+    let mut report = Report::new("estimate_margin_near_window");
+    for round in 1..=rounds() {
+        for provider in Provider::selected() {
+            let started = Instant::now();
+            report.record(
+                provider.name(),
+                round,
+                estimate_margin_near_window(provider).await,
+                started,
+            );
+        }
+    }
+
+    report.finish()
+}
+
+// ---------------------------------------------------------------------------
 // Sandboxed Bash (#662), executor contract (#674, #675)
 // ---------------------------------------------------------------------------
 
