@@ -18,6 +18,13 @@ pub(crate) struct Options {
     before: Vec<PathBuf>,
 }
 
+/// Prints a JSON comparison or fails when the evidence is incomplete or mixed.
+pub(crate) fn run(options: &Options) -> Result<(), String> {
+    let report = compare(options, &FileReader)?;
+
+    write_report(&report, &mut io::stdout().lock())
+}
+
 #[derive(Deserialize)]
 struct Metadata {
     environment: Value,
@@ -54,17 +61,6 @@ impl Reader for FileReader {
     fn read(&self, path: &Path) -> Result<String, String> {
         std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))
     }
-}
-
-/// Prints a JSON comparison or fails when the evidence is incomplete or mixed.
-pub(crate) fn run(options: &Options) -> Result<(), String> {
-    let report = compare(options, &FileReader)?;
-
-    write_report(&report, &mut io::stdout().lock())
-}
-
-fn write_report(report: &Value, writer: &mut impl Write) -> Result<(), String> {
-    serde_json::to_writer_pretty(writer, report).map_err(|error| error.to_string())
 }
 
 fn compare(options: &Options, reader: &impl Reader) -> Result<Value, String> {
@@ -127,6 +123,10 @@ fn compare(options: &Options, reader: &impl Reader) -> Result<Value, String> {
         "metrics": metrics,
         "limits": "Hook time excludes setup and queueing. Summed test process time is not wall time. Exact cache miss does not imply cold. Ranges overlap unless demonstrated otherwise; these are descriptive samples, not a causal or workspace-wide speed estimate.",
     }))
+}
+
+fn write_report(report: &Value, writer: &mut impl Write) -> Result<(), String> {
+    serde_json::to_writer_pretty(writer, report).map_err(|error| error.to_string())
 }
 
 fn load(paths: &[PathBuf], reader: &impl Reader) -> Result<Vec<Sample>, String> {
