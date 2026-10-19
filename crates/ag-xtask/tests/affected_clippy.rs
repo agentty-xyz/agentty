@@ -111,6 +111,41 @@ fn package_changes_lint_owners_and_dependents_and_root_files_lint_the_workspace(
 }
 
 #[test]
+fn coordinated_packages_override_catalog_filenames_and_reject_invalid_selections()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new(None)?;
+    let files = ["Cargo.toml", "crates/other/src/lib.rs"];
+
+    // Act
+    let selected = fixture
+        .command(&files, 0)?
+        .env("AGENTTY_CLIPPY_PACKAGES", " core\t\n")
+        .output()?;
+    let empty = fixture
+        .command(&files, 0)?
+        .env("AGENTTY_CLIPPY_PACKAGES", " \t")
+        .output()?;
+    let unknown = fixture
+        .command(&files, 0)?
+        .env("AGENTTY_CLIPPY_PACKAGES", "missing")
+        .output()?;
+
+    // Assert
+    assert!(selected.status.success());
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stdout).contains("must contain package names"));
+    assert!(!unknown.status.success());
+    assert!(String::from_utf8_lossy(&unknown.stdout).contains("Unknown workspace package"));
+    assert_eq!(
+        fixture.calls()?,
+        ["clippy -q --locked --all-targets --all-features -p app -p core -- -D warnings"]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn clippy_failures_and_unreadable_metadata_fail_the_command() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new(None)?;

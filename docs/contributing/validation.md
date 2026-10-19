@@ -47,8 +47,12 @@ AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
 ```
 
 The coordinator executes `clippy` and unrestricted `test-focused` selections through
-`prek`, holding an OS lock in Cargo's effective target directory, resolved from metadata
-and pinned for each check. Cargo configuration and target-directory environment
+`prek`. Its Clippy subprocess receives the affected package selection in
+`AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
+selection. Ordinary Clippy hook invocations continue to select owners and dependents
+from their changed files, with root configuration changes selecting the whole workspace.
+The coordinator holds an OS lock in Cargo's effective target directory, resolved from
+metadata and pinned for each check. Cargo configuration and target-directory environment
 overrides are honored. The check subprocesses clear `SKIP` and `PREK_SKIP` so requested
 checks execute before their successes are recorded. Other invocations of the coordinator
 using that directory wait; direct Cargo commands still use Cargo's own build lock. Keep
