@@ -99,6 +99,12 @@ async fn test_{name}() -> Result<(), Box<dyn std::error::Error>> {
 - **`.run(build_scenario, assert).await`** — execute the scenario, await the boxed async
   assertion closure, and generate the GIF when recording mode is enabled.
 
+VHS replay sets `VHS_REPLAY_ENV_VAR` so command fixtures can use recording delays where
+the PTY proof uses Rust-controlled gates. If the proof mutates fixture state, write a
+reset script named `VHS_SETUP_SCRIPT_NAME` under `BuilderEnv::stub_bin`. The launcher
+runs it from the proof workdir before starting replay and stops if it fails. Restore
+only that scenario's isolated fixture state.
+
 #### Common `Journey` helpers
 
 Reuse the shared journey builders from `common.rs` instead of repeating step sequences:

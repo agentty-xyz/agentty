@@ -1,14 +1,18 @@
 //! Review request publication, status, and cleanup.
 
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
+use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::session::{
     ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
 };
 use agentty::domain::session_message::SessionMessageKind;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{ConnectOptions, Connection};
 use testty::assertion;
 use testty::region::Region;
 use testty::scenario::Scenario;
@@ -19,22 +23,59 @@ use super::fixture::{
     seed_review_worktree_with_diff, seed_sessions_tab,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{
+    BuilderEnv, FeatureTest, ReleaseGate, SessionSeed, VHS_REPLAY_ENV_VAR, VHS_SETUP_SCRIPT_NAME,
+};
 
 /// Review-request notice body used by the timeline-order regression.
 const REVIEW_REQUEST_TIMELINE_NOTICE_TEXT: &str =
     "Created PR https://github.com/agentty-xyz/agentty/pull/42";
 
-/// Seeds a review-ready worktree whose delayed successful publish keeps the
-/// manual task active beyond the upstream-ref refresh observed by the feature
-/// scenario.
-async fn seed_slow_successful_review_request_publish(
+/// Holds publish steps until the scenario releases them, keeping the create
+/// command active while the UI refreshes its persisted upstream reference.
+async fn seed_gated_review_request_publish(
     env: &BuilderEnv,
+    hold_push: &str,
+    hold_create: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
-    seed_successful_review_request_publish(env, 3, 15, "wt/review-s", false)
+    seed_successful_review_request_publish(env, hold_push, hold_create, "wt/review-s", false)?;
+
+    // Replay must start before publication, including the database's initial
+    // tab, upstream reference, transcript, and review-request state.
+    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+    let snapshot = env.agentty_root.join("before-publish.sqlite");
+    let mut connection = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .connect()
+        .await?;
+    sqlx::query("VACUUM INTO ?")
+        .bind(snapshot.to_string_lossy().as_ref())
+        .execute(&mut connection)
+        .await?;
+    connection.close().await?;
+    let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    std::fs::write(
+        env.stub_bin.join(VHS_SETUP_SCRIPT_NAME),
+        format!(
+            "set -e\nrm -f {db}-wal {db}-shm {marker}\ncp {snapshot} {db}\n",
+            db = quote(&db_path),
+            marker = quote(&env.stub_bin.join("gh.created")),
+            snapshot = quote(&snapshot),
+        ),
+    )?;
+
+    Ok(())
+}
+
+/// Uses a scenario gate for PTY proof and a bounded delay for VHS replay.
+fn gate_or_recording_delay(gate: &ReleaseGate, seconds: u64) -> String {
+    format!(
+        "if [ \"${VHS_REPLAY_ENV_VAR}\" = 1 ]; then sleep {seconds}; else {}; fi",
+        gate.shell_wait(),
+    )
 }
 
 /// Seeds a review-ready session whose chosen review branch was deleted from
@@ -45,7 +86,7 @@ async fn seed_review_request_publish_with_deleted_remote_branch(
     seed_review_ready_session(env).await?;
     seed_review_worktree_with_diff(env)?;
 
-    seed_successful_review_request_publish(env, 0, 0, "review/deleted", true)
+    seed_successful_review_request_publish(env, ":", ":", "review/deleted", true)
 }
 
 /// Seeds a live focused review that completes before a delayed review-request
@@ -53,15 +94,15 @@ async fn seed_review_request_publish_with_deleted_remote_branch(
 async fn seed_review_request_timeline(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_with_resolved_decision(env).await?;
 
-    seed_successful_review_request_publish(env, 0, 0, "wt/review-s", false)
+    seed_successful_review_request_publish(env, ":", ":", "wt/review-s", false)
 }
 
 /// Configures the review-ready worktree and forge stubs for one successful
-/// review-request publish with deterministic command delays.
+/// review-request publish with explicit command barriers.
 fn seed_successful_review_request_publish(
     env: &BuilderEnv,
-    push_delay_seconds: u64,
-    create_delay_seconds: u64,
+    hold_push: &str,
+    hold_create: &str,
     review_branch_name: &str,
     remote_branch_was_deleted: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -104,7 +145,7 @@ fi
     let script = format!(
         r#"#!/bin/sh
 {remote_lookup}if [ "$1" = "push" ]; then
-{push_lease_guard}  sleep {push_delay_seconds}
+{push_lease_guard}  {hold_push}
   case " $* " in
     *" --porcelain "*) printf '*\tHEAD:refs/heads/{review_branch_name}\t[new branch]\n' ;;
   esac
@@ -133,7 +174,7 @@ case "$*" in
     fi
     ;;
   *"pr create"*)
-    sleep __CREATE_DELAY_SECONDS__
+    __HOLD_CREATE__
     touch "$marker_path"
     ;;
   *"mergeStateStatus"*)
@@ -145,10 +186,7 @@ case "$*" in
     ;;
 esac
 "#
-    .replace(
-        "__CREATE_DELAY_SECONDS__",
-        &create_delay_seconds.to_string(),
-    )
+    .replace("__HOLD_CREATE__", hold_create)
     .replace("__REVIEW_BRANCH_NAME__", review_branch_name);
     std::fs::write(&gh_path, gh_script)?;
     #[cfg(unix)]
@@ -543,7 +581,13 @@ async fn review_request_publish_recreates_deleted_remote_branch() -> E2eResult {
 /// session chat while the push runs in the background.
 #[tokio::test]
 async fn review_request_publish_runs_in_background() -> E2eResult {
-    // Arrange, Act, Assert
+    // Arrange
+    let push = ReleaseGate::new()?;
+    let create = ReleaseGate::new()?;
+    // VHS reuses these fixtures after the PTY proof has released both gates.
+    // Keep its recording cadence independent of the proof's callbacks.
+    let hold_push = gate_or_recording_delay(&push, 3);
+    let hold_create = gate_or_recording_delay(&create, 15);
     FeatureTest::new("review_request_background_publish")
         .with_git()
         .zola(
@@ -551,11 +595,14 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
             "Publish a review request in the background and receive its link in session chat.",
             41,
         )
-        .setup(|env| {
-            Box::pin(async move { seed_slow_successful_review_request_publish(env).await })
+        .setup(move |env| {
+            Box::pin(async move {
+                seed_gated_review_request_publish(env, &hold_push, &hold_create).await
+            })
         })
         .run(
-            |scenario| {
+            move |scenario| {
+                // Act
                 scenario
                     .compose(&common::wait_for_agentty_startup())
                     .compose(&common::switch_to_tab("Sessions"))
@@ -575,11 +622,14 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                         "Session help remains available while publishing",
                     )
                     .press_key("q")
+                    .compose(&push.release())
+                    .wait_for_text("origin/wt/review-s", 10000)
                     .viewing_pause_ms(5500)
                     .capture_labeled(
                         "background_publish_waiting_for_url",
                         "Review-request publish progress remains until its URL is ready",
                     )
+                    .compose(&create.release())
                     .wait_for_text("[Review Request] Created PR", 20000)
                     .capture_labeled(
                         "background_publish_finished",
@@ -588,6 +638,7 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
+                    // Assert
                     let loading_frame = common::frame_from_capture(&report.captures[0]);
                     let loading_full = Region::full(loading_frame.cols(), loading_frame.rows());
                     assertion::assert_text_in_region(
@@ -606,6 +657,11 @@ async fn review_request_publish_runs_in_background() -> E2eResult {
                     assertion::assert_text_in_region(
                         &waiting_frame,
                         "Publishing review request...",
+                        &waiting_full,
+                    );
+                    assertion::assert_text_in_region(
+                        &waiting_frame,
+                        "origin/wt/review-s",
                         &waiting_full,
                     );
 
