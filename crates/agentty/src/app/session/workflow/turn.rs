@@ -7,6 +7,7 @@ use ag_contracts::{
     AgentError, AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnEvent,
     TurnRequest, TurnResult,
 };
+use ag_session::ResolvedEnv;
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
@@ -71,21 +72,17 @@ impl MainCheckoutSnapshot {
     /// Captures the main repository checkout status before a provider turn.
     ///
     /// Returns `None` when the shared repository is bare and therefore has no
-    /// main working checkout to snapshot; the session worktree is still
-    /// validated in that case.
+    /// main working checkout to snapshot. The supplied Env has already passed
+    /// session worktree validation, including for bare repositories.
     ///
     /// # Errors
-    /// Returns a workflow error when the session folder is not a valid linked
-    /// worktree or the main-checkout tracked status cannot be read.
-    async fn capture(context: &SessionWorkerContext) -> Result<Option<Self>, SessionError> {
-        let validation = isolation::validate_session_worktree(
-            context.fs_client.as_ref(),
-            context.git_client.as_ref(),
-            &context.folder,
-            &context.session_id,
-        )
-        .await?;
-        let Some(main_repo_root) = validation.main_checkout else {
+    /// Returns a workflow error when main-checkout tracked status cannot be
+    /// read.
+    async fn capture(
+        context: &SessionWorkerContext,
+        env: &ResolvedEnv,
+    ) -> Result<Option<Self>, SessionError> {
+        let Some(main_repo_root) = env.main_checkout.clone() else {
             return Ok(None);
         };
         let tracked_status_output = context
@@ -170,7 +167,7 @@ pub(super) async fn run_channel_turn(
 
     let post_turn_context =
         PostTurnContext::from_worker(context, Arc::clone(&run_client), turn_cancel_token.clone());
-    let main_checkout_snapshot =
+    let workspace =
         match prepare_turn_workspace(context, &mut turn_metadata, &mut prompt, &turn_cancel_token)
             .await
         {
@@ -193,7 +190,7 @@ pub(super) async fn run_channel_turn(
         request_kind,
         replay_transcript,
         &prompt,
-        main_checkout_snapshot.as_ref(),
+        &workspace.env,
     )
     .await
     {
@@ -240,7 +237,7 @@ pub(super) async fn run_channel_turn(
     let activity = consumer.await.unwrap_or_default();
 
     let turn_result =
-        add_main_checkout_warning(context, main_checkout_snapshot.as_ref(), turn_result).await;
+        add_main_checkout_warning(context, workspace.snapshot.as_ref(), turn_result).await;
     let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
@@ -265,14 +262,20 @@ pub(super) async fn run_channel_turn(
     result.map(|_| ())
 }
 
-/// Waits for earlier branch effects, snapshots isolation state, and restores
+/// Validated execution location plus the existing main-checkout warning state.
+struct PreparedTurnWorkspace {
+    env: ResolvedEnv,
+    snapshot: Option<MainCheckoutSnapshot>,
+}
+
+/// Waits for earlier branch effects, resolves the Env, and restores
 /// unfinished review targets before constructing the next agent request.
 async fn prepare_turn_workspace(
     context: &SessionWorkerContext,
     turn_metadata: &mut TurnMetadata,
     prompt: &mut TurnPrompt,
     cancel_token: &CancellationToken,
-) -> Result<Option<MainCheckoutSnapshot>, SessionError> {
+) -> Result<PreparedTurnWorkspace, SessionError> {
     tokio::select! {
         biased;
         () = cancel_token.cancelled() => Err(SessionError::StoppedByUser(
@@ -280,12 +283,22 @@ async fn prepare_turn_workspace(
         )),
         result = async {
             drop(context.branch_operation_lock.lock().await);
-            let snapshot = Span::child("workspace.prepare")
-                .run(MainCheckoutSnapshot::capture(context), |_| Outcome::Failed)
+            let workspace = Span::child("workspace.prepare")
+                .run(async {
+                    let env = isolation::validate_session_worktree(
+                        context.fs_client.as_ref(),
+                        context.git_client.as_ref(),
+                        &context.folder,
+                        &context.session_id,
+                    ).await?;
+                    let snapshot = MainCheckoutSnapshot::capture(context, &env).await?;
+
+                    Ok(PreparedTurnWorkspace { env, snapshot })
+                }, |_: &SessionError| Outcome::Failed)
                 .await?;
             SessionWorkerService::prepare_review_comment_turn(context, turn_metadata, prompt).await?;
 
-            Ok(snapshot)
+            Ok(workspace)
         } => result,
     }
 }
@@ -357,7 +370,7 @@ async fn prepare_turn_request(
     request_kind: AgentRequestKind,
     replay_transcript: Option<String>,
     prompt: &TurnPrompt,
-    main_checkout_snapshot: Option<&MainCheckoutSnapshot>,
+    env: &ResolvedEnv,
 ) -> Result<PreparedTurnRequest, SessionError> {
     Span::child("context.prepare")
         .run(
@@ -376,9 +389,8 @@ async fn prepare_turn_request(
                     request: TurnRequest {
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         continuation,
-                        folder: context.folder.clone(),
-                        main_checkout_root: main_checkout_snapshot
-                            .map(|snapshot| snapshot.main_repo_root.clone()),
+                        folder: env.folder.clone(),
+                        main_checkout_root: env.main_checkout.clone(),
                         model: model.to_string(),
                         permission_mode: settings.permission_mode,
                         personality: settings.personality.prompt,

@@ -1,6 +1,6 @@
 //! Desired outcomes and explicit, single-turn attempts to advance them.
 
-use crate::{DurableMessageVisibility, SessionId};
+use crate::{DurableMessageVisibility, EnvId, SessionId};
 
 /// A desired outcome to persist without admitting an attempt or starting work.
 ///
@@ -59,6 +59,16 @@ pub struct Task {
     pub objective: String,
     /// Conversation and workspace used by every attempt.
     pub session_id: SessionId,
+}
+
+impl Task {
+    /// Returns the shared environment used by this task and all its attempts.
+    ///
+    /// The immutable, persisted session ownership is the environment binding;
+    /// no second record or independently mutable workspace assignment exists.
+    pub fn env_id(&self) -> EnvId {
+        EnvId::SessionWorktree(self.session_id.clone())
+    }
 }
 
 /// One turn and its ordered post-processing, backed by a unique operation.

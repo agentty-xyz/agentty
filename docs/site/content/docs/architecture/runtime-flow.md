@@ -47,6 +47,12 @@ Saved prompts remain recoverable until execution start, transcript persistence, 
 prompt acknowledgment commit together. Failed setup or handoff remains retryable;
 operations that began executing are not automatically replayed.
 
+Before each turn, the host resolves the session's shared local Env after earlier branch
+effects finish. Existing isolation checks validate the worktree and protect the main
+checkout; the resolved folder and main-checkout boundary supply the worker request. The
+[session](@/docs/core-components/durable-components/session.md#execution-environment)
+owns the Env throughout setup and cleanup, including when it has multiple tasks.
+
 Question answers likewise claim the persisted question set before enqueueing a
 continuation. A rejected enqueue restores the claim. Cancellation coordinates setup and
 resource cleanup so a late preparation result cannot revive canceled work.

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use ag_git as git;
+use ag_session::EnvId;
 
 use super::validate_session_worktree;
 use crate::infra::fs;
@@ -37,7 +38,7 @@ async fn validate_session_worktree_returns_main_repo_for_linked_worktree() {
     // Arrange
     let session_folder = PathBuf::from("/tmp/session");
     let repo_root = PathBuf::from("/tmp/project");
-    let fs_client = fs_client_for_validation(session_folder.clone(), repo_root.clone());
+    let fs_client = fs_client_for_validation(PathBuf::from("canonical/session"), repo_root.clone());
     let mut git_client = git::MockGitClient::new();
     git_client
         .expect_detect_git_info()
@@ -56,6 +57,9 @@ async fn validate_session_worktree_returns_main_repo_for_linked_worktree() {
 
     // Assert
     assert_eq!(validation.main_checkout, Some(repo_root));
+    assert_eq!(validation.folder, session_folder);
+    assert_eq!(validation.branch, "wt/session");
+    assert_eq!(validation.id, EnvId::SessionWorktree("session".into()));
 }
 
 #[tokio::test]
@@ -83,6 +87,9 @@ async fn validate_session_worktree_accepts_bare_shared_repo_without_main_checkou
 
     // Assert
     assert_eq!(validation.main_checkout, None);
+    assert_eq!(validation.folder, session_folder);
+    assert_eq!(validation.branch, "wt/session");
+    assert_eq!(validation.id, EnvId::SessionWorktree("session".into()));
 }
 
 #[tokio::test]

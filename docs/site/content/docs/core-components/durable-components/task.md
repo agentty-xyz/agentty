@@ -10,6 +10,10 @@ conversation and workspace context. Each task attempt runs one turn and its orde
 post-processing through a unique
 [operation](@/docs/core-components/durable-components/operation.md).
 
+`Task::env_id()` identifies the session-owned
+[execution environment](@/docs/core-components/durable-components/session.md#execution-environment)
+shared by all its attempts. Task completion does not release that workspace.
+
 ## Planning and Querying
 
 Use `SessionService::create_task` with a `CreateTaskRequest` to save a nonempty
