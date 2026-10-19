@@ -122,6 +122,7 @@ impl OtlpExport {
     }
 
     fn build(endpoint: &str, service: Service) -> Result<Self, OtlpError> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let exporter = SpanExporter::builder()
             .with_http()
             .with_protocol(Protocol::HttpBinary)

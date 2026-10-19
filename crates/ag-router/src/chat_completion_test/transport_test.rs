@@ -177,6 +177,7 @@ async fn retries_rate_limit_response_before_decoding_success() {
             }
         }
     });
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),
@@ -242,6 +243,7 @@ async fn retries_transport_failure_before_decoding_success() {
         )
         .expect("success response should be written");
     });
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),
@@ -291,6 +293,7 @@ async fn timed_out_request_is_reported_without_a_retry() {
 
         accepted.len()
     });
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),
@@ -361,6 +364,7 @@ async fn retains_http_status_when_error_body_read_fails() {
                 .expect("truncated-response server should write the response");
         }
     });
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),
@@ -423,6 +427,7 @@ async fn reports_error_body_read_failure_without_partial_body() {
             )
             .expect("server should write headers");
     });
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let client = ReqwestChatCompletionClient {
         client: reqwest::Client::new(),
         max_retry_delay: Duration::from_millis(5),

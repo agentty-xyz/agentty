@@ -408,6 +408,7 @@ impl ChatCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
     let stdin_is_terminal = io::stdin().is_terminal();
     let stdout_is_terminal = io::stdout().is_terminal();
