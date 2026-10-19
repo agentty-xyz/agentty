@@ -15,13 +15,15 @@ directly to their existing handlers.
 
 The gateway accepts session creation, prepared terminal prompts, ordinary and durable
 messages, question answers, cancellation, staged starts, merge, and review publication.
-Session reads remain separate queries.
+It also accepts [task](@/docs/core-components/durable-components/task.md) creation,
+attempt submission, and explicit completion. Session and task reads remain separate
+queries.
 
 Each request carries a fresh command ID and an initiator: terminal or session API.
-Durable messages and review publication also carry an operation correlation. The command
-ID identifies one admission attempt; the durable operation ID retains its existing
-deduplication semantics. Initiator metadata records provenance rather than granting
-permissions.
+Durable messages, task attempts, and review publication also carry an operation
+correlation. The command ID identifies one admission attempt; the durable operation ID
+retains its existing deduplication semantics. Initiator metadata records provenance
+rather than granting permissions.
 
 ## Delivery and Acknowledgement
 

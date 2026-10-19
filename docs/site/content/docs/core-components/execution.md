@@ -61,6 +61,9 @@ abandoned runs rather than replaying potentially mutating requests.
 
 ### Execution Policy
 
+For per-turn settings and their resolution timing, see
+[Turn preparation](@/docs/architecture/runtime-flow.md#headless-execution-ownership).
+
 `ag-worker::RuntimeConfig` owns the configured subagent, built-in tool, and MCP policy
 for each harness. Hosts use `with_execution_policy` when composing workers. Each worker
 captures its configuration and replaces the request's `ExecutionPolicy` before runtime
