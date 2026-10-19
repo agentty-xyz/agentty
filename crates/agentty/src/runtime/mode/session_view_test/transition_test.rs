@@ -4,10 +4,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mockall::predicate::eq;
 
 use super::super::{
-    ViewActionState, ViewContext, ViewPendingUpdate, ViewSessionSnapshot, confirmation_view_mode,
-    end_in_progress_turn, handle_primary_view_key, open_view_help_overlay,
-    open_worktree_for_view_session, show_diff_for_view_session, view_context,
-    view_session_snapshot,
+    ViewActionState, ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot,
+    confirmation_view_mode, end_in_progress_turn, handle_primary_view_key, handle_view_key,
+    open_view_help_overlay, open_worktree_for_view_session, show_diff_for_view_session,
+    view_context, view_session_snapshot,
 };
 use super::support::{
     apply_pending_session_diff, attach_open_review_request, handle, new_test_app_with_session,
@@ -20,7 +20,7 @@ use crate::presentation::app_mode::{
 };
 use crate::presentation::help_action::ViewSessionState;
 use crate::runtime::EventResult;
-use crate::test_support::{SessionFixtureBuilder, session_manager_with_sessions};
+use crate::test_support::{SessionFixtureBuilder, new_test_app, session_manager_with_sessions};
 
 #[test]
 fn test_view_context_returns_none_for_non_view_mode() {
@@ -208,6 +208,48 @@ fn test_open_view_help_overlay_preserves_view_context() {
             },
             scroll_offset: 0,
         } if session_id_in_mode == &session_id
+    ));
+}
+
+#[tokio::test]
+async fn question_mark_dispatches_to_view_help() {
+    // Arrange
+    let (mut app, _base_dir) = new_test_app().await;
+    let session = session_fixture(Status::Review, false);
+    let session_id = session.id.clone();
+    *app.sessions = session_manager_with_sessions(vec![session]);
+    app.mode = AppMode::View {
+        session_id: session_id.clone(),
+        scroll_offset: Some(3),
+    };
+    let context = view_context(&mut app).expect("expected view context");
+    let snapshot = view_session_snapshot(&app, &context).expect("expected session snapshot");
+    let mut pending_update = ViewPendingUpdate::from_context(&context);
+
+    // Act
+    let result = handle_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        ViewKeyContext {
+            context: &context,
+            session_snapshot: &snapshot,
+        },
+        &mut pending_update,
+    )
+    .await;
+
+    // Assert
+    assert!(!result);
+    assert!(matches!(
+        app.mode,
+        AppMode::Help {
+            context: HelpContext::View {
+                session_id: ref help_session_id,
+                scroll_offset: Some(3),
+                ..
+            },
+            ..
+        } if help_session_id == &session_id.to_string()
     ));
 }
 
