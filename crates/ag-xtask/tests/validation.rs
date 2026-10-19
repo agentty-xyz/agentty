@@ -289,6 +289,47 @@ fn inherited_skip_variables_cannot_skip_checks_or_create_unearned_successes()
 }
 
 #[test]
+fn cargo_parent_context_does_not_leak_into_cataloged_checks() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new()?;
+    fs::write(
+        fixture.directory.path().join("prek"),
+        r#"#!/bin/sh
+if [ "$1" = --version ]; then
+    echo prek-version
+else
+    printf '%s\n' "${CARGO_MANIFEST_DIR-unset}" "${CARGO_MANIFEST_PATH-unset}" \
+        "${CARGO_MANIFEST_LINKS-unset}" "${CARGO_PKG_NAME-unset}" \
+        "${CARGO_PKG_VERSION_MAJOR-unset}" "$AGENTTY_KEEP_ENV" "$CARGO_HOME" >> environment
+    printf '%s|%s|%s\n' "$*" "$AGENTTY_TEST_PACKAGES" "$AGENTTY_TEST_FILTER" >> calls
+fi
+"#,
+    )?;
+
+    // Act
+    let output = fixture
+        .command(&[], 0)
+        .env("CARGO_MANIFEST_DIR", "/cargo-parent/ag-xtask")
+        .env("CARGO_MANIFEST_PATH", "/cargo-parent/ag-xtask/Cargo.toml")
+        .env("CARGO_MANIFEST_LINKS", "parent-links")
+        .env("CARGO_PKG_NAME", "ag-xtask")
+        .env("CARGO_PKG_VERSION_MAJOR", "0")
+        .env("AGENTTY_KEEP_ENV", "preserved")
+        .env("CARGO_HOME", "unchanged-cache")
+        .output()?;
+
+    // Assert
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(fixture.directory.path().join("environment"))?,
+        "unset\nunset\nunset\nunset\nunset\npreserved\nunchanged-cache\n".repeat(2)
+    );
+    assert_eq!(fixture.calls()?.len(), 2);
+
+    Ok(())
+}
+
+#[test]
 fn custom_targets_and_linked_outputs_never_invalidate_source_fingerprints()
 -> Result<(), Box<dyn Error>> {
     // Arrange

@@ -558,7 +558,7 @@ impl Host for ProcessHost {
             .map(|package| format!("package(={package})"))
             .collect::<Vec<_>>()
             .join(" or ");
-        let mut command = Command::new("prek");
+        let mut command = crate::cargo_environment::command("prek");
         command
             .args(["run", &hook.id, "--all-files", "--hook-stage", stage])
             .env_remove("SKIP")
