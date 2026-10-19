@@ -2,3 +2,19 @@
 # Use the optional compiler cache when sccache is installed.
 rustc-wrapper = ".cargo/rustc-wrapper.sh"
 # Use Cargo's CPU-based default; set CARGO_BUILD_JOBS for concurrent sessions.
+
+# The pinned nightly toolchain allows these unstable build-speed options.
+[unstable]
+feature-unification = true
+profile-rustflags = true
+
+# Build dependencies with the whole workspace's features, so switching between
+# `-p` selections reuses them. Postsubmit source tests switch back to `selected`
+# to catch packages that rely on features only another member enables.
+[resolver]
+feature-unification = "workspace"
+
+# Type-check and borrow-check each crate on several threads. Profile flags are
+# added to `RUSTFLAGS`, so coverage hooks that set it keep this option.
+[profile.dev]
+rustflags = ["-Zthreads=4"]
