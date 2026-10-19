@@ -1,0 +1,25 @@
+name: Test timing provenance
+description: Clear old reports before a hook and retain only that invocation's results.
+inputs:
+  phase:
+    description: prepare before the hook, finish afterwards.
+    required: true
+  suite:
+    description: Stable suite identifier, unique within the job.
+    required: true
+  build-directory:
+    description: Cargo build directory relative to the workspace.
+    default: target
+  outcome:
+    description: Actual hook step outcome, including failure or skipped.
+    default: unknown
+  exact-cache-hit:
+    description: Raw rust-cache cache-hit output; false does not imply a cold build.
+  container:
+    description: Pinned container image when the job uses one.
+outputs:
+  directory:
+    description: Directory containing this suite's metadata and available reports.
+runs:
+  using: node24
+  main: index.mjs

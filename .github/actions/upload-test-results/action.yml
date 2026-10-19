@@ -3,23 +3,34 @@ description: Retain nextest execution timings and Cargo compilation timings.
 
 inputs:
   name:
-    description: Unique artifact name for the test job.
+    description: Suite identifier used by the matching preparation step.
     required: true
   build-directory:
     description: Cargo target directory containing the compilation timing report.
     required: false
     default: target
+  outcome:
+    description: Outcome of the measured hook step.
+    required: true
 
 runs:
   using: composite
   steps:
+    - name: Finalize fresh test results
+      id: results
+      if: ${{ always() }}
+      uses: $/.github/actions/test-timing
+      with:
+        phase: finish
+        suite: ${{ inputs.name }}
+        build-directory: ${{ inputs.build-directory }}
+        outcome: ${{ inputs.outcome }}
+
     - name: Upload test and compilation reports
       if: ${{ always() }}
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: ${{ inputs.name }}
-        path: |
-          target/nextest/ci/junit.xml
-          ${{ inputs.build-directory }}/cargo-timings/cargo-timing.html
-        if-no-files-found: ignore
+        name: ${{ inputs.name }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+        path: ${{ steps.results.outputs.directory }}
+        if-no-files-found: error
         retention-days: 14

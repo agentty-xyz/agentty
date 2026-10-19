@@ -28,6 +28,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Rust and prek
+        id: rust-setup
         uses: $/.github/actions/setup-rust-prek
         with:
           cargo-llvm-cov: "true"
@@ -39,7 +40,15 @@ jobs:
         run: |
           uname -a
           rustc --version
+      - name: Prepare native sandbox timing reports
+        uses: $/.github/actions/test-timing
+        with:
+          phase: prepare
+          suite: native-sandbox-test-results-${{ matrix.os }}
+          build-directory: target/llvm-cov-target
+          exact-cache-hit: ${{ steps.rust-setup.outputs.exact-cache-hit }}
       - name: Native sandbox public contract and launcher coverage
+        id: sandbox-tests
         run: prek run coverage-ag-harness-sandbox --all-files --hook-stage manual
       - name: Retain native sandbox test timings
         if: ${{ always() }}
@@ -47,3 +56,4 @@ jobs:
         with:
           name: native-sandbox-test-results-${{ matrix.os }}
           build-directory: target/llvm-cov-target
+          outcome: ${{ steps.sandbox-tests.outcome }}

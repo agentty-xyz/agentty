@@ -50,6 +50,13 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [manual]
+      - id: test-timing-action
+        name: test timing artifact lifecycle
+        description: Verify artifact freshness and provenance with complete JavaScript line coverage.
+        entry: node --test --experimental-test-coverage --test-coverage-lines=100 --test-coverage-include=.github/actions/test-timing/*.mjs --test-coverage-exclude=**/*.test.mjs .github/actions/test-timing/timing.test.mjs
+        language: system
+        files: ^(\.github/actions/test-timing/|\.pre-commit-config\.yaml$)
+        pass_filenames: false
       - id: clippy-fix
         name: clippy fix
         description: Auto-fix clippy lints across Rust targets when a mechanical fix is available.

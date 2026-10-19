@@ -4,6 +4,7 @@ mod affected_clippy;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;
+mod timing;
 mod validation;
 
 use std::process::ExitCode;
@@ -32,6 +33,8 @@ enum Command {
     /// Validates SQL migration numbering across workspace crates.
     #[command(name = "check-migrations")]
     Migrations,
+    /// Compares repeated CI timing artifacts with matching provenance.
+    CompareTimings(timing::Options),
     /// Runs cataloged checks with package selection and target coordination.
     Validate(validation::Options),
 }
@@ -46,6 +49,7 @@ fn main() -> ExitCode {
         Some(Command::ExecutionBoundary) => check_execution_boundary::run(),
         Some(Command::Instructions) => check_instruction::run(),
         None | Some(Command::Migrations) => check_migration::run(),
+        Some(Command::CompareTimings(options)) => timing::run(&options),
         Some(Command::Validate(options)) => validation::run(options),
     };
 

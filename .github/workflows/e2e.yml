@@ -36,6 +36,7 @@ jobs:
           fi
 
       - name: Restore E2E Rust cache
+        id: rust-cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # This action ignores `key` when `shared-key` is set, so include
@@ -46,7 +47,16 @@ jobs:
           # PRs restore main's cache without uploading competing archives.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Prepare E2E timing reports
+        uses: $/.github/actions/test-timing
+        with:
+          phase: prepare
+          suite: e2e-test-results
+          exact-cache-hit: ${{ steps.rust-cache.outputs.cache-hit }}
+          container: ghcr.io/agentty-xyz/agentty-e2e@sha256:a72f0ec28f53b2746b3b3cd224aaa1e511e555c6a1b5c2bbdfa21e79538e55f4
+
       - name: Run end-to-end feature suite
+        id: e2e-tests
         run: prek run test-agentty-e2e --all-files --hook-stage manual
 
       - name: Retain E2E test timings
@@ -54,3 +64,4 @@ jobs:
         uses: $/.github/actions/upload-test-results
         with:
           name: e2e-test-results
+          outcome: ${{ steps.e2e-tests.outcome }}

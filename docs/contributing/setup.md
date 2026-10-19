@@ -28,6 +28,11 @@ in `.github/actions/setup-native-sandbox/action.yml`. CI tooling is configured i
 `cargo run -p agentty --bin agentty` to launch the application from the workspace.
 Public runtime prerequisites and backend authentication are documented in `README.md`.
 
+Changes to the timing collector under `.github/actions/test-timing/` or the hook catalog
+also run `test-timing-action`, which requires Node.js 24. GitHub-hosted runners provide
+it; the JavaScript action uses the runner's Node.js runtime inside E2E jobs. This is a
+repository tooling requirement, not an application runtime dependency.
+
 ## Build Cache and Parallelism
 
 Install `sccache` to share third-party dependency compilations across worktrees:
