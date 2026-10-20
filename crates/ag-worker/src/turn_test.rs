@@ -17,6 +17,9 @@ use tokio_util::sync::CancellationToken;
 use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
 use crate::{RuntimeConfig, SessionRunClient};
 
+#[path = "task_context_test.rs"]
+mod task_context;
+
 #[tokio::test]
 async fn configured_session_policy_replaces_request_policy_and_survives_repair() {
     // Arrange

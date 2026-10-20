@@ -53,6 +53,13 @@ Commit generation prepares bounded evidence deterministically; primary and fallb
 requests share their budget, including transport repairs. Captured utility ownership
 remains authoritative when an active host phase supplies a trace link.
 
+`SessionRunClient::for_task_context` binds retained provider resources and native
+history to a host-allocated task-context UUID. Session ownership, shared capacity, and
+tracing stay attached to the owning session. Hosts must dispatch through that session's
+serial worker, supply task-only continuation, and clean up each owned context. Ordinary
+chat retains its existing runtime identity. This boundary alone does not enable
+role-aware task submission or apply role permissions.
+
 Caller drop, parent cancellation, or shutdown stops owned execution. Nested scopes
 retain parent cancellation. Cleanup precedes terminal bookkeeping and resource deletion;
 durable admission closures reject late session work. Shutdown has one shared five-second
