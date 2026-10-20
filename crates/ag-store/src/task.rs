@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
+use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
 use crate::{DbError, TimestampSource};
 
 /// Persistence boundary for desired outcomes and immutable attempt identities.
@@ -19,6 +20,31 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
+    /// Loads one consistent snapshot of task-only history and provider state.
+    async fn load_agent_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskAgentHistoryRow>, DbError> {
+        let _ = task_id;
+        Err(TaskAgentStore::invalid(
+            "Host does not support role-aware tasks",
+        ))
+    }
+
+    /// Commits a running, uncanceled attempt's observed response, continuation,
+    /// and usage atomically. Identical repeats do not duplicate usage or rewind
+    /// continuation. This does not settle the operation or accept the task.
+    async fn persist_agent_turn(
+        &self,
+        attempt_id: &str,
+        metadata: &TaskAgentTurnMetadata,
+    ) -> Result<(), DbError> {
+        let _ = (attempt_id, metadata);
+        Err(TaskAgentStore::invalid(
+            "Host does not support role-aware tasks",
+        ))
+    }
+
     /// Atomically assigns an isolated context and admits its first or next
     /// attempt. Legacy attempts cannot acquire an assignment. Repeated
     /// deliveries retain the original assignment, context identity, and
@@ -303,6 +329,30 @@ impl SqliteTaskRepository {
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
+    async fn load_agent_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskAgentHistoryRow>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let history = TaskAgentTurnStore::load(&mut transaction, task_id).await?;
+        transaction.commit().await?;
+
+        Ok(history)
+    }
+
+    async fn persist_agent_turn(
+        &self,
+        attempt_id: &str,
+        metadata: &TaskAgentTurnMetadata,
+    ) -> Result<(), DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn claim_agent_attempt(
         &self,
         session_id: &str,

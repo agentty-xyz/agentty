@@ -74,6 +74,13 @@ history cannot acquire an isolated assignment, and assigned tasks require role-a
 delivery. This persistence support does not yet add a `SessionService` submission path
 or execute roles.
 
+Task-owned history stores each observed response with its producing attempt and keeps
+provider continuation separate from ordinary session chat. Saving a response accounts
+usage once under the task's captured model; repeated saves cannot overwrite output or
+rewind a newer conversation. A response can be available while post-processing is still
+running, so callers must inspect the attempt status before accepting it. History alone
+does not complete a task or enable role execution.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

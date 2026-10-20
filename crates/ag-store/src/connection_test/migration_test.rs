@@ -1,10 +1,75 @@
-use ag_session::{SessionMessageKind, SettingName};
+use ag_session::{
+    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
+    SessionMessageKind, SettingName, SubmitAgentTaskRequest, SubmitTaskRequest,
+    TaskAgentAssignment, TaskAgentInput,
+};
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqlitePoolOptions;
 
 use super::support::insert_session_fixture;
 use crate::connection::Database;
+
+#[tokio::test]
+async fn task_history_migration_preserves_existing_assignments() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    sqlx::raw_sql(
+        "DROP TABLE task_agent_turn; ALTER TABLE task_agent_context DROP COLUMN \
+         provider_conversation_id; ALTER TABLE task_agent_context DROP COLUMN \
+         instruction_conversation_id;",
+    )
+    .execute(database.pool())
+    .await
+    .expect("previous schema");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    insert_session_fixture(&database, "history-session", "main", "Review", project).await;
+    let request = SubmitAgentTaskRequest {
+        assignment: TaskAgentAssignment {
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            definition: BuiltinAgentDefinition::Planner,
+        },
+        attempt_id: "existing-attempt".to_string(),
+        input: TaskAgentInput {
+            accepted_plan: None,
+            clarification: None,
+            user_request: "Plan a change".to_string(),
+        },
+        objective: "A plan".to_string(),
+        task_id: "history-task".to_string(),
+        visibility: DurableMessageVisibility::Visible,
+    };
+    database
+        .tasks()
+        .claim_agent_attempt("history-session", &request, "reply")
+        .await
+        .expect("existing assignment");
+    let original = database
+        .tasks()
+        .load_agent_context("history-task")
+        .await
+        .expect("context")
+        .expect("present");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 94).await;
+    let history = database
+        .tasks()
+        .load_agent_history("history-task")
+        .await
+        .expect("history")
+        .expect("context");
+
+    // Assert
+    assert_eq!(history.context, original);
+    assert_eq!(history.turns.len(), 0);
+    assert_eq!(history.provider_conversation_id, None);
+    assert_eq!(history.instruction_conversation_id, None);
+}
 
 #[tokio::test]
 async fn task_context_migration_preserves_unassigned_task_history() {
@@ -20,12 +85,12 @@ async fn task_context_migration_preserves_unassigned_task_history() {
         .await
         .expect("project");
     insert_session_fixture(&database, "legacy-context", "main", "Review", project).await;
-    let request = ag_session::SubmitTaskRequest {
+    let request = SubmitTaskRequest {
         attempt_id: "legacy-attempt".to_string(),
         message: "ordinary task input".to_string(),
         objective: "existing outcome".to_string(),
         task_id: "legacy-task".to_string(),
-        visibility: ag_session::DurableMessageVisibility::Visible,
+        visibility: DurableMessageVisibility::Visible,
     };
     // Insert the pre-context records directly: current admission also reads
     // the context table, which does not exist in the previous schema.

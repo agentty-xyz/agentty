@@ -16,6 +16,7 @@ mod setting;
 mod status;
 mod task;
 mod task_agent;
+mod task_agent_turn;
 mod timestamp;
 mod usage;
 
@@ -41,6 +42,7 @@ pub use session_preparation::{
 pub use setting::SettingRepository;
 pub use task::TaskRepository;
 pub use task_agent::TaskAgentContextRow;
+pub use task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnRow};
 pub use timestamp::TimestampSource;
 pub use usage::{SessionUsageRow, UsageRepository};
 
