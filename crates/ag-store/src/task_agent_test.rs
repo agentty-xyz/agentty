@@ -1,10 +1,12 @@
 use ag_session::{
-    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentAssignment,
-    TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
+    SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput,
 };
 
-use crate::{Database, SessionMessageRow};
+use crate::SessionMessageRow;
+use crate::test_support::{
+    agent_task_request as request, task_database_fixture as database_fixture,
+};
 
 #[tokio::test]
 async fn role_attempts_keep_one_context_and_preserve_explicit_input() {
@@ -450,44 +452,4 @@ async fn independent_planner_tasks_get_distinct_contexts_and_delete_with_the_ses
             .expect("deleted"),
         None
     );
-}
-
-async fn database_fixture() -> Database {
-    let database = Database::in_memory().await.expect("database");
-    let project = database
-        .projects()
-        .upsert_project("project", None)
-        .await
-        .expect("project");
-    for session in ["session", "other"] {
-        database
-            .sessions()
-            .insert_session(session, "gpt-6.1-sol", "main", "Review", project)
-            .await
-            .expect("session");
-    }
-
-    database
-}
-
-fn request(attempt_id: &str) -> SubmitAgentTaskRequest {
-    SubmitAgentTaskRequest {
-        assignment: TaskAgentAssignment {
-            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Implementer,
-        },
-        attempt_id: attempt_id.to_string(),
-        input: TaskAgentInput {
-            accepted_plan: Some(AcceptedTaskPlan {
-                attempt_id: "accepted-plan-attempt".to_string(),
-                task_id: "accepted-plan-task".to_string(),
-                text: "  Implement exactly this plan.\n".to_string(),
-            }),
-            clarification: Some("Initial guidance".to_string()),
-            user_request: "  Add the requested feature.\n".to_string(),
-        },
-        objective: "Implement the requested feature".to_string(),
-        task_id: "task".to_string(),
-        visibility: DurableMessageVisibility::Visible,
-    }
 }

@@ -64,6 +64,12 @@ conversation identities in the same transaction. Cached SQLite boundary tests co
 isolation from ordinary task delivery, immutable inputs, and rollback. A public on-disk
 contract test verifies identity and delivery checks after reopening.
 
+Task-turn persistence commits response history, provider continuation, and usage in one
+transaction without replacing ordinary conversation state. Boundary tests cover
+cancellation, duplicate and conflicting saves, cross-task isolation, and rollback after
+a usage-write failure. Reopening tests prove durable continuation through the public
+repository API.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

@@ -5,7 +5,7 @@ use ag_session::{
     DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentAssignment,
     TaskAgentInput,
 };
-use ag_store::{DbError, TaskRepository};
+use ag_store::{DbError, TaskAgentTurnMetadata, TaskRepository};
 use async_trait::async_trait;
 
 struct OrdinaryTaskAdapter;
@@ -94,10 +94,28 @@ async fn ordinary_adapter_keeps_its_contract_and_explicitly_rejects_role_tasks()
         .load_agent_context("planner-task")
         .await
         .expect_err("unsupported role context");
+    let history = adapter
+        .load_agent_history("planner-task")
+        .await
+        .expect_err("unsupported role history");
+    let response = adapter
+        .persist_agent_turn(
+            "plan",
+            &TaskAgentTurnMetadata {
+                assistant_message: "observed output".to_string(),
+                harness_turn_report: None,
+                instruction_conversation_id: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                provider_conversation_id: None,
+            },
+        )
+        .await
+        .expect_err("unsupported role response");
 
     // Assert
     assert!(admitted);
-    for error in [claim, lookup, context] {
+    for error in [claim, lookup, context, history, response] {
         assert_eq!(
             error.to_string(),
             "Invalid task agent context: Host does not support role-aware tasks"

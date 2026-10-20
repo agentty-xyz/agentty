@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT assistant_message, input_tokens, output_tokens, provider_conversation_id, instruction_conversation_id, harness_turn_report FROM task_agent_turn WHERE task_attempt_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "assistant_message",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "assistant_message"
+          }
+        }
+      },
+      {
+        "name": "input_tokens",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "input_tokens"
+          }
+        }
+      },
+      {
+        "name": "output_tokens",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "output_tokens"
+          }
+        }
+      },
+      {
+        "name": "provider_conversation_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "instruction_conversation_id",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "instruction_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "harness_turn_report",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "harness_turn_report"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "99b8ea791f45171d427a65357d479f5b833e709825cbd9b5f836ff4a7e0eef1b"
+}

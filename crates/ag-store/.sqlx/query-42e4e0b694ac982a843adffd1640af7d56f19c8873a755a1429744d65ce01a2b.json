@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT provider_conversation_id, instruction_conversation_id FROM task_agent_context WHERE task_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "provider_conversation_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "provider_conversation_id"
+          }
+        }
+      },
+      {
+        "name": "instruction_conversation_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "instruction_conversation_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "42e4e0b694ac982a843adffd1640af7d56f19c8873a755a1429744d65ce01a2b"
+}

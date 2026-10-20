@@ -7,7 +7,7 @@ use ag_session::{
     ReasoningLevel, ResponseStyle, SessionMessageKind, SessionStats, SettingName, SpeedMode,
 };
 use async_trait::async_trait;
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use tracing::warn;
 
 use crate::review::{
@@ -1947,60 +1947,16 @@ WHERE id = ?
             return Err(sqlx::Error::RowNotFound.into());
         }
 
-        if turn_metadata.token_usage_delta.input_tokens != 0
-            || turn_metadata.token_usage_delta.output_tokens != 0
-        {
-            sqlx::query!(
-                r"
-UPDATE session
-SET input_tokens = input_tokens + ?,
-    output_tokens = output_tokens + ?,
-    updated_at = ?
-WHERE id = ?
-",
-                turn_metadata.token_usage_delta.input_tokens.cast_signed(),
-                turn_metadata.token_usage_delta.output_tokens.cast_signed(),
-                now,
-                session_id
-            )
-            .execute(&mut *transaction)
-            .await?;
-
-            sqlx::query!(
-                r"
-INSERT INTO session_usage (
-    session_id, model, created_at, input_tokens, output_tokens, invocation_count
-)
-VALUES (?, ?, ?, ?, ?, 1)
-ON CONFLICT(session_id, model) DO UPDATE SET
-    input_tokens = input_tokens + excluded.input_tokens,
-    output_tokens = output_tokens + excluded.output_tokens,
-    invocation_count = invocation_count + 1
-",
-                session_id,
-                turn_metadata.model.as_str(),
-                now,
-                turn_metadata.token_usage_delta.input_tokens.cast_signed(),
-                turn_metadata.token_usage_delta.output_tokens.cast_signed()
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        if let Some(report) = turn_metadata.harness_turn_report.as_deref() {
-            sqlx::query!(
-                r"
-INSERT INTO harness_turn_report (session_id, model, created_at, report)
-VALUES (?, ?, ?, ?)
-",
-                session_id,
-                turn_metadata.model.as_str(),
-                now,
-                report
-            )
-            .execute(&mut *transaction)
-            .await?;
-        }
+        persist_turn_usage(
+            &mut transaction,
+            session_id,
+            turn_metadata.model.as_str(),
+            now,
+            turn_metadata.token_usage_delta.input_tokens,
+            turn_metadata.token_usage_delta.output_tokens,
+            turn_metadata.harness_turn_report.as_deref(),
+        )
+        .await?;
 
         insert_review_comment_resolutions(
             &mut transaction,
@@ -3242,6 +3198,70 @@ impl SessionJoinRow {
 
         (metadata, detail)
     }
+}
+
+/// Records shared session usage without replacing any conversation state.
+pub(crate) async fn persist_turn_usage(
+    connection: &mut SqliteConnection,
+    session_id: &str,
+    model: &str,
+    now: i64,
+    input_tokens: u64,
+    output_tokens: u64,
+    harness_report: Option<&str>,
+) -> Result<(), DbError> {
+    if input_tokens != 0 || output_tokens != 0 {
+        sqlx::query!(
+            r"
+UPDATE session
+SET input_tokens = input_tokens + ?,
+    output_tokens = output_tokens + ?,
+    updated_at = ?
+WHERE id = ?
+",
+            input_tokens.cast_signed(),
+            output_tokens.cast_signed(),
+            now,
+            session_id
+        )
+        .execute(&mut *connection)
+        .await?;
+        sqlx::query!(
+            r"
+INSERT INTO session_usage (
+    session_id, model, created_at, input_tokens, output_tokens, invocation_count
+)
+VALUES (?, ?, ?, ?, ?, 1)
+ON CONFLICT(session_id, model) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    invocation_count = invocation_count + 1
+",
+            session_id,
+            model,
+            now,
+            input_tokens.cast_signed(),
+            output_tokens.cast_signed()
+        )
+        .execute(&mut *connection)
+        .await?;
+    }
+    if let Some(report) = harness_report {
+        sqlx::query!(
+            r"
+INSERT INTO harness_turn_report (session_id, model, created_at, report)
+VALUES (?, ?, ?, ?)
+",
+            session_id,
+            model,
+            now,
+            report
+        )
+        .execute(connection)
+        .await?;
+    }
+
+    Ok(())
 }
 
 /// Aliased nullable `session_review_request` columns loaded through a joined

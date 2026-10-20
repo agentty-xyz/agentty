@@ -1,6 +1,55 @@
 //! Fixtures shared by persistence unit suites.
 
-use ag_session::{ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary};
+use ag_session::{
+    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
+    DurableMessageVisibility, ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary,
+    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+};
+
+use crate::Database;
+
+/// Builds task repositories from the cached migrated schema.
+pub(crate) async fn task_database_fixture() -> Database {
+    let database = Database::in_memory().await.expect("database");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    for session in ["session", "other"] {
+        database
+            .sessions()
+            .insert_session(session, "gpt-6.1-sol", "main", "Review", project)
+            .await
+            .expect("session");
+    }
+
+    database
+}
+
+/// Supplies explicit role input without dispatching a model or accepting a
+/// plan.
+pub(crate) fn agent_task_request(attempt_id: &str) -> SubmitAgentTaskRequest {
+    SubmitAgentTaskRequest {
+        assignment: TaskAgentAssignment {
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            definition: BuiltinAgentDefinition::Implementer,
+        },
+        attempt_id: attempt_id.to_string(),
+        input: TaskAgentInput {
+            accepted_plan: Some(AcceptedTaskPlan {
+                attempt_id: "accepted-plan-attempt".to_string(),
+                task_id: "accepted-plan-task".to_string(),
+                text: "  Implement exactly this plan.\n".to_string(),
+            }),
+            clarification: Some("Initial guidance".to_string()),
+            user_request: "  Add the requested feature.\n".to_string(),
+        },
+        objective: "Implement the requested feature".to_string(),
+        task_id: "task".to_string(),
+        visibility: DurableMessageVisibility::Visible,
+    }
+}
 
 /// Builds the review-request domain fixture shared by repository persistence
 /// tests.

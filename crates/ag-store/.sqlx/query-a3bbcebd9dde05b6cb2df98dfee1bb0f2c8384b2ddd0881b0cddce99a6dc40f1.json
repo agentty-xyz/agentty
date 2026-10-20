@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.session_id, c.model, a.task_id FROM task_attempt a\n               JOIN task t ON t.id = a.task_id\n               JOIN task_agent_context c ON c.task_id = a.task_id WHERE a.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "task_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "task_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a3bbcebd9dde05b6cb2df98dfee1bb0f2c8384b2ddd0881b0cddce99a6dc40f1"
+}
