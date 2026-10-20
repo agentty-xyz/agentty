@@ -82,7 +82,7 @@ repos:
         pass_filenames: false
       - id: clippy
         name: clippy
-        description: Run strict clippy across all targets and features of the packages owning changed files and their dependents; a changed file outside every package lints the whole workspace.
+        description: Lint affected packages across all targets and features, then Agentty's explicit PTY targets when affected; shared files select the workspace.
         entry: cargo run -q --locked -p ag-xtask -- clippy
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
@@ -96,11 +96,12 @@ repos:
         pass_filenames: false
       - id: clippy-agentty-e2e
         name: clippy agentty e2e
-        description: Lint the Agentty PTY suites, which `--all-targets` skips because only `test-agentty-e2e` runs them.
-        entry: cargo clippy -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test showcase -- -D warnings
+        description: Lint Agentty PTY suites when Agentty or its dependencies change; shared files select them conservatively.
+        entry: cargo run -q --locked -p ag-xtask -- clippy --agentty-e2e
         language: system
         files: (^|/)(Cargo\.toml|Cargo\.lock|.*\.rs)$
-        pass_filenames: false
+        require_serial: true
+        stages: [manual]
       - id: test-workspace
         name: cargo nextest workspace
         description: Run workspace source and public API tests with `cargo-nextest`.
@@ -120,7 +121,7 @@ repos:
         stages: [manual]
       - id: test-focused
         name: cargo nextest focused
-        description: Run tests selected by AGENTTY_TEST_FILTER, optionally compiling only AGENTTY_TEST_PACKAGES; Agentty PTY suites run only through `test-agentty-e2e`.
+        description: Run selected tests with the fail-fast local profile, optionally compiling only AGENTTY_TEST_PACKAGES; Agentty PTY suites run only through `test-agentty-e2e`.
         entry: >-
           bash -eu -o pipefail -c 'package_args=(--workspace);
           if [[ -n "${AGENTTY_TEST_PACKAGES:-}" ]]; then
@@ -129,7 +130,7 @@ repos:
           echo "AGENTTY_TEST_PACKAGES must contain package names" >&2; exit 1; fi;
           package_args=();
           for package in "${packages[@]}"; do package_args+=(-p "$package"); done; fi;
-          cargo nextest run --locked --timings --profile ci "${package_args[@]}"
+          cargo nextest run --locked --timings --profile local "${package_args[@]}"
           --no-tests=fail -E "${AGENTTY_TEST_FILTER:?Set AGENTTY_TEST_FILTER to a nextest filterset}"'
         language: system
         always_run: true
@@ -137,7 +138,7 @@ repos:
         stages: [manual]
       - id: validate
         name: coordinated affected-package validation
-        description: Run cataloged clippy and focused tests with build coordination; requires AGENTTY_TEST_PACKAGES.
+        description: Run cataloged clippy and focused tests for changed packages and dependents, with optional explicit package selection and build coordination.
         entry: cargo run --locked -q -p ag-xtask -- validate
         language: system
         always_run: true

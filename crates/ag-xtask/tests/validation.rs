@@ -27,7 +27,8 @@ impl Fixture {
         fs::write(
             path.join(".pre-commit-config.yaml"),
             "default_stages: [pre-commit]\nrepos:\n- hooks:\n  - id: clippy\n  - id: \
-             test-focused\n    stages: [manual]\n  - id: coverage\n    stages: [manual]\n",
+             clippy-agentty-e2e\n    stages: [manual]\n  - id: test-focused\n    stages: \
+             [manual]\n  - id: coverage\n    stages: [manual]\n",
         )?;
         for (name, script) in [
             (
@@ -59,6 +60,76 @@ impl Fixture {
 
     fn run(&self, arguments: &[&str], exit_code: i32) -> std::io::Result<Output> {
         self.run_in_target(arguments, exit_code, "target")
+    }
+
+    fn automatic() -> Result<Self, Box<dyn Error>> {
+        let fixture = Self::new()?;
+        let root = fixture.directory.path().canonicalize()?;
+        fs::remove_file(root.join("git"))?;
+        fs::write(root.join(".gitignore"), "target/\ncalls\n")?;
+        let packages = ["core", "app", "other"].map(|name| {
+            serde_json::json!({
+                "id": name, "name": name,
+                "manifest_path": root.join(name).join("Cargo.toml"),
+                "dependencies": if name == "app" { vec![serde_json::json!({"name":"core", "path":"core"})] } else { vec![] },
+            })
+        });
+        fs::write(
+            root.join("metadata.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "target_directory": "target", "workspace_members": ["core", "app", "other"], "packages": packages,
+            }))?,
+        )?;
+        for package in ["core", "app", "other"] {
+            fs::create_dir(root.join(package))?;
+            fs::write(root.join(package).join("source.rs"), "original")?;
+        }
+        fixture.git(&["init", "-q", "-b", "main"])?;
+        fixture.git(&["add", "."])?;
+        fixture.git(&["commit", "-qm", "base"])?;
+        fixture.git(&["switch", "-qc", "change"])?;
+
+        Ok(fixture)
+    }
+
+    fn git(&self, arguments: &[&str]) -> Result<(), Box<dyn Error>> {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(arguments)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .current_dir(self.directory.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Ok(())
+    }
+
+    fn automatic_command(&self, arguments: &[&str]) -> Result<Command, Box<dyn Error>> {
+        let mut command = self.command(arguments, 0);
+        command
+            .env_remove("AGENTTY_TEST_PACKAGES")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.directory.path().display(),
+                    std::env::var("PATH")?
+                ),
+            );
+
+        Ok(command)
     }
 
     fn run_in_target(
@@ -162,6 +233,122 @@ fi
             .map(str::to_string)
             .collect())
     }
+}
+
+#[test]
+fn automatic_plan_includes_every_git_transition_and_executes_the_selected_contracts()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::automatic()?;
+    let root = fixture.directory.path();
+    fs::write(root.join("core/source.rs"), "committed")?;
+    fixture.git(&["add", "core/source.rs"])?;
+    fixture.git(&["commit", "-qm", "core change"])?;
+
+    // Act
+    let owned = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+
+    // Assert
+    assert!(
+        owned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&owned.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&owned.stdout)?;
+    assert_eq!(plan["packages"], serde_json::json!(["app", "core"]));
+    assert_eq!(plan["hooks"], serde_json::json!(["clippy", "test-focused"]));
+    assert!(!root.join("target").exists());
+    assert!(!root.join("calls").exists());
+
+    // Arrange: rename across packages, stage a change then undo it in the
+    // worktree, delete a tracked file, and add an untracked path containing
+    // a newline.
+    fixture.git(&["mv", "core/source.rs", "app/renamed.rs"])?;
+    fs::write(root.join("app/source.rs"), "staged")?;
+    fixture.git(&["add", "app/source.rs"])?;
+    fs::write(root.join("app/source.rs"), "original")?;
+    fs::remove_file(root.join("other/source.rs"))?;
+    fs::write(root.join("core/new file\n.rs"), "untracked")?;
+
+    // Act
+    let complete = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    let executed = fixture.automatic_command(&["--base", "main"])?.output()?;
+
+    // Assert
+    assert!(complete.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&complete.stdout)?;
+    assert_eq!(
+        plan["changed_files"],
+        serde_json::json!([
+            "app/renamed.rs",
+            "app/source.rs",
+            "core/new file\n.rs",
+            "core/source.rs",
+            "other/source.rs"
+        ])
+    );
+    assert_eq!(
+        plan["packages"],
+        serde_json::json!(["app", "core", "other"])
+    );
+    assert!(
+        executed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    assert_eq!(fixture.calls()?.len(), 2);
+    assert!(fixture.calls()?[0].contains("|app core other|"));
+
+    Ok(())
+}
+
+#[test]
+fn automatic_plan_expands_shared_changes_and_fails_closed_on_invalid_inputs()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::automatic()?;
+    let root = fixture.directory.path();
+
+    // Act
+    let clean = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    let missing = fixture
+        .automatic_command(&["--base", "$(touch unexpected)", "--plan"])?
+        .output()?;
+    fs::write(root.join("Cargo.lock"), "shared configuration")?;
+    let shared = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    fs::remove_file(root.join("Cargo.lock"))?;
+    fs::write(root.join("git"), "#!/bin/sh\nprintf '\\377'\n")?;
+    fs::set_permissions(root.join("git"), fs::Permissions::from_mode(0o755))?;
+    let invalid = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+
+    // Assert
+    assert!(!clean.status.success());
+    assert!(!missing.status.success());
+    assert!(!root.join("unexpected").exists());
+    assert!(shared.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&shared.stdout)?;
+    assert_eq!(
+        plan["packages"],
+        serde_json::json!(["app", "core", "other"])
+    );
+    assert_eq!(
+        plan["reason"],
+        "shared or unowned paths require the whole workspace"
+    );
+    assert!(!invalid.status.success());
+    assert!(!root.join("calls").exists());
+
+    Ok(())
 }
 
 #[test]
@@ -450,29 +637,53 @@ fn targets_cannot_hide_the_workspace_or_tracked_sources() -> Result<(), Box<dyn 
 fn coordinated_clippy_keeps_its_scope_through_the_cataloged_command() -> Result<(), Box<dyn Error>>
 {
     // Arrange
-    let fixture = Fixture::new()?;
-    let path = fixture.directory.path();
     let catalog: Value = serde_yaml_ng::from_str(include_str!("../../../.pre-commit-config.yaml"))?;
-    let hook = catalog["repos"]
-        .as_sequence()
-        .expect("repository list")
-        .iter()
-        .flat_map(|repository| repository["hooks"].as_sequence().expect("hook list"))
-        .find(|hook| hook["id"].as_str() == Some("clippy"))
-        .expect("Clippy hook");
-    let entry = hook["entry"].as_str().expect("Clippy command");
-    fs::write(path.join("clippy-hook"), format!("{entry} \"$@\"\n"))?;
-    fs::write(
-        path.join("prek"),
-        r#"#!/bin/sh
+    let cases = [
+        (
+            "clippy",
+            "core",
+            Some(
+                "clippy -q --locked --all-targets --all-features -p agentty -p core -- -D \
+                 warnings\nclippy -q --locked -p agentty --test e2e --test \
+                 protocol_compliance_e2e --test showcase -- -D warnings\n",
+            ),
+        ),
+        (
+            "clippy-agentty-e2e",
+            "core",
+            Some(
+                "clippy -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test \
+                 showcase -- -D warnings\n",
+            ),
+        ),
+        ("clippy-agentty-e2e", "other", None),
+    ];
+    for (hook_id, packages, expected) in cases {
+        let fixture = Fixture::new()?;
+        let path = fixture.directory.path();
+        let metadata =
+            fs::read_to_string(path.join("metadata.json"))?.replace("\"app\"", "\"agentty\"");
+        fs::write(path.join("metadata.json"), metadata)?;
+        let hook = catalog["repos"]
+            .as_sequence()
+            .expect("repository list")
+            .iter()
+            .flat_map(|repository| repository["hooks"].as_sequence().expect("hook list"))
+            .find(|hook| hook["id"].as_str() == Some(hook_id))
+            .expect("Clippy hook");
+        let entry = hook["entry"].as_str().expect("Clippy command");
+        fs::write(path.join("clippy-hook"), format!("{entry} \"$@\"\n"))?;
+        fs::write(
+            path.join("prek"),
+            r#"#!/bin/sh
 if [ "$1" = --version ]; then echo prek-version; else
     exec sh clippy-hook Cargo.toml crates/other/src/lib.rs
 fi
 "#,
-    )?;
-    fs::write(
-        path.join("cargo"),
-        r#"#!/bin/sh
+        )?;
+        fs::write(
+            path.join("cargo"),
+            r#"#!/bin/sh
 case "$1" in
     metadata) cat metadata.json ;;
     run)
@@ -484,20 +695,22 @@ case "$1" in
     *) echo nextest-version ;;
 esac
 "#,
-    )?;
+        )?;
 
-    // Act
-    let output = fixture
-        .command(&["--hook", "clippy"], 0)
-        .env("AGENTTY_XTASK", env!("CARGO_BIN_EXE_ag-xtask"))
-        .output()?;
+        // Act
+        let output = fixture
+            .command(&["--hook", hook_id], 0)
+            .env("AGENTTY_TEST_PACKAGES", packages)
+            .env("AGENTTY_XTASK", env!("CARGO_BIN_EXE_ag-xtask"))
+            .output()?;
 
-    // Assert
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        fs::read_to_string(path.join("lint-calls"))?,
-        "clippy -q --locked --all-targets --all-features -p app -p core -- -D warnings\n"
-    );
+        // Assert
+        assert!(output.status.success(), "{output:?}");
+        match expected {
+            Some(expected) => assert_eq!(fs::read_to_string(path.join("lint-calls"))?, expected),
+            None => assert!(!path.join("lint-calls").exists()),
+        }
+    }
 
     Ok(())
 }

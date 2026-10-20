@@ -158,8 +158,8 @@ fn registrations_declare_revision_and_per_model_context_profiles() {
         assert_eq!(registration.capabilities().profile, expected, "{model}");
     }
     assert_eq!(FALLBACK_MODEL_PROFILE.context_window_tokens(), 128_000);
-    assert_eq!(FALLBACK_MODEL_PROFILE.reserved_tokens(), 48_384);
-    assert_eq!(FALLBACK_MODEL_PROFILE.input_token_budget(), 79_616);
+    assert_eq!(FALLBACK_MODEL_PROFILE.reserved_tokens(), 49_673);
+    assert_eq!(FALLBACK_MODEL_PROFILE.input_token_budget(), 78_327);
 }
 
 #[tokio::test]

@@ -27,15 +27,18 @@ Pick the first level that can observe the behavior:
 1. **Boundary unit**. Workflow orchestration through injected traits with `mockall`
    mocks or scripted worker facilities. Add an in-memory database only when persisted
    state is the subject, and a real Git repository only when Git behavior is the
-   subject. A full `App` with a session still costs about 0.1 to 1 s under parallel
-   load.
+   subject.
 1. **Crate contract** (`crates/*/tests/`). One test per public contract rule, using the
    crate's public API. Leave argument permutations and error branches to levels 1–2.
 1. **PTY scenario** (`crates/agentty/tests/e2e/`, `FeatureTest`). One scenario per
    user-visible journey, asserting rendering and wiring. Do not re-check ordering,
-   validation, or error permutations already pinned below; scenarios cost 2 to 30 s.
-1. **Manual gates**. `coverage`, `test-workspace`, the full `test-agentty-e2e` suite,
-   and `prompt-evaluation` run in CI or on request, as root `AGENTS.md` defines.
+   validation, or error permutations already pinned below.
+
+## Execution Policy
+
+Test levels describe what a test proves. Local versus CI execution is a separate
+decision: follow root `AGENTS.md` and the required procedure in
+`docs/contributing/validation.md`. A manual gate is not another test level.
 
 ## Before Adding a Test
 
@@ -79,20 +82,17 @@ rule against skipping or deleting a failing test during repair.
 
 ## Fast Local Loop
 
-- Iterate with `test-focused` and a filter for the changed behavior, plus
-  `AGENTTY_TEST_PACKAGES` when only some packages need compiling; see
-  `docs/contributing/validation.md`.
-- Run whole-package suites once for the final state. The `agentty` library suite alone
-  runs for minutes, so do not use it as an inner loop.
+- Use the focused and affected-package recipes in `docs/contributing/validation.md` for
+  iteration and final confirmation; do not duplicate hook implementations here.
 - For a focused PTY scenario, use the command in
   `docs/contributing/feature-test/authoring.md`, not the full E2E hook.
 
 ## Finding Slow Tests
 
-`--profile ci` writes per-test durations to `target/nextest/ci/junit.xml`. Sort tests by
-time, group them by module, and treat any level-1 or level-2 test over 0.5 s as a
-fixture problem first. CI keeps the same report as an artifact for workspace, coverage,
-and E2E jobs.
+`test-focused` writes per-test durations to `target/nextest/local/junit.xml`; CI hooks
+use `target/nextest/ci/junit.xml`. Sort tests by time, group them by module, and treat
+any level-1 or level-2 test over 0.5 s as a fixture problem first. CI keeps the same
+report as an artifact for workspace, coverage, and E2E jobs.
 
 ## Review Checklist
 
