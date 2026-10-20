@@ -79,6 +79,11 @@ impl SessionRunFactory for TestSessionRunFactory {
 }
 
 impl AppServices {
+    /// Injects task receipts independently of the remaining database ports.
+    pub(crate) fn set_task_repository(&mut self, repository: Arc<dyn ag_store::TaskRepository>) {
+        self.repositories = self.repositories.with_task_repository(repository);
+    }
+
     /// Replaces only the Git boundary, retaining utility execution ownership.
     pub(crate) fn set_git_client(&mut self, client: Arc<dyn GitClient>) {
         self.git_client = client;

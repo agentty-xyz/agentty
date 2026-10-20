@@ -6,7 +6,7 @@ use ag_contracts::SessionDiffState;
 use ag_git::MockGitClient;
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageRequest,
-    DurableMessageVisibility, PermissionMode, SessionId, SubmitAgentTaskRequest,
+    DurableMessageVisibility, PermissionMode, SessionId, SubmitAgentTaskRequest, SubmitTaskRequest,
     TaskAgentAssignment, TaskAgentInput, TaskAttemptStatus,
 };
 use ag_worker::MockRunClient;
@@ -251,6 +251,57 @@ async fn old_ordinary_receipts_and_failed_admission_retain_role_ownership() {
     assert!(app.role_review_suppression.contains(&session_id));
     app.discard_deleted_session_diff_state(&session_id);
     assert!(!app.role_review_suppression.contains(&session_id));
+}
+
+#[tokio::test]
+async fn competing_ordinary_task_receipt_retains_role_review_ownership() {
+    // Arrange: a different claimant wins after the preliminary receipt read.
+    let (mut app, _directory, _) = new_git_test_app_with_pool().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    set_session_status_for_test(&mut app, &session_id, Status::Review);
+    app.suppress_agent_task_automation(&session_id)
+        .await
+        .expect("suppress");
+    let request = SubmitTaskRequest {
+        attempt_id: "competing-attempt".to_string(),
+        message: "Ordinary task intent".to_string(),
+        objective: "Finish existing work".to_string(),
+        task_id: "ordinary-task".to_string(),
+        visibility: DurableMessageVisibility::Hidden,
+    };
+    let mut tasks = ag_store::MockTaskRepository::new();
+    let expected_session = session_id.clone();
+    let expected_request = request.clone();
+    tasks
+        .expect_contains_attempt()
+        .times(1)
+        .withf(move |session, request| {
+            session == expected_session.as_str() && request == &expected_request
+        })
+        .returning(|_, _| Ok(false));
+    let expected_session = session_id.clone();
+    let expected_request = request.clone();
+    tasks
+        .expect_claim_attempt()
+        .times(1)
+        .withf(move |session, request, kind| {
+            session == expected_session.as_str() && request == &expected_request && kind == "reply"
+        })
+        .returning(|_, _, _| Ok(false));
+    app.services.set_task_repository(Arc::new(tasks));
+    let service = app.session_service();
+
+    // Act
+    app.drive_session_request(service.submit_task(&session_id, request))
+        .await
+        .expect("competing receipt");
+
+    // Assert: no new worker turn can release role ownership or start a model.
+    assert!(app.role_review_suppression.contains(&session_id));
+    assert!(matches!(
+        app.review_cache.get(&session_id),
+        Some(ReviewCacheEntry::Suppressed)
+    ));
 }
 
 fn install_pending_ordinary_turn(app: &mut App, session_id: &SessionId) -> Arc<Notify> {
