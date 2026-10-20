@@ -145,9 +145,41 @@ The focused hook writes test execution durations to `target/nextest/local/junit.
 hooks use `target/nextest/ci/junit.xml`. Cargo writes compilation timings to the build
 directory's `cargo-timings/cargo-timing.html`. CI retains both as artifacts for 14 days
 for workspace, source, coverage, native sandbox, and E2E jobs, including reports
-available after failures. Compare compilation and execution separately, and distinguish
-cold builds from cache restores before tuning concurrency or partitioning suites. E2E
-builds use a cache isolated by the pinned container and Rust environment.
+available after failures. Each artifact name includes the run ID, attempt, and job. Its
+`metadata.json` identifies the source SHA, suite, runner image, CPU models,
+available-parallelism estimate, toolchain, container, exact cache-hit flag, hook
+outcome, elapsed hook time, and report hashes. Preparation deletes old reports after
+cache restoration; finalization accepts reports only from that prepared invocation.
+Missing preparation or reports remain explicit. Cancelled jobs may have no artifact at
+all.
+
+Download at least three samples per revision and compare matching suites and
+environments:
+
+```sh
+cargo run --locked -q -p ag-xtask -- compare-timings \
+  --before evidence/before/*/metadata.json \
+  --after evidence/after/*/metadata.json
+```
+
+The JSON comparison reports medians, ranges, and percentage changes separately for hook,
+compilation, execution, and summed test-process time. It rejects failed, incomplete,
+duplicate, corrupt, or mixed-environment samples. Keep those rejected samples in the
+experiment record and report failures alongside successful timings; do not select only
+favorable runs. Warm up both revisions equally and retain raw artifacts. A percentage
+alone does not establish a reliable improvement when ranges overlap. Summed process time
+is work across concurrent tests, not elapsed time.
+
+`exact_cache_hit: false` may mean a partial restore or a miss; `null` means unknown.
+Neither proves a cold build. Hook time excludes setup and queueing; obtain those phases
+from Actions job/step timestamps. The hook interval can include scheduling between the
+collector steps. Cargo's rounded timing report cannot resolve subsecond warm-build
+differences. E2E caches remain isolated by their pinned container and Rust environment.
+The collector's lifecycle and failure paths are checked by `test-timing-action`,
+including 100% JavaScript line coverage; Rust report parsing and comparison are covered
+by the ordinary `ag-xtask` suites and coverage gate. The collector hook writes a fresh
+`timing-action.lcov` for SonarCloud; the coverage job runs that hook before scanning so
+JavaScript coverage is imported alongside Rust.
 
 A new PR push cancels that PR's obsolete Presubmit and Native Harness Sandbox runs.
 Compare timings from the same final head and completed run attempt; cancelled samples

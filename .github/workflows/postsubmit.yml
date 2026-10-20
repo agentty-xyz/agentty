@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # One job runs every member's source hook in turn. Each hook still builds
+  # One job runs the cataloged source hooks in turn. Each hook still builds
   # its own package's feature set, while dependencies compile once and the
   # run holds one runner instead of one per member.
   source-tests:
@@ -48,29 +48,30 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust and `prek`
+        id: rust-setup
         uses: $/.github/actions/setup-rust-prek
 
       # Every hook rewrites the same JUnit and timing files, so each run's
-      # reports are moved under its hook ID. A failing hook does not stop the
-      # remaining members. Resolving features per selected package overrides
+      # fresh reports and provenance are retained under its hook ID. A failing
+      # hook does not stop the remaining members. Resolving features per selected package overrides
       # the workspace unification in `.cargo/config.toml`, so a member that
       # relies on a feature only another member enables fails here.
       - name: Run source tests
         id: source-tests
         env:
           CARGO_RESOLVER_FEATURE_UNIFICATION: selected
+          INPUT_EXACT-CACHE-HIT: ${{ steps.rust-setup.outputs.exact-cache-hit }}
         run: |
           status=0
+          rm -rf target/test-results
           for hook in $SOURCE_TEST_HOOKS; do
             echo "::group::$hook"
-            rm -f target/nextest/ci/junit.xml target/cargo-timings/cargo-timing.html
-            prek run "$hook" --all-files --hook-stage manual || status=1
-            mkdir -p "target/source-tests/$hook"
-            for report in target/nextest/ci/junit.xml target/cargo-timings/cargo-timing.html; do
-              if [ -f "$report" ]; then
-                mv "$report" "target/source-tests/$hook/"
-              fi
-            done
+            export INPUT_SUITE="$hook" INPUT_PHASE=prepare
+            node .github/actions/test-timing/index.mjs
+            outcome=success
+            prek run "$hook" --all-files --hook-stage manual || { status=1; outcome=failure; }
+            export INPUT_PHASE=finish INPUT_OUTCOME="$outcome"
+            node .github/actions/test-timing/index.mjs
             echo "::endgroup::"
           done
           exit "$status"
@@ -79,8 +80,8 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: source-test-results
-          path: target/source-tests/
+          name: source-test-results-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: target/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
@@ -91,7 +92,7 @@ jobs:
         env:
           TRUNK_API_TOKEN: ${{ secrets.TRUNK_API_TOKEN }}
         with:
-          junit-paths: target/source-tests/*/junit.xml
+          junit-paths: target/test-results/*/junit.xml
           org-slug: agentty
           previous-step-outcome: ${{ steps.source-tests.outcome }}
           token: ${{ secrets.TRUNK_API_TOKEN }}

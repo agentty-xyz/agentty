@@ -17,6 +17,7 @@ runs:
   using: composite
   steps:
     - name: Setup Rust and `prek`
+      id: rust-setup
       uses: $/.github/actions/setup-rust-prek
       with:
         cargo-llvm-cov: "true"
@@ -25,6 +26,18 @@ runs:
     - name: Install native sandbox coverage dependency
       if: runner.os == 'Linux'
       uses: $/.github/actions/setup-native-sandbox
+
+    - name: Check timing collector and generate JavaScript coverage
+      shell: bash
+      run: prek run test-timing-action --all-files
+
+    - name: Prepare coverage timing reports
+      uses: $/.github/actions/test-timing
+      with:
+        phase: prepare
+        suite: coverage-test-results
+        build-directory: target/llvm-cov-target
+        exact-cache-hit: ${{ steps.rust-setup.outputs.exact-cache-hit }}
 
     - name: Generate and check coverage report
       id: coverage
@@ -43,6 +56,7 @@ runs:
       with:
         name: coverage-test-results
         build-directory: target/llvm-cov-target
+        outcome: ${{ steps.coverage.outcome }}
 
     - name: Upload coverage test results to Trunk
       if: ${{ !cancelled() && inputs.trunk-token != '' }}

@@ -48,6 +48,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust and `prek`
+        id: rust-setup
         uses: $/.github/actions/setup-rust-prek
         with:
           cargo-audit: ${{ inputs['cargo-audit'] && 'true' || 'false' }}
@@ -72,6 +73,14 @@ jobs:
         if: ${{ inputs['workspace-tests'] }}
         uses: $/.github/actions/setup-native-sandbox
 
+      - name: Prepare workspace timing reports
+        if: ${{ inputs['workspace-tests'] }}
+        uses: $/.github/actions/test-timing
+        with:
+          phase: prepare
+          suite: workspace-test-results
+          exact-cache-hit: ${{ steps.rust-setup.outputs.exact-cache-hit }}
+
       - name: Full test suite
         id: workspace-tests
         if: ${{ inputs['workspace-tests'] }}
@@ -82,6 +91,7 @@ jobs:
         uses: $/.github/actions/upload-test-results
         with:
           name: workspace-test-results
+          outcome: ${{ steps.workspace-tests.outcome }}
 
       - name: Upload workspace test results to Trunk
         if: ${{ !cancelled() && inputs['workspace-tests'] && env.TRUNK_API_TOKEN_AVAILABLE == 'true' }}
