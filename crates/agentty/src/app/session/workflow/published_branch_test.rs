@@ -8,17 +8,23 @@ use ag_git::{BranchPushOutcome, GitError, MockGitClient};
 use ag_protocol::{ReviewCommentOutcome, ReviewCommentResolution};
 use ag_session::test_support as model_fixture;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use super::{
-    PublishedBranchAutoPushInput, ReviewCommentSyncInput, ReviewRequestMetadataEvaluationInput,
-    ReviewRequestMetadataSyncInput, resolve_review_comments_after_push, review_comment_reply_body,
-    sync_linked_review_request_metadata_after_push,
+    PublishedBranchAutoPushInput, PublishedBranchAutoPushStartInput, ReviewCommentSyncInput,
+    ReviewRequestMetadataEvaluationInput, ReviewRequestMetadataSyncInput,
+    resolve_review_comments_after_push, review_comment_reply_body,
+    run_published_branch_auto_push_task, start_published_branch_auto_push,
+    start_published_branch_auto_push_inner, sync_linked_review_request_metadata_after_push,
 };
+use crate::app::AppEvent;
 use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, run_branch_publish_action,
 };
-use crate::app::session::session_branch;
-use crate::domain::session::{PublishBranchAction, ReviewRequest, ReviewRequestState, Status};
+use crate::app::session::{SessionError, session_branch};
+use crate::domain::session::{
+    PublishBranchAction, PublishedBranchSyncStatus, ReviewRequest, ReviewRequestState, Status,
+};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
@@ -29,6 +35,226 @@ enum TestCommitComparison {
     Matching,
     Rewritten,
     Unbound,
+}
+
+#[tokio::test]
+async fn task_push_returns_failures_while_retaining_push_notices() {
+    // Arrange
+    let db = linked_review_request_db().await;
+    let mut git_client = push_git_client();
+    git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .returning(|_, _| Box::pin(async { Err(GitError::OutputParse("push rejected".into())) }));
+    let (mut input, _) = metadata_sync_test_input(db, git_client);
+    let (events, mut receiver) = mpsc::unbounded_channel();
+    input.app_event_tx = events;
+
+    // Act
+    let result = run_published_branch_auto_push_task(&input, false).await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("failed push")
+            .to_string()
+            .contains("push rejected")
+    );
+    assert!(
+        matches!(receiver.try_recv().expect("push notice"), AppEvent::PublishedBranchSyncUpdated { sync_status:PublishedBranchSyncStatus::Failed, persistent_notice:Some(message), .. } if message.contains("push rejected"))
+    );
+}
+
+#[tokio::test]
+async fn task_push_keeps_inherited_ordinary_review_operations_pending() {
+    // Arrange
+    let db = linked_review_request_db().await;
+    persist_resolution_test_operations(
+        &db,
+        vec![fixed_outcome("ordinary-thread")],
+        Some("ordinary-commit"),
+    )
+    .await;
+    let mut git_client = push_git_client();
+    expect_successful_push(&mut git_client);
+    git_client.expect_get_ref_ahead_behind().never();
+    let (input, _) = metadata_sync_test_input(db.clone(), git_client);
+
+    // Act
+    let result = run_published_branch_auto_push_task(&input, false).await;
+
+    // Assert
+    result.expect("push succeeds without ordinary review effects");
+    assert_eq!(
+        db.reviews()
+            .load_session_review_comment_resolutions("session-id")
+            .await
+            .expect("pending operations")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn task_push_propagates_metadata_failure_after_successful_publication() {
+    // Arrange
+    let db = linked_review_request_db().await;
+    let mut git_client = push_git_client();
+    expect_successful_push(&mut git_client);
+    git_client.expect_repo_url().once().returning(|_| {
+        Box::pin(async { Err(GitError::OutputParse("missing metadata remote".into())) })
+    });
+    let (mut input, transcript) = metadata_sync_test_input(db, git_client);
+    input.review_request_metadata_sync = Some(metadata_sync_input(
+        Some("Generated title"),
+        MockReviewRequestClient::new(),
+    ));
+    let (events, mut receiver) = mpsc::unbounded_channel();
+    input.app_event_tx = events;
+
+    // Act
+    let result = run_published_branch_auto_push_task(&input, false).await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("metadata failure")
+            .to_string()
+            .contains("missing metadata remote")
+    );
+    assert!(
+        last_transcript_message(&transcript)
+            .contains("Failed to update linked review-request metadata")
+    );
+    let publication = std::iter::from_fn(|| receiver.try_recv().ok())
+        .find(|event| matches!(event, AppEvent::PublishedBranchSyncUpdated { .. }))
+        .expect("publication result");
+    assert!(matches!(
+        publication,
+        AppEvent::PublishedBranchSyncUpdated {
+            sync_status: PublishedBranchSyncStatus::Succeeded,
+            ..
+        }
+    ));
+}
+
+#[tokio::test]
+async fn spawned_push_preserves_cancellation_inner_failures_and_join_errors() {
+    // Arrange
+    let db = linked_review_request_db().await;
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let canceled_input = push_start_input(db.clone(), MockGitClient::new()).await;
+
+    // Act
+    let canceled = start_published_branch_auto_push_inner(canceled_input, cancel, false)
+        .await
+        .expect("canceled task joins");
+
+    // Assert
+    assert!(matches!(canceled, Err(SessionError::StoppedByUser(_))));
+
+    // Arrange
+    let mut git_client = push_git_client();
+    git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .returning(|_, _| Box::pin(async { Err(GitError::OutputParse("push failed".into())) }));
+    let failed_input = push_start_input(db.clone(), git_client).await;
+
+    // Act and Assert
+    let failed = start_published_branch_auto_push(failed_input, CancellationToken::new())
+        .await
+        .expect("ordinary task joins");
+    assert!(
+        failed
+            .expect_err("inner failure")
+            .to_string()
+            .contains("push failed")
+    );
+
+    // Arrange
+    let mut git_client = push_git_client();
+    let (started, entered) = tokio::sync::oneshot::channel();
+    git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .return_once(move |_, _| {
+            Box::pin(async move {
+                let _ = started.send(());
+
+                std::future::pending().await
+            })
+        });
+    let interrupted_input = push_start_input(db, git_client).await;
+
+    // Act and Assert
+    let handle =
+        start_published_branch_auto_push_inner(interrupted_input, CancellationToken::new(), false);
+    entered.await.expect("push entered");
+    handle.abort();
+    let join = handle.await.expect_err("join error remains observable");
+    assert!(join.is_cancelled());
+}
+
+#[tokio::test]
+async fn metadata_sync_returns_head_lookup_and_forge_errors_with_existing_warnings() {
+    // Arrange
+    for failure in ["head", "detect", "metadata"] {
+        let db = linked_review_request_db().await;
+        let mut git_client = MockGitClient::new();
+        let mut forge_client = MockReviewRequestClient::new();
+        let commit_message = if failure == "head" {
+            git_client
+                .expect_head_commit_message()
+                .once()
+                .returning(|_| {
+                    Box::pin(async { Err(GitError::OutputParse("head lookup failed".into())) })
+                });
+            None
+        } else {
+            git_client.expect_repo_url().once().returning(|_| {
+                Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".into()) })
+            });
+            if failure == "detect" {
+                forge_client
+                    .expect_detect_remote()
+                    .once()
+                    .returning(|repo_url| {
+                        Err(forge::ReviewRequestError::UnsupportedRemote { repo_url })
+                    });
+            } else {
+                forge_client
+                    .expect_detect_remote()
+                    .once()
+                    .returning(|_| Ok(github_remote()));
+                forge_client
+                    .expect_review_request_metadata()
+                    .once()
+                    .returning(|_, _| {
+                        Box::pin(async {
+                            Err(forge::ReviewRequestError::OperationFailed {
+                                forge_kind: forge::ForgeKind::GitHub,
+                                message: "forge read failed".into(),
+                            })
+                        })
+                    });
+            }
+            Some("Generated title")
+        };
+        let (input, transcript) = metadata_sync_test_input(db, git_client);
+        let metadata = metadata_sync_input(commit_message, forge_client);
+
+        // Act
+        let result = sync_linked_review_request_metadata_after_push(&input, &metadata).await;
+
+        // Assert
+        assert!(result.is_err(), "{failure}");
+        assert!(
+            last_transcript_message(&transcript)
+                .contains("Failed to update linked review-request metadata")
+        );
+    }
 }
 
 #[tokio::test]
@@ -106,7 +332,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
     };
 
     // Act
-    sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
     let review_request = db
         .reviews()
         .load_session_review_request("session-id")
@@ -115,6 +341,7 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
         .expect("review request should remain linked");
 
     // Assert
+    result.expect("metadata sync");
     assert_eq!(review_request.title, "Manual stable title");
     assert!(transcript.lock().expect("transcript lock").is_empty());
 }
@@ -135,9 +362,10 @@ async fn metadata_sync_reports_link_load_failure() {
     pool.close().await;
 
     // Act
-    sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
 
     // Assert
+    assert!(result.is_err());
     assert!(last_transcript_message(&transcript).contains(
         "Failed to update linked review-request metadata: attempted to acquire a connection on a \
          closed pool"
@@ -157,9 +385,10 @@ async fn metadata_sync_skips_missing_commit_message() {
     let metadata_sync_input = metadata_sync_input(None, MockReviewRequestClient::new());
 
     // Act
-    sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
 
     // Assert
+    result.expect("skipped metadata sync");
     assert!(transcript.lock().expect("transcript lock").is_empty());
 }
 
@@ -173,9 +402,10 @@ async fn metadata_sync_skips_unstructured_commit_message() {
     let metadata_sync_input = metadata_sync_input(Some("\n \n"), MockReviewRequestClient::new());
 
     // Act
-    sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
 
     // Assert
+    result.expect("skipped metadata sync");
     assert!(transcript.lock().expect("transcript lock").is_empty());
 }
 
@@ -194,9 +424,10 @@ async fn metadata_sync_reports_repository_remote_failure() {
         metadata_sync_input(Some("Generated title\n\nNew body."), review_request_client);
 
     // Act
-    sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
+    let result = sync_linked_review_request_metadata_after_push(&input, &metadata_sync_input).await;
 
     // Assert
+    assert!(result.is_err());
     let message = last_transcript_message(&transcript);
     assert!(
         message.contains("Failed to resolve repository remote for review-request metadata sync")
@@ -1013,6 +1244,57 @@ async fn review_comment_resolution_retries_when_commit_check_fails() {
          push: commit lookup failed. The saved operations will retry after the next successful \
          push."
     );
+}
+
+/// Builds one detached-push input for direct review-resolution tests.
+fn push_git_client() -> MockGitClient {
+    let mut git_client = MockGitClient::new();
+    git_client
+        .expect_in_progress_operation()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git_client
+        .expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some(session_branch("session-id")) }));
+
+    git_client
+}
+
+fn expect_successful_push(git_client: &mut MockGitClient) {
+    git_client
+        .expect_push_current_branch_to_remote_branch_with_outcome()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                Ok(BranchPushOutcome {
+                    updated: true,
+                    upstream_reference: "origin/wt/session-id".into(),
+                })
+            })
+        });
+}
+
+async fn push_start_input(
+    db: AppRepositories,
+    git_client: MockGitClient,
+) -> PublishedBranchAutoPushStartInput {
+    PublishedBranchAutoPushStartInput {
+        app_event_tx: mpsc::unbounded_channel().0,
+        branch_operation_guard: Arc::new(tokio::sync::Mutex::new(())).lock_owned().await,
+        clock: Arc::new(RealClock),
+        db,
+        folder: PathBuf::from("/tmp/project"),
+        git_client: Arc::new(git_client),
+        run_client: Arc::new(ag_worker::MockRunClient::new()),
+        published_upstream_ref: "origin/wt/session-id".into(),
+        review_request_client: Arc::new(MockReviewRequestClient::new()),
+        review_request_commit_message: None,
+        session_agent: model_fixture::codex_selection(),
+        session_id: "session-id".into(),
+        session_update_versions: Arc::default(),
+        transcript: Arc::new(Mutex::new(SessionTranscript::default())),
+    }
 }
 
 /// Builds one detached-push input for direct review-resolution tests.

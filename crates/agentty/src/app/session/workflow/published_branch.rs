@@ -71,7 +71,17 @@ pub(super) struct PublishedBranchAutoPushStartInput {
 pub(super) fn start_published_branch_auto_push(
     input: PublishedBranchAutoPushStartInput,
     cancel_token: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
+) -> tokio::task::JoinHandle<Result<(), SessionError>> {
+    start_published_branch_auto_push_inner(input, cancel_token, true)
+}
+
+/// Starts a result-bearing push with explicit ownership of pending review
+/// effects. Task callers leave ordinary session review operations untouched.
+fn start_published_branch_auto_push_inner(
+    input: PublishedBranchAutoPushStartInput,
+    cancel_token: CancellationToken,
+    finish_review_comments: bool,
+) -> tokio::task::JoinHandle<Result<(), SessionError>> {
     let branch_operation_guard = input.branch_operation_guard;
     let sync_operation_id = Uuid::new_v4().to_string();
     let review_request_metadata_sync =
@@ -124,8 +134,12 @@ pub(super) fn start_published_branch_auto_push(
                     sync_operation_id: auto_push_input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Failed,
                 });
+
+                Err(SessionError::StoppedByUser(
+                    "[Stopped] Publishing canceled; unfinished thread updates remain pending.".to_string(),
+                ))
             }
-            () = run_published_branch_auto_push_task(&auto_push_input) => {}
+            result = run_published_branch_auto_push_task(&auto_push_input, finish_review_comments) => result,
         }
     })
 }
@@ -215,11 +229,14 @@ pub(super) struct ReviewRequestMetadataEvaluationInput {
 /// Runs one detached auto-push for a previously published session branch and
 /// reports its state through the app event pipeline.
 pub(super) async fn run_published_branch_auto_push(input: PublishedBranchAutoPushInput) {
-    run_published_branch_auto_push_task(&input).await;
+    let _ = run_published_branch_auto_push_task(&input, true).await;
 }
 
 /// Executes one detached published-branch auto-push from owned task inputs.
-async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInput) {
+async fn run_published_branch_auto_push_task(
+    input: &PublishedBranchAutoPushInput,
+    finish_review_comments: bool,
+) -> Result<(), SessionError> {
     let remote_branch_name = remote_branch_name_from_upstream_ref(&input.published_upstream_ref);
     let push_result = branch_publish::push_session_branch_to_remote(
         &input.db,
@@ -234,10 +251,15 @@ async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInpu
 
     match push_result {
         Ok(outcome) => {
-            if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
-                sync_linked_review_request_metadata_after_push(input, metadata_sync_input).await;
+            let metadata_result =
+                if let Some(metadata_sync_input) = input.review_request_metadata_sync.as_ref() {
+                    sync_linked_review_request_metadata_after_push(input, metadata_sync_input).await
+                } else {
+                    Ok(())
+                };
+            if finish_review_comments {
+                resolve_review_comments_after_push(&ReviewCommentSyncInput::from(input)).await;
             }
-            resolve_review_comments_after_push(&ReviewCommentSyncInput::from(input)).await;
 
             let message = TranscriptNotice::BranchPush.format(if outcome.updated {
                 "Auto-pushed published branch after completed turn."
@@ -253,9 +275,11 @@ async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInpu
                     sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Succeeded,
                 });
+
+            metadata_result
         }
         Err(failure) => {
-            let message = TranscriptNotice::BranchPushError.format(failure.message);
+            let message = TranscriptNotice::BranchPushError.format(&failure.message);
 
             let _ = input
                 .app_event_tx
@@ -265,6 +289,8 @@ async fn run_published_branch_auto_push_task(input: &PublishedBranchAutoPushInpu
                     sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Failed,
                 });
+
+            Err(SessionError::Workflow(failure.message))
         }
     }
 }
@@ -871,14 +897,14 @@ async fn append_review_comment_resolution_notice(
 async fn sync_linked_review_request_metadata_after_push(
     input: &PublishedBranchAutoPushInput,
     metadata_sync_input: &ReviewRequestMetadataSyncInput,
-) {
+) -> Result<(), SessionError> {
     let linked_review_request = match load_open_review_request(&input.db, &input.session_id).await {
         Ok(Some(linked_review_request)) => linked_review_request,
-        Ok(None) => return,
+        Ok(None) => return Ok(()),
         Err(error) => {
-            append_review_request_sync_warning(input, error).await;
+            append_review_request_sync_warning(input, &error).await;
 
-            return;
+            return Err(error);
         }
     };
     let commit_message = match metadata_sync_input.commit_message.as_deref() {
@@ -889,24 +915,21 @@ async fn sync_linked_review_request_metadata_after_push(
             .await
         {
             Ok(Some(commit_message)) => commit_message,
-            Ok(None) => return,
+            Ok(None) => return Ok(()),
             Err(error) => {
-                append_review_request_sync_warning(
-                    input,
-                    SessionError::Workflow(format!(
-                        "Failed to resolve the session commit message: {error}"
-                    )),
-                )
-                .await;
+                let error = SessionError::Workflow(format!(
+                    "Failed to resolve the session commit message: {error}"
+                ));
+                append_review_request_sync_warning(input, &error).await;
 
-                return;
+                return Err(error);
             }
         },
     };
     let Some(generated_metadata) =
         crate::app::review_request::parse_review_request_commit_message(&commit_message)
     else {
-        return;
+        return Ok(());
     };
 
     let result = sync_review_request_metadata(
@@ -917,9 +940,11 @@ async fn sync_linked_review_request_metadata_after_push(
         generated_metadata,
     )
     .await;
-    if let Err(error) = result {
+    if let Err(error) = &result {
         append_review_request_sync_warning(input, error).await;
     }
+
+    result
 }
 
 /// Loads the linked review request when it is still open.
@@ -1042,7 +1067,7 @@ async fn sync_review_request_metadata(
 /// Appends one metadata-sync warning to the session transcript.
 async fn append_review_request_sync_warning(
     input: &PublishedBranchAutoPushInput,
-    error: SessionError,
+    error: &SessionError,
 ) {
     warn_review_request_metadata_sync(input, &error.to_string());
     let message = TranscriptNotice::ReviewRequestSyncWarning.format(format!(
