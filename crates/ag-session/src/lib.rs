@@ -19,6 +19,7 @@ mod review;
 mod service;
 mod setting;
 mod task;
+mod task_chain;
 mod task_execution;
 mod task_plan;
 mod transcript_notice;
@@ -68,6 +69,10 @@ pub use service::{
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
+pub use task_chain::{
+    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, StartPlanThenImplementRequest, TaskChain,
+    TaskChainPhase,
+};
 pub use task_execution::{
     AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,
     TaskAgentHistory, TaskAgentInput, TaskAgentTurn,

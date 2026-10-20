@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use super::support::FakeBackend;
 use crate::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, CreateTaskRequest,
-    DurableMessageVisibility, SessionError, SessionId, SessionService, SubmitAgentTaskRequest,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
+    BuiltinAgentDefinition, ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
+    SessionError, SessionId, SessionService, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
     SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
 };
 
@@ -67,4 +68,64 @@ async fn existing_hosts_report_unsupported_task_capability() {
     let unsupported = SessionError::Operation("Host does not support role-aware tasks".to_string());
     assert_eq!(role_submitted, Err(unsupported.clone()));
     assert_eq!(role_history, Err(unsupported));
+}
+
+#[tokio::test]
+async fn existing_hosts_report_unsupported_workflow_capability() {
+    // Arrange
+    let service = SessionService::new(Arc::new(FakeBackend::default()));
+    let session_id = SessionId::from("session");
+    let start = StartPlanThenImplementRequest {
+        agent: crate::test_support::codex_selection(),
+        chain_id: "chain".into(),
+        planner_attempt_id: "plan".into(),
+        user_request: "Objective".into(),
+    };
+
+    // Act
+    let started = service.start_plan_then_implement(&session_id, start).await;
+    let loaded = service.get_task_chain("chain").await;
+    let listed = service.list_task_chains(&session_id).await;
+    let accepted = service
+        .accept_task_chain_plan(
+            "chain",
+            AcceptTaskChainPlanRequest {
+                attempt_id: "implement".into(),
+                plan_attempt_id: "plan".into(),
+            },
+        )
+        .await;
+    let continued = service
+        .continue_task_chain(
+            "chain",
+            ContinueTaskChainRequest {
+                attempt_id: "continued".into(),
+                clarification: None,
+            },
+        )
+        .await;
+    let canceled = service.cancel_task_chain("chain").await;
+    let standalone = service
+        .accept_agent_plan(
+            &session_id,
+            AcceptTaskPlanRequest {
+                attempt_id: "plan".into(),
+                task_id: "planner".into(),
+            },
+        )
+        .await;
+
+    // Assert
+    let expected = SessionError::Operation("Host does not support task chains".into());
+    assert_eq!(loaded, Err(expected.clone()));
+    assert_eq!(listed, Err(expected.clone()));
+    for result in [started, accepted, continued, canceled] {
+        assert_eq!(result, Err(expected.clone()));
+    }
+    assert_eq!(
+        standalone,
+        Err(SessionError::Operation(
+            "Host does not support plan acceptance".into()
+        ))
+    );
 }
