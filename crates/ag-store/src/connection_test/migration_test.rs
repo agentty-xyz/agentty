@@ -153,10 +153,13 @@ async fn task_context_migration_preserves_unassigned_task_history() {
 async fn task_migration_preserves_existing_sessions_and_operation_retry_semantics() {
     // Arrange
     let database = Database::open_in_memory().await.expect("database");
-    sqlx::raw_sql("DROP TRIGGER task_attempt_no_reopen; DROP TABLE task_attempt; DROP TABLE task;")
-        .execute(database.pool())
-        .await
-        .expect("prior schema");
+    sqlx::raw_sql(
+        "DROP TABLE task_chain; DROP TRIGGER task_attempt_no_reopen; DROP TABLE task_attempt; \
+         DROP TABLE task;",
+    )
+    .execute(database.pool())
+    .await
+    .expect("prior schema");
     let project = database
         .projects()
         .upsert_project("project", None)

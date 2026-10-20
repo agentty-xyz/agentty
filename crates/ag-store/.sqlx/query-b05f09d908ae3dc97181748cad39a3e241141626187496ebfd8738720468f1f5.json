@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT session_id, agent, model, user_request, planner_task_attempt_id FROM task_chain WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "user_request",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "user_request"
+          }
+        }
+      },
+      {
+        "name": "planner_task_attempt_id",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "planner_task_attempt_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b05f09d908ae3dc97181748cad39a3e241141626187496ebfd8738720468f1f5"
+}

@@ -91,6 +91,33 @@ and captured model in the same transaction as the attempt. A newer Planner attem
 an older version ineligible for new handoffs, while preserving its historical acceptance
 record. Repeated acceptance of the same eligible version is idempotent.
 
+## Static Plan Then Implement Workflow
+
+A static workflow captures one original request and provider/model selection for two
+isolated tasks sharing the session's workspace. Planning finishes before explicit plan
+acceptance admits implementation. Revision and clarification use new attempts in the
+current role's context; implementation retains the accepted plan exactly.
+
+Workflow phase is projected from its current attempt and saved response. A saved plan
+does not become acceptable until the entire attempt, including post-processing, has
+succeeded. Cancellation affects only the workflow's operations. Identical launch,
+acceptance, and continuation deliveries acknowledge their original receipts even after
+the stage changes; they never restart work or clear cancellation. An explicit new
+attempt is required to retry a canceled, failed, or interrupted stage. Reading or
+reopening a workflow never replays implementation.
+
+`SessionService` exposes this optional workflow capability through
+`start_plan_then_implement`, `get_task_chain`, `list_task_chains`,
+`accept_task_chain_plan`, `continue_task_chain`, and `cancel_task_chain`. The SQLite
+adapter admits each action atomically; hosts dispatch newly admitted requests through
+the session's serialized worker.
+
+Continuations include `expected_attempt_id`, captured from the workflow snapshot when
+guidance is authored. Admission rejects stale guidance if another action has advanced
+the workflow. The continuation receipt retains that source identity, so exact repeats
+remain safe after later progress; changing the source under an existing delivery ID or
+reusing a launch or acceptance ID as a continuation is rejected.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

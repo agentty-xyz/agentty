@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_chain SET id = id WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "39ffe2018b7991079d68073f5227b2c0d0e35e9bb2485df21d537cd7a7c1d056"
+}

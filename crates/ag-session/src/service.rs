@@ -6,7 +6,10 @@ use async_trait::async_trait;
 
 use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
-use crate::{CreateTaskRequest, SubmitTaskRequest, Task};
+use crate::{
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, ContinueTaskChainRequest, CreateTaskRequest,
+    StartPlanThenImplementRequest, SubmitTaskRequest, Task, TaskChain,
+};
 
 /// Creation strategy for a new session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -107,6 +110,74 @@ pub trait SessionBackend: Send + Sync {
         ))
     }
 
+    /// Explicitly accepts a standalone Planner response by producing version.
+    async fn accept_agent_plan(
+        &self,
+        _session_id: &SessionId,
+        _request: AcceptTaskPlanRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support plan acceptance".into(),
+        ))
+    }
+
+    /// Launches a static workflow with one isolated Planner attempt.
+    async fn start_plan_then_implement(
+        &self,
+        _session_id: &SessionId,
+        _request: StartPlanThenImplementRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Reads a workflow snapshot without recovering or replaying work.
+    async fn get_task_chain(&self, _chain_id: &str) -> Result<Option<TaskChain>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Lists a session's workflows in creation order.
+    async fn list_task_chains(
+        &self,
+        _session_id: &SessionId,
+    ) -> Result<Vec<TaskChain>, SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Explicitly accepts an exact Planner version and admits implementation.
+    async fn accept_task_chain_plan(
+        &self,
+        _chain_id: &str,
+        _request: AcceptTaskChainPlanRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Explicitly continues the current stage; uses a new attempt identity.
+    async fn continue_task_chain(
+        &self,
+        _chain_id: &str,
+        _request: ContinueTaskChainRequest,
+    ) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Requests cancellation of only this workflow's current attempt.
+    async fn cancel_task_chain(&self, _chain_id: &str) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
     /// Persists an outcome without execution. Older hosts may omit support.
     async fn create_task(
         &self,
@@ -202,6 +273,88 @@ pub struct SessionService {
 }
 
 impl SessionService {
+    /// Accepts a standalone Planner version from durable task history.
+    ///
+    /// # Errors
+    /// Returns an error for stale/ineligible versions or failed persistence.
+    pub async fn accept_agent_plan(
+        &self,
+        session_id: &SessionId,
+        request: AcceptTaskPlanRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.accept_agent_plan(session_id, request).await
+    }
+
+    /// Starts one Planner attempt with a captured provider/model selection.
+    ///
+    /// # Errors
+    /// Returns an error for identity conflicts, ineligible sessions, or failed
+    /// admission.
+    pub async fn start_plan_then_implement(
+        &self,
+        session_id: &SessionId,
+        request: StartPlanThenImplementRequest,
+    ) -> Result<(), SessionError> {
+        self.backend
+            .start_plan_then_implement(session_id, request)
+            .await
+    }
+
+    /// Reads a durable workflow snapshot without dispatching work.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot read or decode the workflow.
+    pub async fn get_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, SessionError> {
+        self.backend.get_task_chain(chain_id).await
+    }
+
+    /// Lists workflows owned by one session.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot read workflow snapshots.
+    pub async fn list_task_chains(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<TaskChain>, SessionError> {
+        self.backend.list_task_chains(session_id).await
+    }
+
+    /// Accepts an exact latest plan and admits its isolated Implementer
+    /// attempt.
+    ///
+    /// # Errors
+    /// Returns an error for stale/ineligible plans, conflicts, or failed
+    /// admission.
+    pub async fn accept_task_chain_plan(
+        &self,
+        chain_id: &str,
+        request: AcceptTaskChainPlanRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.accept_task_chain_plan(chain_id, request).await
+    }
+
+    /// Explicitly revises, clarifies, or retries the current stage.
+    ///
+    /// # Errors
+    /// Returns an error for unfinished attempts, conflicts, or failed
+    /// admission.
+    pub async fn continue_task_chain(
+        &self,
+        chain_id: &str,
+        request: ContinueTaskChainRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.continue_task_chain(chain_id, request).await
+    }
+
+    /// Requests cancellation of this workflow's current attempt.
+    ///
+    /// # Errors
+    /// Returns an error when the workflow is missing or cancellation cannot
+    /// persist.
+    pub async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
+        self.backend.cancel_task_chain(chain_id).await
+    }
+
     /// Creates an owned session capability backed by a shared host handle.
     pub fn new(backend: Arc<dyn SessionBackend>) -> Self {
         Self { backend }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task_chain SET canceled_at = COALESCE(canceled_at, ?) WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7d5159ef7cb40cd553edd32a0d4057ad3e6ad57864d9d37c05f1678d99875f9c"
+}
