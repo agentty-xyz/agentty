@@ -19,6 +19,7 @@ mod review;
 mod service;
 mod setting;
 mod task;
+mod task_execution;
 mod transcript_notice;
 
 /// Shared explicit model selections for deterministic tests and demos.
@@ -66,4 +67,7 @@ pub use service::{
 };
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
+pub use task_execution::{
+    AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
+};
 pub use transcript_notice::TranscriptNotice;
