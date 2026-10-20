@@ -30,19 +30,24 @@ pub(super) fn session_replay_text(session: &crate::domain::session::Session) -> 
         .unwrap_or_default()
 }
 
-/// Applies queued app events through the first completed full-diff load.
+/// Applies event batches until the pending full-diff request settles.
 pub(super) async fn apply_next_session_diff(app: &mut App) {
-    loop {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(10), app.next_app_event())
-            .await
-            .expect("session diff event should arrive")
-            .expect("app event channel should remain open");
-        let is_session_diff = matches!(event, AppEvent::SessionDiffLoaded { .. });
-        app.apply_app_events(event).await;
-        if is_session_diff {
-            return;
+    let request_id = *app
+        .pending_session_diff_requests
+        .keys()
+        .next()
+        .expect("session diff request should be pending");
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while app.pending_session_diff_requests.contains_key(&request_id) {
+            let event = app
+                .next_app_event()
+                .await
+                .expect("app event channel should remain open");
+            app.apply_app_events(event).await;
         }
-    }
+    })
+    .await
+    .expect("session diff request should settle");
 }
 
 /// Applies queued app events through the first completed clipboard-image

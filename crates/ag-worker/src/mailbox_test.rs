@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::future::Future;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::task::{Context, Wake, Waker};
@@ -308,10 +309,11 @@ async fn dropping_a_pause_resumes_pending_commands_and_messages_after_active_eff
 
     // Act: acquiring a pause waits for the active workflow, including effects.
     let mut pause = Box::pin(worker.pause());
-    tokio::select! {
-        _ = &mut pause => panic!("paused before active effects completed"),
-        () = tokio::task::yield_now() => {}
-    }
+    let paused = tokio::select! {
+        _ = &mut pause => true,
+        () = tokio::task::yield_now() => false,
+    };
+    assert!(!paused, "paused before active effects completed");
     gate.notify_one();
     let pause = pause.await;
 
@@ -390,7 +392,7 @@ async fn submission_and_both_shutdown_paths_serialize_their_admission_boundary()
                 observed.store(true, Ordering::SeqCst);
             }
         }))));
-        let mut cancellation = Box::pin(worker.stop.cancelled());
+        let mut cancellation = pin!(worker.stop.cancelled());
         assert!(
             cancellation
                 .as_mut()
@@ -436,7 +438,7 @@ async fn submission_and_both_shutdown_paths_serialize_their_admission_boundary()
         let shutdown = tokio::task::spawn_blocking({
             let worker = worker.clone();
             move || {
-                let mut shutdown = Box::pin(async move {
+                let mut shutdown = pin!(async move {
                     if let Some(pause) = pause {
                         pause.shutdown().await;
                     } else {
