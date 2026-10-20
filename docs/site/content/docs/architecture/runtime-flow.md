@@ -206,6 +206,12 @@ new attempts retain ordinary durable-turn eligibility. Operation settlement and 
 recovery supply attempt status. The task remains open until a caller explicitly accepts
 its outcome, independently of session lifecycle.
 
+The static Planner-to-Implementer workflow uses the same command gateway and serial
+worker. Accepting a specific plan version and admitting implementation commit together
+before dispatch. Duplicate requests acknowledge their saved attempt; queries and
+reopening never start work. Cancellation targets the current attempt, and retries
+require an explicit new delivery. Failed delivery remains visible in operation state.
+
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients
 retain an explicit capture policy across background task spawns, even when captured

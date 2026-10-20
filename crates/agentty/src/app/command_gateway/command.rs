@@ -44,6 +44,18 @@ impl SessionCommand {
                 request: SessionMutation::SubmitAgentTask { request, .. },
                 ..
             } => Some(format!("task-attempt:{}", request.attempt_id)),
+            CommandDelivery::Admission {
+                request: SessionMutation::StartTaskChain { request, .. },
+                ..
+            } => Some(format!("task-attempt:{}", request.planner_attempt_id)),
+            CommandDelivery::Admission {
+                request: SessionMutation::AcceptTaskChainPlan { request, .. },
+                ..
+            } => Some(format!("task-attempt:{}", request.attempt_id)),
+            CommandDelivery::Admission {
+                request: SessionMutation::ContinueTaskChain { request, .. },
+                ..
+            } => Some(format!("task-attempt:{}", request.attempt_id)),
             CommandDelivery::Review { request, .. } => Some(request.operation_id.clone()),
             _ => None,
         };
@@ -97,6 +109,28 @@ pub(crate) enum SessionMutation {
         request: Box<ag_session::SubmitAgentTaskRequest>,
         session_id: SessionId,
     },
+    /// Accepts one exact standalone Planner version without dispatching work.
+    AcceptAgentPlan {
+        request: ag_session::AcceptTaskPlanRequest,
+        session_id: SessionId,
+    },
+    /// Starts a static workflow with one captured role selection.
+    StartTaskChain {
+        request: ag_session::StartPlanThenImplementRequest,
+        session_id: SessionId,
+    },
+    /// Atomically records acceptance and admits the first implementation.
+    AcceptTaskChainPlan {
+        chain_id: String,
+        request: ag_session::AcceptTaskChainPlanRequest,
+    },
+    /// Explicitly advances the current role using a new attempt identity.
+    ContinueTaskChain {
+        chain_id: String,
+        request: ag_session::ContinueTaskChainRequest,
+    },
+    /// Requests cancellation without canceling unrelated session work.
+    CancelTaskChain { chain_id: String },
     /// Submits the terminal's prepared prompt without losing attachment or
     /// staging intent.
     Prompt {
@@ -144,6 +178,11 @@ impl SessionMutation {
     pub(super) fn target(&self) -> (&'static str, Option<&SessionId>) {
         match self {
             Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
+            Self::AcceptAgentPlan { session_id, .. } => ("accept_agent_plan", Some(session_id)),
+            Self::StartTaskChain { session_id, .. } => ("start_task_chain", Some(session_id)),
+            Self::AcceptTaskChainPlan { .. } => ("accept_task_chain_plan", None),
+            Self::ContinueTaskChain { .. } => ("continue_task_chain", None),
+            Self::CancelTaskChain { .. } => ("cancel_task_chain", None),
             Self::Prompt { session_id, .. } => ("prompt", Some(session_id)),
             Self::StartStaged { session_id } => ("start_staged", Some(session_id)),
             Self::SendMessage { session_id, .. } => ("send_message", Some(session_id)),

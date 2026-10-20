@@ -156,6 +156,30 @@ impl App {
                 request,
                 session_id,
             } => Box::pin(self.submit_api_agent_task(&session_id, *request)).await,
+            SessionMutation::AcceptAgentPlan {
+                request,
+                session_id,
+            } => self
+                .services
+                .db()
+                .tasks()
+                .accept_agent_plan(&session_id, &request)
+                .await
+                .map(|_| ())
+                .map_err(|error| SessionError::Operation(error.to_string())),
+            SessionMutation::StartTaskChain {
+                request,
+                session_id,
+            } => self.start_api_task_chain(&session_id, request).await,
+            SessionMutation::AcceptTaskChainPlan { chain_id, request } => {
+                self.accept_api_task_chain_plan(&chain_id, request).await
+            }
+            SessionMutation::ContinueTaskChain { chain_id, request } => {
+                self.continue_api_task_chain(&chain_id, request).await
+            }
+            SessionMutation::CancelTaskChain { chain_id } => {
+                self.cancel_api_task_chain(&chain_id).await
+            }
             SessionMutation::Prompt {
                 session_id,
                 intent,
