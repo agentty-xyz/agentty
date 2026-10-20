@@ -69,7 +69,8 @@ pub use service::{
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use task_execution::{
-    AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
+    AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,
+    TaskAgentHistory, TaskAgentInput, TaskAgentTurn,
 };
 pub use task_plan::AcceptTaskPlanRequest;
 pub use transcript_notice::TranscriptNotice;

@@ -82,6 +82,31 @@ pub enum DurableMessageVisibility {
 /// programmatic session capability without depending on a concrete frontend.
 #[async_trait]
 pub trait SessionBackend: Send + Sync {
+    /// Admits a role-bound attempt with its own isolated conversation.
+    async fn submit_agent_task(
+        &self,
+        session_id: &SessionId,
+        request: crate::SubmitAgentTaskRequest,
+    ) -> Result<(), SessionError> {
+        let _ = (session_id, request);
+
+        Err(SessionError::Operation(
+            "Host does not support role-aware tasks".to_string(),
+        ))
+    }
+
+    /// Reads isolated task responses without exposing host storage types.
+    async fn get_agent_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::TaskAgentHistory>, SessionError> {
+        let _ = task_id;
+
+        Err(SessionError::Operation(
+            "Host does not support role-aware tasks".to_string(),
+        ))
+    }
+
     /// Persists an outcome without execution. Older hosts may omit support.
     async fn create_task(
         &self,
@@ -180,6 +205,32 @@ impl SessionService {
     /// Creates an owned session capability backed by a shared host handle.
     pub fn new(backend: Arc<dyn SessionBackend>) -> Self {
         Self { backend }
+    }
+
+    /// Admits an isolated role-bound attempt, acknowledging durable admission.
+    /// Identical redeliveries do not execute again. Task completion is
+    /// explicit.
+    ///
+    /// # Errors
+    /// Returns an error for invalid input, unaccepted implementation plans,
+    /// conflicting identity, or a session unable to accept work.
+    pub async fn submit_agent_task(
+        &self,
+        session_id: &SessionId,
+        request: crate::SubmitAgentTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.backend.submit_agent_task(session_id, request).await
+    }
+
+    /// Reads the task's own responses. Attempt status remains authoritative.
+    ///
+    /// # Errors
+    /// Returns an error when the host cannot load the isolated conversation.
+    pub async fn get_agent_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::TaskAgentHistory>, SessionError> {
+        self.backend.get_agent_task_history(task_id).await
     }
 
     /// Persists a task with zero attempts in an existing session, regardless
