@@ -15,6 +15,7 @@ use crate::infra::clock::{self, Clock};
 use crate::presentation::app_mode::{AppMode, HelpContext};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::setting::SettingsScreenSnapshot;
+use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Focused-review display state for the visible session.
 pub(crate) struct SessionReviewView<'a> {
@@ -66,6 +67,8 @@ pub(crate) struct AppViewSnapshot<'a> {
     pub(crate) settings_screen: Option<SettingsScreenSnapshot>,
     pub(crate) stats_activity: &'a [DailyActivity],
     pub(crate) status_bar_fyi_rotation_index: u64,
+    /// Latest live task-chain graphs keyed by session.
+    pub(crate) task_chain_graphs: &'a TaskChainGraphCache,
     pub(crate) theme: ColorTheme,
     pub(crate) update_status: Option<&'a UpdateStatus>,
     pub(crate) working_dir: &'a Path,
@@ -127,6 +130,7 @@ impl App {
             settings_screen,
             stats_activity: sessions.stats_activity,
             status_bar_fyi_rotation_index,
+            task_chain_graphs: &self.task_chain_graphs,
             theme: self.settings.theme,
             update_status: self.update_status.as_ref(),
             working_dir: project.working_dir,
@@ -135,7 +139,7 @@ impl App {
 }
 
 /// Returns the session visible behind the active presentation mode.
-fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
+pub(super) fn visible_review_session_id(mode: &AppMode) -> Option<&str> {
     match mode {
         AppMode::View { session_id, .. }
         | AppMode::Prompt { session_id, .. }

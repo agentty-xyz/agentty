@@ -107,6 +107,12 @@ the stage changes; they never restart work or clear cancellation. An explicit ne
 attempt is required to retry a canceled, failed, or interrupted stage. Reading or
 reopening a workflow never replays implementation.
 
+The session transcript shows the workflow without sharing role context. A newly admitted
+launch records the original request and an execution-graph marker, and each newly saved
+role response appends one answer attributed to its role. Repeated deliveries and saves
+never duplicate these rows, and ordinary provider replay excludes the role answers and
+marker.
+
 `SessionService` exposes this optional workflow capability through
 `start_plan_then_implement`, `get_task_chain`, `list_task_chains`,
 `accept_task_chain_plan`, `continue_task_chain`, and `cancel_task_chain`. The SQLite

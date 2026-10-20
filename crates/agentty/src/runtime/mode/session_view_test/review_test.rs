@@ -257,6 +257,7 @@ async fn test_view_total_lines_uses_default_review_model_for_loading_fallback() 
             active_prompt_output: None,
             active_progress: None,
             session_update_version: app.session_update_version(&session_id),
+            task_chain_graph: None,
         },
         render_cache_store.markdown_render_cache(),
         render_cache_store.session_output_layout_cache(),

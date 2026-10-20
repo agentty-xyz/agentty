@@ -16,10 +16,11 @@ use crate::domain::session_message::{SessionMessage, SessionMessageKind, Session
 use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageSlot,
 };
+use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::session_output;
 use crate::ui::markdown::{self, render_markdown};
 use crate::ui::prompt_block::{self, USER_PROMPT_PREFIX, USER_PROMPT_RIGHT_GUTTER_WIDTH};
-use crate::ui::session_format;
+use crate::ui::{session_format, task_chain_format};
 
 const DRAFT_PREVIEW_HEADER: &str = "## Draft Session";
 
@@ -50,12 +51,20 @@ pub(crate) struct SessionOutputBody {
 }
 
 /// Assembles the stable transcript body without the dynamic status tail.
+///
+/// `task_chain_graph` is the session's latest live graph; execution-graph
+/// markers for that chain render its current state, and other markers render
+/// a neutral placeholder.
 pub(crate) fn output_body(
     session: &Session,
     inner_width: usize,
+    task_chain_graph: Option<&TaskChainGraph>,
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
 ) -> SessionOutputBody {
-    output_assembly(session, inner_width, None, markdown_render_cache).into_output_body()
+    let mut assembly = output_assembly(session, inner_width, None, markdown_render_cache);
+    assembly.task_chain_graph = task_chain_graph;
+
+    assembly.into_output_body()
 }
 
 /// Dynamic rows rendered after the shared transcript body.
@@ -153,11 +162,12 @@ struct SessionOutputAssembly<'a> {
     queued_line_indices: Vec<usize>,
     session: &'a Session,
     status: Status,
+    task_chain_graph: Option<&'a TaskChainGraph>,
     trailing_notice_section: SessionOutputTranscriptSection<'a>,
     transient_loader_line_index: Option<usize>,
 }
 
-impl SessionOutputAssembly<'_> {
+impl<'assembly> SessionOutputAssembly<'assembly> {
     fn into_output_body(mut self) -> SessionOutputBody {
         for block in SESSION_OUTPUT_BLOCK_ORDER {
             if !matches!(
@@ -197,12 +207,16 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_completed_transcript(&mut self) {
-        append_transcript_section(
-            &mut self.lines,
-            &self.completed_turn_section,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
+        let input = self.render_input();
+        append_transcript_section(&mut self.lines, &self.completed_turn_section, input);
+    }
+
+    fn render_input(&self) -> TranscriptRenderInput<'assembly> {
+        TranscriptRenderInput {
+            inner_width: self.inner_width,
+            markdown_render_cache: self.markdown_render_cache,
+            task_chain_graph: self.task_chain_graph,
+        }
     }
 
     fn append_trailing_transcript_notice(&mut self, placement: TrailingTranscriptNoticePlacement) {
@@ -213,12 +227,8 @@ impl SessionOutputAssembly<'_> {
             TrailingTranscriptNoticePlacement::AfterReview => !self.active_turn_has_visible_text,
         };
         if should_append {
-            append_transcript_section(
-                &mut self.lines,
-                &self.trailing_notice_section,
-                self.inner_width,
-                self.markdown_render_cache,
-            );
+            let input = self.render_input();
+            append_transcript_section(&mut self.lines, &self.trailing_notice_section, input);
         }
     }
 
@@ -241,12 +251,8 @@ impl SessionOutputAssembly<'_> {
     }
 
     fn append_active_turn(&mut self) {
-        append_transcript_section(
-            &mut self.lines,
-            &self.active_turn_section,
-            self.inner_width,
-            self.markdown_render_cache,
-        );
+        let input = self.render_input();
+        append_transcript_section(&mut self.lines, &self.active_turn_section, input);
     }
 
     fn append_queued_messages(&mut self) {
@@ -291,6 +297,7 @@ fn output_assembly<'assembly>(
         queued_line_indices: Vec::new(),
         session,
         status,
+        task_chain_graph: None,
         transient_loader_line_index: None,
         trailing_notice_section: transcript_sections.trailing_notice,
     }
@@ -588,19 +595,31 @@ fn append_plain_status_lines(
     lines.extend(rendered_lines);
 }
 
+/// Shared per-body inputs for rendering transcript messages.
+#[derive(Clone, Copy)]
+struct TranscriptRenderInput<'a> {
+    inner_width: usize,
+    markdown_render_cache: Option<&'a markdown::MarkdownRenderCache>,
+    task_chain_graph: Option<&'a TaskChainGraph>,
+}
+
 fn append_transcript_section(
     lines: &mut Vec<Line<'static>>,
     section: &SessionOutputTranscriptSection<'_>,
-    inner_width: usize,
-    markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    input: TranscriptRenderInput<'_>,
 ) {
     match section {
         SessionOutputTranscriptSection::Empty => {}
         SessionOutputTranscriptSection::Markdown(markdown) => {
-            append_markdown_lines(lines, markdown, inner_width, markdown_render_cache);
+            append_markdown_lines(
+                lines,
+                markdown,
+                input.inner_width,
+                input.markdown_render_cache,
+            );
         }
         SessionOutputTranscriptSection::Messages(messages) => {
-            append_transcript_messages(lines, messages, inner_width, markdown_render_cache);
+            append_transcript_messages(lines, messages, input);
         }
     }
 }
@@ -608,9 +627,13 @@ fn append_transcript_section(
 fn append_transcript_messages(
     lines: &mut Vec<Line<'static>>,
     messages: &[SessionMessage],
-    inner_width: usize,
-    markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+    input: TranscriptRenderInput<'_>,
 ) {
+    let TranscriptRenderInput {
+        inner_width,
+        markdown_render_cache,
+        task_chain_graph,
+    } = input;
     for message in messages {
         match message.kind {
             SessionMessageKind::UserPrompt => {
@@ -624,10 +647,45 @@ fn append_transcript_messages(
                     inner_width,
                 ));
             }
+            SessionMessageKind::AgentAnswer => {
+                append_agent_answer(lines, message, inner_width, markdown_render_cache);
+            }
+            SessionMessageKind::AgentGraph => {
+                let graph = task_chain_graph.filter(|graph| {
+                    message.agent_graph_chain_id() == Some(graph.chain_id.as_str())
+                });
+                append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+                lines.extend(task_chain_format::graph_card_lines(graph, inner_width));
+            }
             SessionMessageKind::AssistantAnswer | SessionMessageKind::WorkflowNotice => {
                 append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
             }
         }
+    }
+}
+
+/// Renders a role header followed by the answer as ordinary assistant
+/// Markdown. Undecodable content falls back to plain Markdown so no stored
+/// text is hidden.
+fn append_agent_answer(
+    lines: &mut Vec<Line<'static>>,
+    message: &SessionMessage,
+    inner_width: usize,
+    markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
+) {
+    let Some(answer) = message.agent_answer() else {
+        append_markdown_lines(lines, &message.content, inner_width, markdown_render_cache);
+
+        return;
+    };
+    append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+    lines.push(task_chain_format::agent_answer_header_line(
+        answer.agent,
+        inner_width,
+    ));
+    let rendered_lines = rendered_markdown_lines(&answer.text, inner_width, markdown_render_cache);
+    if let Some(visible_lines) = visible_rendered_lines(&rendered_lines) {
+        lines.extend(visible_lines.iter().cloned());
     }
 }
 
@@ -858,21 +916,25 @@ fn append_markdown_lines(
     markdown_render_cache: Option<&markdown::MarkdownRenderCache>,
 ) {
     let rendered_lines = rendered_markdown_lines(markdown, inner_width, markdown_render_cache);
-    let Some(first_visible_line_index) = rendered_lines.iter().position(|line| line.width() > 0)
-    else {
+    let Some(visible_lines) = visible_rendered_lines(&rendered_lines) else {
         return;
     };
+
+    append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
+    lines.extend(visible_lines.iter().cloned());
+}
+
+/// Returns rendered rows without leading or trailing blank rows.
+fn visible_rendered_lines<'lines>(
+    rendered_lines: &'lines [Line<'static>],
+) -> Option<&'lines [Line<'static>]> {
+    let first_visible_line_index = rendered_lines.iter().position(|line| line.width() > 0)?;
     let last_visible_line_index = rendered_lines
         .iter()
         .rposition(|line| line.width() > 0)
         .unwrap_or(first_visible_line_index);
 
-    append_block_separator(lines, SessionOutputSeparator::AfterPreviousContent);
-    lines.extend(
-        rendered_lines[first_visible_line_index..=last_visible_line_index]
-            .iter()
-            .cloned(),
-    );
+    Some(&rendered_lines[first_visible_line_index..=last_visible_line_index])
 }
 
 fn rendered_markdown_lines(

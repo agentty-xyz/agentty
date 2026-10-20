@@ -59,11 +59,8 @@ impl TaskAgentStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let definition = match row.role.as_str() {
-            "planner" => BuiltinAgentDefinition::Planner,
-            "implementer" => BuiltinAgentDefinition::Implementer,
-            _ => return Err(Self::invalid("Unknown task agent role")),
-        };
+        let definition = BuiltinAgentDefinition::from_id(&row.role)
+            .ok_or_else(|| Self::invalid("Unknown task agent role"))?;
         let kind = row
             .agent
             .parse::<AgentKind>()

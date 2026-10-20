@@ -16,6 +16,7 @@ use crate::presentation::app_mode::{AppMode, ChatFocus};
 use crate::presentation::frame_time::FrameTime;
 use crate::presentation::help_action::{self, ViewActionAvailability, ViewHelpState};
 use crate::presentation::prompt::PromptAtMentionState;
+use crate::presentation::task_chain_graph::TaskChainGraph;
 use crate::ui::component::chat_input::{ChatInput, SuggestionList};
 use crate::ui::component::session_output::{
     SessionOutput, SessionOutputLayoutCache, SessionOutputLineContext,
@@ -167,6 +168,8 @@ pub struct SessionChatPageInput<'a> {
     pub(crate) frame_time: FrameTime,
     /// Host temperature supplied by the internal monitoring sidecar.
     pub(crate) host_cpu_temperature_celsius: Option<f32>,
+    /// Latest live graph for the session's task chain, when loaded.
+    pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 /// Chat page renderer for a single session.
@@ -202,6 +205,8 @@ pub struct SessionChatPage<'a> {
     pub(crate) frame_time: FrameTime,
     /// Host temperature supplied by the internal monitoring sidecar.
     pub(crate) host_cpu_temperature_celsius: Option<f32>,
+    /// Latest live graph for the session's task chain, when loaded.
+    pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
 }
 
 impl<'a> SessionChatPage<'a> {
@@ -222,6 +227,7 @@ impl<'a> SessionChatPage<'a> {
             session_index,
             session_update_version,
             sessions,
+            task_chain_graph,
         } = input;
 
         Self {
@@ -240,6 +246,7 @@ impl<'a> SessionChatPage<'a> {
             session_index,
             session_update_version,
             sessions,
+            task_chain_graph,
         }
     }
 
@@ -299,6 +306,7 @@ impl<'a> SessionChatPage<'a> {
             .markdown_render_cache(self.markdown_render_cache)
             .output_layout_cache(self.output_layout_cache)
             .session_update_version(self.session_update_version)
+            .task_chain_graph(self.task_chain_graph)
             .spinner_frame(Icon::spinner_frame_from_millis(
                 self.frame_time.unix_millis(),
             ));

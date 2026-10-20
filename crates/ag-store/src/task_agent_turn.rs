@@ -104,12 +104,14 @@ impl TaskAgentTurnStore {
         }))
     }
 
+    /// Returns `true` only when this call recorded the response; an identical
+    /// repeat returns `false` without side effects.
     pub(crate) async fn save(
         connection: &mut SqliteConnection,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
         now: i64,
-    ) -> Result<(), DbError> {
+    ) -> Result<bool, DbError> {
         if metadata.assistant_message.trim().is_empty() {
             return Err(Self::invalid("Task response must be nonempty"));
         }
@@ -164,7 +166,7 @@ impl TaskAgentTurnStore {
             }
 
             // An old response must never rewind a newer task continuation.
-            return Ok(());
+            return Ok(false);
         }
         let owner = sqlx::query!(
             r#"SELECT t.session_id, c.model, a.task_id FROM task_attempt a
@@ -194,7 +196,7 @@ impl TaskAgentTurnStore {
         )
         .await?;
 
-        Ok(())
+        Ok(true)
     }
 
     fn write_count(value: u64) -> Result<i64, DbError> {

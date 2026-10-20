@@ -3,6 +3,9 @@ use std::hash::Hasher;
 use std::str::FromStr;
 
 use rustc_hash::FxHasher;
+use serde::{Deserialize, Serialize};
+
+use crate::BuiltinAgentDefinition;
 
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +17,14 @@ pub enum SessionMessageKind {
     UserPrompt,
     /// Generated agent-facing prompt retained for replay but hidden from chat.
     AgentPrompt,
+    /// Task-chain role answer encoded by [`AgentAnswerContent`]. Displayed in
+    /// chat but excluded from ordinary provider replay because the role keeps
+    /// its own isolated conversation.
+    AgentAnswer,
+    /// Live execution-graph marker whose content is only the owning task-chain
+    /// identity. Renderers project current chain state, so stored content
+    /// never goes stale; excluded from provider replay.
+    AgentGraph,
     /// Raw assistant answer text without transcript padding.
     AssistantAnswer,
     /// Generic workflow notice emitted by Agentty session workflows.
@@ -27,6 +38,8 @@ impl SessionMessageKind {
             Self::ActivitySummary => "activity_summary",
             Self::UserPrompt => "user_prompt",
             Self::AgentPrompt => "agent_prompt",
+            Self::AgentAnswer => "agent_answer",
+            Self::AgentGraph => "agent_graph",
             Self::AssistantAnswer => "assistant_answer",
             Self::WorkflowNotice => "workflow_notice",
         }
@@ -34,6 +47,9 @@ impl SessionMessageKind {
 
     /// Returns whether this kind represents a raw conversation message that
     /// belongs in the normal `session_message` store.
+    ///
+    /// Task-chain kinds are excluded: role answers belong to their own task
+    /// conversations, and graph markers carry no conversation text.
     pub fn is_conversation_message(self) -> bool {
         matches!(
             self,
@@ -61,6 +77,8 @@ impl FromStr for SessionMessageKind {
             "activity_summary" => Ok(Self::ActivitySummary),
             "user_prompt" => Ok(Self::UserPrompt),
             "agent_prompt" => Ok(Self::AgentPrompt),
+            "agent_answer" => Ok(Self::AgentAnswer),
+            "agent_graph" => Ok(Self::AgentGraph),
             "assistant_answer" => Ok(Self::AssistantAnswer),
             "workflow_notice" => Ok(Self::WorkflowNotice),
             _ => Err(SessionMessageKindParseError {
@@ -83,6 +101,43 @@ impl fmt::Display for SessionMessageKindParseError {
 }
 
 impl std::error::Error for SessionMessageKindParseError {}
+
+/// Role-attributed task-chain answer stored as
+/// [`SessionMessageKind::AgentAnswer`] content.
+///
+/// The durable encoding is one JSON object,
+/// `{"agent":"<BuiltinAgentDefinition::id>","text":"<answer>"}`, so arbitrary
+/// Markdown round-trips unchanged and new graph roles need only a new role
+/// identity rather than a new message kind.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AgentAnswerContent {
+    /// Role that produced the answer.
+    pub agent: BuiltinAgentDefinition,
+    /// User-visible answer text, including any clarification questions.
+    pub text: String,
+}
+
+impl AgentAnswerContent {
+    /// Returns durable message content with outer text whitespace removed,
+    /// matching assistant-answer normalization.
+    pub fn encode(&self) -> String {
+        serde_json::json!(EncodedAgentAnswer {
+            agent: self.agent.id().to_string(),
+            text: self.text.trim().to_string(),
+        })
+        .to_string()
+    }
+
+    /// Parses durable content, rejecting malformed JSON and unknown roles.
+    pub fn decode(content: &str) -> Option<Self> {
+        let encoded = serde_json::from_str::<EncodedAgentAnswer>(content).ok()?;
+
+        Some(Self {
+            agent: BuiltinAgentDefinition::from_id(&encoded.agent)?,
+            text: encoded.text,
+        })
+    }
+}
 
 /// One persisted transcript message for a session.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -115,10 +170,31 @@ impl SessionMessage {
         }
     }
 
+    /// Returns the decoded role answer for a well-formed
+    /// [`SessionMessageKind::AgentAnswer`] message.
+    pub fn agent_answer(&self) -> Option<AgentAnswerContent> {
+        if self.kind != SessionMessageKind::AgentAnswer {
+            return None;
+        }
+
+        AgentAnswerContent::decode(&self.content)
+    }
+
+    /// Returns the task-chain identity referenced by a
+    /// [`SessionMessageKind::AgentGraph`] marker.
+    pub fn agent_graph_chain_id(&self) -> Option<&str> {
+        (self.kind == SessionMessageKind::AgentGraph).then_some(self.content.as_str())
+    }
+
     /// Appends this message to a formatted transcript display buffer.
+    ///
+    /// Task-chain kinds render only in the chat UI; they never enter provider
+    /// replay or plain-text transcript projections.
     fn append_display_text(&self, output: &mut String) {
         match self.kind {
-            SessionMessageKind::ActivitySummary => {}
+            SessionMessageKind::ActivitySummary
+            | SessionMessageKind::AgentAnswer
+            | SessionMessageKind::AgentGraph => {}
             SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
                 Self::append_user_prompt_display_text(output, &self.content);
             }
@@ -350,16 +426,18 @@ impl SessionTranscript {
 ///
 /// User prompts preserve leading horizontal whitespace so pasted indentation
 /// survives persistence while outer line breaks and trailing whitespace are
-/// normalized. Assistant rows remove outer whitespace, while workflow notices
-/// preserve exact content so status blocks keep their spacing.
+/// normalized. Assistant rows and task-chain payloads remove outer whitespace,
+/// while workflow notices preserve exact content so status blocks keep their
+/// spacing.
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
     match kind {
         SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
             normalized_user_prompt_content(content)
         }
-        SessionMessageKind::AssistantAnswer | SessionMessageKind::ActivitySummary => {
-            normalized_message_content(content)
-        }
+        SessionMessageKind::AssistantAnswer
+        | SessionMessageKind::ActivitySummary
+        | SessionMessageKind::AgentAnswer
+        | SessionMessageKind::AgentGraph => normalized_message_content(content),
         SessionMessageKind::WorkflowNotice => content.to_string(),
     }
 }
@@ -367,6 +445,13 @@ pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String
 /// Returns raw persisted message content with only outer whitespace removed.
 pub fn normalized_message_content(content: &str) -> String {
     content.trim().to_string()
+}
+
+/// Wire shape behind [`AgentAnswerContent`].
+#[derive(Deserialize, Serialize)]
+struct EncodedAgentAnswer {
+    agent: String,
+    text: String,
 }
 
 const CLARIFICATION_HEADER: &str = "Clarifications:";

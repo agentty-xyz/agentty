@@ -59,6 +59,7 @@ use crate::presentation::app_mode::{
     PromptModeSnapshot,
 };
 use crate::presentation::setting::SettingsPresentationState;
+use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Relative directory name used for session git worktrees within the
 /// `agentty` home directory.
@@ -276,6 +277,9 @@ pub struct App {
     pub(crate) sync_handle: sync::SyncHandle,
     /// Runs sync-to-main workflows behind an injectable boundary.
     pub(crate) sync_main_runner: Arc<dyn SyncMainRunner>,
+    /// Latest task-chain graph snapshots for recently visible sessions,
+    /// reloaded when a session's reduced update version changes.
+    pub(crate) task_chain_graphs: TaskChainGraphCache,
     /// Interacts with tmux panes for session-specific terminal workflows.
     pub(super) tmux_client: Arc<dyn TmuxClient>,
     /// Stores the current auto-update progress state when an update is running.
@@ -1818,6 +1822,7 @@ impl App {
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
         self.refresh_plan_workflow_if_needed();
+        self.refresh_task_chain_graph_if_needed();
         let resources_refreshed = self.sessions.refresh_resources().await;
         let refreshed = self
             .sessions

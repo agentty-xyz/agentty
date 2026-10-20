@@ -118,11 +118,13 @@ pub trait TaskRepository: Send + Sync {
     /// Commits a running, uncanceled attempt's observed response, continuation,
     /// and usage atomically. Identical repeats do not duplicate usage or rewind
     /// continuation. This does not settle the operation or accept the task.
+    /// Returns `true` only when this call recorded the response, so callers
+    /// can run once-only follow-up effects; identical repeats return `false`.
     async fn persist_agent_turn(
         &self,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
-    ) -> Result<(), DbError> {
+    ) -> Result<bool, DbError> {
         let _ = (attempt_id, metadata);
         Err(TaskAgentStore::invalid(
             "Host does not support role-aware tasks",
@@ -571,13 +573,14 @@ impl TaskRepository for SqliteTaskRepository {
         &self,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
-    ) -> Result<(), DbError> {
+    ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
-        TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
+        let recorded =
+            TaskAgentTurnStore::save(&mut transaction, attempt_id, metadata, now).await?;
         transaction.commit().await?;
 
-        Ok(())
+        Ok(recorded)
     }
 
     async fn claim_agent_attempt(

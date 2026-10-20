@@ -19,6 +19,7 @@ use crate::infra::clock::{self, Clock};
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
 use crate::presentation::setting::SettingsPresentationState;
+use crate::presentation::task_chain_graph::TaskChainGraphCache;
 
 /// Environment flag that pins the version rendered by feature-test runs.
 const E2E_PIN_DISPLAY_VERSION_ENV_VAR: &str = "AGENTTY_E2E_PIN_DISPLAY_VERSION";
@@ -185,6 +186,7 @@ impl App {
             update_status: None,
             sync_handle,
             sync_main_runner,
+            task_chain_graphs: TaskChainGraphCache::default(),
             tmux_client: clients.tmux_client,
         };
         app.recover_startup_focused_reviews(recoverable_focused_review_session_ids);

@@ -24,8 +24,9 @@ before sending your first ordinary prompt. You can also plan a new request in an
 existing idle session whose workspace is prepared. An unprepared deferred draft shows an
 error and retains your request; use a prepared regular session to start planning. Enter
 your request in the **New plan** composer and submit it to the read-only **Planner**.
-Use `n` to compose another workflow later. The planning panel keeps each role's output
-separate from ordinary chat and shows the captured model.
+Use `n` to compose another workflow later. The planning panel shows the captured model.
+Session chat also shows your request, a live execution graph with each role's status,
+and each role's answer under a **Planner** or **Implementer** header.
 
 Inspect the latest plan before pressing `Enter` to accept that exact version and start
 the **Implementer**. Press `r` instead to request a revision. The panel labels its input

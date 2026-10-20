@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use testty::assertion;
+use testty::frame::TerminalFrame;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -77,6 +78,24 @@ fn wait_for_implementer(scenario: Scenario, started: PathBuf) -> Scenario {
     )
 }
 
+/// Ordinary chat shows the request, live graph, and role-attributed answers.
+fn assert_chat_shows_chain(chat: &TerminalFrame) {
+    let full = Region::full(chat.cols(), chat.rows());
+    for expected in [
+        "› Add search",
+        "⬡ Execution graph",
+        "Planner      ✓ Done",
+        "│ accepted plan ✓",
+        "Implementer  ✓ Done",
+        "◆ Planner",
+        "Plan version 2: add indexed search and tests.",
+        "◆ Implementer",
+        "Implementation finished from accepted plan version 2.",
+    ] {
+        assertion::assert_text_in_region(chat, expected, &full);
+    }
+}
+
 #[tokio::test]
 async fn plan_command_is_unavailable_by_default() -> E2eResult {
     // Arrange, Act, Assert: prove the default launch hides and rejects `/plan`.
@@ -125,6 +144,7 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
     let started = gate.path().join("implementation-started");
     FeatureTest::new("plan_then_implement")
         .with_git()
+        .with_terminal_size(100, 60)
         .args(["--experimental-multi-agent".to_string()])
         .env(
             "AGENTTY_TEST_IMPLEMENTER_STARTED",
@@ -158,6 +178,9 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
                     .write_text("Include search tests")
                     .press_key("Enter")
                     .wait_for_text("Plan version 2", 20000)
+                    // The answer and settled status refresh the panel
+                    // separately; accept only after the last load lands.
+                    .wait_for_stable_frame(500, 5000)
                     .press_key("Enter")
                     .wait_for_text("Implementer running", 20000);
                 wait_for_implementer(scenario, started)
@@ -184,8 +207,12 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
                         "Implementer retry retains the accepted plan",
                     )
                     .press_key("Esc")
+                    .wait_for_text("Implementer  ✓ Done", 10000)
                     .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("ordinary_chat", "Role output stays outside ordinary chat")
+                    .capture_labeled(
+                        "session_chat",
+                        "Role answers and the live execution graph appear in chat",
+                    )
                     .press_key("/")
                     .write_text("plan")
                     .press_key("Enter")
@@ -197,9 +224,7 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
                     let planner_full = Region::full(planner.cols(), planner.rows());
                     assertion::assert_text_in_region(&planner, "Planner", &planner_full);
                     assertion::assert_text_in_region(&planner, "Plan version 1", &planner_full);
-                    let chat = common::frame_from_capture(&report.captures[2]);
-                    assertion::assert_not_visible(&chat, "Plan version 2");
-                    assertion::assert_not_visible(&chat, "Implementation finished");
+                    assert_chat_shows_chain(&common::frame_from_capture(&report.captures[2]));
                     assertion::assert_text_in_region(
                         frame,
                         "Implementation succeeded",

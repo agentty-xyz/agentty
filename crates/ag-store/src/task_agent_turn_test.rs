@@ -87,7 +87,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     let database = task_database_fixture().await;
     running_attempt(&database, "first").await;
     let first = metadata("first");
-    database
+    let first_recorded = database
         .tasks()
         .persist_agent_turn("first", &first)
         .await
@@ -112,7 +112,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
         .expect("second response");
 
     // Act
-    database
+    let duplicate_recorded = database
         .tasks()
         .persist_agent_turn("first", &first)
         .await
@@ -125,6 +125,8 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
         .expect("context");
 
     // Assert
+    assert!(first_recorded);
+    assert!(!duplicate_recorded);
     assert_eq!(
         history.provider_conversation_id,
         second.provider_conversation_id

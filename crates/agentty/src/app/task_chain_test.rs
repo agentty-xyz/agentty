@@ -4,10 +4,10 @@ use std::time::Duration;
 use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_protocol::AgentResponse;
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
-    ContinueTaskChainRequest, FocusedReviewStatus, PermissionMode, SessionError, SessionId,
-    SessionService, SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn, TaskChain,
-    TaskChainPhase,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentAnswerContent, AgentKind, AgentModel,
+    AgentSelection, BuiltinAgentDefinition, ContinueTaskChainRequest, FocusedReviewStatus,
+    PermissionMode, SessionError, SessionId, SessionMessageKind, SessionService, SessionStatus,
+    StartPlanThenImplementRequest, TaskAgentTurn, TaskChain, TaskChainPhase,
 };
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -102,6 +102,18 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
     // Assert
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
     assert_eq!(listed, vec![finished]);
+    let expected_transcript = vec![
+        (
+            SessionMessageKind::UserPrompt,
+            "Implement a scoped change".to_string(),
+        ),
+        (SessionMessageKind::AgentGraph, "workflow".to_string()),
+        agent_answer(BuiltinAgentDefinition::Planner, "First plan"),
+        agent_answer(BuiltinAgentDefinition::Planner, "Exact revised plan"),
+        agent_answer(BuiltinAgentDefinition::Implementer, "Implemented"),
+    ];
+    assert_eq!(fixture.persisted_transcript().await, expected_transcript);
+    assert_eq!(fixture.live_transcript(), expected_transcript);
     assert!(
         fixture
             .app
@@ -391,6 +403,17 @@ async fn workflow_queries_and_admission_surface_database_failures() {
     );
 }
 
+fn agent_answer(agent: BuiltinAgentDefinition, text: &str) -> (SessionMessageKind, String) {
+    (
+        SessionMessageKind::AgentAnswer,
+        AgentAnswerContent {
+            agent,
+            text: text.to_string(),
+        }
+        .encode(),
+    )
+}
+
 fn launch_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
@@ -561,6 +584,31 @@ impl ChainFixture {
         .await
         .expect("settle guard");
         self.app.sessions.sync_session_from_handle(&self.session_id);
+    }
+
+    async fn persisted_transcript(&self) -> Vec<(SessionMessageKind, String)> {
+        self.app
+            .services
+            .db()
+            .sessions()
+            .load_session_messages(&self.session_id)
+            .await
+            .expect("session messages")
+            .into_iter()
+            .map(|row| (row.kind.parse().expect("message kind"), row.content))
+            .collect()
+    }
+
+    fn live_transcript(&self) -> Vec<(SessionMessageKind, String)> {
+        self.app
+            .sessions
+            .session_for_id(&self.session_id)
+            .and_then(|session| session.transcript.as_ref())
+            .expect("live transcript")
+            .messages()
+            .iter()
+            .map(|message| (message.kind, message.content.clone()))
+            .collect()
     }
 
     async fn snapshot(&mut self) -> TaskChain {
