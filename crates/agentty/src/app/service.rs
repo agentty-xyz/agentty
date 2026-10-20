@@ -458,6 +458,7 @@ impl AppServices {
     /// Returns a stable instrumentation label for one app event variant.
     fn app_event_label(event: &AppEvent) -> &'static str {
         match event {
+            AppEvent::PlanWorkflowLoaded { .. } => "PlanWorkflowLoaded",
             AppEvent::ProjectDiscoveryCompleted { .. } => "ProjectDiscoveryCompleted",
             AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
             AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",

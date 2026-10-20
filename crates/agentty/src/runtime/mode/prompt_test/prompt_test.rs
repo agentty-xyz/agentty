@@ -397,6 +397,7 @@ fn test_prompt_slash_commands_lists_all_commands() {
             "/apply",
             "/mode",
             "/model",
+            "/plan",
             "/personality",
             "/reasoning",
             "/style",

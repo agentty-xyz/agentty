@@ -65,6 +65,10 @@ pub(crate) enum AppRuntimeEvent {
 /// [`App::apply_app_events`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AppEvent {
+    /// A task-workflow query or mutation completed through the session actor.
+    PlanWorkflowLoaded {
+        completion: crate::app::plan_workflow::PlanWorkflowCompletion,
+    },
     /// User-authorized repository scan completed; cancelled results are
     /// ignored.
     ProjectDiscoveryCompleted {
@@ -438,6 +442,7 @@ pub(super) struct AppEventBatch {
     pub(super) sync_main_completion: Option<SyncMainCompletion>,
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
     project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
+    plan_workflow_completions: Vec<crate::app::plan_workflow::PlanWorkflowCompletion>,
     pub(super) update_status: Option<UpdateStatus>,
 }
 
@@ -467,6 +472,7 @@ impl AppEventBatch {
             before_snapshot_effects.push(AppEventEffect::RecordTurnEnds(turn_ends));
         }
         let changes_observable_state = !self.project_discovery_completions.is_empty()
+            || !self.plan_workflow_completions.is_empty()
             || self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
@@ -535,6 +541,9 @@ impl AppEventBatch {
     /// tick preserves cumulative usage from multiple completed turns.
     pub(super) fn collect_event(&mut self, event: AppEvent) {
         match event {
+            AppEvent::PlanWorkflowLoaded { completion } => {
+                self.plan_workflow_completions.push(completion);
+            }
             AppEvent::ProjectDiscoveryCompleted { completion } => {
                 self.project_discovery_completions.push(completion);
             }
@@ -704,7 +713,8 @@ impl AppEventBatch {
             | AppEvent::StackedParentMergeCompleted { .. }
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
-            AppEvent::ProjectDiscoveryCompleted { .. }
+            AppEvent::PlanWorkflowLoaded { .. }
+            | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::GitStatusUpdated { .. }
@@ -853,7 +863,8 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::ProjectDiscoveryCompleted { .. }
+            AppEvent::PlanWorkflowLoaded { .. }
+            | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
             | AppEvent::AtMentionEntriesLoaded { .. }
@@ -1151,9 +1162,7 @@ impl App {
         for session_id in std::mem::take(&mut event_batch.session_rebase_review_invalidated_ids) {
             self.clear_review_output(&session_id);
         }
-        for completion in std::mem::take(&mut event_batch.project_discovery_completions) {
-            self.complete_project_discovery(completion);
-        }
+        self.complete_loaded_dialogs(&mut event_batch);
         self.apply_batch_runtime_updates(&mut event_batch);
 
         self.apply_batch_session_snapshot_updates(&mut event_batch);
@@ -1242,6 +1251,16 @@ impl App {
 
         if should_mark_dirty {
             self.mark_dirty();
+        }
+    }
+
+    /// Applies request-scoped background snapshots to foreground dialogs.
+    fn complete_loaded_dialogs(&mut self, event_batch: &mut AppEventBatch) {
+        for completion in std::mem::take(&mut event_batch.project_discovery_completions) {
+            self.complete_project_discovery(completion);
+        }
+        for completion in std::mem::take(&mut event_batch.plan_workflow_completions) {
+            self.complete_plan_workflow(completion);
         }
     }
 
@@ -1964,6 +1983,10 @@ impl App {
                 ..
             }
             | AppMode::Prompt {
+                session_id: view_id,
+                ..
+            }
+            | AppMode::PlanWorkflow {
                 session_id: view_id,
                 ..
             }

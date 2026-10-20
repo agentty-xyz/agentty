@@ -6,6 +6,7 @@ pub mod app_mode;
 pub(crate) mod frame_time;
 /// Context-sensitive help actions and keybinding projections.
 pub mod help_action;
+pub mod plan_workflow;
 /// Explicit project registration and discovery dialogs.
 pub mod project_catalog;
 /// Prompt composer history, attachment, and suggestion state.

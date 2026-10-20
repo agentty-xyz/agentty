@@ -12,6 +12,7 @@ mod diff_prompt;
 mod error;
 mod merge_queue;
 mod message_admission;
+pub(crate) mod plan_workflow;
 mod project;
 mod project_catalog;
 pub(crate) mod prompt_intent;

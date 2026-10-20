@@ -94,6 +94,7 @@ impl RouteSharedContext<'_> {
 /// UI-private base page selected for the active mode.
 #[derive(Clone, Copy)]
 enum Surface<'a> {
+    PlanWorkflow(&'a crate::presentation::plan_workflow::PlanWorkflowState),
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
@@ -125,7 +126,7 @@ impl Surface<'_> {
         match self {
             Self::Diff { .. } | Self::DiffLoading { .. } => SurfaceKind::Diff,
             Self::List => SurfaceKind::List,
-            Self::Session { .. } => SurfaceKind::Session,
+            Self::PlanWorkflow(_) | Self::Session { .. } => SurfaceKind::Session,
         }
     }
 }
@@ -305,6 +306,7 @@ pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
 /// Resolves the base page painted for every mode before any overlay.
 fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
     match mode {
+        AppMode::PlanWorkflow { state, .. } => Surface::PlanWorkflow(state),
         AppMode::Confirmation {
             confirmation_intent:
                 ConfirmationIntent::ContinueSession
@@ -446,6 +448,9 @@ fn render_surface(
     resources: FrameResources<'_>,
 ) {
     match surface {
+        Surface::PlanWorkflow(state) => {
+            page::plan_workflow::render(f, area, state, resources.markdown_render_cache);
+        }
         Surface::List => render_list_background(f, area, shared, resources.frame_time),
         Surface::Session {
             mode,
@@ -531,6 +536,7 @@ fn render_mode_overlay(
 ) {
     match mode {
         AppMode::List
+        | AppMode::PlanWorkflow { .. }
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }
@@ -581,13 +587,10 @@ fn render_mode_overlay(
                 message,
                 project_name.as_deref(),
             );
-            component::info_overlay::InfoOverlay::new(title, &popup_message)
+            let popup = InfoOverlay::new(title, &popup_message)
                 .is_loading(*is_loading)
-                .loading_label("Sync in progress...")
-                .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
-                    resources.frame_time.unix_millis(),
-                ))
-                .render(f, area);
+                .loading_label("Sync in progress...");
+            render_information_overlay(f, area, popup, resources.frame_time);
         }
         AppMode::ViewInfoPopup {
             is_loading,
@@ -596,13 +599,10 @@ fn render_mode_overlay(
             title,
             ..
         } => {
-            component::info_overlay::InfoOverlay::new(title, message)
+            let popup = InfoOverlay::new(title, message)
                 .is_loading(*is_loading)
-                .loading_label(loading_label)
-                .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
-                    resources.frame_time.unix_millis(),
-                ))
-                .render(f, area);
+                .loading_label(loading_label);
+            render_information_overlay(f, area, popup, resources.frame_time);
         }
         AppMode::Help {
             context: help_context,
@@ -629,6 +629,20 @@ fn render_mode_overlay(
         )
         .render(f, area),
     }
+}
+
+/// Shares the frame's spinner phase between informational overlays.
+fn render_information_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    popup: InfoOverlay<'_>,
+    frame_time: FrameTime,
+) {
+    popup
+        .spinner_frame(crate::ui::icon::Icon::spinner_frame_from_millis(
+            frame_time.unix_millis(),
+        ))
+        .render(frame, area);
 }
 
 /// Renders the eligible parent choices for the session being appended.

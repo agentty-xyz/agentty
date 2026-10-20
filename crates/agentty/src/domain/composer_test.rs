@@ -942,6 +942,7 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
         vec![
             "/mode",
             "/model",
+            "/plan",
             "/personality",
             "/reasoning",
             "/style",
@@ -968,7 +969,14 @@ fn test_prompt_slash_command_list_omits_speed_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/mode", "/model", "/personality", "/reasoning", "/style"]
+        vec![
+            "/mode",
+            "/model",
+            "/plan",
+            "/personality",
+            "/reasoning",
+            "/style"
+        ]
     );
 }
 
