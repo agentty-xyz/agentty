@@ -59,6 +59,12 @@ impl App {
             } => {
                 return self.execute_review_request(request, response_tx).await;
             }
+            CommandDelivery::TaskChainReply {
+                request,
+                response_tx,
+            } => {
+                self.execute_task_chain_reply(request, response_tx).await;
+            }
         }
 
         Ok(())

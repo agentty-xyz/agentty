@@ -351,6 +351,64 @@ async fn reopening_never_replays_an_interrupted_implementation() {
     );
 }
 
+#[tokio::test]
+async fn reopening_keeps_reply_receipts_with_one_transcript_prompt() {
+    // Arrange
+    let directory = tempdir().expect("directory");
+    let path = directory.path().join("reply.sqlite");
+    let database = Database::open(&path).await.expect("database");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    database
+        .sessions()
+        .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
+        .await
+        .expect("session");
+    database
+        .tasks()
+        .start_task_chain(
+            "session",
+            &StartPlanThenImplementRequest {
+                agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+                chain_id: "chain".into(),
+                planner_attempt_id: "plan".into(),
+                user_request: "Implement this change".into(),
+            },
+            "reply",
+        )
+        .await
+        .expect("start");
+    let recorded = database
+        .tasks()
+        .record_task_chain_reply("chain", "reply-1", "Go ahead")
+        .await
+        .expect("record reply");
+    database.pool().close().await;
+
+    // Act
+    let reopened = Database::open(&path).await.expect("reopen");
+    let redelivered = reopened
+        .tasks()
+        .record_task_chain_reply("chain", "reply-1", "Go ahead")
+        .await
+        .expect("reply receipt");
+    let messages = reopened
+        .sessions()
+        .load_session_messages("session")
+        .await
+        .expect("transcript");
+
+    // Assert
+    assert!(recorded);
+    assert!(!redelivered);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].kind, "user_prompt");
+    assert_eq!(messages[0].content, "Go ahead");
+}
+
 async fn begin_implementation(
     database: &Database,
     start: &StartPlanThenImplementRequest,
