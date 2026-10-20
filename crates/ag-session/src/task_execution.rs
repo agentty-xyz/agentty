@@ -140,6 +140,32 @@ pub struct SubmitAgentTaskRequest {
     pub visibility: DurableMessageVisibility,
 }
 
+/// One response retained in an isolated task conversation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskAgentTurn {
+    /// Exact serialized protocol response, including clarification questions.
+    pub assistant_message: String,
+    /// Producing attempt; consult its durable status before accepting output.
+    pub attempt_id: String,
+    /// Explicit input supplied to this attempt.
+    pub input: TaskAgentInput,
+    /// Input tokens charged to the captured model.
+    pub input_tokens: u64,
+    /// Output tokens charged to the captured model.
+    pub output_tokens: u64,
+}
+
+/// Durable task conversation, independent of ordinary session messages.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskAgentHistory {
+    /// Stable assignment and runtime identity shared by these attempts.
+    pub context: TaskAgentContext,
+    /// Original task input without attempt-specific clarification.
+    pub input: TaskAgentInput,
+    /// Responses in admitted attempt order; absence is not proof of failure.
+    pub turns: Vec<TaskAgentTurn>,
+}
+
 #[cfg(test)]
 #[path = "task_execution_test.rs"]
 mod tests;
