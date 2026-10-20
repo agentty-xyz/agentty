@@ -108,6 +108,10 @@ effects. Implementer post-processing uses an isolated transcript projection and 
 ordered through publication. A settled task attempt refreshes its owning session only
 after operation bookkeeping finishes, so consumers observe its final durable status.
 
+The terminal projects planning commands and panel access from the launch-time
+`--experimental-multi-agent` setting; the shared task API retains its own programmatic
+contract.
+
 Role admission invalidates earlier ordinary review work and its durable recovery
 trigger. Task completion does not start automatic review or auto-address follow-ups;
 explicit review and later ordinary turns retain their existing behavior. See

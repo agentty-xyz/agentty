@@ -552,7 +552,6 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
         vec![
             "/mode",
             "/model",
-            "/plan",
             "/personality",
             "/reasoning",
             "/style",

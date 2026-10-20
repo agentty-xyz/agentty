@@ -31,6 +31,7 @@ fn test_handle_quit_key_restores_view_mode() {
     // Arrange
     let mut mode = AppMode::Help {
         context: HelpContext::View {
+            can_open_plan_workflow: false,
             can_fork_session: true,
             can_merge_session_branch: true,
             can_mutate_session_branch: true,

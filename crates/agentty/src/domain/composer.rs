@@ -446,6 +446,8 @@ pub enum PromptSlashStage {
 /// UI state for prompt-only slash command selection.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PromptSlashState {
+    /// Whether the preview `/plan` command is available for this launch.
+    pub allow_plan_command: bool,
     /// Agent kinds currently runnable on this machine for `/model`.
     pub available_agent_kinds: Vec<AgentKind>,
     /// Workspace personalities loaded when `/personality` was accepted.
@@ -464,6 +466,7 @@ impl PromptSlashState {
     #[must_use]
     pub fn with_available_agent_kinds(available_agent_kinds: Vec<AgentKind>) -> Self {
         Self {
+            allow_plan_command: false,
             available_agent_kinds,
             personalities: Vec::new(),
             selected_agent: None,
@@ -665,26 +668,12 @@ impl Default for PromptComposerState {
 #[must_use]
 pub fn prompt_slash_option_count(
     input: &str,
-    stage: PromptSlashStage,
-    selected_agent: Option<AgentKind>,
-    available_agent_kinds: &[AgentKind],
-    personalities: &[PersonalitySummary],
+    slash_state: &PromptSlashState,
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
 ) -> usize {
-    build_prompt_slash_suggestion_list(
-        input,
-        &PromptSlashState {
-            available_agent_kinds: available_agent_kinds.to_vec(),
-            personalities: personalities.to_vec(),
-            selected_agent,
-            selected_index: 0,
-            stage,
-        },
-        session_agent_kind,
-        allow_apply_command,
-    )
-    .map_or(0, |suggestion_list| suggestion_list.items.len())
+    build_prompt_slash_suggestion_list(input, slash_state, session_agent_kind, allow_apply_command)
+        .map_or(0, |suggestion_list| suggestion_list.items.len())
 }
 
 /// Returns the character range deleted by one current-line delete action.
@@ -941,15 +930,20 @@ fn build_slash_suggestion_list(
 
     let (title, items): (&str, Vec<PromptSuggestionItem>) = match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input, session_agent_kind, allow_apply_command)
-                .into_iter()
-                .map(|command| PromptSuggestionItem {
-                    badge: None,
-                    detail: Some(command_description(command).to_string()),
-                    label: command.to_string(),
-                    metadata: None,
-                })
-                .collect::<Vec<_>>();
+            let commands = prompt_slash_commands(
+                input,
+                session_agent_kind,
+                allow_apply_command,
+                slash_state.allow_plan_command,
+            )
+            .into_iter()
+            .map(|command| PromptSuggestionItem {
+                badge: None,
+                detail: Some(command_description(command).to_string()),
+                label: command.to_string(),
+                metadata: None,
+            })
+            .collect::<Vec<_>>();
 
             ("Slash Command (j/k move, Enter select)", commands)
         }
@@ -1029,7 +1023,12 @@ fn selected_slash_action(
 ) -> Option<PromptSuggestionSelection> {
     match slash_state.stage {
         PromptSlashStage::Command => {
-            let commands = prompt_slash_commands(input, session_agent_kind, allow_apply_command);
+            let commands = prompt_slash_commands(
+                input,
+                session_agent_kind,
+                allow_apply_command,
+                slash_state.allow_plan_command,
+            );
             let selected_command = commands
                 .get(clamp_selected_index(
                     slash_state.selected_index,
@@ -1168,6 +1167,7 @@ fn prompt_slash_commands(
     input: &str,
     session_agent_kind: AgentKind,
     allow_apply_command: bool,
+    allow_plan_command: bool,
 ) -> Vec<&'static str> {
     let lowered = input.to_lowercase();
     let mut commands = vec![
@@ -1182,6 +1182,9 @@ fn prompt_slash_commands(
     ];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
+    }
+    if !allow_plan_command {
+        commands.retain(|command| *command != "/plan");
     }
     if !session_agent_kind.supports_speed_mode() {
         commands.retain(|command| *command != "/speed");

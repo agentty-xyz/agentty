@@ -553,7 +553,12 @@ async fn handle_workflow_view_key(
             return Some(false);
         }
         KeyCode::Char('?') => {
-            open_view_help_overlay(&mut app.mode, view_context, view_session_snapshot);
+            open_view_help_overlay(
+                &mut app.mode,
+                view_context,
+                view_session_snapshot,
+                app.experimental_multi_agent,
+            );
             return Some(false);
         }
         _ => return None,
@@ -932,9 +937,11 @@ fn open_view_help_overlay(
     mode: &mut AppMode,
     view_context: &ViewContext,
     view_session_snapshot: &ViewSessionSnapshot,
+    can_open_plan_workflow: bool,
 ) {
     *mode = AppMode::Help {
         context: HelpContext::View {
+            can_open_plan_workflow,
             can_fork_session: view_session_snapshot.can_fork_session(),
             can_merge_session_branch: view_session_snapshot.can_merge_session_branch(),
             can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),

@@ -25,11 +25,9 @@ use clap::Parser;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Offers preview Harness sessions run by the built-in agent loop when
-    /// `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or
-    /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
-    #[arg(long)]
-    experimental_harness: bool,
+    /// Preview features enabled for this launch.
+    #[command(flatten)]
+    experimental: ExperimentalFeatures,
     /// Disables automatic application updates.
     #[arg(long)]
     no_update: bool,
@@ -40,6 +38,19 @@ struct Cli {
     /// Exports traces using OTLP HTTP/protobuf to this complete traces URL.
     #[arg(long, value_name = "URL")]
     otlp_endpoint: Option<String>,
+}
+
+/// Opt-in preview features, disabled unless their launch flags are present.
+#[derive(Debug, Default, clap::Args)]
+struct ExperimentalFeatures {
+    /// Offers preview Harness sessions run by the built-in agent loop when
+    /// `MODEL_API_KEY`, `KIMI_API_KEY` with `KIMI_BASE_URL`, or
+    /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
+    #[arg(long = "experimental-harness")]
+    harness: bool,
+    /// Enables preview multi-agent planning with `/plan` and the `T` shortcut.
+    #[arg(long = "experimental-multi-agent")]
+    multi_agent: bool,
 }
 
 /// Runs the `agentty` application runtime using the configured workspace and
@@ -183,7 +194,8 @@ async fn run_application(
         Box::pin(async {
             let mut app = App::new(
                 !cli.no_update,
-                cli.experimental_harness,
+                cli.experimental.harness,
+                cli.experimental.multi_agent,
                 base_path,
                 working_dir,
                 git_branch,

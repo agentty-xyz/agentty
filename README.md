@@ -172,10 +172,12 @@ agentty              # Launch with auto-update enabled (default)
 agentty --no-update  # Launch without automatic updates
 agentty --otlp-endpoint http://localhost:4318/v1/traces  # Export session traces
 agentty --experimental-harness  # Offer preview Harness sessions
+agentty --experimental-multi-agent  # Enable /plan and the planning panel
 agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
 
+Start with `agentty --experimental-multi-agent` to enable `/plan` and the `T` shortcut.
 Use `/plan` in a session with a prepared worktree, including a new **Regular** session,
 to start **Plan then implement**. Inspect or revise the read-only **Planner** proposal,
 then explicitly accept it to run the **Implementer**. Press `T` in session view to

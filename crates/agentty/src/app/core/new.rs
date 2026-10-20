@@ -34,6 +34,7 @@ impl App {
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under
     /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
+    /// `experimental_multi_agent` enables `/plan` and the planning panel.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,
@@ -42,6 +43,7 @@ impl App {
     pub async fn new(
         auto_update: bool,
         experimental_harness: bool,
+        experimental_multi_agent: bool,
         base_path: PathBuf,
         working_dir: PathBuf,
         git_branch: Option<String>,
@@ -59,7 +61,7 @@ impl App {
             env!("CARGO_PKG_VERSION"),
         );
 
-        let app = Box::pin(Self::new_with_options(
+        let mut app = Box::pin(Self::new_with_options(
             auto_update,
             base_path,
             working_dir,
@@ -69,6 +71,7 @@ impl App {
             clients,
         ))
         .await?;
+        app.experimental_multi_agent = experimental_multi_agent;
 
         Ok(app)
     }
@@ -153,6 +156,7 @@ impl App {
             current_version_display_text,
             prompt_progress: std::collections::HashMap::new(),
             diff_comment_progress: std::collections::HashMap::new(),
+            experimental_multi_agent: false,
             auto_address_review_iterations: std::collections::HashMap::new(),
             deferred_auto_review_session_ids: std::collections::HashSet::new(),
             role_review_suppression: std::collections::HashSet::new(),

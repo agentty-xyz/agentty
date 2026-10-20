@@ -487,6 +487,7 @@ fn mode_session_id_uses_view_help_context() {
     // Arrange
     let mode = AppMode::Help {
         context: HelpContext::View {
+            can_open_plan_workflow: false,
             can_fork_session: false,
             can_merge_session_branch: false,
             can_mutate_session_branch: false,

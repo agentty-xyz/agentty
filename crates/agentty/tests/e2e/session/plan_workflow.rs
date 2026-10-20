@@ -78,12 +78,54 @@ fn wait_for_implementer(scenario: Scenario, started: PathBuf) -> Scenario {
 }
 
 #[tokio::test]
+async fn plan_command_is_unavailable_by_default() -> E2eResult {
+    // Arrange, Act, Assert: prove the default launch hides and rejects `/plan`.
+    FeatureTest::new("plan_command_disabled")
+        .with_git()
+        .run(
+            |scenario| {
+                scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 10000)
+                    .press_key("/")
+                    .wait_for_text("Slash Command", 3000)
+                    .capture_labeled("commands", "Planning is absent from the default menu")
+                    .write_text("plan")
+                    .press_key("Enter")
+                    .wait_for_stable_frame(300, 3000)
+                    .capture_labeled("disabled", "Typing /plan cannot open the panel")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    let menu = common::frame_from_capture(&report.captures[0]);
+                    assertion::assert_not_visible(&menu, "/plan");
+                    assertion::assert_not_visible(frame, "Plan then implement");
+                    assertion::assert_not_visible(frame, "New plan");
+                    assertion::assert_text_in_region(
+                        frame,
+                        "/plan",
+                        &Region::full(frame.cols(), frame.rows()),
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn plan_then_implement_requires_acceptance_and_preserves_role_history() -> E2eResult {
     // Arrange, Act, Assert: lower tests own phase and identity permutations.
     let gate = tempfile::tempdir()?;
     let started = gate.path().join("implementation-started");
     FeatureTest::new("plan_then_implement")
         .with_git()
+        .args(["--experimental-multi-agent".to_string()])
         .env(
             "AGENTTY_TEST_IMPLEMENTER_STARTED",
             started.to_string_lossy(),

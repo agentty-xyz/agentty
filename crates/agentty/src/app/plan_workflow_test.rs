@@ -335,6 +335,7 @@ async fn drive_panel(app: &mut crate::app::App) {
 async fn empty_panel_queries_use_mailbox_and_reload_without_discarding_a_draft() {
     // Arrange
     let (mut app, _root) = test_support::new_test_app().await;
+    app.experimental_multi_agent = true;
     let _consumer = app.sessions.foreground_consumer();
     app.open_plan_workflow(SessionId::from("missing"));
 
@@ -366,6 +367,18 @@ async fn empty_panel_queries_use_mailbox_and_reload_without_discarding_a_draft()
     app.refresh_plan_workflow_if_needed();
     app.handle_plan_workflow_intent(PlanWorkflowIntent::Refresh);
     assert!(matches!(app.mode, AppMode::View { .. }));
+}
+
+#[tokio::test]
+async fn planning_panel_is_unavailable_without_experimental_multi_agent() {
+    // Arrange
+    let (mut app, _root) = test_support::new_test_app().await;
+
+    // Act
+    app.open_plan_workflow(SessionId::from("missing"));
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
 }
 
 #[tokio::test]

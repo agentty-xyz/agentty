@@ -274,6 +274,7 @@ fn surface_for_help_context_classifies_each_restored_page() {
         keybindings: vec![],
     };
     let view_context = HelpContext::View {
+        can_open_plan_workflow: false,
         can_fork_session: true,
         can_merge_session_branch: true,
         can_mutate_session_branch: true,
@@ -745,6 +746,7 @@ fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
         (
             AppMode::Help {
                 context: crate::presentation::app_mode::HelpContext::View {
+                    can_open_plan_workflow: false,
                     can_fork_session: true,
                     can_merge_session_branch: true,
                     can_mutate_session_branch: true,

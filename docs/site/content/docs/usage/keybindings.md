@@ -125,24 +125,24 @@ Claude or Codex, speed. Launch commands use the shared text editor. See
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.
 The full set in **Review** state, subject to session and forge availability:
 
-| Key                 | Action                                              |
-| ------------------- | --------------------------------------------------- |
-| `q`                 | Back to list                                        |
-| `Enter`             | Compose a reply                                     |
-| `/`                 | Open composer with `/` prefilled                    |
-| `T`                 | Open planning workflows                             |
-| `o`                 | Run a launch configuration in the worktree (`tmux`) |
-| `p`                 | Publish branch and create or refresh review request |
-| `c`                 | Show linked review-request comments                 |
-| `d`                 | Show diff when the session has changes              |
-| `f`                 | Show, generate, or regenerate focused review        |
-| `F`                 | Fork session with copied transcript history         |
-| `m`                 | Add to merge queue after confirmation               |
-| `r`                 | Sync session branch                                 |
-| `j` / `k`           | Scroll output                                       |
-| `g` / `G`           | Scroll to top / bottom                              |
-| `Ctrl+d` / `Ctrl+u` | Half page down / up                                 |
-| `?`                 | Help                                                |
+| Key                 | Action                                                 |
+| ------------------- | ------------------------------------------------------ |
+| `q`                 | Back to list                                           |
+| `Enter`             | Compose a reply                                        |
+| `/`                 | Open composer with `/` prefilled                       |
+| `T`                 | Open planning workflows (`--experimental-multi-agent`) |
+| `o`                 | Run a launch configuration in the worktree (`tmux`)    |
+| `p`                 | Publish branch and create or refresh review request    |
+| `c`                 | Show linked review-request comments                    |
+| `d`                 | Show diff when the session has changes                 |
+| `f`                 | Show, generate, or regenerate focused review           |
+| `F`                 | Fork session with copied transcript history            |
+| `m`                 | Add to merge queue after confirmation                  |
+| `r`                 | Sync session branch                                    |
+| `j` / `k`           | Scroll output                                          |
+| `g` / `G`           | Scroll to top / bottom                                 |
+| `Ctrl+d` / `Ctrl+u` | Half page down / up                                    |
+| `?`                 | Help                                                   |
 
 State-specific differences:
 
@@ -267,9 +267,9 @@ navigation. Other file types keep showing diffs; unavailable files show a notice
 Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
 `Shift+Tab` cycles those modes in that order.
 
-Use `/plan` to open **Plan then implement** in a session with a prepared worktree. From
-session view, `T` also opens its workflows, including while an agent is running. In its
-panel:
+With `agentty --experimental-multi-agent`, use `/plan` to open **Plan then implement**
+in a session with a prepared worktree. From session view, `T` also opens its workflows,
+including while an agent is running. In its panel:
 
 | Key                       | Action                                                                      |
 | ------------------------- | --------------------------------------------------------------------------- |

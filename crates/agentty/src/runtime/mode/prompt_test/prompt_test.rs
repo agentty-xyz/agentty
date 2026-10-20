@@ -397,7 +397,6 @@ fn test_prompt_slash_commands_lists_all_commands() {
             "/apply",
             "/mode",
             "/model",
-            "/plan",
             "/personality",
             "/reasoning",
             "/style",
@@ -425,10 +424,10 @@ fn test_prompt_slash_option_count_for_agent_stage() {
     // Arrange & Act
     let count = prompt_slash_option_count(
         "/model",
-        PromptSlashStage::Agent,
-        None,
-        AgentKind::ALL,
-        &[],
+        &PromptSlashState {
+            stage: PromptSlashStage::Agent,
+            ..PromptSlashState::default()
+        },
         AgentKind::Codex,
         true,
     );
@@ -442,10 +441,11 @@ fn test_prompt_slash_option_count_for_model_stage() {
     // Arrange & Act
     let count = prompt_slash_option_count(
         "/model",
-        PromptSlashStage::Model,
-        Some(AgentKind::Claude),
-        AgentKind::ALL,
-        &[],
+        &PromptSlashState {
+            stage: PromptSlashStage::Model,
+            selected_agent: Some(AgentKind::Claude),
+            ..PromptSlashState::default()
+        },
         AgentKind::Codex,
         true,
     );
@@ -462,10 +462,11 @@ fn test_prompt_slash_option_count_for_agent_stage_uses_available_agent_kinds() {
     // Act
     let count = prompt_slash_option_count(
         "/model",
-        PromptSlashStage::Agent,
-        None,
-        &available_agent_kinds,
-        &[],
+        &PromptSlashState {
+            stage: PromptSlashStage::Agent,
+            available_agent_kinds: available_agent_kinds.to_vec(),
+            ..PromptSlashState::default()
+        },
         AgentKind::Codex,
         true,
     );
@@ -2250,16 +2251,33 @@ async fn plan_slash_command_opens_task_panel_without_submitting_an_ordinary_turn
             .id("prompt-test-session")
             .build(),
     );
-    app.mode = new_test_prompt_mode("/plan");
-    let context = prompt_context(&mut app).expect("prompt context");
+    for enabled in [false, true] {
+        // Arrange
+        app.experimental_multi_agent = enabled;
+        let slash_state = app.prompt_slash_state("prompt-test-session");
+        app.mode = new_test_prompt_mode("/plan");
+        if let AppMode::Prompt {
+            slash_state: current,
+            ..
+        } = &mut app.mode
+        {
+            *current = slash_state;
+        }
+        let context = prompt_context(&mut app).expect("prompt context");
 
-    // Act
-    handle_prompt_slash_submit(&mut app, &context).await;
+        // Act
+        handle_prompt_slash_submit(&mut app, &context).await;
 
-    // Assert
-    assert!(
-        matches!(&app.mode, AppMode::PlanWorkflow { session_id, state } if session_id == "prompt-test-session" && state.is_loading)
-    );
+        // Assert
+        assert_eq!(
+            matches!(&app.mode, AppMode::PlanWorkflow { session_id, state } if session_id == "prompt-test-session" && state.is_loading),
+            enabled
+        );
+        if !enabled {
+            assert!(matches!(&app.mode, AppMode::Prompt { input, .. } if input.text() == "/plan"));
+        }
+        assert_eq!(app.sessions.sessions()[0].prompt, "");
+    }
 }
 
 #[tokio::test]

@@ -48,6 +48,10 @@ enum PlanWorkflowRequest {
 impl App {
     /// Opens isolated task output without modifying the ordinary transcript.
     pub(crate) fn open_plan_workflow(&mut self, session_id: SessionId) {
+        if !self.experimental_multi_agent {
+            return;
+        }
+
         self.mode = AppMode::PlanWorkflow {
             session_id,
             state: Box::default(),

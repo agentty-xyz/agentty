@@ -192,6 +192,8 @@ pub struct App {
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
+    /// Enables the preview planning panel and its chat entry points.
+    pub(crate) experimental_multi_agent: bool,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
     /// Whether Agentty was launched from inside a `tmux` session.

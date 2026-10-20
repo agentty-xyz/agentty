@@ -728,46 +728,27 @@ fn navigate_prompt_history_down(mode: &mut AppMode) {
 }
 
 fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
-    let (
-        available_agent_kinds,
-        input_text,
-        personalities,
-        selected_agent,
-        selected_index,
-        session_agent_kind,
-        session_id,
-        stage,
-    ) = match &app.mode {
+    let (option_count, selected_index) = match &app.mode {
         AppMode::Prompt {
             input,
             session_id,
             slash_state,
             ..
-        } => (
-            slash_state.available_agent_kinds.clone(),
-            input.text().to_string(),
-            slash_state.personalities.clone(),
-            slash_state.selected_agent,
-            slash_state.selected_index,
-            app.selected_session()
-                .map_or(AgentKind::Codex, |session| session.agent.kind()),
-            Some(session_id.clone()),
-            slash_state.stage,
-        ),
+        } => {
+            let session_agent_kind = app
+                .selected_session()
+                .map_or(AgentKind::Codex, |session| session.agent.kind());
+            let option_count = prompt_slash_option_count(
+                input.text(),
+                slash_state,
+                session_agent_kind,
+                app.prompt_apply_command_is_available_for_session(session_id),
+            );
+
+            (option_count, slash_state.selected_index)
+        }
         _ => return,
     };
-    let allow_apply_command = session_id
-        .is_some_and(|session_id| app.prompt_apply_command_is_available_for_session(&session_id));
-
-    let option_count = prompt_slash_option_count(
-        &input_text,
-        stage,
-        selected_agent,
-        &available_agent_kinds,
-        &personalities,
-        session_agent_kind,
-        allow_apply_command,
-    );
     if option_count == 0 {
         return;
     }

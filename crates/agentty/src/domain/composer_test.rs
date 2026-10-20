@@ -8,7 +8,7 @@ use super::{
     PromptHistoryState, PromptSlashStage, PromptSlashState, PromptSuggestionItem,
     PromptSuggestionList, PromptSuggestionSelection, build_prompt_slash_suggestion_list,
     current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
-    insert_prompt_local_image_at, resolve_prompt_slash_selection,
+    insert_prompt_local_image_at, prompt_slash_option_count, resolve_prompt_slash_selection,
 };
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
@@ -942,7 +942,6 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
         vec![
             "/mode",
             "/model",
-            "/plan",
             "/personality",
             "/reasoning",
             "/style",
@@ -950,6 +949,33 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
         ]
     );
     assert_eq!(suggestion_list.selected_index, 0);
+}
+
+#[test]
+fn plan_command_availability_keeps_rendering_selection_and_navigation_aligned() {
+    for enabled in [false, true] {
+        // Arrange
+        let mut slash_state = PromptSlashState {
+            allow_plan_command: enabled,
+            ..PromptSlashState::default()
+        };
+        slash_state.reset();
+
+        // Act
+        let menu = build_prompt_slash_suggestion_list("/", &slash_state, AgentKind::Codex, false)
+            .expect("command menu");
+        let selection =
+            resolve_prompt_slash_selection("/plan", &slash_state, AgentKind::Codex, false);
+        let count = prompt_slash_option_count("/plan", &slash_state, AgentKind::Codex, false);
+
+        // Assert
+        assert_eq!(menu.items.iter().any(|item| item.label == "/plan"), enabled);
+        assert_eq!(
+            selection,
+            enabled.then_some(PromptSuggestionSelection::Command("/plan"))
+        );
+        assert_eq!(count, usize::from(enabled));
+    }
 }
 
 #[test]
@@ -969,14 +995,7 @@ fn test_prompt_slash_command_list_omits_speed_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec![
-            "/mode",
-            "/model",
-            "/plan",
-            "/personality",
-            "/reasoning",
-            "/style"
-        ]
+        vec!["/mode", "/model", "/personality", "/reasoning", "/style"]
     );
 }
 

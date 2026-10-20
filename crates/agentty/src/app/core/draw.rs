@@ -51,9 +51,13 @@ impl App {
             self.services.available_agent_kinds()
         };
 
-        crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
-            available_agent_kinds,
-        )
+        let mut slash_state =
+            crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
+                available_agent_kinds,
+            );
+        slash_state.allow_plan_command = self.experimental_multi_agent;
+
+        slash_state
     }
 
     /// Returns the newer stable `agentty` version when an update is available.

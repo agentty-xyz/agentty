@@ -16,6 +16,9 @@ session workers and do not automatically complete sessions.
 
 ## Plan Then Implement
 
+Start Agentty with `--experimental-multi-agent` to enable `/plan` and the `T` shortcut.
+Without this flag, the planning commands and panel are unavailable in session chat.
+
 Create a **Regular** session, then open the commands menu with `/` and select `/plan`
 before sending your first ordinary prompt. You can also plan a new request in an
 existing idle session whose workspace is prepared. An unprepared deferred draft shows an

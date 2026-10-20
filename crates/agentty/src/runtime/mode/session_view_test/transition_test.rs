@@ -79,6 +79,7 @@ fn test_view_context_returns_existing_session_details() {
 async fn workflow_shortcut_opens_task_results_while_the_session_is_running() {
     // Arrange
     let (mut app, _root) = new_test_app().await;
+    app.experimental_multi_agent = true;
     let session = session_fixture(Status::InProgress, false);
     let session_id = session.id.clone();
     app.sessions.push_session(session);
@@ -222,7 +223,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
     };
 
     // Act
-    open_view_help_overlay(&mut mode, &view_context, &view_session_snapshot);
+    open_view_help_overlay(&mut mode, &view_context, &view_session_snapshot, false);
 
     // Assert
     assert!(matches!(

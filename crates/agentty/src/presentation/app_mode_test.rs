@@ -252,6 +252,7 @@ fn test_confirmation_view_mode_into_view_mode_restores_view_identity() {
 fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_actions() {
     // Arrange
     let context = HelpContext::View {
+        can_open_plan_workflow: false,
         can_fork_session: true,
         can_merge_session_branch: true,
         can_mutate_session_branch: true,
@@ -272,6 +273,7 @@ fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_ac
 
     // Assert
     assert!(bindings.iter().any(|binding| binding.key == "q"));
+    assert!(!bindings.iter().any(|binding| binding.key == "T"));
     assert!(bindings.iter().any(|binding| binding.key == "j/k"));
     assert!(bindings.iter().any(|binding| binding.key == "?"));
     assert!(bindings.iter().any(|binding| binding.key == "Ctrl+c"));
@@ -286,6 +288,7 @@ fn test_help_context_view_keybindings_for_in_progress_show_sync_and_hide_edit_ac
 fn test_help_context_restore_mode_ignores_help_only_view_fields() {
     // Arrange
     let context = HelpContext::View {
+        can_open_plan_workflow: false,
         can_fork_session: true,
         can_merge_session_branch: true,
         can_mutate_session_branch: true,
@@ -319,6 +322,7 @@ fn test_help_context_restore_mode_ignores_help_only_view_fields() {
 fn test_help_context_view_keybindings_include_publish_pull_request_action() {
     // Arrange
     let context = HelpContext::View {
+        can_open_plan_workflow: true,
         can_fork_session: true,
         can_merge_session_branch: true,
         can_mutate_session_branch: true,
@@ -339,6 +343,7 @@ fn test_help_context_view_keybindings_include_publish_pull_request_action() {
 
     // Assert
     assert!(bindings.iter().any(|binding| binding.key == "p"));
+    assert!(bindings.iter().any(|binding| binding.key == "T"));
 }
 
 #[test]
