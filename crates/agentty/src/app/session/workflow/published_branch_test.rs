@@ -12,10 +12,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     PublishedBranchAutoPushInput, PublishedBranchAutoPushStartInput, ReviewCommentSyncInput,
-    ReviewRequestMetadataEvaluationInput, ReviewRequestMetadataSyncInput,
+    ReviewRequestMetadataEvaluationInput, ReviewRequestMetadataSyncInput, persistent_notice,
     resolve_review_comments_after_push, review_comment_reply_body,
     run_published_branch_auto_push_task, start_published_branch_auto_push,
-    start_published_branch_auto_push_inner, sync_linked_review_request_metadata_after_push,
+    start_task_published_branch_auto_push, sync_linked_review_request_metadata_after_push,
 };
 use crate::app::AppEvent;
 use crate::app::branch_publish::{
@@ -28,6 +28,23 @@ use crate::domain::session::{
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::clock::RealClock;
 use crate::infra::db::AppRepositories;
+
+#[test]
+fn task_publish_notices_do_not_enter_ordinary_session_replay() {
+    // Arrange
+    let ordinary = Mutex::new(SessionTranscript::default());
+    let task = Mutex::new(SessionTranscript::ephemeral(Vec::new()));
+
+    // Act / Assert
+    assert_eq!(
+        persistent_notice(&ordinary, "Published".to_string()),
+        Some("Published".to_string())
+    );
+    assert_eq!(
+        persistent_notice(&task, "Task publication".to_string()),
+        None
+    );
+}
 
 #[derive(Clone, Copy)]
 enum TestCommitComparison {
@@ -147,7 +164,7 @@ async fn spawned_push_preserves_cancellation_inner_failures_and_join_errors() {
     let canceled_input = push_start_input(db.clone(), MockGitClient::new()).await;
 
     // Act
-    let canceled = start_published_branch_auto_push_inner(canceled_input, cancel, false)
+    let canceled = start_task_published_branch_auto_push(canceled_input, cancel)
         .await
         .expect("canceled task joins");
 
@@ -189,8 +206,7 @@ async fn spawned_push_preserves_cancellation_inner_failures_and_join_errors() {
     let interrupted_input = push_start_input(db, git_client).await;
 
     // Act and Assert
-    let handle =
-        start_published_branch_auto_push_inner(interrupted_input, CancellationToken::new(), false);
+    let handle = start_task_published_branch_auto_push(interrupted_input, CancellationToken::new());
     entered.await.expect("push entered");
     handle.abort();
     let join = handle.await.expect_err("join error remains observable");

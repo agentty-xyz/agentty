@@ -54,6 +54,16 @@ impl TestSessionRunFactory {
 }
 
 impl SessionRunFactory for TestSessionRunFactory {
+    fn create_task(
+        &self,
+        context: &ag_session::TaskAgentContext,
+    ) -> Result<SessionRunClient, AgentError> {
+        Ok(self.create(
+            &SessionId::from(context.task_id.as_str()),
+            context.assignment.agent.kind(),
+        ))
+    }
+
     fn create(&self, session_id: &SessionId, _kind: AgentKind) -> SessionRunClient {
         self.channels
             .lock()

@@ -212,6 +212,11 @@ impl AppServices {
         self.session_run_factory.create(session_id, kind)
     }
 
+    /// Captures task runtime composition for serialized execution.
+    pub(crate) fn task_run_factory(&self) -> Arc<dyn SessionRunFactory> {
+        Arc::clone(&self.session_run_factory)
+    }
+
     /// Stops detached and nested utility runs owned by a canceled session.
     pub(crate) fn cancel_agent_runs(&self, session_id: &str) {
         self.run_worker.cancel_session(session_id);
@@ -597,6 +602,12 @@ pub(crate) struct AppServiceDeps {
 pub(crate) trait SessionRunFactory: Send + Sync {
     /// Creates a worker client for the session and selected provider.
     fn create(&self, session_id: &SessionId, kind: AgentKind) -> SessionRunClient;
+
+    /// Creates a task-owned runtime retaining the owner session's admission.
+    fn create_task(
+        &self,
+        context: &ag_session::TaskAgentContext,
+    ) -> Result<SessionRunClient, ag_contracts::AgentError>;
 }
 
 /// Production worker configuration for session runtime composition.
@@ -614,6 +625,13 @@ impl RealSessionRunFactory {
 impl SessionRunFactory for RealSessionRunFactory {
     fn create(&self, session_id: &SessionId, kind: AgentKind) -> SessionRunClient {
         SessionRunClient::new(session_id.to_string(), kind, &self.config)
+    }
+
+    fn create_task(
+        &self,
+        context: &ag_session::TaskAgentContext,
+    ) -> Result<SessionRunClient, ag_contracts::AgentError> {
+        SessionRunClient::for_task_context(context, &self.config)
     }
 }
 

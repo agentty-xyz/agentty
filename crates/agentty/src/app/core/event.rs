@@ -1094,7 +1094,8 @@ impl App {
             event_batch.collect_event(event);
         }
 
-        self.apply_app_event_batch(event_batch).await;
+        // Bound reducer effect state across session creation and event loops.
+        Box::pin(self.apply_app_event_batch(event_batch)).await;
         self.reconcile_terminal_session_input_mode().await;
     }
 

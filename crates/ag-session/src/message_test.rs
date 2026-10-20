@@ -4,6 +4,28 @@ use crate::message::{
 };
 
 #[test]
+fn ephemeral_transcripts_keep_projection_behavior_without_session_persistence() {
+    // Arrange
+    let mut transcript = SessionTranscript::ephemeral(Vec::new());
+
+    // Act
+    transcript.append_message(SessionMessageKind::UserPrompt, "Task input");
+    transcript.append_message(SessionMessageKind::WorkflowNotice, "Task diagnostic");
+
+    // Assert
+    assert!(!transcript.should_persist());
+    assert!(SessionTranscript::default().should_persist());
+    assert!(SessionTranscript::new(Vec::new()).should_persist());
+    assert_eq!(transcript.messages().len(), 2);
+    assert!(
+        transcript
+            .replay_text()
+            .expect("replay")
+            .contains("Task diagnostic")
+    );
+}
+
+#[test]
 fn test_session_message_kind_round_trips_database_value() {
     // Arrange
     let kinds = [

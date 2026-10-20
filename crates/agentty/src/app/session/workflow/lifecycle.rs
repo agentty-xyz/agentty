@@ -1029,7 +1029,7 @@ impl SessionManager {
     /// # Errors
     /// Returns an error if repository discovery, worktree creation, or
     /// backend setup fails.
-    async fn ensure_session_worktree_ready(
+    pub(super) async fn ensure_session_worktree_ready(
         &mut self,
         services: &AppServices,
         session_id: &str,
@@ -1144,7 +1144,7 @@ impl SessionManager {
     ///
     /// # Errors
     /// Returns an error if the session is missing or persistence fails.
-    async fn clear_session_draft_flag(
+    pub(super) async fn clear_session_draft_flag(
         &mut self,
         services: &AppServices,
         session_id: &str,

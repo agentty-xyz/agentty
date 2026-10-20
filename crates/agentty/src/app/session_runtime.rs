@@ -31,6 +31,10 @@ const SESSION_RUNTIME_UNAVAILABLE: &str = "Session runtime is unavailable";
 
 /// A read query or an enveloped mutation awaiting foreground admission.
 pub(crate) enum SessionRuntimeCommand {
+    GetAgentTaskHistory {
+        response_tx: oneshot::Sender<Result<Option<ag_session::TaskAgentHistory>, SessionError>>,
+        task_id: String,
+    },
     ListTasks {
         response_tx: oneshot::Sender<Result<Vec<ag_session::Task>, SessionError>>,
         session_id: SessionId,
@@ -55,6 +59,31 @@ pub(crate) struct SessionRuntimeHandle {
 }
 
 impl SessionRuntimeHandle {
+    /// Admits an isolated task through the same foreground gateway.
+    pub(crate) async fn submit_agent_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::SubmitAgentTaskRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::SubmitAgentTask {
+            request: Box::new(request),
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
+    /// Loads a task-owned conversation through the foreground query path.
+    pub(crate) async fn get_agent_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ag_session::TaskAgentHistory>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetAgentTaskHistory {
+            response_tx,
+            task_id: task_id.to_string(),
+        })
+        .await
+    }
+
     /// Persists a desired outcome through shared admission without execution.
     pub(crate) async fn create_task(
         &self,

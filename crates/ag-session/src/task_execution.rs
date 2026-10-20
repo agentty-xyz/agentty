@@ -136,7 +136,8 @@ pub struct SubmitAgentTaskRequest {
     pub objective: String,
     /// Globally unique desired-outcome identity.
     pub task_id: String,
-    /// Whether the explicit input is shown in the human transcript.
+    /// Whether task views show the explicit input. Task input never enters
+    /// the ordinary session's transcript.
     pub visibility: DurableMessageVisibility,
 }
 
