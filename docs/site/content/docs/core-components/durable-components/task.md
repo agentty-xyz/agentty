@@ -56,6 +56,17 @@ their instructions. A workflow must provide separate conversations, explicit acc
 plan handoff, and worker-enforced permissions before running a chain. Definitions do not
 add a registry, editor, persistence, or automatic scheduling.
 
+`SubmitAgentTaskRequest` describes an isolated role-aware attempt separately from
+ordinary `SubmitTaskRequest` execution. It carries a captured provider/model selection,
+role, original request, and explicit clarification. Implementer input also identifies
+the exact plan body and producing task/attempt; input validation does not establish
+acceptance. Hosts must verify acceptance before dispatch. Assignment and original inputs
+remain fixed across attempts, while new clarification may be supplied.
+
+This request is a library contract, not a supported submission method yet. Conversation
+identity and history must be task-owned, while execution still uses the session-owned
+Env and serial worker. Session permissions remain authoritative.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.
