@@ -261,6 +261,28 @@ async fn assert_task_admission_rejections(
             .await
             .is_err()
     );
+    let mut unaccepted = request("unaccepted");
+    unaccepted.assignment.definition = BuiltinAgentDefinition::Implementer;
+    unaccepted.task_id = "unaccepted-implementation".to_string();
+    unaccepted.input.accepted_plan = Some(ag_session::AcceptedTaskPlan {
+        task_id: "planner".to_string(),
+        attempt_id: "first".to_string(),
+        text: "Unaccepted plan".to_string(),
+    });
+    assert!(
+        app.drive_session_request(service.submit_agent_task(session_id, unaccepted))
+            .await
+            .is_err()
+    );
+    assert!(
+        app.services
+            .db()
+            .tasks()
+            .load_task("unaccepted-implementation")
+            .await
+            .expect("unaccepted task lookup")
+            .is_none()
+    );
     app.drive_session_request(service.complete_task("planner"))
         .await
         .expect("explicit complete");
@@ -538,6 +560,19 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
             .to_string()
             .contains("Stacked task execution")
     );
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id("deferred-child")
+            .parent_session_id(Some("parent".into()))
+            .draft(true)
+            .status(SessionStatus::Draft)
+            .build(),
+    );
+    let deferred_child = app
+        .sessions
+        .validate_agent_task_admission("deferred-child", BuiltinAgentDefinition::Planner)
+        .expect_err("active stack blocks workspace preparation");
+    assert!(deferred_child.to_string().contains("idle stack"));
     // Act / Assert: deferred workspaces fail before admitting model work.
     app.sessions.push_session(
         SessionFixtureBuilder::new()

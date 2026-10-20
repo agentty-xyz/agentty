@@ -5,8 +5,9 @@ weight = 6
 +++
 
 A Task records a desired outcome in one
-[session](@/docs/core-components/durable-components/session.md). The session supplies
-conversation and workspace context. Each task attempt runs one turn and its ordered
+[session](@/docs/core-components/durable-components/session.md). The session owns its
+workspace and scheduling. Ordinary tasks use session conversation context; role-aware
+tasks retain their own conversation. Each attempt runs one turn and its ordered
 post-processing through a unique
 [operation](@/docs/core-components/durable-components/operation.md).
 
@@ -38,8 +39,7 @@ dependency scheduler.
 
 ## Built-in Agent Definitions
 
-`ag_session::BuiltinAgentDefinition` provides two role contracts for future task
-workflows:
+`ag_session::BuiltinAgentDefinition` provides two built-in task roles:
 
 | Role          | Required context                               | Permissions                                     | Expected answer                        |
 | ------------- | ---------------------------------------------- | ----------------------------------------------- | -------------------------------------- |
@@ -51,11 +51,6 @@ from providers and personalities and do not select a model; a workflow can suppl
 same session Smart `AgentSelection` to both. Questions use the existing response
 protocol, and neither output automatically completes a task.
 
-These are library contracts only. Task submission does not yet assign roles or apply
-their instructions. A workflow must provide separate conversations, explicit accepted
-plan handoff, and worker-enforced permissions before running a chain. Definitions do not
-add a registry, editor, persistence, or automatic scheduling.
-
 `SubmitAgentTaskRequest` describes an isolated role-aware attempt separately from
 ordinary `SubmitTaskRequest` execution. It carries a captured provider/model selection,
 role, original request, and explicit clarification. Implementer input also identifies
@@ -63,23 +58,28 @@ the exact plan body and producing task/attempt; input validation does not establ
 acceptance. Hosts must verify acceptance before dispatch. Assignment and original inputs
 remain fixed across attempts, while new clarification may be supplied.
 
-This request is a library contract, not a supported submission method yet. Conversation
-identity and history must be task-owned, while execution still uses the session-owned
-Env and serial worker. Session permissions remain authoritative.
+Use `SessionService::submit_agent_task` to admit the request through the session's
+serial worker. Execution uses the prepared session-owned Env and enforces role
+permissions. Planner turns are read-only and skip mutating host effects. Implementer
+turns retain session permissions and finish permitted commit and publication effects
+before the next turn; failures settle the attempt as failed. A fresh regular `Draft` can
+start with a Planner without an ordinary chat turn. Other role attempts require `Review`
+or `AgentReview`; unmaterialized deferred workspaces are rejected before model
+execution.
 
 `TaskRepository` can atomically bind that assignment and a host-allocated conversation
 identity when admitting a role-aware attempt. The binding and original inputs survive
 restart; clarification belongs to each attempt. Tasks with ordinary session-context
 history cannot acquire an isolated assignment, and assigned tasks require role-aware
-delivery. This persistence support does not yet add a `SessionService` submission path
-or execute roles.
+delivery.
 
 Task-owned history stores each observed response with its producing attempt and keeps
 provider continuation separate from ordinary session chat. Saving a response accounts
 usage once under the task's captured model; repeated saves cannot overwrite output or
 rewind a newer conversation. A response can be available while post-processing is still
 running, so callers must inspect the attempt status before accepting it. History alone
-does not complete a task or enable role execution.
+does not complete a task. Use `SessionService::get_agent_task_history` to retrieve its
+assignment, explicit inputs, responses, and usage without reading ordinary chat.
 
 `TaskRepository::accept_agent_plan` explicitly accepts one persisted Planner attempt.
 Only the latest successful, uncanceled response with a nonempty plan and no questions is
@@ -115,10 +115,15 @@ Completion does not merge, publish, or finish the session.
 
 ## Clarification, Retries, and Recovery
 
-A clarification response finishes its attempt and leaves the task open and the session
-waiting for input. Read the session's questions and submit a new attempt with the
-answers in its message to continue task accounting. Ordinary question answers retain
-their existing session behavior and are not automatically attached to a task.
+For ordinary tasks, a clarification response finishes its attempt and leaves the task
+open and the session waiting for input. Read the session's questions and submit a new
+attempt with the answers in its message to continue task accounting. Ordinary question
+answers retain their existing session behavior and are not automatically attached to a
+task.
+
+Role-aware clarification stays in that task's response history and does not replace the
+ordinary session's pending questions. Submit a new role-aware attempt with explicit
+`TaskAgentInput::clarification` to continue the task's own conversation.
 
 Use a new attempt ID for an explicit retry or continuation. Provider retries remain
 inside the current attempt. Only one attempt per task may be unfinished; dependency
