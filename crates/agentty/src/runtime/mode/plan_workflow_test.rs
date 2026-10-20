@@ -79,6 +79,8 @@ fn editor_preserves_literal_input_and_requires_text_except_for_explicit_retry() 
     handle_key(&mut state, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     handle_key(&mut state, key(KeyCode::Char('y')));
     assert_eq!(state.editor.as_ref().expect("editor").input.text(), "x\ny");
+    assert_eq!(handle_key(&mut state, key(KeyCode::F(2))), None);
+    assert_eq!(state.editor.as_ref().expect("editor").input.text(), "x\ny");
     assert_eq!(
         handle_key(&mut state, key(KeyCode::Enter)),
         Some(PlanWorkflowIntent::Submit)

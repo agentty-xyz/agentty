@@ -68,7 +68,7 @@ impl App {
     }
 
     pub(crate) fn handle_plan_workflow_intent(&mut self, intent: PlanWorkflowIntent) {
-        let AppMode::PlanWorkflow { session_id, state } = &self.mode else {
+        let AppMode::PlanWorkflow { session_id, state } = &mut self.mode else {
             return;
         };
         let request = match intent {
@@ -124,13 +124,10 @@ impl App {
                         || chain.continuation != Some(editor.kind)
                         || editor.expected_attempt_id != chain.current_attempt_id
                     {
-                        if let AppMode::PlanWorkflow { state, .. } = &mut self.mode {
-                            state.error = Some(
-                                "Workflow changed. Discard this draft and inspect the current \
-                                 stage."
-                                    .into(),
-                            );
-                        }
+                        state.error = Some(
+                            "Workflow changed. Discard this draft and inspect the current stage."
+                                .into(),
+                        );
 
                         return;
                     }

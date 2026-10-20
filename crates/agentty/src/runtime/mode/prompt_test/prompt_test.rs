@@ -11,9 +11,9 @@ use super::super::{
     handle_prompt_down_key, handle_prompt_image_paste, handle_prompt_slash_submit,
     handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache, is_active_at_mention,
     is_prompt_image_paste_key, move_prompt_slash_selection, navigate_prompt_history_down,
-    navigate_prompt_history_up, paste_image_into_active_prompt, prompt_context, show_prompt_diff,
-    submit_current_text_prompt, take_prompt_attachment_cleanup, take_prompt_snapshot,
-    take_submitted_turn_prompt,
+    navigate_prompt_history_up, open_prompt_personality_stage, paste_image_into_active_prompt,
+    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
+    take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
@@ -2260,6 +2260,27 @@ async fn plan_slash_command_opens_task_panel_without_submitting_an_ordinary_turn
     assert!(
         matches!(&app.mode, AppMode::PlanWorkflow { session_id, state } if session_id == "prompt-test-session" && state.is_loading)
     );
+}
+
+#[tokio::test]
+async fn personality_stage_ignores_a_context_after_leaving_the_composer() {
+    // Arrange
+    let (mut app, root) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("prompt-test-session")
+            .folder(root.path().to_path_buf())
+            .build(),
+    );
+    app.mode = new_test_prompt_mode("/personality");
+    let context = prompt_context(&mut app).expect("prompt context");
+    app.mode = AppMode::List;
+
+    // Act
+    open_prompt_personality_stage(&mut app, &context).await;
+
+    // Assert
+    assert!(matches!(app.mode, AppMode::List));
 }
 
 #[tokio::test]
