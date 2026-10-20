@@ -8,7 +8,8 @@ use crate::error::SessionError;
 use crate::model::{ReviewRequest, Session, SessionId};
 use crate::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, ContinueTaskChainRequest, CreateTaskRequest,
-    StartPlanThenImplementRequest, SubmitTaskRequest, Task, TaskChain,
+    ReplyToTaskChainRequest, StartPlanThenImplementRequest, SubmitTaskRequest, Task, TaskChain,
+    TaskChainReplyOutcome,
 };
 
 /// Creation strategy for a new session.
@@ -173,6 +174,17 @@ pub trait SessionBackend: Send + Sync {
 
     /// Requests cancellation of only this workflow's current attempt.
     async fn cancel_task_chain(&self, _chain_id: &str) -> Result<(), SessionError> {
+        Err(SessionError::Operation(
+            "Host does not support task chains".to_string(),
+        ))
+    }
+
+    /// Routes a natural-language reply to the session's latest workflow.
+    async fn reply_to_task_chain(
+        &self,
+        _session_id: &SessionId,
+        _request: ReplyToTaskChainRequest,
+    ) -> Result<TaskChainReplyOutcome, SessionError> {
         Err(SessionError::Operation(
             "Host does not support task chains".to_string(),
         ))
@@ -353,6 +365,28 @@ impl SessionService {
     /// persist.
     pub async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
         self.backend.cancel_task_chain(chain_id).await
+    }
+
+    /// Records a user reply once and lets the host decide what it means.
+    ///
+    /// While a plan awaits acceptance, the host decides through a model run
+    /// whether the reply clearly approves the plan. Only clear approval with
+    /// no requested changes starts the Implementer; anything else, including
+    /// a failed or uncertain decision, revises the plan. In every other
+    /// settled phase the reply continues the current role. Redelivering the
+    /// same `reply_id` returns the original outcome.
+    ///
+    /// # Errors
+    /// Returns [`SessionError::TaskChainNotFound`] when the session owns no
+    /// workflow, [`SessionError::TaskChainBusy`] while an agent is working
+    /// or an earlier reply is being decided, and other errors for invalid
+    /// input, conflicts, or failed admission.
+    pub async fn reply_to_task_chain(
+        &self,
+        session_id: &SessionId,
+        request: ReplyToTaskChainRequest,
+    ) -> Result<TaskChainReplyOutcome, SessionError> {
+        self.backend.reply_to_task_chain(session_id, request).await
     }
 
     /// Creates an owned session capability backed by a shared host handle.

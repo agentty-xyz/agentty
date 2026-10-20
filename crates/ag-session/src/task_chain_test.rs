@@ -1,7 +1,7 @@
 use crate::test_support::codex_selection;
 use crate::{
-    ContinueTaskChainRequest, DurableMessageVisibility, SessionId, StartPlanThenImplementRequest,
-    TaskChain, TaskChainPhase,
+    ContinueTaskChainRequest, DurableMessageVisibility, SessionError, SessionId,
+    StartPlanThenImplementRequest, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
 };
 
 #[test]
@@ -49,4 +49,49 @@ fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     assert_eq!(continuation.task_id, planner.task_id);
     assert_eq!(continuation.input.accepted_plan, None);
     assert_eq!(continuation.input.user_request, planner.input.user_request);
+}
+
+#[test]
+fn reply_outcomes_derive_distinct_deterministic_attempt_identities() {
+    // Arrange
+    let reply_id = "reply-1";
+
+    // Act
+    let attempt_ids = TaskChainReplyOutcome::ALL.map(|outcome| outcome.attempt_id(reply_id));
+
+    // Assert
+    assert_eq!(
+        attempt_ids,
+        [
+            "reply:reply-1:implement".to_string(),
+            "reply:reply-1:revise".to_string(),
+            "reply:reply-1:continue".to_string(),
+        ]
+    );
+    assert_eq!(
+        TaskChainReplyOutcome::PlanAccepted.attempt_id(reply_id),
+        attempt_ids[0]
+    );
+}
+
+#[test]
+fn task_chain_reply_errors_explain_how_to_proceed() {
+    // Arrange
+    let busy = SessionError::TaskChainBusy(TaskChainPhase::Planning);
+
+    // Act
+    let messages = [
+        busy.to_string(),
+        SessionError::TaskChainNotFound.to_string(),
+    ];
+
+    // Assert
+    assert_eq!(
+        messages,
+        [
+            "The task chain agent is still working; wait for it to finish before replying"
+                .to_string(),
+            "Session has no task chain".to_string(),
+        ]
+    );
 }

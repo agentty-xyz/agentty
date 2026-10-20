@@ -70,8 +70,8 @@ pub use service::{
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use task_chain::{
-    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, StartPlanThenImplementRequest, TaskChain,
-    TaskChainPhase,
+    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, ReplyToTaskChainRequest,
+    StartPlanThenImplementRequest, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
 };
 pub use task_execution::{
     AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,

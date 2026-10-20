@@ -1,8 +1,8 @@
 //! Typed mutation requests and transport-independent admission metadata.
 
 use ag_session::{
-    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReviewRequest,
-    SessionError, SessionId,
+    AnswerQuestionsRequest, CreateSessionRequest, DurableMessageRequest, ReplyToTaskChainRequest,
+    ReviewRequest, SessionError, SessionId, TaskChainReplyOutcome,
 };
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -57,6 +57,9 @@ impl SessionCommand {
                 ..
             } => Some(format!("task-attempt:{}", request.attempt_id)),
             CommandDelivery::Review { request, .. } => Some(request.operation_id.clone()),
+            CommandDelivery::TaskChainReply { request, .. } => {
+                Some(format!("task-chain-reply:{}", request.reply_id()))
+            }
             _ => None,
         };
 
@@ -89,6 +92,12 @@ pub(crate) enum CommandDelivery {
         request: ReviewRequestCommand,
         response_tx: Option<oneshot::Sender<Result<ReviewRequest, SessionError>>>,
     },
+    /// A workflow reply may transfer its reply to a background decision,
+    /// which applies the decided action through this gateway again.
+    TaskChainReply {
+        request: TaskChainReplyCommand,
+        response_tx: oneshot::Sender<Result<TaskChainReplyOutcome, SessionError>>,
+    },
 }
 
 impl CommandDelivery {
@@ -98,8 +107,49 @@ impl CommandDelivery {
             Self::Create { .. } => ("create", None),
             Self::Admission { request, .. } => request.target(),
             Self::Review { request, .. } => ("create_review_request", Some(&request.session_id)),
+            Self::TaskChainReply {
+                request: TaskChainReplyCommand::Reply { session_id, .. },
+                ..
+            } => ("reply_to_task_chain", Some(session_id)),
+            Self::TaskChainReply {
+                request: TaskChainReplyCommand::Apply(action),
+                ..
+            } => ("apply_task_chain_reply", Some(&action.session_id)),
         }
     }
+}
+
+/// Inputs for natural-language workflow replies.
+pub(crate) enum TaskChainReplyCommand {
+    /// Records a public reply once and decides its workflow action.
+    Reply {
+        request: ReplyToTaskChainRequest,
+        session_id: SessionId,
+    },
+    /// Admits an action decided for an already recorded reply.
+    Apply(TaskChainReplyAction),
+}
+
+impl TaskChainReplyCommand {
+    /// Returns the delivery identity shared by a reply and its action.
+    pub(super) fn reply_id(&self) -> &str {
+        match self {
+            Self::Reply { request, .. } => &request.reply_id,
+            Self::Apply(action) => &action.reply_id,
+        }
+    }
+}
+
+/// One decided workflow action, anchored to the attempt observed when the
+/// reply was routed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TaskChainReplyAction {
+    pub(crate) chain_id: String,
+    pub(crate) expected_attempt_id: String,
+    pub(crate) message: String,
+    pub(crate) outcome: TaskChainReplyOutcome,
+    pub(crate) reply_id: String,
+    pub(crate) session_id: SessionId,
 }
 
 /// Application inputs for workflows that return an admission result.

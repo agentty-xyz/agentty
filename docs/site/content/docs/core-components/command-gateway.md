@@ -41,8 +41,9 @@ do not enter the message planner.
 Acknowledgement follows the workflow. Ordinary message submissions return after
 acceptance, while API creation of a materialized session waits for workspace
 preparation. Terminal review publication returns after admission; API publication waits
-for the worker's result. An accepted command does not necessarily mean its work has
-completed.
+for the worker's result. A task-chain reply returns its routed outcome; while a plan
+awaits acceptance, it waits for the orchestrator decision and the admission of the
+decided action. An accepted command does not necessarily mean its work has completed.
 
 Terminal prompts retain their draft-staging intent and attachments. API messages retain
 their automatic start behavior. Busy ordinary chat uses an in-memory queue, while

@@ -4,8 +4,9 @@ use super::support::FakeBackend;
 use crate::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
     BuiltinAgentDefinition, ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
-    SessionError, SessionId, SessionService, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
-    SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    ReplyToTaskChainRequest, SessionError, SessionId, SessionService,
+    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment,
+    TaskAgentInput,
 };
 
 #[tokio::test]
@@ -106,6 +107,15 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         )
         .await;
     let canceled = service.cancel_task_chain("chain").await;
+    let replied = service
+        .reply_to_task_chain(
+            &session_id,
+            ReplyToTaskChainRequest {
+                message: "Go ahead".into(),
+                reply_id: "reply".into(),
+            },
+        )
+        .await;
     let standalone = service
         .accept_agent_plan(
             &session_id,
@@ -123,6 +133,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
     for result in [started, accepted, continued, canceled] {
         assert_eq!(result, Err(expected.clone()));
     }
+    assert_eq!(replied, Err(expected));
     assert_eq!(
         standalone,
         Err(SessionError::Operation(
