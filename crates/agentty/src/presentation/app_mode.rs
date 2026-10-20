@@ -728,6 +728,13 @@ pub enum ChatFocus {
 
 /// Represents the active UI mode for the application.
 pub enum AppMode {
+    /// Displays isolated planning and implementation tasks for one session.
+    PlanWorkflow {
+        /// Session whose environment is shared by the two roles.
+        session_id: SessionId,
+        /// Foreground-owned presentation snapshot and composer.
+        state: Box<crate::presentation::plan_workflow::PlanWorkflowState>,
+    },
     /// Explicit project registration, discovery, and startup suggestion.
     ProjectCatalog {
         /// Current project dialog state.

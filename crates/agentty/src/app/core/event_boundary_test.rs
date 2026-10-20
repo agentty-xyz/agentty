@@ -23,6 +23,10 @@ async fn session_composers_and_overlays_retain_their_viewed_session() {
         session_id: "viewed-session".into(),
     };
     let modes = [
+        AppMode::PlanWorkflow {
+            session_id: restore_view.session_id.clone(),
+            state: Box::default(),
+        },
         test_prompt_mode_snapshot(restore_view.session_id.clone()).into_prompt_mode(),
         AppMode::Question {
             at_mention_state: None,

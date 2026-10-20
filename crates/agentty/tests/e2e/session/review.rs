@@ -20,7 +20,7 @@ use super::fixture::{
     seed_review_worktree_with_diff,
 };
 use crate::common;
-use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
+use crate::common::{BuilderEnv, FeatureTest, SessionSeed, VHS_SETUP_SCRIPT_NAME};
 
 /// Focused-review output emitted after Gemini starts without plan-mode flags.
 const GEMINI_FOCUSED_REVIEW_TEXT: &str = "Gemini focused review completed without plan mode.";
@@ -1431,7 +1431,7 @@ async fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("apply_slash_command_no_review")
         .with_git()
-        .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
+        .setup(|env| Box::pin(async move { seed_apply_slash_recording(env).await }))
         .zola(
             "Apply slash command",
             "Type unavailable `/apply` in a review-ready session and keep the prompt intact.",
@@ -1479,6 +1479,32 @@ async fn apply_slash_command_unavailable_without_review_cache() -> E2eResult {
             },
         )
         .await?;
+
+    Ok(())
+}
+
+/// Restores the original startup tab before replaying the published demo.
+async fn seed_apply_slash_recording(env: &BuilderEnv) -> E2eResult {
+    seed_review_ready_session(env).await?;
+    common::seed_projects_startup_tab(env).await?;
+    let database = common::open_database(env).await?;
+    let snapshot = env.agentty_root.join("before-apply-demo.sqlite");
+    sqlx::query("VACUUM INTO ?")
+        .bind(snapshot.to_string_lossy().as_ref())
+        .execute(database.pool())
+        .await?;
+    database.pool().close().await;
+    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    std::fs::write(
+        env.stub_bin.join(VHS_SETUP_SCRIPT_NAME),
+        format!(
+            "set -e\nrm -f {db}-wal {db}-shm\ncp {snapshot} {db}\n",
+            db = quote(&db_path),
+            snapshot = quote(&snapshot),
+        ),
+    )?;
 
     Ok(())
 }

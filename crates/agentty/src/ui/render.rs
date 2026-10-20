@@ -224,6 +224,7 @@ fn render_footer_bar(f: &mut Frame, footer_bar_area: Rect, context: FooterBarRen
             ..
         }
         | AppMode::View { session_id, .. }
+        | AppMode::PlanWorkflow { session_id, .. }
         | AppMode::Prompt { session_id, .. }
         | AppMode::Question { session_id, .. }
         | AppMode::DiffLoading { session_id, .. }

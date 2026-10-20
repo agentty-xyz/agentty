@@ -92,6 +92,21 @@ fn visible_review_session_id_includes_loading_diff() {
     assert_eq!(session_id, Some("loading-session"));
 }
 
+#[test]
+fn plan_workflow_does_not_project_ordinary_focused_review_into_role_results() {
+    // Arrange
+    let mode = AppMode::PlanWorkflow {
+        session_id: "session-id".into(),
+        state: Box::default(),
+    };
+
+    // Act
+    let session_id = visible_review_session_id(&mode);
+
+    // Assert
+    assert_eq!(session_id, None);
+}
+
 #[tokio::test]
 async fn view_snapshot_builds_settings_screen_only_for_settings_tab() {
     // Arrange

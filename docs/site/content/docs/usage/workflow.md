@@ -12,7 +12,30 @@ merge locally or publish a review request. See
 
 Programmatic integrations can also track desired outcomes and explicit attempts through
 the [Task API](@/docs/core-components/durable-components/task.md). Tasks use existing
-session workers; they do not add terminal controls or automatically complete sessions.
+session workers and do not automatically complete sessions.
+
+## Plan Then Implement
+
+Create a **Regular** session, then open the commands menu with `/` and select `/plan`
+before sending your first ordinary prompt. You can also plan a new request in an
+existing idle session whose workspace is prepared. An unprepared deferred draft shows an
+error and retains your request; use a prepared regular session to start planning. Enter
+your request in the **New plan** composer and submit it to the read-only **Planner**.
+Use `n` to compose another workflow later. The planning panel keeps each role's output
+separate from ordinary chat and shows the captured model.
+
+Inspect the latest plan before pressing `Enter` to accept that exact version and start
+the **Implementer**. Press `r` instead to request a revision. The panel labels its input
+as a revision, question answer, or explicit retry so each action is clear. Answer role
+questions in this panel; they do not replace ordinary chat questions.
+
+Press `x` to cancel running work. Failed or canceled work stays paused until you request
+a retry with `r`. Wait for a stopping worker before retrying; a rejected submission
+keeps your draft. An implementation retry retains its accepted plan. Leaving the panel
+with `Esc` keeps accepted work running; press `T` in session view to reopen the panel,
+including while work is running. Reopening `/plan` also reloads saved results. Use `Tab`
+to inspect another workflow and `F5` to refresh. Both roles share the session's
+worktree. Review and merge the resulting changes through the ordinary session actions.
 
 ## Interface Layout
 

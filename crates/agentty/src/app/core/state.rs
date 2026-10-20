@@ -1815,6 +1815,7 @@ impl App {
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
+        self.refresh_plan_workflow_if_needed();
         let resources_refreshed = self.sessions.refresh_resources().await;
         let refreshed = self
             .sessions

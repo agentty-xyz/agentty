@@ -901,6 +901,10 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         _ => None,
     };
     match selection {
+        Some(PromptSuggestionSelection::Command("/plan")) => {
+            clear_prompt_slash_input(app).await;
+            app.open_plan_workflow(session_id.clone());
+        }
         Some(PromptSuggestionSelection::Command("/apply")) => {
             let outcome = app
                 .apply_focused_review(session_id, prompt_context.session_index)
@@ -920,24 +924,7 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
             open_prompt_response_style_stage(app, prompt_context.session_index);
         }
         Some(PromptSuggestionSelection::Command("/personality")) => {
-            let personalities = app.list_prompt_personalities(session_id).await;
-            let selected_personality_id = app
-                .session_at(prompt_context.session_index)
-                .and_then(|session| session.personality_id.as_deref());
-            let selected_index = selected_personality_id
-                .and_then(|selected_id| {
-                    personalities
-                        .iter()
-                        .position(|personality| personality.id == selected_id)
-                })
-                .map_or(0, |index| index.saturating_add(1));
-
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.personalities = personalities;
-                slash_state.stage = PromptSlashStage::Personality;
-                slash_state.selected_agent = None;
-                slash_state.selected_index = selected_index;
-            }
+            open_prompt_personality_stage(app, prompt_context).await;
         }
         Some(PromptSuggestionSelection::Command(_)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
@@ -983,6 +970,30 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
                 .await;
         }
         None => {}
+    }
+}
+
+/// Loads the personality options and selects the session's current choice.
+async fn open_prompt_personality_stage(app: &mut App, prompt_context: &PromptContext) {
+    let personalities = app
+        .list_prompt_personalities(&prompt_context.session_id)
+        .await;
+    let selected_personality_id = app
+        .session_at(prompt_context.session_index)
+        .and_then(|session| session.personality_id.as_deref());
+    let selected_index = selected_personality_id
+        .and_then(|selected_id| {
+            personalities
+                .iter()
+                .position(|personality| personality.id == selected_id)
+        })
+        .map_or(0, |index| index.saturating_add(1));
+
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+        slash_state.personalities = personalities;
+        slash_state.stage = PromptSlashStage::Personality;
+        slash_state.selected_agent = None;
+        slash_state.selected_index = selected_index;
     }
 }
 

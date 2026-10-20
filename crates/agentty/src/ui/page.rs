@@ -3,6 +3,7 @@
 /// Scrollable session git-diff page.
 pub mod diff;
 pub mod fyi;
+pub(crate) mod plan_workflow;
 /// Project selection and activity list page.
 pub mod project_list;
 /// Session-linked forge-review panels embedded in Diff mode.

@@ -175,6 +175,21 @@ Completion replaces matching progress with its result in one reducer update. Sta
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
 
+The planning panel reads task-chain and role-history snapshots through `SessionService`.
+Its launch, acceptance, revision, clarification, retry, and cancellation actions use the
+same command gateway as programmatic callers. Background replies return through the
+reducer with a panel request identity; navigation and newer requests invalidate late
+results. Role output remains outside the ordinary session transcript, and rendering
+never advances a workflow.
+
+Foreground gateway admission records each workflow stage and its attempt atomically;
+only a new claim reaches the session worker. Duplicate deliveries acknowledge their
+original receipt without repeating execution. Plan acceptance binds the exact producing
+version before implementation admission, and cancellation targets the selected attempt.
+Actor queries read persisted state and never dispatch or resume work. Continuation input
+retains the attempt shown when composition began; admission rejects a stale source
+before it can reach another stage or role.
+
 Resource sampling runs behind `ResourceClient`. Process creation identities guard
 against PID reuse. Temperature sampling runs independently and expires stale readings,
 so sensor I/O cannot block accounting or terminal input. Accounting PIDs never authorize

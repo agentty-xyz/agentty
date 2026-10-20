@@ -176,6 +176,11 @@ agentty --help       # Show supported command-line options
 agentty --version    # Show the installed Agentty version
 ```
 
+Use `/plan` in a session with a prepared worktree, including a new **Regular** session,
+to start **Plan then implement**. Inspect or revise the read-only **Planner** proposal,
+then explicitly accept it to run the **Implementer**. Press `T` in session view to
+reopen role results while work continues.
+
 `--experimental-harness` adds a preview **Harness** session type that runs Agentty's
 built-in agent loop against Muse, Kimi, or Qwen using `MODEL_API_KEY`, `KIMI_API_KEY`
 with `KIMI_BASE_URL`, or `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL`. Its edit mode
