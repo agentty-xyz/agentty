@@ -70,6 +70,10 @@ cancellation, duplicate and conflicting saves, cross-task isolation, and rollbac
 a usage-write failure. Reopening tests prove durable continuation through the public
 repository API.
 
+Plan acceptance uses a versioned ledger independent of task completion. Repository tests
+prove exact plan handoff, latest-version checks, ownership and captured-selection
+validation, and transactional rejection before Implementer admission.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

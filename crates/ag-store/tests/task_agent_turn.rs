@@ -1,10 +1,10 @@
 //! Public task-history durability and idempotent response persistence.
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
+    DurableMessageVisibility, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
 };
-use ag_store::{Database, TaskAgentTurnMetadata};
+use ag_store::{Database, DbError, TaskAgentTurnMetadata};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -23,21 +23,7 @@ async fn reopening_retains_task_only_continuation_and_exact_response() {
         .insert_session("session", "gpt-6.1-sol", "main", "Review", project)
         .await
         .expect("session");
-    let request = SubmitAgentTaskRequest {
-        assignment: TaskAgentAssignment {
-            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
-        },
-        attempt_id: "first".to_string(),
-        input: TaskAgentInput {
-            accepted_plan: None,
-            clarification: None,
-            user_request: "Plan this change".to_string(),
-        },
-        objective: "A concrete plan".to_string(),
-        task_id: "task".to_string(),
-        visibility: DurableMessageVisibility::Visible,
-    };
+    let request = planner_request();
     database
         .tasks()
         .claim_agent_attempt("session", &request, "reply")
@@ -105,4 +91,60 @@ async fn reopening_retains_task_only_continuation_and_exact_response() {
     .await
     .expect("usage");
     assert_eq!(usage, (5, 2, 1));
+
+    // Act: explicitly accept the reopened exact Planner version and hand it
+    // off.
+    assert_reopened_plan_handoff(&reopened, request)
+        .await
+        .expect("reopened plan handoff");
+}
+
+async fn assert_reopened_plan_handoff(
+    reopened: &Database,
+    request: SubmitAgentTaskRequest,
+) -> Result<(), DbError> {
+    // Arrange and Act
+    let plan = reopened
+        .tasks()
+        .accept_agent_plan(
+            "session",
+            &AcceptTaskPlanRequest {
+                task_id: "task".into(),
+                attempt_id: "first".into(),
+            },
+        )
+        .await?;
+    assert_eq!(plan.text, "A plan");
+    let mut implementation = request;
+    implementation.assignment.definition = BuiltinAgentDefinition::Implementer;
+    implementation.task_id = "implementation".into();
+    implementation.attempt_id = "implement".into();
+    implementation.input.accepted_plan = Some(plan);
+    let admitted = reopened
+        .tasks()
+        .claim_agent_attempt("session", &implementation, "reply")
+        .await?;
+
+    // Assert
+    assert!(admitted);
+
+    Ok(())
+}
+
+fn planner_request() -> SubmitAgentTaskRequest {
+    SubmitAgentTaskRequest {
+        assignment: TaskAgentAssignment {
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            definition: BuiltinAgentDefinition::Planner,
+        },
+        attempt_id: "first".to_string(),
+        input: TaskAgentInput {
+            accepted_plan: None,
+            clarification: None,
+            user_request: "Plan this change".to_string(),
+        },
+        objective: "A concrete plan".to_string(),
+        task_id: "task".to_string(),
+        visibility: DurableMessageVisibility::Visible,
+    }
 }

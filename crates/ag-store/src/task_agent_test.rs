@@ -1,6 +1,6 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput,
+    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
+    DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput,
 };
 
 use crate::SessionMessageRow;
@@ -104,20 +104,18 @@ async fn conflicting_assignment_or_original_input_cannot_change_a_task() {
         .await
         .expect("context");
     let mut changed_role = original.clone();
-    changed_role.assignment.definition = BuiltinAgentDefinition::Planner;
-    changed_role.input.accepted_plan = None;
+    changed_role.assignment.definition = BuiltinAgentDefinition::Implementer;
+    changed_role.input.accepted_plan = Some(AcceptedTaskPlan {
+        attempt_id: "source".to_string(),
+        task_id: "planner".to_string(),
+        text: "plan".to_string(),
+    });
     let mut changed_model = original.clone();
     changed_model.assignment.agent = AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra);
     let mut changed_input = original.clone();
     changed_input.input.user_request.push_str(" changed");
     let mut changed_plan = original.clone();
-    changed_plan
-        .input
-        .accepted_plan
-        .as_mut()
-        .expect("plan")
-        .text
-        .push_str(" changed");
+    changed_plan.input.accepted_plan = changed_role.input.accepted_plan.clone();
     let mut changed_objective = original.clone();
     changed_objective.objective.push_str(" changed");
     let mut changed_visibility = original.clone();
@@ -326,7 +324,7 @@ async fn malformed_persisted_assignments_fail_closed() {
         (
             "UPDATE task_agent_context SET role = ? WHERE task_id = 'task'",
             "unknown",
-            "implementer",
+            "planner",
         ),
         (
             "UPDATE task_agent_context SET agent = ? WHERE task_id = 'task'",

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE task SET objective = objective WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2c645347413e0aa3d3b00dc2c040f172861f2c6c8b5ca2171b1a4ecf607630d4"
+}

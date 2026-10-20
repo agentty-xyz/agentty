@@ -10,6 +10,7 @@ include = ["/.sqlx/**", "/migrations/**", "/sqlx.toml", "/src/**"]
 
 [dependencies]
 ag-contracts.workspace = true
+ag-protocol.workspace = true
 ag-session.workspace = true
 ag-worker.workspace = true
 async-trait.workspace = true

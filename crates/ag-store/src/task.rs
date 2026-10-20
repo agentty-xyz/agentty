@@ -3,14 +3,15 @@
 use std::sync::Arc;
 
 use ag_session::{
-    CreateTaskRequest, DurableMessageVisibility, SessionId, SubmitAgentTaskRequest,
-    SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
+    AcceptTaskPlanRequest, AcceptedTaskPlan, CreateTaskRequest, DurableMessageVisibility,
+    SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
+use crate::task_plan::TaskPlanStore;
 use crate::{DbError, TimestampSource};
 
 /// Persistence boundary for desired outcomes and immutable attempt identities.
@@ -20,6 +21,32 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
+    /// Accepts the latest successful Planner response by immutable version.
+    /// Reads the exact plan from storage; task completion is independent.
+    async fn accept_agent_plan(
+        &self,
+        session_id: &str,
+        request: &AcceptTaskPlanRequest,
+    ) -> Result<AcceptedTaskPlan, DbError> {
+        let _ = (session_id, request);
+        Err(TaskAgentStore::invalid(
+            "Host does not support plan acceptance",
+        ))
+    }
+
+    /// Verifies trusted acceptance, exact body, ownership, original request,
+    /// and captured selection before Implementer dispatch. Planner is a no-op.
+    async fn verify_agent_plan(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+    ) -> Result<(), DbError> {
+        let _ = (session_id, request);
+        Err(TaskAgentStore::invalid(
+            "Host does not support plan acceptance",
+        ))
+    }
+
     /// Loads one consistent snapshot of task-only history and provider state.
     async fn load_agent_history(
         &self,
@@ -275,6 +302,9 @@ impl SqliteTaskRepository {
         if Self::matching_attempt(&mut transaction, session_id, request, agent_request).await? {
             return Ok(false);
         }
+        if let Some(agent_request) = agent_request {
+            TaskPlanStore::verify(&mut transaction, session_id, agent_request).await?;
+        }
         let task = sqlx::query!(
             "SELECT session_id, objective, completed_at FROM task WHERE id = ?",
             request.task_id
@@ -329,6 +359,31 @@ impl SqliteTaskRepository {
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
+    async fn accept_agent_plan(
+        &self,
+        session_id: &str,
+        request: &AcceptTaskPlanRequest,
+    ) -> Result<AcceptedTaskPlan, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        let plan = TaskPlanStore::accept(&mut transaction, session_id, request, now).await?;
+        transaction.commit().await?;
+
+        Ok(plan)
+    }
+
+    async fn verify_agent_plan(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+    ) -> Result<(), DbError> {
+        let mut transaction = self.pool.begin().await?;
+        TaskPlanStore::verify(&mut transaction, session_id, request).await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn load_agent_history(
         &self,
         task_id: &str,
