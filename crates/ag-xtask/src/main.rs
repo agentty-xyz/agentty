@@ -1,6 +1,7 @@
 //! Workspace maintenance command-line tasks.
 
 mod affected_clippy;
+mod cargo_environment;
 mod check_execution_boundary;
 mod check_instruction;
 mod check_migration;

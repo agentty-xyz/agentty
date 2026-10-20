@@ -178,6 +178,54 @@ fn clippy_failures_and_unreadable_metadata_fail_the_command() -> Result<(), Box<
 }
 
 #[test]
+fn cargo_parent_context_does_not_leak_into_clippy() -> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::new(None)?;
+    fs::write(
+        fixture.directory.path().join("cargo"),
+        r#"#!/bin/sh
+if [ "$1" = metadata ]; then
+    cat metadata.json
+else
+    printf '%s\n' "${CARGO_MANIFEST_DIR-unset}" "${CARGO_MANIFEST_PATH-unset}" \
+        "${CARGO_MANIFEST_LINKS-unset}" "${CARGO_PKG_NAME-unset}" \
+        "${CARGO_PKG_VERSION_MAJOR-unset}" "$AGENTTY_KEEP_ENV" "$CARGO_HOME" >> environment
+    echo "$*" >> calls
+fi
+"#,
+    )?;
+
+    // Act
+    let output = fixture
+        .command(&["crates/core/src/lib.rs"], 0)?
+        .env("CARGO_MANIFEST_DIR", "/cargo-parent/ag-xtask")
+        .env("CARGO_MANIFEST_PATH", "/cargo-parent/ag-xtask/Cargo.toml")
+        .env("CARGO_MANIFEST_LINKS", "parent-links")
+        .env("CARGO_PKG_NAME", "ag-xtask")
+        .env("CARGO_PKG_VERSION_MAJOR", "0")
+        .env("AGENTTY_KEEP_ENV", "preserved")
+        .env("CARGO_HOME", "unchanged-cache")
+        .output()?;
+
+    // Assert
+    assert!(output.status.success());
+    assert_eq!(
+        fs::read_to_string(fixture.directory.path().join("environment"))?,
+        "unset\nunset\nunset\nunset\nunset\npreserved\nunchanged-cache\n".repeat(2)
+    );
+    assert_eq!(
+        fixture.calls()?,
+        [
+            "clippy -q --locked --all-targets --all-features -p agentty -p core -- -D warnings",
+            "clippy -q --locked -p agentty --test e2e --test protocol_compliance_e2e --test \
+             showcase -- -D warnings"
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
 fn cargo_that_cannot_launch_clippy_fails_the_command() -> Result<(), Box<dyn Error>> {
     // Arrange
     let fixture = Fixture::new(None)?;

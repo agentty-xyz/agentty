@@ -1,10 +1,10 @@
 //! Strict Clippy limited to the packages that changed files can affect.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use clap::Args;
 
+use crate::cargo_environment;
 use crate::validation::Metadata;
 
 /// Explicit package selection supplied only to a coordinated Clippy hook.
@@ -50,7 +50,7 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
         let Some(arguments) = clippy_arguments(packages.as_deref(), agentty_e2e) else {
             continue;
         };
-        let status = Command::new("cargo")
+        let status = cargo_environment::command("cargo")
             .args(arguments)
             .status()
             .map_err(|error| format!("Could not execute cargo: {error}"))?;
