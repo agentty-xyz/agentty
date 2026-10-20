@@ -20,6 +20,7 @@ pub(crate) struct PlanWorkflowItem {
     pub(crate) body: String,
     pub(crate) can_cancel: bool,
     pub(crate) continuation: Option<PlanEditorKind>,
+    pub(crate) current_attempt_id: String,
     pub(crate) id: String,
     pub(crate) status: String,
     pub(crate) user_request: String,
@@ -57,6 +58,7 @@ impl PlanEditorKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PlanWorkflowEditor {
     pub(crate) chain_id: Option<String>,
+    pub(crate) expected_attempt_id: String,
     pub(crate) input: InputState,
     pub(crate) kind: PlanEditorKind,
 }
@@ -68,6 +70,7 @@ pub struct PlanWorkflowState {
     pub(crate) editor: Option<PlanWorkflowEditor>,
     pub(crate) error: Option<String>,
     pub(crate) is_loading: bool,
+    pub(crate) is_submitting: bool,
     pub(crate) request_id: String,
     pub(crate) scroll_offset: u16,
     pub(crate) selected_index: usize,
@@ -86,8 +89,10 @@ impl PlanWorkflowState {
             .map(|chain| chain.id.as_str())
             .and_then(|id| chains.iter().position(|chain| chain.id == id))
             .unwrap_or_default();
-        if selected.map(|chain| &chain.accept_plan)
-            != chains.get(selected_index).map(|chain| &chain.accept_plan)
+        if selected.map(|chain| (&chain.accept_plan, &chain.current_attempt_id))
+            != chains
+                .get(selected_index)
+                .map(|chain| (&chain.accept_plan, &chain.current_attempt_id))
         {
             self.scroll_offset = 0;
         }
@@ -96,10 +101,10 @@ impl PlanWorkflowState {
     }
 
     pub(crate) fn begin_editing(&mut self, kind: PlanEditorKind) {
+        let selected = self.selected().filter(|_| kind != PlanEditorKind::New);
         self.editor = Some(PlanWorkflowEditor {
-            chain_id: (kind != PlanEditorKind::New)
-                .then(|| self.selected().map(|chain| chain.id.clone()))
-                .flatten(),
+            chain_id: selected.map(|chain| chain.id.clone()),
+            expected_attempt_id: selected.map_or_default(|chain| chain.current_attempt_id.clone()),
             input: InputState::default(),
             kind,
         });

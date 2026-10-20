@@ -36,9 +36,15 @@ use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
 async fn workflow_paste_routes_to_its_isolated_composer_only_when_editable() {
     // Arrange
     let (mut app, _root) = crate::test_support::new_test_app().await;
-    for (is_loading, has_editor) in [(false, true), (true, true), (false, false)] {
+    for (is_loading, is_submitting, has_editor) in [
+        (false, false, true),
+        (true, false, true),
+        (true, true, true),
+        (false, false, false),
+    ] {
         let mut state = PlanWorkflowState {
             is_loading,
+            is_submitting,
             ..PlanWorkflowState::default()
         };
         if has_editor {
@@ -55,7 +61,7 @@ async fn workflow_paste_routes_to_its_isolated_composer_only_when_editable() {
         // Assert
         assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. }
             if state.editor.as_ref().map(|editor| editor.input.text())
-                == if !has_editor { None } else if is_loading { Some("") } else { Some("first\nsecond") }));
+                == if !has_editor { None } else if is_submitting { Some("") } else { Some("first\nsecond") }));
     }
 }
 

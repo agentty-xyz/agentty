@@ -38,6 +38,7 @@ enum PlanWorkflowRequest {
     Continue {
         chain_id: String,
         clarification: String,
+        expected_attempt_id: String,
     },
     Cancel {
         chain_id: String,
@@ -121,6 +122,7 @@ impl App {
                     };
                     if editor.chain_id.as_deref() != Some(chain.id.as_str())
                         || chain.continuation != Some(editor.kind)
+                        || editor.expected_attempt_id != chain.current_attempt_id
                     {
                         if let AppMode::PlanWorkflow { state, .. } = &mut self.mode {
                             state.error = Some(
@@ -136,6 +138,7 @@ impl App {
                     PlanWorkflowRequest::Continue {
                         chain_id: chain.id.clone(),
                         clarification: editor.input.text().to_string(),
+                        expected_attempt_id: editor.expected_attempt_id.clone(),
                     }
                 }
             }
@@ -144,15 +147,14 @@ impl App {
     }
 
     fn request_plan_workflow(&mut self, request: PlanWorkflowRequest) {
-        let version = match &self.mode {
-            AppMode::PlanWorkflow { session_id, .. } => {
-                self.session_update_version(session_id.as_str())
-            }
-            _ => return,
-        };
         let AppMode::PlanWorkflow { session_id, state } = &mut self.mode else {
             return;
         };
+        let version = self
+            .last_seen_session_update_versions
+            .get(session_id.as_str())
+            .copied()
+            .unwrap_or_default();
         if state.is_loading {
             return;
         }
@@ -160,12 +162,13 @@ impl App {
         state.request_id.clone_from(&request_id);
         state.update_version = version;
         state.is_loading = true;
+        state.is_submitting = !matches!(&request, PlanWorkflowRequest::Load);
         if !matches!(&request, PlanWorkflowRequest::Load) {
             state.error = None;
         }
         let session_id = session_id.clone();
         let service = self.session_view_service();
-        let event_tx = self.services.event_sender();
+        let services = self.services.clone();
         tokio::spawn(async move {
             let is_mutation = !matches!(&request, PlanWorkflowRequest::Load);
             let action = apply_request(&service, &session_id, request).await;
@@ -175,7 +178,7 @@ impl App {
             };
             let clear_editor = is_mutation && error.is_none();
             let result = load_items(&service, &session_id).await;
-            let _ = event_tx.send(AppEvent::PlanWorkflowLoaded {
+            services.emit_app_event(AppEvent::PlanWorkflowLoaded {
                 completion: PlanWorkflowCompletion {
                     clear_editor,
                     error,
@@ -197,6 +200,7 @@ impl App {
             return;
         }
         state.is_loading = false;
+        state.is_submitting = false;
         if completion.error.is_some() {
             state.error = completion.error;
         }
@@ -207,13 +211,14 @@ impl App {
             Ok(chains) => {
                 state.replace_chains(chains);
                 if let Some(id) = completion.select_chain_id {
+                    state.scroll_offset = 0;
                     state.selected_index = state
                         .chains
                         .iter()
                         .position(|chain| chain.id == id)
                         .unwrap_or_default();
                 }
-                if state.chains.is_empty() && state.editor.is_none() {
+                if state.chains.is_empty() && state.editor.is_none() && state.error.is_none() {
                     state.begin_editing(PlanEditorKind::New);
                 }
             }
@@ -266,6 +271,7 @@ async fn apply_request(
         PlanWorkflowRequest::Continue {
             chain_id,
             clarification,
+            expected_attempt_id,
         } => {
             service
                 .continue_task_chain(
@@ -273,6 +279,7 @@ async fn apply_request(
                     ContinueTaskChainRequest {
                         attempt_id: Uuid::new_v4().to_string(),
                         clarification: (!clarification.trim().is_empty()).then_some(clarification),
+                        expected_attempt_id,
                     },
                 )
                 .await
@@ -349,27 +356,32 @@ fn project_chain(
             };
             (
                 if chain.phase == TaskChainPhase::Failed {
-                    "Failed · explicit retry available"
+                    "Failed · explicit retry required"
                 } else {
-                    "Canceled · explicit retry available"
+                    "Canceled · retry after the worker stops"
                 },
                 Some(retry),
             )
         }
         TaskChainPhase::Succeeded => ("Implementation succeeded", None),
     };
-    let mut body = format!("# Original request\n\n{}\n\n", chain.user_request);
-    if let Some(plan) = &chain.accepted_plan {
-        let _ = writeln!(body, "Accepted plan version: {}\n", plan.attempt_id);
+    let mut body = String::new();
+    let planner_label = if chain.accepted_plan.is_some() {
+        "Planner · accepted plan"
     } else {
-        let _ = writeln!(
-            body,
-            "Current Planner version: {}\n",
-            chain.current_request.attempt_id
-        );
+        "Planner"
+    };
+    match chain.current_request.assignment.definition {
+        BuiltinAgentDefinition::Planner => {
+            append_history(&mut body, planner_label, planner)?;
+            append_history(&mut body, "Implementer", implementer)?;
+        }
+        BuiltinAgentDefinition::Implementer => {
+            append_history(&mut body, "Implementer", implementer)?;
+            append_history(&mut body, planner_label, planner)?;
+        }
     }
-    append_history(&mut body, "Planner", planner)?;
-    append_history(&mut body, "Implementer", implementer)?;
+    let _ = writeln!(body, "# Original request\n\n{}\n", chain.user_request);
     let accept_plan = (chain.phase == TaskChainPhase::AwaitingPlanAcceptance).then(|| {
         (
             chain.planner_task_id,
@@ -386,6 +398,7 @@ fn project_chain(
             TaskChainPhase::Planning | TaskChainPhase::Implementing
         ),
         continuation,
+        current_attempt_id: chain.current_request.attempt_id.clone(),
         id: chain.id,
         status: status.into(),
         user_request: chain.user_request,
@@ -403,14 +416,14 @@ fn append_history(
 
         return Ok(());
     };
-    for turn in history.turns.iter().rev() {
+    for (index, turn) in history.turns.iter().enumerate().rev() {
         let response = serde_json::from_str::<AgentResponse>(&turn.assistant_message)
             .map_err(|error| format!("Cannot read {role} response: {error}"))?;
-        let _ = writeln!(body, "## Attempt {}\n", turn.attempt_id);
+        let _ = writeln!(body, "## Response {}\n", index + 1);
+        let _ = writeln!(body, "{}\n", response.to_display_text());
         if let Some(clarification) = &turn.input.clarification {
             let _ = writeln!(body, "Clarification: {clarification}\n");
         }
-        let _ = writeln!(body, "{}\n", response.to_display_text());
     }
 
     Ok(())

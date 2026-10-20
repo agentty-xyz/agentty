@@ -7,6 +7,7 @@ fn item(id: &str) -> PlanWorkflowItem {
         body: String::new(),
         can_cancel: false,
         continuation: None,
+        current_attempt_id: format!("{id}-source"),
         id: id.into(),
         status: "Planning".into(),
         user_request: "Original request".into(),
@@ -35,8 +36,34 @@ fn workflow_selection_survives_reload_and_wraps_without_losing_editor() {
     state.select_next();
     state.select_next();
     assert_eq!(state.selected_index, 0);
+    assert_eq!(
+        state.editor.as_ref().expect("editor").expected_attempt_id,
+        "first-source"
+    );
     state.replace_chains(vec![item("replacement")]);
     assert_eq!(state.selected_index, 0);
+}
+
+#[test]
+fn a_new_attempt_returns_to_its_response_without_discarding_an_older_draft() {
+    // Arrange
+    let mut state = PlanWorkflowState::default();
+    state.replace_chains(vec![item("workflow")]);
+    state.begin_editing(PlanEditorKind::RetryImplementer);
+    state.scroll_offset = 20;
+
+    // Act, Assert: passive reads retain the viewport; stage changes reveal new
+    // output.
+    state.replace_chains(vec![item("workflow")]);
+    assert_eq!(state.scroll_offset, 20);
+    let mut next = item("workflow");
+    next.current_attempt_id = "retry".into();
+    state.replace_chains(vec![next]);
+    assert_eq!(state.scroll_offset, 0);
+    assert_eq!(
+        state.editor.expect("retained draft").expected_attempt_id,
+        "workflow-source"
+    );
 }
 
 #[test]

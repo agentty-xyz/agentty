@@ -16,6 +16,7 @@ fn panel_renders_role_attribution_scroll_and_explicit_editor_intent() {
             body: "# Planner\nInspect this plan.\n\n# Implementer\nWaiting for acceptance.".into(),
             can_cancel: true,
             continuation: Some(PlanEditorKind::RevisePlan),
+            current_attempt_id: "attempt".into(),
             id: "workflow".into(),
             status: "Awaiting plan acceptance".into(),
             user_request: "Add search".into(),
@@ -99,4 +100,39 @@ fn empty_panel_handles_tiny_terminals_and_loading_without_a_composer() {
             }
         }
     }
+}
+
+#[test]
+fn failed_start_keeps_the_request_visible_with_actionable_workspace_guidance() {
+    // Arrange
+    let mut state = PlanWorkflowState::default();
+    state.begin_editing(PlanEditorKind::New);
+    state
+        .editor
+        .as_mut()
+        .expect("editor")
+        .input
+        .insert_text("Add search without losing this request");
+    state.error =
+        Some("Workspace is not prepared. Create a Regular session to start planning.".into());
+    let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+    let cache = MarkdownRenderCache::default();
+
+    // Act
+    terminal
+        .draw(|frame| render(frame, frame.area(), &state, &cache))
+        .expect("render");
+    let text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(Cell::symbol)
+        .collect::<String>();
+
+    // Assert
+    assert!(text.contains("Add search without losing this request"));
+    assert!(
+        text.contains("Workspace is not prepared. Create a Regular session to start planning.")
+    );
 }

@@ -34,8 +34,9 @@ One session can own multiple distinct tasks. Their attempts execute serially thr
 that session's worker; submitting a new attempt while the session is busy is rejected,
 not added to the ordinary chat queue. Tasks in different eligible sessions can execute
 concurrently within existing capacity and workspace limits. Each task stays with its
-owning session. Task management is programmatic; there is no dedicated task UI or
-dependency scheduler.
+owning session. Generic task management is programmatic. The
+[Plan then implement workflow](@/docs/usage/workflow.md#plan-then-implement) provides a
+terminal panel for its two role tasks; arbitrary dependency scheduling is not provided.
 
 ## Built-in Agent Definitions
 

@@ -2242,6 +2242,27 @@ async fn test_handle_prompt_submit_key_routes_slash_command() {
 }
 
 #[tokio::test]
+async fn plan_slash_command_opens_task_panel_without_submitting_an_ordinary_turn() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("prompt-test-session")
+            .build(),
+    );
+    app.mode = new_test_prompt_mode("/plan");
+    let context = prompt_context(&mut app).expect("prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &context).await;
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::PlanWorkflow { session_id, state } if session_id == "prompt-test-session" && state.is_loading)
+    );
+}
+
+#[tokio::test]
 async fn test_handle_prompt_submit_key_drains_supported_image_turn() {
     // Arrange
     let (mut app, _base_dir) = new_test_draft_prompt_app("Review ", None).await;

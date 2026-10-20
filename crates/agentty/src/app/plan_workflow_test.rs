@@ -120,13 +120,13 @@ fn projection_labels_roles_and_distinguishes_every_explicit_continuation() {
         ),
         (
             TaskChainPhase::Failed,
-            "Failed · explicit retry available",
+            "Failed · explicit retry required",
             Some(PlanEditorKind::RetryPlanner),
             false,
         ),
         (
             TaskChainPhase::Canceled,
-            "Canceled · explicit retry available",
+            "Canceled · retry after the worker stops",
             Some(PlanEditorKind::RetryPlanner),
             false,
         ),
@@ -159,6 +159,12 @@ fn projection_labels_roles_and_distinguishes_every_explicit_continuation() {
             item.accept_plan.is_some(),
             phase == TaskChainPhase::AwaitingPlanAcceptance
         );
+        if phase == TaskChainPhase::AwaitingPlanAcceptance {
+            assert_eq!(
+                item.accept_plan,
+                Some(("chain:chain:planner".into(), "plan-v2".into()))
+            );
+        }
     }
     for phase in [TaskChainPhase::Canceled, TaskChainPhase::Failed] {
         let mut chain = chain(phase);
@@ -170,24 +176,23 @@ fn projection_labels_roles_and_distinguishes_every_explicit_continuation() {
         chain.current_request.assignment.definition = BuiltinAgentDefinition::Implementer;
         let item = project_chain(chain, None, None).expect("projection");
         assert_eq!(item.continuation, Some(PlanEditorKind::RetryImplementer));
-        assert!(
-            item.body
-                .contains("Accepted plan version: accepted-version")
-        );
+        assert!(item.body.contains("# Planner · accepted plan"));
+        assert!(item.body.starts_with("# Implementer"));
     }
 }
 
 #[test]
 fn projection_rejects_corrupt_responses_and_shows_latest_version_first() {
     // Arrange
-    let chain = chain(TaskChainPhase::AwaitingPlanAcceptance);
+    let mut chain = chain(TaskChainPhase::AwaitingPlanAcceptance);
     let mut history = history(&chain);
     history.turns[0].input.clarification = None;
     let mut newest = history.turns[0].clone();
-    newest.attempt_id = "newest".into();
+    newest.attempt_id = "opaque-receipt".into();
     newest.assistant_message =
         serde_json::to_string(&AgentResponse::plain("Latest plan")).expect("protocol");
     history.turns.push(newest);
+    chain.current_request.attempt_id = "opaque-receipt".into();
 
     // Act
     let item = project_chain(chain.clone(), Some(&history), None).expect("projection");
@@ -195,6 +200,12 @@ fn projection_rejects_corrupt_responses_and_shows_latest_version_first() {
     // Assert
     assert!(
         item.body.find("Latest plan").expect("new") < item.body.find("Plan text").expect("old")
+    );
+    assert!(item.body.contains("## Response 2"));
+    assert!(!item.body.contains("opaque-receipt"));
+    assert_eq!(
+        item.accept_plan,
+        Some((chain.planner_task_id.clone(), "opaque-receipt".into()))
     );
     history.turns[0].assistant_message = "broken JSON".into();
     assert!(
@@ -214,6 +225,7 @@ async fn reducer_applies_only_matching_panel_completions_and_preserves_drafts_on
     let mut state = PlanWorkflowState {
         request_id: "request".into(),
         is_loading: true,
+        scroll_offset: 17,
         chains: vec![item.clone()],
         ..PlanWorkflowState::default()
     };
@@ -251,7 +263,9 @@ async fn reducer_applies_only_matching_panel_completions_and_preserves_drafts_on
         matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if !state.is_loading && state.error.as_deref() == Some("Admission failed") && state.editor.is_some())
     );
     app.complete_plan_workflow(completion.clone());
-    assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.editor.is_some()));
+    assert!(
+        matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.editor.is_some() && state.scroll_offset == 0)
+    );
     app.complete_plan_workflow(PlanWorkflowCompletion {
         error: Some("Worker admission failed; persisted stage reloaded.".into()),
         ..completion.clone()
@@ -276,6 +290,18 @@ async fn reducer_applies_only_matching_panel_completions_and_preserves_drafts_on
         ..completion.clone()
     });
     assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.editor.is_none()));
+    app.complete_plan_workflow(PlanWorkflowCompletion {
+        clear_editor: false,
+        error: Some("Workflow no longer exists".into()),
+        result: Ok(Vec::new()),
+        ..completion.clone()
+    });
+    assert!(
+        matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.error.as_deref() == Some("Workflow no longer exists") && state.editor.is_none())
+    );
+    if let AppMode::PlanWorkflow { state, .. } = &mut app.mode {
+        state.error = None;
+    }
     app.complete_plan_workflow(PlanWorkflowCompletion {
         clear_editor: true,
         result: Ok(Vec::new()),
@@ -396,6 +422,14 @@ async fn action_guards_keep_missing_or_replaced_stage_inputs_out_of_admission() 
         matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.error.as_deref().is_some_and(|error| error.contains("Workflow changed")))
     );
     state.editor.as_mut().expect("editor").chain_id = Some("chain".into());
+    state.chains[0].current_attempt_id = "a-newer-planner-attempt".into();
+    app.mode = AppMode::PlanWorkflow {
+        session_id: "missing".into(),
+        state: Box::new(state.clone()),
+    };
+    app.handle_plan_workflow_intent(PlanWorkflowIntent::Submit);
+    assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.error.is_some()));
+    state.chains[0].current_attempt_id = "plan-v2".into();
     state.chains[0].continuation = None;
     app.mode = AppMode::PlanWorkflow {
         session_id: "missing".into(),
@@ -412,6 +446,12 @@ async fn action_guards_keep_missing_or_replaced_stage_inputs_out_of_admission() 
     assert!(
         matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.request_id.is_empty())
     );
+    if let AppMode::PlanWorkflow { state, .. } = &mut app.mode {
+        state.is_loading = false;
+    }
+    app.handle_plan_workflow_intent(PlanWorkflowIntent::Refresh);
+    drive_panel(&mut app).await;
+    assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if !state.is_loading));
 }
 
 #[tokio::test]
@@ -421,10 +461,11 @@ async fn terminal_admission_failure_retains_composer_and_reloads_durable_phase()
     let session = test_support::SessionFixtureBuilder::new().build();
     let session_id = session.id.clone();
     app.sessions.push_session(session);
-    for intent in [
-        PlanWorkflowIntent::Submit,
-        PlanWorkflowIntent::Accept,
-        PlanWorkflowIntent::Cancel,
+    for (intent, editor_kind) in [
+        (PlanWorkflowIntent::Submit, Some(PlanEditorKind::New)),
+        (PlanWorkflowIntent::Submit, Some(PlanEditorKind::RevisePlan)),
+        (PlanWorkflowIntent::Accept, None),
+        (PlanWorkflowIntent::Cancel, None),
     ] {
         let mut item =
             project_chain(chain(TaskChainPhase::AwaitingPlanAcceptance), None, None).expect("item");
@@ -433,8 +474,8 @@ async fn terminal_admission_failure_retains_composer_and_reloads_durable_phase()
             chains: vec![item],
             ..PlanWorkflowState::default()
         };
-        if intent == PlanWorkflowIntent::Submit {
-            state.begin_editing(PlanEditorKind::New);
+        if let Some(kind) = editor_kind {
+            state.begin_editing(kind);
             state
                 .editor
                 .as_mut()
@@ -455,7 +496,7 @@ async fn terminal_admission_failure_retains_composer_and_reloads_durable_phase()
         assert!(
             matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if !state.is_loading && state.error.is_some())
         );
-        if intent == PlanWorkflowIntent::Submit {
+        if editor_kind.is_some() {
             assert!(
                 matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.editor.as_ref().is_some_and(|editor| editor.input.text() == "Preserve this failed request"))
             );
@@ -500,6 +541,7 @@ async fn terminal_requests_preserve_inputs_and_surface_each_admission_failure() 
             .returning(move |chain_id, request| {
                 assert_eq!(chain_id, "chain");
                 assert!(uuid::Uuid::parse_str(&request.attempt_id).is_ok());
+                assert_eq!(request.expected_attempt_id, "source-version");
                 if let Some(clarification) = request.clarification {
                     assert_eq!(clarification, "  Answer.\n");
                 }
@@ -525,10 +567,12 @@ async fn terminal_requests_preserve_inputs_and_surface_each_admission_failure() 
             PlanWorkflowRequest::Continue {
                 chain_id: "chain".into(),
                 clarification: "  Answer.\n".into(),
+                expected_attempt_id: "source-version".into(),
             },
             PlanWorkflowRequest::Continue {
                 chain_id: "chain".into(),
                 clarification: " \n".into(),
+                expected_attempt_id: "source-version".into(),
             },
             PlanWorkflowRequest::Cancel {
                 chain_id: "chain".into(),

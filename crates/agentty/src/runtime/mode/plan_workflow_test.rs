@@ -1,9 +1,12 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::presentation::app_mode::AppMode;
 use crate::presentation::plan_workflow::{
     PlanEditorKind, PlanWorkflowIntent, PlanWorkflowItem, PlanWorkflowState,
 };
-use crate::runtime::mode::plan_workflow::handle_key;
+use crate::runtime::key_handler::handle_key_event;
+use crate::runtime::mode::plan_workflow::{handle, handle_key};
+use crate::runtime::{EventResult, PresentationState};
 
 fn state() -> PlanWorkflowState {
     PlanWorkflowState {
@@ -13,6 +16,7 @@ fn state() -> PlanWorkflowState {
             body: String::new(),
             can_cancel: true,
             continuation: Some(PlanEditorKind::RevisePlan),
+            current_attempt_id: "plan-version".into(),
             id: "workflow".into(),
             status: String::new(),
             user_request: String::new(),
@@ -99,6 +103,7 @@ fn loading_blocks_double_submission_and_escape_still_returns_to_chat() {
     let mut state = state();
     state.begin_editing(PlanEditorKind::New);
     state.is_loading = true;
+    state.is_submitting = true;
 
     // Act, Assert
     for key in [
@@ -115,6 +120,36 @@ fn loading_blocks_double_submission_and_escape_still_returns_to_chat() {
     assert_eq!(
         handle_key(&mut state, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         Some(PlanWorkflowIntent::Close)
+    );
+}
+
+#[test]
+fn background_snapshot_refresh_keeps_typing_responsive_without_admitting_stale_actions() {
+    // Arrange
+    let mut state = state();
+    state.begin_editing(PlanEditorKind::RevisePlan);
+    state.is_loading = true;
+
+    // Act
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    );
+    let submit = handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+
+    // Assert
+    assert_eq!(state.editor.as_ref().expect("editor").input.text(), "x");
+    assert_eq!(submit, None);
+    state.editor = None;
+    assert_eq!(
+        handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        ),
+        None
     );
 }
 
@@ -136,6 +171,63 @@ fn navigation_changes_only_foreground_selection_and_scroll() {
 
     // Assert
     assert_eq!(state.scroll_offset, 1);
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    );
+    assert_eq!(state.scroll_offset, 6);
+    state.begin_editing(PlanEditorKind::RevisePlan);
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+    );
+    assert_eq!(state.scroll_offset, 1);
+    state.editor = None;
     handle_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(state.scroll_offset, 0);
+}
+
+#[tokio::test]
+async fn panel_dispatch_edits_and_closes_without_waiting_for_the_session_actor() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    app.mode = AppMode::List;
+    assert!(matches!(
+        handle(&mut app, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        EventResult::Continue
+    ));
+    app.mode = AppMode::PlanWorkflow {
+        session_id: "session".into(),
+        state: Box::default(),
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+    let presentation = PresentationState::default();
+
+    // Act
+    handle_key_event(
+        &mut app,
+        &presentation,
+        &mut terminal,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+    )
+    .await
+    .expect("input route");
+
+    // Assert
+    assert!(
+        matches!(&app.mode, AppMode::PlanWorkflow { state, .. } if state.editor.as_ref().is_some_and(|editor| editor.kind == PlanEditorKind::New))
+    );
+    assert!(!app.has_visible_tick_driven_ui());
+    for _ in 0..2 {
+        handle_key_event(
+            &mut app,
+            &presentation,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+        )
+        .await
+        .expect("close route");
+    }
+    assert!(matches!(app.mode, AppMode::View { .. }));
 }

@@ -186,7 +186,9 @@ Foreground gateway admission records each workflow stage and its attempt atomica
 only a new claim reaches the session worker. Duplicate deliveries acknowledge their
 original receipt without repeating execution. Plan acceptance binds the exact producing
 version before implementation admission, and cancellation targets the selected attempt.
-Actor queries read persisted state and never dispatch or resume work.
+Actor queries read persisted state and never dispatch or resume work. Continuation input
+retains the attempt shown when composition began; admission rejects a stale source
+before it can reach another stage or role.
 
 Resource sampling runs behind `ResourceClient`. Process creation identities guard
 against PID reuse. Temperature sampling runs independently and expires stale readings,

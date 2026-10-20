@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph, Wrap};
 
-use crate::presentation::plan_workflow::PlanWorkflowState;
+use crate::presentation::plan_workflow::{PlanEditorKind, PlanWorkflowState};
 use crate::ui::component::chat_input::ChatInput;
 use crate::ui::{Component, markdown, style};
 
@@ -25,31 +25,8 @@ pub(crate) fn render(
     ])
     .areas(area);
     let selected = state.selected();
-    let header_text = selected.map_or_else(
-        || {
-            vec![Line::from(
-                "Start a read-only Planner, inspect its plan, then accept to run Implementer.",
-            )]
-        },
-        |chain| {
-            vec![
-                Line::from(vec![
-                    Span::raw(chain.status.as_str()),
-                    Span::raw(" · "),
-                    Span::raw(chain.agent_label.as_str()),
-                ]),
-                Line::from(chain.user_request.lines().next().unwrap_or_default()),
-                Line::from(format!(
-                    "Workflow {}/{} · {}",
-                    state.selected_index + 1,
-                    state.chains.len(),
-                    chain.id
-                )),
-            ]
-        },
-    );
     frame.render_widget(
-        Paragraph::new(header_text).block(
+        Paragraph::new(header_lines(state)).block(
             Block::bordered()
                 .title(" Plan then implement ")
                 .border_style(style::border_style()),
@@ -62,9 +39,12 @@ pub(crate) fn render(
         .border_style(style::border_style());
     let inner = block.inner(body);
     frame.render_widget(block, body);
-    let text = selected.map_or("No workflows yet. Press n to write a request.", |chain| {
-        chain.body.as_str()
-    });
+    let empty_text = if state.editor.is_some() {
+        "Write your request below to start the read-only Planner."
+    } else {
+        "No workflows yet. Press n to write a request."
+    };
+    let text = selected.map_or(empty_text, |chain| chain.body.as_str());
     let lines = markdown_cache.render(text, usize::from(inner.width));
     let visible = lines
         .iter()
@@ -80,12 +60,18 @@ pub(crate) fn render(
             composer.input.text(),
             composer.input.cursor,
         )
-        .footer("Enter submit · Alt+Enter newline · Esc discard")
-        .active(!state.is_loading)
+        .footer("Enter submit · Alt+Enter newline · PgUp/PgDn results · Esc discard")
+        .active(!state.is_submitting)
         .render(frame, editor);
     }
     let action_text = if state.is_loading {
         "Loading workflow…"
+    } else if state
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.kind == PlanEditorKind::New)
+    {
+        "Planner inspects the prepared workspace without editing files."
     } else if state.editor.is_some() {
         "The original request and accepted plan remain unchanged."
     } else {
@@ -97,6 +83,32 @@ pub(crate) fn render(
         Paragraph::new(Line::from(notice)).wrap(Wrap { trim: false }),
         footer,
     );
+}
+
+/// Borrows request text while formatting only the small workflow selector.
+fn header_lines(state: &PlanWorkflowState) -> Vec<Line<'_>> {
+    state.selected().map_or_else(
+        || {
+            vec![Line::from(
+                "Start a read-only Planner, inspect its plan, then accept to run Implementer.",
+            )]
+        },
+        |chain| {
+            vec![
+                Line::from(vec![
+                    Span::raw(chain.status.as_str()),
+                    Span::raw(" · "),
+                    Span::raw(chain.agent_label.as_str()),
+                ]),
+                Line::from(chain.user_request.lines().next().unwrap_or_default()),
+                Line::from(format!(
+                    "Workflow {}/{}",
+                    state.selected_index + 1,
+                    state.chains.len(),
+                )),
+            ]
+        },
+    )
 }
 
 #[cfg(test)]

@@ -130,6 +130,7 @@ The full set in **Review** state, subject to session and forge availability:
 | `q`                 | Back to list                                        |
 | `Enter`             | Compose a reply                                     |
 | `/`                 | Open composer with `/` prefilled                    |
+| `T`                 | Open planning workflows                             |
 | `o`                 | Run a launch configuration in the worktree (`tmux`) |
 | `p`                 | Publish branch and create or refresh review request |
 | `c`                 | Show linked review-request comments                 |
@@ -266,7 +267,9 @@ navigation. Other file types keep showing diffs; unavailable files show a notice
 Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
 `Shift+Tab` cycles those modes in that order.
 
-Use `/plan` to open **Plan then implement** for a review-ready session. In its panel:
+Use `/plan` to open **Plan then implement** in a session with a prepared worktree. From
+session view, `T` also opens its workflows, including while an agent is running. In its
+panel:
 
 | Key                       | Action                                                                      |
 | ------------------------- | --------------------------------------------------------------------------- |
@@ -277,6 +280,7 @@ Use `/plan` to open **Plan then implement** for a review-ready session. In its p
 | `Tab`                     | Select the next workflow                                                    |
 | `Up` / `Down` / `k` / `j` | Scroll role results                                                         |
 | `F5`                      | Reload persisted workflow state                                             |
+| `PgUp` / `PgDn`           | Scroll results, including while composing                                   |
 | `Esc`                     | Discard the active draft, or return to chat                                 |
 
 In its composer, `Enter` submits and `Alt+Enter` / `Shift+Enter` inserts a newline.

@@ -76,6 +76,40 @@ fn test_view_context_returns_existing_session_details() {
 }
 
 #[tokio::test]
+async fn workflow_shortcut_opens_task_results_while_the_session_is_running() {
+    // Arrange
+    let (mut app, _root) = new_test_app().await;
+    let session = session_fixture(Status::InProgress, false);
+    let session_id = session.id.clone();
+    app.sessions.push_session(session);
+    app.mode = AppMode::View {
+        session_id: session_id.clone(),
+        scroll_offset: None,
+    };
+    let context = view_context(&mut app).expect("view");
+    let snapshot = view_session_snapshot(&app, &context).expect("snapshot");
+    let mut pending = ViewPendingUpdate::from_context(&context);
+
+    // Act
+    let apply_view_updates = handle_view_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
+        ViewKeyContext {
+            context: &context,
+            session_snapshot: &snapshot,
+        },
+        &mut pending,
+    )
+    .await;
+
+    // Assert
+    assert!(!apply_view_updates);
+    assert!(
+        matches!(&app.mode, AppMode::PlanWorkflow { session_id: actual, state } if actual == &session_id && state.is_loading)
+    );
+}
+
+#[tokio::test]
 async fn test_linked_canceled_session_routes_c_to_continue_without_comments() {
     // Arrange
     let (mut app, _base_dir, session_id) = new_test_app_with_session().await;

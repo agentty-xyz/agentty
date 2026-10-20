@@ -26,17 +26,33 @@ pub(crate) fn handle_key(
     key: KeyEvent,
 ) -> Option<PlanWorkflowIntent> {
     if key.code == KeyCode::Esc {
-        if state.editor.take().is_none() || state.is_loading {
+        if state.editor.take().is_none() || state.is_submitting {
             return Some(PlanWorkflowIntent::Close);
         }
 
         return None;
     }
-    if state.is_loading {
+    if state.is_submitting {
         return None;
+    }
+    if key.modifiers == KeyModifiers::NONE {
+        match key.code {
+            KeyCode::PageDown => {
+                state.scroll_offset = state.scroll_offset.saturating_add(5);
+                return None;
+            }
+            KeyCode::PageUp => {
+                state.scroll_offset = state.scroll_offset.saturating_sub(5);
+                return None;
+            }
+            _ => {}
+        }
     }
     if let Some(editor) = &mut state.editor {
         if input_key::is_enter_key(key.code) && key.modifiers == KeyModifiers::NONE {
+            if state.is_loading {
+                return None;
+            }
             if editor.kind.requires_text() && editor.input.text().trim().is_empty() {
                 state.error = Some("Enter text before submitting.".into());
 
@@ -50,6 +66,9 @@ pub(crate) fn handle_key(
             state.error = None;
         }
 
+        return None;
+    }
+    if state.is_loading {
         return None;
     }
     if key.modifiers != KeyModifiers::NONE {

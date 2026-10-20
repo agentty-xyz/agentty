@@ -494,6 +494,11 @@ async fn handle_workflow_view_key(
     pending_update: &mut ViewPendingUpdate,
 ) -> Option<bool> {
     match key.code {
+        KeyCode::Char('T') if is_insertable_char_key(key) => {
+            app.open_plan_workflow(view_context.session_id.clone());
+
+            return Some(false);
+        }
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.inspect_diff.is_enabled() =>
