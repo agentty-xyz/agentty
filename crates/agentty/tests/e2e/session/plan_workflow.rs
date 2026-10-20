@@ -1,10 +1,11 @@
 //! One terminal journey through explicit plan acceptance and stage retry.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use testty::assertion;
+use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
 
@@ -13,12 +14,17 @@ use crate::session::fixture::{E2eResult, seed_project_settings};
 
 const WORKFLOW_MODEL_ID: &str = "claude-haiku-4-5-20251001";
 
+/// Focused-review text shown after the Implementer changes the worktree.
+const IMPLEMENTER_REVIEW_TEXT: &str = "Implementer focused review completed.";
+
 async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
     seed_project_settings(
         env,
         &[
             ("DefaultSmartAgent", "claude"),
             ("DefaultSmartModel", WORKFLOW_MODEL_ID),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", WORKFLOW_MODEL_ID),
         ],
     )
     .await?;
@@ -32,6 +38,14 @@ prompt=$(cat)
 stub_root=$(dirname "$0")
 printf '%s\n' '{"type":"system","subtype":"init"}'
 case "$prompt" in
+  *'Review the Git diff for display in a terminal UI.'*)
+    case "$prompt" in
+      *'Reduce review:'*|*'Cross-file review:'*) ;;
+      *) printf 'review\n' >> "$AGENTTY_TEST_REVIEW_LOG" ;;
+    esac
+    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\":[\"Implementer focused review completed.\"],\"suggestions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+    exit 0
+    ;;
   *'Act as the planner'*)
     case "$prompt" in
       *'Include search tests'*) answer='Plan version 2: add indexed search and tests.' ;;
@@ -44,6 +58,7 @@ case "$prompt" in
       while [ -d "$stub_root" ]; do sleep 0.02; done
       exit 0
     fi
+    printf 'indexed search\n' > search.txt
     answer='Implementation finished from accepted plan version 2.'
     ;;
   *) answer='Session unchanged.' ;;
@@ -123,6 +138,8 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
     // Arrange, Act, Assert: lower tests own phase and identity permutations.
     let gate = tempfile::tempdir()?;
     let started = gate.path().join("implementation-started");
+    let review_log = gate.path().join("review-runs");
+    let review_runs = review_log.clone();
     FeatureTest::new("plan_then_implement")
         .with_git()
         .args(["--experimental-multi-agent".to_string()])
@@ -130,6 +147,7 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
             "AGENTTY_TEST_IMPLEMENTER_STARTED",
             started.to_string_lossy(),
         )
+        .env("AGENTTY_TEST_REVIEW_LOG", review_log.to_string_lossy())
         .setup(|env| Box::pin(async move { seed_workflow_project(env).await }))
         .run(
             move |scenario| {
@@ -184,22 +202,24 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
                         "Implementer retry retains the accepted plan",
                     )
                     .press_key("Esc")
+                    .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 30000)
                     .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("ordinary_chat", "Role output stays outside ordinary chat")
+                    .capture_labeled(
+                        "ordinary_chat",
+                        "Role output stays outside ordinary chat while focused review runs",
+                    )
                     .press_key("/")
                     .write_text("plan")
                     .press_key("Enter")
                     .wait_for_text("Implementation succeeded", 5000)
             },
-            |frame, report| {
+            move |frame, report| {
                 Box::pin(async move {
                     let planner = common::frame_from_capture(&report.captures[0]);
                     let planner_full = Region::full(planner.cols(), planner.rows());
                     assertion::assert_text_in_region(&planner, "Planner", &planner_full);
                     assertion::assert_text_in_region(&planner, "Plan version 1", &planner_full);
-                    let chat = common::frame_from_capture(&report.captures[2]);
-                    assertion::assert_not_visible(&chat, "Plan version 2");
-                    assertion::assert_not_visible(&chat, "Implementation finished");
+                    assert_implementer_review_in_ordinary_chat(report, &review_runs);
                     assertion::assert_text_in_region(
                         frame,
                         "Implementation succeeded",
@@ -211,4 +231,22 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
         .await?;
 
     Ok(())
+}
+
+/// Asserts that role output stays outside ordinary chat while the successful
+/// Implementer attempt starts the session's one focused review.
+fn assert_implementer_review_in_ordinary_chat(report: &ProofReport, review_runs: &Path) {
+    let chat = common::frame_from_capture(&report.captures[2]);
+    assertion::assert_not_visible(&chat, "Plan version 2");
+    assertion::assert_not_visible(&chat, "Implementation finished");
+    assertion::assert_text_in_region(
+        &chat,
+        IMPLEMENTER_REVIEW_TEXT,
+        &Region::full(chat.cols(), chat.rows()),
+    );
+    // Planner revisions and the canceled Implementer start no review.
+    assert_eq!(
+        std::fs::read_to_string(review_runs).unwrap_or_default(),
+        "review\n"
+    );
 }

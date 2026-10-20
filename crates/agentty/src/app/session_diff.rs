@@ -349,7 +349,7 @@ impl App {
         cached_diff_hash: u64,
         suggestions: String,
     ) -> bool {
-        if self.role_review_suppression.contains(session_id) {
+        if self.role_review_suppression.contains_key(session_id) {
             return false;
         }
         self.start_apply_review_diff_load_with_mode(session_id, cached_diff_hash, suggestions, true)
@@ -386,7 +386,7 @@ impl App {
     /// background.
     pub(super) fn start_auto_review_diff_loads(&mut self, session_ids: &HashSet<SessionId>) {
         for session_id in session_ids {
-            if self.role_review_suppression.contains(session_id) {
+            if self.role_review_suppression.contains_key(session_id) {
                 continue;
             }
             let Some(session) = self.sessions.session_for_id(session_id) else {
@@ -426,7 +426,7 @@ impl App {
         &mut self,
         session_id: &SessionId,
     ) -> bool {
-        if self.role_review_suppression.contains(session_id) {
+        if self.role_review_suppression.contains_key(session_id) {
             return false;
         }
         if self.pending_session_diff_requests.values().any(|request| {
@@ -486,7 +486,7 @@ impl App {
     /// completed turns, then clears their stale focused-review generations.
     pub(super) fn supersede_review_diff_loads(&mut self, session_ids: &HashSet<SessionId>) {
         for session_id in session_ids {
-            if self.role_review_suppression.contains(session_id) {
+            if self.role_review_suppression.contains_key(session_id) {
                 continue;
             }
             self.discard_pending_review_action_diff_loads(session_id);

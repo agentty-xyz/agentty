@@ -182,7 +182,7 @@ impl App {
                     "Workflow attempt changed before delivery".to_string(),
                 ));
             }
-            self.suppress_agent_task_automation(&chain.session_id)
+            self.suppress_agent_task_automation(&chain.session_id, attempt_id)
                 .await?;
             self.sessions
                 .enqueue_claimed_agent_task(

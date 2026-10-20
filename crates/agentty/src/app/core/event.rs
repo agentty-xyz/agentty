@@ -274,6 +274,13 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         turn_applied_state: TurnAppliedState,
     },
+    /// Indicates that an Implementer task attempt finished without questions
+    /// after its implementation effects, so the ordinary automatic review may
+    /// start when this attempt still owns role review suppression.
+    ImplementerAttemptSucceeded {
+        attempt_id: String,
+        session_id: SessionId,
+    },
     /// Indicates one review-ready parent turn finished and any materialized
     /// stacked child branches should sync onto the refreshed parent branch.
     StackedParentTurnCompleted { session_id: SessionId },
@@ -394,6 +401,9 @@ pub(super) struct AppEventBatch {
     pub(super) diff_preview_updates: Vec<DiffPreviewUpdate>,
     pub(super) focused_review_persistence_retries: Vec<FocusedReviewPersistenceRetry>,
     pub(super) git_status_update: Option<GitStatusBatchUpdate>,
+    /// Retains every Implementer success, including duplicates, so ownership
+    /// matching decides which completion may start review.
+    pub(super) implementer_attempt_successes: Vec<(SessionId, String)>,
     pub(super) latest_available_version_update: Option<LatestAvailableVersionUpdate>,
     pub(super) prompt_image_paste_updates: Vec<PromptImagePasteUpdate>,
     pub(super) published_branch_sync_updates: Vec<(SessionId, PublishedBranchSyncUpdate)>,
@@ -480,6 +490,7 @@ impl AppEventBatch {
             || self.latest_available_version_update.is_some()
             || self.update_status.is_some()
             || !self.applied_turns.is_empty()
+            || !self.implementer_attempt_successes.is_empty()
             || !self.at_mention_entries_updates.is_empty()
             || !self.branch_publish_action_updates.is_empty()
             || !self.branch_publish_resolved_session_ids.is_empty()
@@ -547,6 +558,10 @@ impl AppEventBatch {
             AppEvent::ProjectDiscoveryCompleted { completion } => {
                 self.project_discovery_completions.push(completion);
             }
+            AppEvent::ImplementerAttemptSucceeded {
+                attempt_id,
+                session_id,
+            } => self.collect_implementer_attempt_succeeded(session_id, attempt_id),
             AppEvent::SessionReviewCommentResolutionUpdated {
                 comment_count,
                 session_id,
@@ -714,6 +729,7 @@ impl AppEventBatch {
             | AppEvent::PublishedBranchSyncUpdated { .. }
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
             AppEvent::PlanWorkflowLoaded { .. }
+            | AppEvent::ImplementerAttemptSucceeded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
@@ -864,6 +880,7 @@ impl AppEventBatch {
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::PlanWorkflowLoaded { .. }
+            | AppEvent::ImplementerAttemptSucceeded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
@@ -1089,6 +1106,14 @@ impl AppEventBatch {
             }
         }
     }
+
+    /// Retains one Implementer success and marks its session as touched so
+    /// the reducer evaluates review startup with synchronized status.
+    fn collect_implementer_attempt_succeeded(&mut self, session_id: SessionId, attempt_id: String) {
+        self.session_ids.insert(session_id.clone());
+        self.implementer_attempt_successes
+            .push((session_id, attempt_id));
+    }
 }
 
 impl App {
@@ -1191,9 +1216,8 @@ impl App {
         self.apply_session_review_comment_snapshot_updates(std::mem::take(
             &mut event_batch.session_review_comment_snapshots,
         ));
-        let completed_turn_session_ids = event_batch.applied_turns.keys().cloned().collect();
-        let completed_review_session_ids =
-            Self::completed_review_session_ids(&event_batch.applied_turns);
+        let (completed_turn_session_ids, completed_review_session_ids) =
+            self.completed_turn_review_session_ids(&mut event_batch);
         self.supersede_review_diff_loads(&completed_turn_session_ids);
         for session_diff_update in std::mem::take(&mut event_batch.session_diff_updates) {
             self.apply_session_diff_update(session_diff_update).await;
@@ -1286,6 +1310,38 @@ impl App {
                 self.sessions.append_workflow_notice(&session_id, notice);
             }
         }
+    }
+
+    /// Returns sessions whose turns completed in this batch and the subset
+    /// eligible for automatic focused review.
+    ///
+    /// Ordinary completions come from applied turns. An Implementer success
+    /// joins both sets only when it releases the role review ownership of the
+    /// attempt that emitted it. Planner attempts never emit a success, and
+    /// stale or duplicate completions no longer match the owning attempt.
+    fn completed_turn_review_session_ids(
+        &mut self,
+        event_batch: &mut AppEventBatch,
+    ) -> (HashSet<SessionId>, HashSet<SessionId>) {
+        let implementer_session_ids =
+            std::mem::take(&mut event_batch.implementer_attempt_successes)
+                .into_iter()
+                .filter(|(session_id, attempt_id)| {
+                    self.release_role_review_for_implementer(session_id, attempt_id)
+                })
+                .map(|(session_id, _)| session_id)
+                .collect::<HashSet<_>>();
+        let mut completed_turn_session_ids = event_batch
+            .applied_turns
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
+        completed_turn_session_ids.extend(implementer_session_ids.iter().cloned());
+        let mut completed_review_session_ids =
+            Self::completed_review_session_ids(&event_batch.applied_turns);
+        completed_review_session_ids.extend(implementer_session_ids);
+
+        (completed_turn_session_ids, completed_review_session_ids)
     }
 
     /// Returns completed turns eligible to trigger an automatic focused
@@ -2320,7 +2376,7 @@ impl App {
         let mut loaded_session_ids = HashSet::new();
 
         for session_id in session_ids {
-            if self.role_review_suppression.contains(session_id) {
+            if self.role_review_suppression.contains_key(session_id) {
                 continue;
             }
             let loaded_status = self

@@ -19,7 +19,6 @@ use tokio_util::sync::CancellationToken;
 use super::support::{
     mock_fs_client_with_existing_directories, queue_helper_context, successful_turn_result,
 };
-use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionTaskService;
 use crate::app::session::workflow::task_turn;
@@ -27,6 +26,7 @@ use crate::app::session::workflow::worker::{
     ScheduledSessionCommand, SessionCommand, SessionWorkerContext,
 };
 use crate::app::test_support::TestSessionRunFactory;
+use crate::app::{App, AppEvent};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
 use crate::infra::personality::MockPersonalityCatalogClient;
@@ -101,7 +101,7 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
             .is_err()
     );
     assert!(
-        app.suppress_agent_task_automation(&session_id)
+        app.suppress_agent_task_automation(&session_id, "closed")
             .await
             .is_err()
     );
@@ -884,9 +884,12 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         "missing-personality",
         "stateless",
         "commit-failure",
+        "canceled",
     ] {
         // Arrange
         let (mut context, pool) = execution_context().await;
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        context.app_event_tx = event_tx;
         let mut planner = request("plan");
         if scenario == "stateless" {
             planner.assignment.agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
@@ -894,7 +897,8 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         let request = accepted_implementation(&context, planner).await;
         prepare_implementation_scenario(&mut context, &pool, &request, scenario).await;
         let (request_tx, mut request_rx) = mpsc::unbounded_channel();
-        let factory = implementation_factory(scenario, request_tx);
+        let cancellation = CancellationToken::new();
+        let factory = implementation_factory(scenario, request_tx, &cancellation);
 
         // Act
         let result = ag_worker::execute(
@@ -906,7 +910,7 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
                 Arc::new(MockRunClient::new()),
                 &request,
                 &factory,
-                CancellationToken::new(),
+                cancellation,
             ),
             |error| matches!(error, crate::app::SessionError::StoppedByUser(_)),
             |_| {},
@@ -921,7 +925,22 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
             "commit-failure",
         ]
         .contains(&scenario);
-        assert_eq!(result.is_err(), should_fail, "{scenario}: {result:?}");
+        let canceled = scenario == "canceled";
+        assert_eq!(
+            result.is_err(),
+            should_fail || canceled,
+            "{scenario}: {result:?}"
+        );
+        let signals_review = !should_fail && !canceled && scenario != "questions";
+        assert_eq!(
+            implementer_review_signals(&mut event_rx),
+            if signals_review {
+                vec!["execute".to_string()]
+            } else {
+                Vec::new()
+            },
+            "{scenario}"
+        );
         assert_eq!(
             context
                 .db
@@ -942,45 +961,120 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         if let Ok(turn) = request_rx.try_recv() {
             assert_implementation_request(&turn, scenario);
         }
-        let history = context
-            .db
-            .tasks()
-            .load_agent_history("implementation")
-            .await
-            .expect("history")
-            .expect("context");
-        let response_saved =
-            !["persist-failure", "stale-plan", "invalid-permission"].contains(&scenario);
-        assert_eq!(
-            history.turns.len(),
-            usize::from(response_saved),
-            "{scenario}"
-        );
-        assert_eq!(history.provider_conversation_id, None);
-        let task = context
-            .db
-            .tasks()
-            .load_task("implementation")
-            .await
-            .expect("task")
-            .expect("present");
-        assert_eq!(
-            task.attempts[0].status,
-            if should_fail {
-                TaskAttemptStatus::Failed
-            } else {
-                TaskAttemptStatus::Succeeded
-            }
-        );
+        let expected_status = if canceled {
+            TaskAttemptStatus::Canceled
+        } else if should_fail {
+            TaskAttemptStatus::Failed
+        } else {
+            TaskAttemptStatus::Succeeded
+        };
+        assert_implementation_records(&context, scenario, expected_status).await;
     }
+}
+
+/// Asserts the durable Implementer history and attempt outcome.
+async fn assert_implementation_records(
+    context: &SessionWorkerContext,
+    scenario: &str,
+    expected_status: TaskAttemptStatus,
+) {
+    let history = context
+        .db
+        .tasks()
+        .load_agent_history("implementation")
+        .await
+        .expect("history")
+        .expect("context");
+    let response_saved = ![
+        "persist-failure",
+        "stale-plan",
+        "invalid-permission",
+        "canceled",
+    ]
+    .contains(&scenario);
+    assert_eq!(
+        history.turns.len(),
+        usize::from(response_saved),
+        "{scenario}"
+    );
+    assert_eq!(history.provider_conversation_id, None);
+    let task = context
+        .db
+        .tasks()
+        .load_task("implementation")
+        .await
+        .expect("task")
+        .expect("present");
+    assert_eq!(task.attempts[0].status, expected_status, "{scenario}");
+}
+
+#[tokio::test]
+async fn planner_success_never_signals_implementer_review() {
+    // Arrange
+    let (mut context, _pool) = execution_context().await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+    let planner = request("plan");
+    context
+        .db
+        .tasks()
+        .claim_agent_attempt("sess", &planner, "agent_task")
+        .await
+        .expect("planner claim");
+    context
+        .db
+        .operations()
+        .mark_session_operation_running("task-attempt:plan")
+        .await
+        .expect("planner running");
+    let (request_tx, _request_rx) = mpsc::unbounded_channel();
+    let cancellation = CancellationToken::new();
+    let factory = implementation_factory("planner", request_tx, &cancellation);
+
+    // Act
+    let result = task_turn::run(
+        &context,
+        Arc::new(MockRunClient::new()),
+        &planner,
+        &factory,
+        cancellation,
+    )
+    .await;
+
+    // Assert
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        implementer_review_signals(&mut event_rx),
+        Vec::<String>::new()
+    );
+}
+
+/// Drains worker events and returns attempts that signaled Implementer
+/// success for the fixture session.
+fn implementer_review_signals(event_rx: &mut mpsc::UnboundedReceiver<AppEvent>) -> Vec<String> {
+    let mut attempt_ids = Vec::new();
+    while let Ok(event) = event_rx.try_recv() {
+        if let AppEvent::ImplementerAttemptSucceeded {
+            attempt_id,
+            session_id,
+        } = event
+        {
+            assert_eq!(session_id.as_str(), "sess");
+            attempt_ids.push(attempt_id);
+        }
+    }
+
+    attempt_ids
 }
 
 fn implementation_factory(
     scenario: &'static str,
     request_tx: mpsc::UnboundedSender<TurnRequest>,
+    cancellation: &CancellationToken,
 ) -> MockSessionRunFactory {
     let mut factory = MockSessionRunFactory::new();
     if !["stale-plan", "invalid-permission"].contains(&scenario) {
+        let cleanup_cancellation = cancellation.clone();
         let mut channel = MockAgentChannel::new();
         channel
             .expect_run_turn()
@@ -1001,7 +1095,12 @@ fn implementation_factory(
         channel
             .expect_shutdown_session()
             .once()
-            .returning(|_| Box::pin(async { Ok(()) }));
+            .returning(move |_| {
+                if scenario == "canceled" {
+                    cleanup_cancellation.cancel();
+                }
+                Box::pin(async { Ok(()) })
+            });
         let client =
             SessionRunClient::from_channel("implementation".to_string(), Arc::new(channel));
         factory

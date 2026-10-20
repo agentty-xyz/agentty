@@ -113,9 +113,13 @@ The terminal projects planning commands and panel access from the launch-time
 contract.
 
 Role admission invalidates earlier ordinary review work and its durable recovery
-trigger. Task completion does not start automatic review or auto-address follow-ups;
-explicit review and later ordinary turns retain their existing behavior. See
-[Execution](@/docs/core-components/execution.md) for context ownership and cleanup.
+trigger, and the admitted attempt owns review suppression. After its effects, a
+successful Implementer attempt without questions emits `ImplementerAttemptSucceeded`.
+The reducer releases suppression only when that attempt still owns it, then follows the
+ordinary completed-turn review path. Other task completions and stale events start no
+automatic review; explicit review and later ordinary turns retain their existing
+behavior. See [Execution](@/docs/core-components/execution.md) for context ownership and
+cleanup.
 
 Application shutdown closes every session worker's admission and waits for active
 effects, queued-work cancellation, and runtime cleanup within the shared five-second

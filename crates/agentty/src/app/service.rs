@@ -509,6 +509,7 @@ impl AppServices {
             AppEvent::FocusedReviewPersistenceRetry { .. } => "FocusedReviewPersistenceRetry",
             AppEvent::SessionUpdated { .. } => "SessionUpdated",
             AppEvent::AgentResponseReceived { .. } => "AgentResponseReceived",
+            AppEvent::ImplementerAttemptSucceeded { .. } => "ImplementerAttemptSucceeded",
             AppEvent::StackedParentTurnCompleted { .. } => "StackedParentTurnCompleted",
             AppEvent::StackedParentSyncCompleted { .. } => "StackedParentSyncCompleted",
             AppEvent::StackedParentMergeCompleted { .. } => "StackedParentMergeCompleted",

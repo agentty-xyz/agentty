@@ -39,6 +39,9 @@ with `Esc` keeps accepted work running; press `T` in session view to reopen the 
 including while work is running. Reopening `/plan` also reloads saved results. Use `Tab`
 to inspect another workflow and `F5` to refresh. Both roles share the session's
 worktree. Review and merge the resulting changes through the ordinary session actions.
+When the **Implementer** finishes without questions, the session starts the same
+[focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
+Planner results, questions, and failed or canceled work do not start a review.
 
 ## Interface Layout
 
