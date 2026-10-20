@@ -180,7 +180,6 @@ fn handle_navigation_key(
         scroll_cache: &mut scroll_cache,
         scroll_offset: &mut scroll_offset,
         selected_diff_line_index: &mut selected_diff_line_index,
-        session_id: &session_id,
     };
     let row_selection_key_handled = handle_row_selection_key(
         render_cache_store,
@@ -198,18 +197,39 @@ fn handle_navigation_key(
             )
         })
         .flatten();
-    let selection_changed = !row_selection_key_handled
-        && apply_navigation_key(app, render_cache_store, content_area, key, &mut navigation);
-
-    if selection_changed && preview.is_enabled() {
-        refresh_selected_preview(
-            app,
-            render_cache_store,
-            &diff,
-            file_explorer_selected_index,
-            &mut preview,
-            &session_id,
-        );
+    let action = if row_selection_key_handled {
+        DiffNavigationAction::None
+    } else {
+        apply_navigation_key(render_cache_store, content_area, key, &mut navigation)
+    };
+    match action {
+        DiffNavigationAction::SelectionChanged => {
+            if preview.is_enabled() {
+                refresh_selected_preview(
+                    app,
+                    render_cache_store,
+                    &diff,
+                    file_explorer_selected_index,
+                    &mut preview,
+                    &session_id,
+                );
+            }
+        }
+        DiffNavigationAction::TogglePreview => {
+            if let Some(updated_preview) = toggle_selected_preview(
+                app,
+                render_cache_store.diff_layout_cache(),
+                &diff,
+                file_explorer_selected_index,
+                &preview,
+                &session_id,
+            ) {
+                preview = updated_preview;
+                scroll_cache = None;
+                scroll_offset = 0;
+            }
+        }
+        DiffNavigationAction::None => {}
     }
 
     app.mode = AppMode::Diff {
@@ -613,6 +633,14 @@ fn append_line_comments(snapshot: &mut PromptModeSnapshot, line_comments: &DiffL
     snapshot.slash_state.reset();
 }
 
+/// Preview work requested by navigation after its state changes are applied.
+#[derive(Debug, Eq, PartialEq)]
+enum DiffNavigationAction {
+    None,
+    SelectionChanged,
+    TogglePreview,
+}
+
 /// Mutable diff-mode values affected by one navigation key.
 struct DiffKeyNavigation<'a> {
     diff: &'a str,
@@ -624,7 +652,6 @@ struct DiffKeyNavigation<'a> {
     scroll_cache: &'a mut Option<DiffScrollCache>,
     scroll_offset: &'a mut u16,
     selected_diff_line_index: &'a mut usize,
-    session_id: &'a SessionId,
 }
 
 impl DiffKeyNavigation<'_> {
@@ -644,16 +671,15 @@ impl DiffKeyNavigation<'_> {
     }
 }
 
-/// Applies one file-tree or right-pane navigation key.
+/// Applies one file-tree or right-pane key without starting application work.
 fn apply_navigation_key(
-    app: &App,
     render_cache_store: &RenderCacheStore,
     content_area: Rect,
     key: KeyEvent,
     navigation: &mut DiffKeyNavigation<'_>,
-) -> bool {
+) -> DiffNavigationAction {
     if apply_unfocused_scroll_key(render_cache_store, content_area, key, navigation) {
-        return false;
+        return DiffNavigationAction::None;
     }
 
     match key.code {
@@ -675,7 +701,7 @@ fn apply_navigation_key(
                 *navigation.scroll_offset = 0;
                 *navigation.selected_diff_line_index = 0;
 
-                return true;
+                return DiffNavigationAction::SelectionChanged;
             }
         }
         KeyCode::Enter | KeyCode::Char('l')
@@ -722,18 +748,7 @@ fn apply_navigation_key(
         KeyCode::Char('p')
             if *navigation.focus == DiffFocus::Files && is_plain_char_key(key, 'p') =>
         {
-            if let Some(updated_preview) = toggle_selected_preview(
-                app,
-                render_cache_store.diff_layout_cache(),
-                navigation.diff,
-                *navigation.file_explorer_selected_index,
-                navigation.preview,
-                navigation.session_id,
-            ) {
-                *navigation.preview = updated_preview;
-                *navigation.scroll_cache = None;
-                *navigation.scroll_offset = 0;
-            }
+            return DiffNavigationAction::TogglePreview;
         }
         KeyCode::Char('c')
             if *navigation.focus == DiffFocus::Files
@@ -750,7 +765,7 @@ fn apply_navigation_key(
         _ => {}
     }
 
-    false
+    DiffNavigationAction::None
 }
 
 /// Applies a row-scroll key without moving focus out of the Files pane.

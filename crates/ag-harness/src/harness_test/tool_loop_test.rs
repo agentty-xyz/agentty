@@ -19,7 +19,7 @@ use crate::repository::Repository;
 use crate::session::SessionError;
 use crate::store::MemoryStore;
 use crate::tool::{ReadAction, Tool, ToolCall};
-use crate::turn::{ToolActivity, TurnError};
+use crate::turn::{ToolActivity, TurnError, TurnOutcome};
 
 /// Scripts the model's responses in order and records every request it
 /// received.
@@ -646,6 +646,101 @@ fn overflow_harness(model: crate::model::MockModel, budget: u64) -> Harness {
         file_content(),
         &Arc::new(AtomicUsize::new(0)),
     ))
+}
+
+/// Runs seventy-two distinct small reads and a final output against a
+/// provider whose real tokens are `density_percent` of the estimate and which
+/// rejects any request above `window_tokens - max_output_tokens`, under a
+/// profile whose margin tolerates a 16% under-count. Returns the outcome, the
+/// simulated tokens of every accepted request, and the provider's limit.
+async fn run_against_dense_provider(
+    density_percent: u64,
+) -> (Result<TurnOutcome, TurnError>, Vec<u64>, u64) {
+    let window_tokens = 6_000;
+    let max_output_tokens = 1_000;
+    let input_limit = window_tokens - max_output_tokens;
+    let mut responses = (0..72)
+        .map(|index| {
+            Ok(ModelResponse::ToolCall(read_of(
+                &format!("read_{index}"),
+                &json!({"path": "notes.txt", "offset": index + 1, "limit": 8}),
+            )))
+        })
+        .collect::<Vec<_>>();
+    responses.push(Ok(output()));
+    let responses = Mutex::new(responses.into_iter());
+    let accepted = Arc::new(Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&accepted);
+    let mut model = model();
+    model.expect_complete().returning(move |request| {
+        let tokens = sent_weight(&request) * density_percent / 100;
+        if tokens > input_limit {
+            return Err(overflow());
+        }
+        recorded.lock().expect("accepted lock").push(tokens);
+        responses
+            .lock()
+            .expect("responses lock")
+            .next()
+            .expect("scripted response")
+            .map(response_without_metadata)
+    });
+    let mut registry = ModelRegistry::new();
+    registry
+        .register(
+            ExecutionIdentity::new("dense", "1").expect("identity"),
+            model,
+            ModelCapabilities {
+                image_input: false,
+                profile: ModelProfile::new(window_tokens)
+                    .with_estimate_margin(max_output_tokens, 16),
+                tool_calls: true,
+            },
+        )
+        .expect("register");
+    let harness = Harness::from_registry(&registry, "dense")
+        .expect("harness")
+        .repository(Repository::fixture("repo"))
+        .allow(Tool::Read)
+        .file_system(counting_file_system(
+            file_content(),
+            &Arc::new(AtomicUsize::new(0)),
+        ));
+
+    let outcome = harness.run_once("read the notes", object_schema()).await;
+    let accepted = accepted.lock().expect("accepted lock").clone();
+
+    (outcome, accepted, input_limit)
+}
+
+#[tokio::test]
+async fn content_within_the_declared_under_count_fits_the_window_without_recovery() {
+    // Arrange
+    let density_percent = 116;
+
+    // Act
+    let (outcome, accepted, input_limit) = run_against_dense_provider(density_percent).await;
+
+    // Assert
+    let outcome = outcome.expect("the margin keeps every request within the window");
+    assert_eq!(outcome.report().context_overflow_recoveries(), 0);
+    assert_eq!(accepted.len(), 73);
+    assert!(accepted.iter().any(|tokens| *tokens > input_limit * 9 / 10));
+}
+
+#[tokio::test]
+async fn content_denser_than_the_declared_under_count_fits_after_one_recovery() {
+    // Arrange
+    let density_percent = 146;
+
+    // Act
+    let (outcome, accepted, input_limit) = run_against_dense_provider(density_percent).await;
+
+    // Assert
+    let outcome = outcome.expect("one recovery fits content 46% over the estimate");
+    assert_eq!(outcome.report().context_overflow_recoveries(), 1);
+    assert_eq!(accepted.len(), 73);
+    assert!(accepted.iter().all(|tokens| *tokens <= input_limit));
 }
 
 #[tokio::test]

@@ -5,17 +5,69 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use super::{
-    apply_review_comment_resolution_outcome, handle_with_cache, next_selected_index,
+    ReviewCommentNavigationInput, apply_review_comment_resolution_outcome,
+    handle_review_comment_navigation, handle_with_cache, next_selected_index,
     previous_selected_index,
 };
 use crate::app::prompt_intent::ReviewCommentResolutionOutcome;
 use crate::domain::session::{SessionId, Status};
 use crate::presentation::app_mode::{
-    AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffReviewComments, DiffSidebarFocus,
-    ReviewCommentSelection,
+    AppMode, DiffFocus, DiffLineComments, DiffPreview, DiffReviewComments, DiffScrollCache,
+    DiffSidebarFocus, ReviewCommentSelection, ViewportRect,
 };
 use crate::test_support::SessionFixtureBuilder;
-use crate::ui::RenderCacheStore;
+use crate::ui::{RenderCacheStore, page};
+
+const CONTENT_AREA: Rect = Rect::new(0, 0, 80, 24);
+
+/// Only the in-memory values that comment navigation can change.
+struct NavigationState {
+    comments: DiffReviewComments,
+    scroll_cache: Option<DiffScrollCache>,
+    scroll_offset: u16,
+}
+
+impl NavigationState {
+    fn new(selected_index: usize, scroll_offset: u16) -> Self {
+        Self {
+            comments: comment_state(selected_index),
+            scroll_cache: None,
+            scroll_offset,
+        }
+    }
+
+    fn press(&mut self, key: KeyEvent, content_area: Rect, can_reply: bool) {
+        let render_cache_store = RenderCacheStore::default();
+        let input = ReviewCommentNavigationInput {
+            can_reply,
+            content_area,
+            diff: "",
+            item_count: page::review_comment::review_comment_item_count(
+                self.comments.comment_snapshot.as_ref(),
+            ),
+            render_cache_store: &render_cache_store,
+        };
+        handle_review_comment_navigation(
+            &input,
+            key,
+            &mut self.comments,
+            &mut self.scroll_cache,
+            &mut self.scroll_offset,
+        );
+    }
+}
+
+fn comment_state(selected_comment_index: usize) -> DiffReviewComments {
+    DiffReviewComments {
+        selected_comments: Vec::new(),
+        comment_error: None,
+        is_loading_comments: false,
+        comment_snapshot: Some(comment_snapshot()),
+        request_id: 1,
+        selected_comment_index,
+        sidebar_focus: DiffSidebarFocus::Comments,
+    }
+}
 
 fn comment_snapshot() -> ReviewCommentSnapshot {
     ReviewCommentSnapshot {
@@ -43,11 +95,13 @@ fn comment_snapshot() -> ReviewCommentSnapshot {
 
 fn review_comment_mode(
     session_id: &str,
-    comment_snapshot: Option<ReviewCommentSnapshot>,
-    selected_comments: Vec<ReviewCommentSelection>,
     selected_comment_index: usize,
     scroll_offset: u16,
+    selected_comments: Vec<ReviewCommentSelection>,
 ) -> AppMode {
+    let mut comments = comment_state(selected_comment_index);
+    comments.selected_comments = selected_comments;
+
     AppMode::Diff {
         diff: String::new(),
         file_explorer_selected_index: 0,
@@ -55,15 +109,7 @@ fn review_comment_mode(
         line_comments: DiffLineComments::default(),
         selected_diff_line_index: 0,
         preview: DiffPreview::default(),
-        review_comments: Some(DiffReviewComments {
-            selected_comments,
-            comment_error: None,
-            is_loading_comments: comment_snapshot.is_none(),
-            comment_snapshot,
-            request_id: 1,
-            selected_comment_index,
-            sidebar_focus: DiffSidebarFocus::Comments,
-        }),
+        review_comments: Some(comments),
         restore: None,
         scroll_cache: None,
         session_id: session_id.into(),
@@ -71,261 +117,170 @@ fn review_comment_mode(
     }
 }
 
-#[tokio::test]
-async fn test_handle_uses_space_as_only_comment_selection_key() {
+#[test]
+fn navigation_uses_space_as_only_comment_selection_key() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.sessions.push_session(
-        SessionFixtureBuilder::new()
-            .id("session-id")
-            .status(Status::Review)
-            .build(),
-    );
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
+    let mut state = NavigationState::new(0, 0);
 
-    // Act, Assert
-    for key_code in [KeyCode::Char('a'), KeyCode::Char('d')] {
-        handle_with_cache(
-            &mut app,
-            &RenderCacheStore::default(),
-            Rect::new(0, 0, 80, 24),
-            KeyEvent::new(key_code, KeyModifiers::NONE),
-        )
-        .await;
+    // Act
+    for code in [KeyCode::Char('a'), KeyCode::Char('d')] {
+        state.press(KeyEvent::new(code, KeyModifiers::NONE), CONTENT_AREA, true);
     }
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                ref selected_comments,
-                ..
-            }),
-            ..
-        } if selected_comments.is_empty()
-    ));
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
+
+    // Assert
+    assert_eq!(
+        state.comments.selected_comments,
+        Vec::<ReviewCommentSelection>::new()
+    );
+
+    // Act
+    state.press(
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-    )
-    .await;
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                ref selected_comments,
-                ..
-            }),
-            ..
-        } if selected_comments == &[ReviewCommentSelection {
+        CONTENT_AREA,
+        true,
+    );
+
+    // Assert
+    assert_eq!(
+        state.comments.selected_comments,
+        [ReviewCommentSelection {
             thread_id: "thread-id".to_string(),
         }]
-    ));
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
+    );
+
+    // Act
+    state.press(
         KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-    )
-    .await;
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                ref selected_comments,
-                ..
-            }),
-            ..
-        } if selected_comments.is_empty()
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_selects_next_comment_and_resets_detail_scroll() {
-    // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 4);
-
-    // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    )
-    .await;
+        CONTENT_AREA,
+        true,
+    );
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                selected_comment_index: 1,
-                ..
-            }),
-            scroll_offset: 0,
-            ..
-        }
-    ));
+    assert_eq!(
+        state.comments.selected_comments,
+        Vec::<ReviewCommentSelection>::new()
+    );
 }
 
-#[tokio::test]
-async fn test_handle_f_focuses_files_and_resets_detail_scroll() {
+#[test]
+fn navigation_selects_adjacent_comments_and_resets_detail_scroll() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 3);
+    for (code, initial, expected) in [(KeyCode::Char('j'), 0, 1), (KeyCode::Char('k'), 1, 0)] {
+        let mut state = NavigationState::new(initial, 4);
 
-    // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
-    )
-    .await;
+        // Act
+        state.press(KeyEvent::new(code, KeyModifiers::NONE), CONTENT_AREA, true);
 
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                sidebar_focus: DiffSidebarFocus::Files,
-                ..
-            }),
-            scroll_offset: 0,
-            ..
-        }
-    ));
+        // Assert
+        assert_eq!(state.comments.selected_comment_index, expected);
+        assert_eq!(state.scroll_offset, 0);
+    }
 }
 
-#[tokio::test]
-async fn test_handle_selects_previous_comment_and_resets_detail_scroll() {
+#[test]
+fn navigation_focuses_files_and_clears_detail_scroll_and_cache() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 1, 4);
+    for code in [KeyCode::Char('f'), KeyCode::Esc] {
+        let mut state = NavigationState::new(0, 3);
+        state.scroll_cache = Some(DiffScrollCache {
+            content_area: ViewportRect {
+                height: 24,
+                width: 80,
+                x: 0,
+                y: 0,
+            },
+            file_explorer_selected_index: 0,
+            max_scroll_offset: 4,
+        });
 
-    // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-    )
-    .await;
+        // Act
+        state.press(KeyEvent::new(code, KeyModifiers::NONE), CONTENT_AREA, true);
 
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                selected_comment_index: 0,
-                ..
-            }),
-            scroll_offset: 0,
-            ..
-        }
-    ));
+        // Assert
+        assert_eq!(state.comments.sidebar_focus, DiffSidebarFocus::Files);
+        assert_eq!(state.scroll_offset, 0);
+        assert!(state.scroll_cache.is_none());
+    }
 }
 
-#[tokio::test]
-async fn test_handle_down_scrolls_within_rendered_detail() {
+#[test]
+fn navigation_down_scrolls_within_rendered_detail() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
+    let mut state = NavigationState::new(0, 0);
 
     // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 8),
+    state.press(
         KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-    )
-    .await;
+        Rect::new(0, 0, 80, 8),
+        true,
+    );
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 1,
-            ..
-        }
-    ));
+    assert_eq!(state.scroll_offset, 1);
 }
 
-#[tokio::test]
-async fn test_handle_up_decrements_scroll_and_other_keys_preserve_mode() {
+#[test]
+fn navigation_up_decrements_scroll_and_other_keys_preserve_it() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 2);
+    let mut state = NavigationState::new(0, 2);
 
     // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-    )
-    .await;
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-    )
-    .await;
+    for code in [KeyCode::Up, KeyCode::Char('x')] {
+        state.press(KeyEvent::new(code, KeyModifiers::NONE), CONTENT_AREA, true);
+    }
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 1,
-            ..
-        }
-    ));
+    assert_eq!(state.scroll_offset, 1);
+}
+
+#[test]
+fn navigation_rejects_read_only_rows_and_disabled_replies() {
+    // Arrange
+    for (selected_index, can_reply) in [(1, true), (0, false)] {
+        let mut state = NavigationState::new(selected_index, 3);
+
+        // Act
+        state.press(
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+            CONTENT_AREA,
+            can_reply,
+        );
+
+        // Assert
+        assert_eq!(
+            state.comments.selected_comments,
+            Vec::<ReviewCommentSelection>::new()
+        );
+        assert_eq!(state.comments.selected_comment_index, selected_index);
+        assert_eq!(state.scroll_offset, 3);
+    }
 }
 
 #[tokio::test]
-async fn test_handle_batch_keys_reject_read_only_rows_and_preserve_failed_submission() {
+async fn failed_submission_preserves_selected_comments_and_scroll() {
     // Arrange
-    let mut selected_app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    selected_app.mode = review_comment_mode(
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    app.mode = review_comment_mode(
         "missing-session",
-        Some(comment_snapshot()),
-        Vec::new(),
         1,
         3,
-    );
-    let mut submit_app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    submit_app.mode = review_comment_mode(
-        "missing-session",
-        Some(comment_snapshot()),
         vec![ReviewCommentSelection {
             thread_id: "thread-id".to_string(),
         }],
-        1,
-        3,
     );
 
     // Act
     handle_with_cache(
-        &mut selected_app,
+        &mut app,
         &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-    )
-    .await;
-    handle_with_cache(
-        &mut submit_app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
+        CONTENT_AREA,
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
     )
     .await;
 
     // Assert
     assert!(matches!(
-        selected_app.mode,
+        app.mode,
         AppMode::Diff {
             review_comments: Some(DiffReviewComments {
                 ref selected_comments,
@@ -334,75 +289,51 @@ async fn test_handle_batch_keys_reject_read_only_rows_and_preserve_failed_submis
             }),
             scroll_offset: 3,
             ..
-        } if selected_comments.is_empty()
-    ));
-    assert!(matches!(
-        submit_app.mode,
-        AppMode::Diff {
-            review_comments: Some(DiffReviewComments {
-                ref selected_comments,
-                selected_comment_index: 1,
-                ..
-            }),
-            scroll_offset: 3,
-            ..
-        } if selected_comments.len() == 1
+        } if selected_comments == &[ReviewCommentSelection { thread_id: "thread-id".to_string() }]
     ));
 }
 
-#[tokio::test]
-async fn test_apply_review_comment_resolution_outcome_shows_session() {
+#[test]
+fn resolution_outcome_shows_session() {
     // Arrange
-    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut mode = AppMode::List;
     let session_id = SessionId::from("session-id");
 
     // Act
     apply_review_comment_resolution_outcome(
-        &mut app,
+        &mut mode,
         ReviewCommentResolutionOutcome::ShowSession {
             session_id: session_id.clone(),
         },
     );
 
     // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::View {
-            session_id: viewed_session_id,
-            scroll_offset: None,
-        } if viewed_session_id == session_id
-    ));
+    assert!(matches!(mode, AppMode::View {
+        session_id: viewed_session_id,
+        scroll_offset: None,
+    } if viewed_session_id == session_id));
 }
 
 #[tokio::test]
-async fn test_handle_preserves_non_review_comment_modes() {
+async fn dispatch_preserves_non_review_comment_modes() {
     // Arrange
-    let mut exit_app = crate::test_support::new_test_app_without_retained_base_dir().await;
-    let mut other_app = crate::test_support::new_test_app_without_retained_base_dir().await;
+    let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
 
-    // Act
-    handle_with_cache(
-        &mut exit_app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
-    )
-    .await;
-    handle_with_cache(
-        &mut other_app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
-    )
-    .await;
-
-    // Assert
-    assert!(matches!(exit_app.mode, AppMode::List));
-    assert!(matches!(other_app.mode, AppMode::List));
+    // Act, Assert
+    for code in [KeyCode::Esc, KeyCode::Char('x')] {
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            CONTENT_AREA,
+            KeyEvent::new(code, KeyModifiers::NONE),
+        )
+        .await;
+        assert!(matches!(app.mode, AppMode::List));
+    }
 }
 
 #[test]
-fn test_selection_helpers_wrap_clamp_and_preserve_empty_selection() {
+fn selection_helpers_wrap_clamp_and_preserve_empty_selection() {
     // Arrange, Act, Assert
     assert_eq!(next_selected_index(0, 0), 0);
     assert_eq!(next_selected_index(1, 2), 0);
@@ -413,7 +344,7 @@ fn test_selection_helpers_wrap_clamp_and_preserve_empty_selection() {
 }
 
 #[tokio::test]
-async fn busy_session_can_select_review_comment_for_queueing() {
+async fn dispatch_allows_busy_session_selection_and_rejects_a_missing_session() {
     // Arrange
     let mut app = crate::test_support::new_test_app_without_retained_base_dir().await;
     app.sessions.push_session(
@@ -422,19 +353,22 @@ async fn busy_session_can_select_review_comment_for_queueing() {
             .status(Status::Rebasing)
             .build(),
     );
-    app.mode = review_comment_mode("session-id", Some(comment_snapshot()), Vec::new(), 0, 0);
+    for (session_id, expected_count) in [("session-id", 1), ("missing-session", 0)] {
+        app.mode = review_comment_mode(session_id, 0, 0, Vec::new());
 
-    // Act
-    handle_with_cache(
-        &mut app,
-        &RenderCacheStore::default(),
-        Rect::new(0, 0, 80, 24),
-        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
-    )
-    .await;
+        // Act
+        handle_with_cache(
+            &mut app,
+            &RenderCacheStore::default(),
+            CONTENT_AREA,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        )
+        .await;
 
-    // Assert
-    assert!(
-        matches!(app.mode, AppMode::Diff { review_comments: Some(DiffReviewComments { ref selected_comments, .. }), .. } if selected_comments.len() == 1)
-    );
+        // Assert
+        assert!(matches!(app.mode,
+            AppMode::Diff { review_comments: Some(DiffReviewComments { ref selected_comments, .. }), .. }
+            if selected_comments.len() == expected_count
+        ));
+    }
 }

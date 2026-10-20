@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Only a newer revision of the same PR supersedes an existing validation run.
+# Unique groups preserve merge-queue runs, including different candidate heads.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # Match postsubmit: `rust-cache` hashes `CARGO_*` variables into its key, so a
 # difference here would stop pull requests from restoring caches saved on `main`.
 env:

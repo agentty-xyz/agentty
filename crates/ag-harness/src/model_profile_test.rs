@@ -19,33 +19,67 @@ fn profile_reserves_declared_tokens_from_the_window() {
 }
 
 #[test]
-fn estimate_margin_reserves_output_and_a_quarter_of_the_window() {
+fn estimate_margin_fits_a_calibrated_request_that_under_counts_by_the_declared_percent() {
     // Arrange
     let profile = ModelProfile::new(400_000);
 
     // Act
-    let margined = profile.with_estimate_margin(32_000);
-    let saturated = profile.with_estimate_margin(u64::MAX);
+    let margined = profile.with_estimate_margin(32_000, 15);
 
     // Assert
+    let input_tokens = margined.input_token_budget();
+    let output_free_permyriad = (400_000 - 32_000) * 10_000;
     assert_eq!(margined.context_window_tokens(), 400_000);
-    assert_eq!(margined.reserved_tokens(), 132_000);
-    assert_eq!(margined.input_token_budget(), 268_000);
-    assert_eq!(saturated.reserved_tokens(), u64::MAX);
-    assert_eq!(saturated.input_token_budget(), 0);
+    assert_eq!(margined.reserved_tokens(), 63_158);
+    assert_eq!(input_tokens, 336_842);
+    assert!(input_tokens * 95 * 115 <= output_free_permyriad);
+    assert!((input_tokens + 1) * 95 * 115 > output_free_permyriad);
+}
+
+#[test]
+fn estimate_margin_reserves_only_output_for_an_under_count_the_unfilled_share_absorbs() {
+    // Arrange
+    let profile = ModelProfile::new(400_000);
+
+    // Act
+    let exact = profile.with_estimate_margin(32_000, 0);
+    let absorbed = profile.with_estimate_margin(32_000, 5);
+
+    // Assert
+    assert_eq!(exact.reserved_tokens(), 32_000);
+    assert_eq!(absorbed.reserved_tokens(), 32_000);
+    assert_eq!(absorbed.input_token_budget(), 368_000);
+}
+
+#[test]
+fn estimate_margin_saturates_instead_of_overflowing() {
+    // Arrange
+    let profile = ModelProfile::new(400_000);
+
+    // Act
+    let output_saturated = profile.with_estimate_margin(u64::MAX, 15);
+    let under_count_saturated = profile.with_estimate_margin(32_000, u64::MAX);
+    let window_saturated = ModelProfile::new(u64::MAX).with_estimate_margin(0, 0);
+
+    // Assert
+    assert_eq!(output_saturated.reserved_tokens(), u64::MAX);
+    assert_eq!(output_saturated.input_token_budget(), 0);
+    assert_eq!(under_count_saturated.reserved_tokens(), 400_000);
+    assert_eq!(under_count_saturated.input_token_budget(), 0);
+    assert_eq!(window_saturated.reserved_tokens(), 0);
 }
 
 #[test]
 fn context_budget_holds_the_reservation_back_as_reserved_output() {
     // Arrange
-    let profile = ModelProfile::new(262_144).with_estimate_margin(32_768);
+    let profile = ModelProfile::new(262_144).with_estimate_margin(32_768, 20);
 
     // Act
     let budget = profile.context_budget();
 
     // Assert
     let expected = ContextBudget::new(NonZeroU64::new(262_144).expect("nonzero window"))
-        .with_reserved_output(98_304)
+        .with_reserved_output(60_937)
         .expect("valid reservation");
     assert_eq!(budget, Ok(expected));
 }

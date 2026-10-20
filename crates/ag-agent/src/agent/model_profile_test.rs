@@ -10,11 +10,11 @@ fn declared_profiles_preserve_proactive_compaction_budgets() {
     // Arrange
     let codex_models = AgentKind::Codex.models();
     let harness_models = [
-        (AgentModel::MuseSpark13, (1_048_576, 393_216, 655_360)),
-        (AgentModel::KimiK3, (1_048_576, 393_216, 655_360)),
-        (AgentModel::KimiK26, (262_144, 98_304, 163_840)),
-        (AgentModel::Qwen38Max, (1_000_000, 381_072, 618_928)),
-        (AgentModel::QwenPlus, (1_000_000, 282_768, 717_232)),
+        (AgentModel::MuseSpark13, (1_048_576, 230_107, 818_469)),
+        (AgentModel::KimiK3, (1_048_576, 223_112, 825_464)),
+        (AgentModel::KimiK26, (262_144, 55_778, 206_366)),
+        (AgentModel::Qwen38Max, (1_000_000, 204_643, 795_357)),
+        (AgentModel::QwenPlus, (1_000_000, 122_295, 877_705)),
     ];
 
     // Act / Assert

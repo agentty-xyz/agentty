@@ -13,6 +13,12 @@ on:
 permissions:
   contents: read
 
+# PR pushes replace obsolete qualification; main, merge queue, and manual runs
+# keep independent groups and cannot cancel one another.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   native:
     name: Native sandbox (${{ matrix.os }})

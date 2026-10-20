@@ -241,16 +241,17 @@ whose provider is configured:
 
 Each request stays within an input budget below the model's context window. Because
 Agentty estimates tokens from text size, it holds back the model's output reserve plus a
-quarter of the window. Older turns that no longer fit are left out; after switching to a
-model with a smaller window, the next turn fits history to that model's budget.
+margin sized to how far that model's estimate was measured to fall short. Older turns
+that no longer fit are left out; after switching to a model with a smaller window, the
+next turn fits history to that model's budget.
 
 | Model            | Context window | Input budget |
 | ---------------- | -------------- | ------------ |
-| `muse-spark-1.3` | 1,048,576      | 655,360      |
-| `kimi-k3`        | 1,048,576      | 655,360      |
-| `kimi-k2.6`      | 262,144        | 163,840      |
-| `qwen3.8-max`    | 1,000,000      | 618,928      |
-| `qwen-plus`      | 1,000,000      | 717,232      |
+| `muse-spark-1.3` | 1,048,576      | 818,469      |
+| `kimi-k3`        | 1,048,576      | 825,464      |
+| `kimi-k2.6`      | 262,144        | 206,366      |
+| `qwen3.8-max`    | 1,000,000      | 795,357      |
+| `qwen-plus`      | 1,000,000      | 877,705      |
 
 ### Stored Model Upgrades
 

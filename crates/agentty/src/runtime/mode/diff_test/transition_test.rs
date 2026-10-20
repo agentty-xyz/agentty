@@ -2,11 +2,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
 use super::super::{
-    handle_line_comment_edit_key, should_submit_line_comments, sync_comment_at_mention,
+    DiffNavigationAction, handle_line_comment_edit_key, should_submit_line_comments,
+    sync_comment_at_mention,
 };
 use super::support::{
     TEST_TERMINAL_SIZE, aligned_file_diff_fixture, diff_mode_fixture, enter_diff_mode, handle,
-    preview_test_app, scrollable_diff_fixture,
+    navigate, preview_test_app, scrollable_diff_fixture,
 };
 use crate::app::AppEvent;
 use crate::domain::input::InputState;
@@ -17,11 +18,10 @@ use crate::presentation::app_mode::{
 use crate::runtime::EventResult;
 use crate::ui::page;
 
-#[tokio::test]
-async fn test_handle_escape_returns_changed_line_focus_to_files() {
+#[test]
+fn test_navigation_escape_returns_changed_line_focus_to_files() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
+    let mut mode = AppMode::Diff {
         diff: scrollable_diff_fixture(),
         file_explorer_selected_index: 0,
         focus: DiffFocus::Content,
@@ -36,16 +36,16 @@ async fn test_handle_escape_returns_changed_line_focus_to_files() {
     };
 
     // Act
-    let event_result = handle(
-        &mut app,
+    let action = navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     );
 
     // Assert
-    assert!(matches!(event_result, EventResult::Continue));
+    assert_eq!(action, DiffNavigationAction::None);
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             focus: DiffFocus::Files,
             selected_diff_line_index: 8,
@@ -72,87 +72,88 @@ async fn test_handle_non_diff_mode_leaves_mode_unchanged() {
     assert!(matches!(app.mode, AppMode::List));
 }
 
-#[tokio::test]
-async fn test_handle_down_key_selects_next_changed_line() {
+#[test]
+fn test_navigation_content_selection_moves_and_clamps() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: scrollable_diff_fixture(),
-        scroll_offset: 0,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
+    for (key, initial_index, initial_scroll, expected_index, expected_scroll) in [
+        (
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            0,
+            0,
+            1,
+            Some(0),
+        ),
+        (
+            KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            39,
+            u16::MAX,
+            39,
+            None,
+        ),
+        (
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            0,
+            0,
+            0,
+            Some(0),
+        ),
+        (
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
+            2,
+            3,
+            3,
+            None,
+        ),
+        (
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
+            0,
+            0,
+            0,
+            Some(0),
+        ),
+    ] {
+        let mut mode = AppMode::Diff {
+            session_id: "session-id".into(),
+            diff: scrollable_diff_fixture(),
+            scroll_offset: initial_scroll,
+            file_explorer_selected_index: 0,
+            focus: DiffFocus::Content,
+            line_comments: DiffLineComments::default(),
+            selected_diff_line_index: initial_index,
+            preview: DiffPreview::default(),
+            review_comments: None,
+            restore: None,
+            scroll_cache: None,
+        };
 
-    // Act
-    let event_result = handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-    );
+        // Act
+        let action = navigate(&mut mode, TEST_TERMINAL_SIZE, key);
 
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 0,
-            selected_diff_line_index: 1,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_down_key_clamps_changed_line_at_bottom() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    let diff = scrollable_diff_fixture();
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff,
-        scroll_offset: u16::MAX,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 39,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
+        // Assert
+        assert_eq!(action, DiffNavigationAction::None);
+        let AppMode::Diff {
+            file_explorer_selected_index,
+            selected_diff_line_index,
             scroll_offset,
-            selected_diff_line_index: 39,
             ..
-        } if scroll_offset < u16::MAX
-    ));
+        } = mode
+        else {
+            unreachable!("navigation preserves diff mode");
+        };
+        assert_eq!(file_explorer_selected_index, 0);
+        assert_eq!(selected_diff_line_index, expected_index);
+        assert!(scroll_offset < u16::MAX);
+        if let Some(expected_scroll) = expected_scroll {
+            assert_eq!(scroll_offset, expected_scroll);
+        }
+    }
 }
 
-#[tokio::test]
-async fn test_handle_l_focuses_changed_line_aligned_with_selected_file_row() {
+#[test]
+fn test_navigation_l_focuses_changed_line_aligned_with_selected_file_row() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
     let diff = aligned_file_diff_fixture();
-    app.mode = AppMode::Diff {
+    let mut mode = AppMode::Diff {
         diff: diff.clone(),
         file_explorer_selected_index: 7,
         focus: DiffFocus::Files,
@@ -168,15 +169,15 @@ async fn test_handle_l_focuses_changed_line_aligned_with_selected_file_row() {
     let content_area = Rect::new(0, 0, 80, 20);
 
     // Act
-    handle(
-        &mut app,
+    navigate(
+        &mut mode,
         content_area,
         KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE),
     );
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             focus: DiffFocus::Content,
             selected_diff_line_index: 7,
@@ -366,154 +367,6 @@ async fn test_handle_navigation_key_in_non_diff_mode_leaves_mode_unchanged() {
 }
 
 #[tokio::test]
-async fn test_handle_up_key_saturates_changed_line_at_zero() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: scrollable_diff_fixture(),
-        scroll_offset: 0,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 0,
-            selected_diff_line_index: 0,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_j_wraps_file_selection_from_last_to_first() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
-        scroll_offset: 10,
-        file_explorer_selected_index: 1,
-        focus: DiffFocus::Files,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 0,
-            file_explorer_selected_index: 0,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_shift_j_selects_next_changed_line() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: scrollable_diff_fixture(),
-        scroll_offset: 3,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 2,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT),
-    );
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            file_explorer_selected_index: 0,
-            selected_diff_line_index: 3,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_shift_k_saturates_changed_line_at_zero() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: scrollable_diff_fixture(),
-        scroll_offset: 0,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Content,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    let event_result = handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT),
-    );
-
-    // Assert
-    assert!(matches!(event_result, EventResult::Continue));
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 0,
-            file_explorer_selected_index: 0,
-            selected_diff_line_index: 0,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
 async fn test_handle_shift_v_selects_changed_rows_for_one_comment() {
     // Arrange
     let (mut app, _base_dir) = preview_test_app(ag_git::MockGitClient::new()).await;
@@ -632,47 +485,10 @@ async fn test_handle_shift_v_selects_changed_rows_for_one_comment() {
     assert!(!should_submit);
 }
 
-#[tokio::test]
-async fn test_handle_k_wraps_file_selection_from_first_to_last() {
+#[test]
+fn test_navigation_unhandled_key_keeps_diff_mode_unchanged() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
-        session_id: "session-id".into(),
-        diff: "diff --git a/src/main.rs b/src/main.rs\n+added".to_string(),
-        scroll_offset: 10,
-        file_explorer_selected_index: 0,
-        focus: DiffFocus::Files,
-        line_comments: DiffLineComments::default(),
-        selected_diff_line_index: 0,
-        preview: DiffPreview::default(),
-        review_comments: None,
-        restore: None,
-        scroll_cache: None,
-    };
-
-    // Act
-    handle(
-        &mut app,
-        TEST_TERMINAL_SIZE,
-        KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
-    );
-
-    // Assert
-    assert!(matches!(
-        app.mode,
-        AppMode::Diff {
-            scroll_offset: 0,
-            file_explorer_selected_index: 1,
-            ..
-        }
-    ));
-}
-
-#[tokio::test]
-async fn test_handle_unhandled_key_keeps_diff_mode_unchanged() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = AppMode::Diff {
+    let mut mode = AppMode::Diff {
         session_id: "session-id".into(),
         diff: "diff output".to_string(),
         scroll_offset: 4,
@@ -687,17 +503,17 @@ async fn test_handle_unhandled_key_keeps_diff_mode_unchanged() {
     };
 
     // Act
-    let event_result = handle(
-        &mut app,
+    let action = navigate(
+        &mut mode,
         TEST_TERMINAL_SIZE,
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
 
     // Assert — an unhandled key leaves the diff selection and scroll
     // intact.
-    assert!(matches!(event_result, EventResult::Continue));
+    assert_eq!(action, DiffNavigationAction::None);
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             scroll_offset: 4,
             file_explorer_selected_index: 2,
@@ -706,14 +522,13 @@ async fn test_handle_unhandled_key_keeps_diff_mode_unchanged() {
     ));
 }
 
-#[tokio::test]
-async fn test_handle_enter_and_l_from_files_focus_first_changed_line() {
+#[test]
+fn test_navigation_enter_and_l_from_files_focus_first_changed_line() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
 
     // Act, Assert
     for key_code in [KeyCode::Enter, KeyCode::Char('l')] {
-        app.mode = AppMode::Diff {
+        let mut mode = AppMode::Diff {
             diff: scrollable_diff_fixture(),
             file_explorer_selected_index: 1,
             focus: DiffFocus::Files,
@@ -726,15 +541,15 @@ async fn test_handle_enter_and_l_from_files_focus_first_changed_line() {
             selected_diff_line_index: 7,
             session_id: "session-id".into(),
         };
-        let event_result = handle(
-            &mut app,
+        let action = navigate(
+            &mut mode,
             TEST_TERMINAL_SIZE,
             KeyEvent::new(key_code, KeyModifiers::NONE),
         );
 
-        assert!(matches!(event_result, EventResult::Continue));
+        assert_eq!(action, DiffNavigationAction::None);
         assert!(matches!(
-            app.mode,
+            mode,
             AppMode::Diff {
                 focus: DiffFocus::Content,
                 line_comments: DiffLineComments {
@@ -749,18 +564,16 @@ async fn test_handle_enter_and_l_from_files_focus_first_changed_line() {
     }
 }
 
-#[tokio::test]
-async fn test_handle_enter_ignores_folders_and_files_without_changed_lines() {
+#[test]
+fn test_navigation_enter_ignores_folders_and_files_without_changed_lines() {
     // Arrange
-    let (mut folder_app, _folder_base_dir) = crate::test_support::new_test_app().await;
-    let (mut unchanged_app, _unchanged_base_dir) = crate::test_support::new_test_app().await;
-    folder_app.mode = diff_mode_fixture(
+    let mut folder_mode = diff_mode_fixture(
         "diff --git a/src/main.rs b/src/main.rs\n+added",
         0,
         DiffFocus::Files,
         DiffPreview::default(),
     );
-    unchanged_app.mode = diff_mode_fixture(
+    let mut unchanged_mode = diff_mode_fixture(
         "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n unchanged",
         0,
         DiffFocus::Files,
@@ -768,9 +581,9 @@ async fn test_handle_enter_ignores_folders_and_files_without_changed_lines() {
     );
 
     // Act
-    for app in [&mut folder_app, &mut unchanged_app] {
-        handle(
-            app,
+    for mode in [&mut folder_mode, &mut unchanged_mode] {
+        navigate(
+            mode,
             TEST_TERMINAL_SIZE,
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         );
@@ -778,14 +591,14 @@ async fn test_handle_enter_ignores_folders_and_files_without_changed_lines() {
 
     // Assert
     assert!(matches!(
-        folder_app.mode,
+        folder_mode,
         AppMode::Diff {
             focus: DiffFocus::Files,
             ..
         }
     ));
     assert!(matches!(
-        unchanged_app.mode,
+        unchanged_mode,
         AppMode::Diff {
             focus: DiffFocus::Files,
             ..
@@ -1127,11 +940,10 @@ async fn test_handle_quit_saves_and_reopens_diff_comments() {
     ));
 }
 
-#[tokio::test]
-async fn test_handle_plain_j_k_and_f_navigate_changed_lines_and_focus_files() {
+#[test]
+fn test_navigation_plain_j_k_and_f_navigate_changed_lines_and_focus_files() {
     // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
-    app.mode = diff_mode_fixture(
+    let mut mode = diff_mode_fixture(
         &scrollable_diff_fixture(),
         0,
         DiffFocus::Content,
@@ -1140,8 +952,8 @@ async fn test_handle_plain_j_k_and_f_navigate_changed_lines_and_focus_files() {
 
     // Act
     for key_code in [KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::Char('f')] {
-        handle(
-            &mut app,
+        navigate(
+            &mut mode,
             TEST_TERMINAL_SIZE,
             KeyEvent::new(key_code, KeyModifiers::NONE),
         );
@@ -1149,7 +961,7 @@ async fn test_handle_plain_j_k_and_f_navigate_changed_lines_and_focus_files() {
 
     // Assert
     assert!(matches!(
-        app.mode,
+        mode,
         AppMode::Diff {
             focus: DiffFocus::Files,
             selected_diff_line_index: 0,

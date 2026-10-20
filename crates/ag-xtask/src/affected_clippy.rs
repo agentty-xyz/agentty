@@ -13,12 +13,15 @@ pub(crate) const PACKAGES_ENV: &str = "AGENTTY_CLIPPY_PACKAGES";
 /// Arguments for affected-package Clippy.
 #[derive(Args)]
 pub(crate) struct Options {
+    /// Lint Agentty's explicit PTY targets only when Agentty is affected.
+    #[arg(long)]
+    agentty_e2e: bool,
     /// Changed files, relative to the workspace root.
     files: Vec<PathBuf>,
 }
 
-/// Lints the packages owning `files` and their dependents, or the whole
-/// workspace when a file belongs to no package. Coordinated validation
+/// Lints affected packages and, when Agentty is affected, its explicit PTY
+/// targets. Shared files select the workspace. Coordinated validation
 /// supplies an authoritative package selection through [`PACKAGES_ENV`].
 pub(crate) fn run(options: &Options) -> Result<(), String> {
     let metadata = Metadata::load()?;
@@ -39,40 +42,64 @@ pub(crate) fn run(options: &Options) -> Result<(), String> {
             None => None,
         }
     };
-    let status = Command::new("cargo")
-        .args(clippy_arguments(packages.as_deref()))
-        .status()
-        .map_err(|error| format!("Could not execute cargo: {error}"))?;
-    if !status.success() {
+    let mut failed = false;
+    for agentty_e2e in [false, true]
+        .into_iter()
+        .filter(|agentty_e2e| *agentty_e2e || !options.agentty_e2e)
+    {
+        let Some(arguments) = clippy_arguments(packages.as_deref(), agentty_e2e) else {
+            continue;
+        };
+        let status = Command::new("cargo")
+            .args(arguments)
+            .status()
+            .map_err(|error| format!("Could not execute cargo: {error}"))?;
+        failed |= !status.success();
+    }
+    if failed {
         return Err("Clippy reported failures".into());
     }
 
     Ok(())
 }
 
-/// Builds `cargo clippy` arguments for `packages`, or for the whole
-/// workspace when no package is selected.
-fn clippy_arguments(packages: Option<&[String]>) -> Vec<String> {
-    let mut arguments = [
-        "clippy",
-        "-q",
-        "--locked",
-        "--all-targets",
-        "--all-features",
-    ]
-    .map(String::from)
-    .to_vec();
-    match packages {
-        Some(packages) if !packages.is_empty() => {
-            for package in packages {
-                arguments.extend(["-p".to_string(), package.clone()]);
-            }
+/// Builds strict Clippy arguments, retaining workspace-wide fallback when
+/// no package is selected. Returns `None` for unaffected explicit PTY targets.
+fn clippy_arguments(packages: Option<&[String]>, agentty_e2e: bool) -> Option<Vec<String>> {
+    let mut arguments = ["clippy", "-q", "--locked"].map(String::from).to_vec();
+    if agentty_e2e {
+        if packages.is_some_and(|packages| {
+            !packages.is_empty() && !packages.iter().any(|package| package == "agentty")
+        }) {
+            return None;
         }
-        _ => arguments.push("--workspace".into()),
+        arguments.extend(
+            [
+                "-p",
+                "agentty",
+                "--test",
+                "e2e",
+                "--test",
+                "protocol_compliance_e2e",
+                "--test",
+                "showcase",
+            ]
+            .map(String::from),
+        );
+    } else {
+        arguments.extend(["--all-targets", "--all-features"].map(String::from));
+        match packages {
+            Some(packages) if !packages.is_empty() => {
+                for package in packages {
+                    arguments.extend(["-p".to_string(), package.clone()]);
+                }
+            }
+            _ => arguments.push("--workspace".into()),
+        }
     }
     arguments.extend(["--", "-D", "warnings"].map(String::from));
 
-    arguments
+    Some(arguments)
 }
 
 #[cfg(test)]
