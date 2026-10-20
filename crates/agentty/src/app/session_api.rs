@@ -41,6 +41,56 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::get_agent_task_history(self, task_id).await
     }
 
+    async fn accept_agent_plan(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::AcceptTaskPlanRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::accept_agent_plan(self, session_id, request).await
+    }
+
+    async fn start_plan_then_implement(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::StartPlanThenImplementRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::start_plan_then_implement(self, session_id, request).await
+    }
+
+    async fn get_task_chain(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ag_session::TaskChain>, ApiSessionError> {
+        SessionRuntimeHandle::get_task_chain(self, chain_id).await
+    }
+
+    async fn list_task_chains(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ag_session::TaskChain>, ApiSessionError> {
+        SessionRuntimeHandle::list_task_chains(self, session_id).await
+    }
+
+    async fn accept_task_chain_plan(
+        &self,
+        chain_id: &str,
+        request: ag_session::AcceptTaskChainPlanRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::accept_task_chain_plan(self, chain_id, request).await
+    }
+
+    async fn continue_task_chain(
+        &self,
+        chain_id: &str,
+        request: ag_session::ContinueTaskChainRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::continue_task_chain(self, chain_id, request).await
+    }
+
+    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::cancel_task_chain(self, chain_id).await
+    }
+
     async fn create_task(
         &self,
         session_id: &SessionId,
@@ -213,6 +263,32 @@ impl App {
                                 .collect(),
                         })
                     })
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
+            SessionRuntimeCommand::GetTaskChain {
+                chain_id,
+                response_tx,
+            } => {
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .load_task_chain(&chain_id)
+                    .await
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
+            SessionRuntimeCommand::ListTaskChains {
+                session_id,
+                response_tx,
+            } => {
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .list_task_chains(&session_id)
+                    .await
                     .map_err(|error| ApiSessionError::Operation(error.to_string()));
                 let _ = response_tx.send(result);
             }
