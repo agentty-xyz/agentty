@@ -13,6 +13,9 @@ use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::{DbError, TimestampSource};
 
 /// Persistence boundary for desired outcomes and immutable attempt identities.
+///
+/// Existing adapters may omit role-aware tasks; their defaults reject those
+/// requests explicitly without admitting work or changing ordinary tasks.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
@@ -25,20 +28,35 @@ pub trait TaskRepository: Send + Sync {
         session_id: &str,
         request: &SubmitAgentTaskRequest,
         operation_kind: &str,
-    ) -> Result<bool, DbError>;
+    ) -> Result<bool, DbError> {
+        let _ = (session_id, request, operation_kind);
+        Err(TaskAgentStore::invalid(
+            "Host does not support role-aware tasks",
+        ))
+    }
 
     /// Checks a complete role-aware delivery before live session eligibility.
     async fn contains_agent_attempt(
         &self,
         session_id: &str,
         request: &SubmitAgentTaskRequest,
-    ) -> Result<bool, DbError>;
+    ) -> Result<bool, DbError> {
+        let _ = (session_id, request);
+        Err(TaskAgentStore::invalid(
+            "Host does not support role-aware tasks",
+        ))
+    }
 
     /// Loads task-owned identity and immutable inputs without session replay.
     async fn load_agent_context(
         &self,
         task_id: &str,
-    ) -> Result<Option<TaskAgentContextRow>, DbError>;
+    ) -> Result<Option<TaskAgentContextRow>, DbError> {
+        let _ = task_id;
+        Err(TaskAgentStore::invalid(
+            "Host does not support role-aware tasks",
+        ))
+    }
 
     /// Creates an outcome with zero attempts in any persisted session.
     /// Identical requests are idempotent; session and objective are immutable.
