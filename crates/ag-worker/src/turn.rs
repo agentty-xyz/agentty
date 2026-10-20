@@ -5,6 +5,7 @@ use ag_scheduler::SessionAdmission;
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 /// Worker-owned execution handle for one session's runtime.
 ///
@@ -15,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 pub struct SessionRunClient {
     execution_policy: ag_contracts::ExecutionPolicy,
     runtime: ag_runtime::SessionRuntime,
+    runtime_id: String,
     session_admission: SessionAdmission,
     session_id: String,
 }
@@ -32,6 +34,36 @@ impl SessionRunClient {
             config.execution_policy(kind),
             config.session_admission.clone(),
         )
+    }
+
+    /// Creates a task-owned runtime while retaining session admission and
+    /// tracing.
+    ///
+    /// The host must submit this client from the owning session's serial
+    /// worker. The context's host-allocated UUID selects independent retained
+    /// processes and native history; it is never a caller's task ID or a
+    /// provider conversation ID. All attempts reuse the persisted context.
+    /// Hosts supply task-only continuation and shut down each owned client
+    /// before deleting its session. This constructor does not apply role
+    /// instructions or change request permissions.
+    ///
+    /// # Errors
+    /// Returns a runtime error if the context ID is not a UUID, before
+    /// composing an adapter or creating runtime resources.
+    pub fn for_task_context(
+        context: &ag_session::TaskAgentContext,
+        config: &crate::RuntimeConfig,
+    ) -> Result<Self, AgentError> {
+        let context_id = Uuid::parse_str(&context.id)
+            .map_err(|_| AgentError::Runtime("Task context ID must be a UUID".to_string()))?;
+        let mut client = Self::new(
+            context.session_id.to_string(),
+            context.assignment.agent.kind(),
+            config,
+        );
+        client.runtime_id = format!("task-{context_id}");
+
+        Ok(client)
     }
 
     /// Executes a turn under worker cancellation and runtime cleanup.
@@ -52,6 +84,7 @@ impl SessionRunClient {
         request.execution_policy = self.execution_policy.clone();
         let runtime = &self.runtime;
         let session_id = self.session_id.clone();
+        let runtime_id = self.runtime_id.clone();
         let interrupted =
             || AgentError::InterruptedByUser("[Stopped] Session interrupted by user.".to_string());
         if cancellation.is_cancelled() {
@@ -72,10 +105,11 @@ impl SessionRunClient {
         admission.finish(Outcome::Completed);
         let span = Span::child("agent.run");
         span.attribute("agentty.session.id", session_id.clone());
+        span.attribute("agentty.context.id", runtime_id.clone());
         span.attribute("gen_ai.request.model", request.model.clone());
         let mut turn = Box::pin(
             runtime
-                .run_turn(session_id.clone(), request, events)
+                .run_turn(runtime_id.clone(), request, events)
                 .with_context(span.context()),
         );
         let result = tokio::select! {
@@ -83,7 +117,7 @@ impl SessionRunClient {
             () = cancellation.cancelled() => {
                 ag_telemetry::milestone("cancellation_observed");
                 drop(turn);
-                let _ = tokio::time::timeout(Duration::from_secs(5), Span::child("cleanup").run(runtime.shutdown(session_id), |_| Outcome::Failed)).await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), Span::child("cleanup").run(runtime.shutdown(runtime_id), |_| Outcome::Failed)).await;
                 Err(interrupted())
             }
             result = &mut turn => result,
@@ -125,7 +159,7 @@ impl SessionRunClient {
             })?;
 
         Span::child("cleanup")
-            .run(self.runtime.shutdown(self.session_id.clone()), |_| {
+            .run(self.runtime.shutdown(self.runtime_id.clone()), |_| {
                 Outcome::Failed
             })
             .await
@@ -140,6 +174,7 @@ impl SessionRunClient {
         Self {
             execution_policy,
             runtime,
+            runtime_id: session_id.clone(),
             session_admission,
             session_id,
         }
@@ -152,7 +187,7 @@ impl SessionRunClient {
         let _permit = self.session_admission.acquire_cleanup().await.ok();
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
-            Span::child("cleanup").run(self.runtime.shutdown(self.session_id.clone()), |_| {
+            Span::child("cleanup").run(self.runtime.shutdown(self.runtime_id.clone()), |_| {
                 Outcome::Failed
             }),
         )
