@@ -17,6 +17,7 @@ mod status;
 mod task;
 mod task_agent;
 mod task_agent_turn;
+mod task_plan;
 mod timestamp;
 mod usage;
 

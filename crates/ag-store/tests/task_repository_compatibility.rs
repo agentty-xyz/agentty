@@ -1,9 +1,9 @@
 //! Existing task adapters can omit the optional role-aware capability.
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, CreateTaskRequest,
-    DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentAssignment,
-    TaskAgentInput,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
+    CreateTaskRequest, DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task,
+    TaskAgentAssignment, TaskAgentInput,
 };
 use ag_store::{DbError, TaskAgentTurnMetadata, TaskRepository};
 use async_trait::async_trait;
@@ -113,12 +113,33 @@ async fn ordinary_adapter_keeps_its_contract_and_explicitly_rejects_role_tasks()
         .await
         .expect_err("unsupported role response");
 
+    let acceptance = adapter
+        .accept_agent_plan(
+            "session",
+            &AcceptTaskPlanRequest {
+                attempt_id: "plan".to_string(),
+                task_id: "planner-task".to_string(),
+            },
+        )
+        .await
+        .expect_err("unsupported acceptance");
+    let verification = adapter
+        .verify_agent_plan("session", &agent)
+        .await
+        .expect_err("unsupported verification");
+
     // Assert
     assert!(admitted);
     for error in [claim, lookup, context, history, response] {
         assert_eq!(
             error.to_string(),
             "Invalid task agent context: Host does not support role-aware tasks"
+        );
+    }
+    for error in [acceptance, verification] {
+        assert_eq!(
+            error.to_string(),
+            "Invalid task agent context: Host does not support plan acceptance"
         );
     }
 }

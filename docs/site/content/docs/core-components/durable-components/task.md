@@ -81,6 +81,14 @@ rewind a newer conversation. A response can be available while post-processing i
 running, so callers must inspect the attempt status before accepting it. History alone
 does not complete a task or enable role execution.
 
+`TaskRepository::accept_agent_plan` explicitly accepts one persisted Planner attempt.
+Only the latest successful, uncanceled response with a nonempty plan and no questions is
+eligible. The acceptance ledger retains its exact answer; generic task completion does
+not accept a plan. Implementer admission checks the ledger, session, original request,
+and captured model in the same transaction as the attempt. A newer Planner attempt makes
+an older version ineligible for new handoffs, while preserving its historical acceptance
+record. Repeated acceptance of the same eligible version is idempotent.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

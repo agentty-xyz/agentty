@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.id AS \"attempt_id!\", o.status, o.cancel_requested AS \"canceled: bool\", r.assistant_message\n               FROM task_attempt a JOIN session_operation o ON o.id = a.session_operation_id\n               LEFT JOIN task_agent_turn r ON r.task_attempt_id = a.id\n               WHERE a.task_id = ? ORDER BY a.rowid DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "attempt_id!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "canceled: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "cancel_requested"
+          }
+        }
+      },
+      {
+        "name": "assistant_message",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_turn",
+            "name": "assistant_message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "80a4ecf02f732d5a22c9eabf8f256c2c8a695c92bc3b6584aa923d7e49aef42a"
+}

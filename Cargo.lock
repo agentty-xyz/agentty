@@ -203,6 +203,7 @@ name = "ag-store"
 version = "0.17.0"
 dependencies = [
  "ag-contracts",
+ "ag-protocol",
  "ag-session",
  "ag-worker",
  "async-trait",
