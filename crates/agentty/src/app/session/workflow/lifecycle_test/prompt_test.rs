@@ -299,8 +299,9 @@ async fn test_reply_to_durable_message_accepts_existing_operation_without_duplic
         .expect("failed to load session messages");
 
     // Assert
-    assert!(!missing);
-    assert!(accepted);
+    assert!(!missing.is_accepted());
+    assert!(accepted.is_accepted());
+    assert!(!accepted.is_new());
     assert_eq!(messages, [] as [db::SessionMessageRow; 0]);
 }
 

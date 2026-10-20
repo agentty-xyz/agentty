@@ -244,5 +244,6 @@ async fn task_api_rejects_missing_busy_and_unbound_sessions_without_creating_wor
         !app.sessions
             .reply_to_task(&app.services, "missing", request("missing"))
             .await
+            .is_accepted()
     );
 }

@@ -501,7 +501,7 @@ impl App {
             )));
         }
 
-        if self
+        let outcome = self
             .sessions
             .reply_to_durable_message(
                 &self.services,
@@ -510,8 +510,11 @@ impl App {
                 request.visibility == DurableMessageVisibility::Visible,
                 TurnPrompt::from_agent_data(request.message),
             )
-            .await
-        {
+            .await;
+        if outcome.is_accepted() {
+            if outcome.is_new() {
+                self.clear_review_output_for_new_turn(session_id);
+            }
             return Ok(());
         }
 
@@ -577,8 +580,8 @@ impl App {
     }
 
     /// Invalidates prior ordinary review work and its durable startup trigger
-    /// before an admitted role attempt can run. Explicit review and the next
-    /// ordinary response retain their existing reset paths.
+    /// before an admitted role attempt can run. Only a new ordinary admission
+    /// or explicit review can release this ownership barrier.
     pub(in crate::app) async fn suppress_agent_task_automation(
         &mut self,
         session_id: &SessionId,
@@ -586,6 +589,7 @@ impl App {
         self.supersede_review_diff_loads(&HashSet::from([session_id.clone()]));
         self.deferred_auto_review_session_ids.remove(session_id);
         self.suppress_review_output(session_id);
+        self.role_review_suppression.insert(session_id.clone());
         self.services
             .db()
             .sessions()
@@ -623,11 +627,14 @@ impl App {
                 session.status
             )));
         }
-        if self
+        let outcome = self
             .sessions
             .reply_to_task(&self.services, session_id, request)
-            .await
-        {
+            .await;
+        if outcome.is_accepted() {
+            if outcome.is_new() {
+                self.clear_review_output_for_new_turn(session_id);
+            }
             return Ok(());
         }
 
@@ -698,6 +705,7 @@ impl App {
 
             return Err(send_error);
         }
+        self.clear_review_output_for_new_turn(session_id);
         self.clear_diff_comment_progress(session_id);
         self.services.emit_app_event(AppEvent::RefreshSessions);
 

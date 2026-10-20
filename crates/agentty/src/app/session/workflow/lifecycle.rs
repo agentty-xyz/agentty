@@ -252,13 +252,25 @@ impl ReplyOptions {
 
 /// Result of attempting to persist and enqueue one reply command.
 #[derive(Clone, Copy, Eq, PartialEq)]
-enum ReplyEnqueueOutcome {
+pub(in crate::app) enum ReplyEnqueueOutcome {
     /// A prior attempt already durably accepted the same operation.
     AlreadyAccepted,
     /// The command was newly persisted and reached the worker queue.
     Enqueued,
     /// Persistence or worker delivery failed.
     Failed,
+}
+
+impl ReplyEnqueueOutcome {
+    /// Reports a fresh worker delivery separately from an older receipt.
+    pub(in crate::app) fn is_new(self) -> bool {
+        self == Self::Enqueued
+    }
+
+    /// Reports either a fresh delivery or an existing durable receipt.
+    pub(in crate::app) fn is_accepted(self) -> bool {
+        self != Self::Failed
+    }
 }
 
 /// Worker-queue behavior selected after reply preparation.
@@ -1833,21 +1845,21 @@ impl SessionManager {
     /// Callers gate this path to idle session states, so it never falls
     /// back to the lossy in-memory chat queue used by ordinary messages
     /// submitted during an active turn.
-    pub(crate) async fn reply_to_durable_message(
+    pub(in crate::app) async fn reply_to_durable_message(
         &mut self,
         services: &AppServices,
         session_id: &str,
         operation_id: String,
         persist_prompt: bool,
         prompt: impl Into<TurnPrompt>,
-    ) -> bool {
+    ) -> ReplyEnqueueOutcome {
         let prompt = prompt.into();
         let Ok(session) = self.session_or_err(session_id) else {
-            return false;
+            return ReplyEnqueueOutcome::Failed;
         };
         let session_agent = session.agent;
 
-        self.reply_impl(
+        self.reply_impl_with_outcome(
             services,
             session_id,
             prompt,
@@ -1860,14 +1872,14 @@ impl SessionManager {
     /// Uses ordinary durable-turn preparation with atomic task admission at
     /// the worker handoff. Model selection and setting resolution retain
     /// their existing lifetimes.
-    pub(crate) async fn reply_to_task(
+    pub(in crate::app) async fn reply_to_task(
         &mut self,
         services: &AppServices,
         session_id: &str,
         request: ag_session::SubmitTaskRequest,
-    ) -> bool {
+    ) -> ReplyEnqueueOutcome {
         let Ok(session) = self.session_or_err(session_id) else {
-            return false;
+            return ReplyEnqueueOutcome::Failed;
         };
         let session_agent = session.agent;
         let prompt = TurnPrompt::from_agent_data(request.message.clone());
@@ -1877,7 +1889,7 @@ impl SessionManager {
         );
         options.task = Some(request);
 
-        self.reply_impl(services, session_id, prompt, session_agent, options)
+        self.reply_impl_with_outcome(services, session_id, prompt, session_agent, options)
             .await
     }
 
@@ -2530,6 +2542,20 @@ impl SessionManager {
         session_agent: AgentSelection,
         options: ReplyOptions,
     ) -> bool {
+        self.reply_impl_with_outcome(services, session_id, prompt, session_agent, options)
+            .await
+            .is_accepted()
+    }
+
+    /// Retains fresh-delivery identity for admission that releases role state.
+    async fn reply_impl_with_outcome(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        prompt: TurnPrompt,
+        session_agent: AgentSelection,
+        options: ReplyOptions,
+    ) -> ReplyEnqueueOutcome {
         let ReplyOptions {
             defer_prompt_until_enqueued,
             eligibility,
@@ -2554,11 +2580,11 @@ impl SessionManager {
             )
             .await
         else {
-            return false;
+            return ReplyEnqueueOutcome::Failed;
         };
 
         let Ok(handles) = self.session_handles_or_err(&persisted_session_id) else {
-            return false;
+            return ReplyEnqueueOutcome::Failed;
         };
 
         let transcript = Arc::clone(&handles.transcript);
@@ -2636,7 +2662,7 @@ impl SessionManager {
             self.clear_history_replay_pending(&persisted_session_id);
         }
 
-        enqueued != ReplyEnqueueOutcome::Failed
+        enqueued
     }
 
     /// Hydrates a restarted session before replay context is captured.
