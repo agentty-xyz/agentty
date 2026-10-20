@@ -91,6 +91,14 @@ impl SessionBackend for SessionRuntimeHandle {
         SessionRuntimeHandle::cancel_task_chain(self, chain_id).await
     }
 
+    async fn reply_to_task_chain(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::ReplyToTaskChainRequest,
+    ) -> Result<ag_session::TaskChainReplyOutcome, ApiSessionError> {
+        SessionRuntimeHandle::reply_to_task_chain(self, session_id, request).await
+    }
+
     async fn create_task(
         &self,
         session_id: &SessionId,
