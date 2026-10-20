@@ -108,11 +108,10 @@ effects. Implementer post-processing uses an isolated transcript projection and 
 ordered through publication. A settled task attempt refreshes its owning session only
 after operation bookkeeping finishes, so consumers observe its final durable status.
 
-The worker also supports task-context clients with independent runtime identities. They
-retain the owning session for admission and tracing. Hosts must supply the task's own
-continuation and dispatch it through the same serial mailbox; this support does not yet
-expose role-aware task submission. See [Execution](@/docs/core-components/execution.md)
-for context ownership and cleanup.
+Role admission invalidates earlier ordinary review work and its durable recovery
+trigger. Task completion does not start automatic review or auto-address follow-ups;
+explicit review and later ordinary turns retain their existing behavior. See
+[Execution](@/docs/core-components/execution.md) for context ownership and cleanup.
 
 Application shutdown closes every session worker's admission and waits for active
 effects, queued-work cancellation, and runtime cleanup within the shared five-second

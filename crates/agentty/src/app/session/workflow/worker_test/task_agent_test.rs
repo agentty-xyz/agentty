@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,13 +23,16 @@ use crate::app::App;
 use crate::app::service::MockSessionRunFactory;
 use crate::app::session::SessionTaskService;
 use crate::app::session::workflow::task_turn;
-use crate::app::session::workflow::worker::SessionWorkerContext;
+use crate::app::session::workflow::worker::{
+    ScheduledSessionCommand, SessionCommand, SessionWorkerContext,
+};
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
 use crate::infra::personality::MockPersonalityCatalogClient;
 use crate::test_support::{
-    SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, set_session_status_for_test,
+    SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, session_manager_with_handles,
+    set_session_status_for_test,
 };
 
 #[tokio::test]
@@ -94,6 +97,11 @@ async fn planner_execution_uses_captured_model_own_history_and_read_only_permiss
     );
     assert!(
         app.drive_session_request(service.submit_agent_task(&session_id, request("closed")))
+            .await
+            .is_err()
+    );
+    assert!(
+        app.suppress_agent_task_automation(&session_id)
             .await
             .is_err()
     );
@@ -423,8 +431,7 @@ async fn canceling_one_task_attempt_does_not_interrupt_a_later_attempt() {
         drop(pause);
     }
     // Act / Assert: an already admitted receipt never creates another client.
-    app.sessions
-        .enqueue_agent_task(&app.services, &session_id, request("next"))
+    app.drive_session_request(service.submit_agent_task(&session_id, request("next")))
         .await
         .expect("receipt");
     assert!(
@@ -544,14 +551,10 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
             .status(SessionStatus::InProgress)
             .build(),
     );
-    let mut implementation = request("blocked");
-    implementation.assignment.definition = BuiltinAgentDefinition::Implementer;
-
     // Act
     let result = app
         .sessions
-        .enqueue_agent_task(&app.services, "parent", implementation)
-        .await;
+        .validate_agent_task_admission("parent", BuiltinAgentDefinition::Implementer);
 
     // Assert
     assert!(
@@ -582,9 +585,11 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
             .folder(directory.path().join("unprepared-task"))
             .build(),
     );
+    let service = app.session_service();
     let deferred = app
-        .sessions
-        .enqueue_agent_task(&app.services, "deferred", request("deferred"))
+        .drive_session_request(
+            service.submit_agent_task(&SessionId::from("deferred"), request("deferred")),
+        )
         .await
         .expect_err("unprepared workspace");
     assert!(deferred.to_string().contains("prepared workspace"));
@@ -597,6 +602,73 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
             .expect("read")
             .is_none()
     );
+}
+
+#[test]
+fn deferred_planner_requires_a_review_ready_parent_even_when_stack_is_idle() {
+    // Arrange
+    let parent = SessionFixtureBuilder::new()
+        .id("parent")
+        .status(SessionStatus::Done)
+        .build();
+    let child = SessionFixtureBuilder::new()
+        .id("child")
+        .parent_session_id(Some("parent".into()))
+        .draft(true)
+        .status(SessionStatus::Draft)
+        .build();
+    let mut manager = session_manager_with_handles(vec![parent, child], HashMap::new());
+
+    // Act
+    let result = manager.validate_agent_task_admission("child", BuiltinAgentDefinition::Planner);
+
+    // Assert
+    assert!(
+        result
+            .expect_err("parent must be in review")
+            .to_string()
+            .contains("review-ready parent")
+    );
+}
+
+#[test]
+fn task_queue_preserves_question_pause_until_exact_cancellation() {
+    // Arrange
+    let cancellation = Arc::new(CancellationToken::new());
+    let command = ScheduledSessionCommand::immediate(SessionCommand::RunAgentTask {
+        cancellation: Arc::clone(&cancellation),
+        operation_id: "task-attempt:paused".to_string(),
+        request: Box::new(request("paused")),
+        factory: Arc::new(TestSessionRunFactory::default()),
+    });
+
+    // Act / Assert
+    assert!(!command.can_run_while_question());
+    cancellation.cancel();
+    assert!(command.can_run_while_question());
+}
+
+#[test]
+fn clearing_one_session_worker_interrupts_only_its_owned_task_attempts() {
+    // Arrange
+    let mut manager = session_manager_with_handles(Vec::new(), HashMap::new());
+    let owner = Arc::new(CancellationToken::new());
+    let sibling = Arc::new(CancellationToken::new());
+    manager.worker_service_mut().task_cancellations.insert(
+        "owner-operation".to_string(),
+        ("owner".into(), Arc::downgrade(&owner)),
+    );
+    manager.worker_service_mut().task_cancellations.insert(
+        "sibling-operation".to_string(),
+        ("sibling".into(), Arc::downgrade(&sibling)),
+    );
+
+    // Act
+    manager.clear_session_worker("owner");
+
+    // Assert
+    assert!(owner.is_cancelled());
+    assert!(!sibling.is_cancelled());
 }
 
 #[tokio::test]
@@ -637,12 +709,7 @@ async fn task_execution_failures_and_cancellation_do_not_save_or_leak_responses(
         } else if scenario == "closed-storage" {
             pool.close().await;
         } else if scenario == "poison-token" {
-            let token = Arc::clone(&context.cancel_token);
-            let _ = std::thread::spawn(move || {
-                let _guard = token.lock().expect("guard");
-                std::panic::resume_unwind(Box::new("poison cancellation lock"));
-            })
-            .join();
+            poison_lock(Arc::clone(&context.cancel_token));
         } else if scenario == "invalid-status" {
             *context.status.lock().expect("status") = SessionStatus::Done;
         }
@@ -773,6 +840,35 @@ async fn task_host_notices_stay_in_ephemeral_projection() {
             .expect("diagnostic")
             .contains("Task effect failed")
     );
+    // Act / Assert: a poisoned task projection still cannot persist to chat.
+    poison_lock(Arc::clone(&transcript));
+    SessionTaskService::append_workflow_notice(
+        &transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        "sess",
+        "Poisoned task diagnostic",
+    )
+    .await;
+    assert_eq!(
+        context
+            .db
+            .sessions()
+            .load_session_messages("sess")
+            .await
+            .expect("ordinary history")
+            .len(),
+        0
+    );
+}
+
+fn poison_lock<Value: Send + 'static>(lock: Arc<Mutex<Value>>) {
+    let _ = std::thread::spawn(move || {
+        let _guard = lock.lock().expect("test lock");
+        std::panic::resume_unwind(Box::new("poison test lock"));
+    })
+    .join();
 }
 
 #[tokio::test]
@@ -793,8 +889,7 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         let (mut context, pool) = execution_context().await;
         let mut planner = request("plan");
         if scenario == "stateless" {
-            planner.assignment.agent =
-                AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash);
+            planner.assignment.agent = AgentSelection::new(AgentKind::Harness, AgentModel::KimiK3);
         }
         let request = accepted_implementation(&context, planner).await;
         prepare_implementation_scenario(&mut context, &pool, &request, scenario).await;

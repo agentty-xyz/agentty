@@ -2016,29 +2016,7 @@ impl SessionManager {
         result
     }
 
-    /// Claims role assignment and attempt before handing work to its owner.
-    pub(in crate::app) async fn enqueue_agent_task(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        request: ag_session::SubmitAgentTaskRequest,
-    ) -> Result<(), SessionError> {
-        self.validate_agent_task_admission(session_id, request.assignment.definition)?;
-        self.validate_agent_task_workspace(services, session_id)?;
-        if services
-            .db()
-            .tasks()
-            .claim_agent_attempt(session_id, &request, "agent_task")
-            .await?
-        {
-            self.enqueue_claimed_agent_task(services, session_id, request)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    fn validate_agent_task_workspace(
+    pub(in crate::app) fn validate_agent_task_workspace(
         &self,
         services: &AppServices,
         session_id: &str,

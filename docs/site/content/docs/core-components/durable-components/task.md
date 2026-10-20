@@ -65,7 +65,9 @@ turns retain session permissions and finish permitted commit and publication eff
 before the next turn; failures settle the attempt as failed. A fresh regular `Draft` can
 start with a Planner without an ordinary chat turn. Other role attempts require `Review`
 or `AgentReview`; unmaterialized deferred workspaces are rejected before model
-execution.
+execution. Role admission also invalidates prior ordinary review generations. Task
+completion does not start ordinary automatic review or auto-address work; explicit
+review remains available.
 
 `TaskRepository` can atomically bind that assignment and a host-allocated conversation
 identity when admitting a role-aware attempt. The binding and original inputs survive

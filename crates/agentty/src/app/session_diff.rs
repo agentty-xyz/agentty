@@ -382,6 +382,13 @@ impl App {
             };
             let current_status = session.status;
 
+            if matches!(
+                self.review_cache.get(session_id),
+                Some(ReviewCacheEntry::Suppressed)
+            ) {
+                continue;
+            }
+
             if current_status == Status::InProgress {
                 self.discard_pending_review_action_diff_loads(session_id);
                 self.clear_review_output(session_id);
@@ -391,7 +398,7 @@ impl App {
             if !matches!(current_status, Status::Review | Status::AgentReview)
                 || matches!(
                     self.review_cache.get(session_id),
-                    Some(ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed)
+                    Some(ReviewCacheEntry::Loading { .. })
                 )
             {
                 continue;
