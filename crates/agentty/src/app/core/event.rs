@@ -69,6 +69,11 @@ pub(crate) enum AppEvent {
     PlanWorkflowLoaded {
         completion: crate::app::plan_workflow::PlanWorkflowCompletion,
     },
+    /// Latest task-chain graph snapshot loaded for one session update
+    /// version.
+    TaskChainGraphLoaded {
+        completion: crate::app::task_chain_graph::TaskChainGraphCompletion,
+    },
     /// User-authorized repository scan completed; cancelled results are
     /// ignored.
     ProjectDiscoveryCompleted {
@@ -453,6 +458,7 @@ pub(super) struct AppEventBatch {
     pub(super) sync_main_conflict: Option<(ProjectSyncContext, Vec<String>)>,
     project_discovery_completions: Vec<crate::app::project_catalog::ProjectDiscoveryCompletion>,
     plan_workflow_completions: Vec<crate::app::plan_workflow::PlanWorkflowCompletion>,
+    task_chain_graph_completions: Vec<crate::app::task_chain_graph::TaskChainGraphCompletion>,
     pub(super) update_status: Option<UpdateStatus>,
 }
 
@@ -483,6 +489,7 @@ impl AppEventBatch {
         }
         let changes_observable_state = !self.project_discovery_completions.is_empty()
             || !self.plan_workflow_completions.is_empty()
+            || !self.task_chain_graph_completions.is_empty()
             || self.should_reload_sessions
             || self.should_reload_projects
             || self.agent_cli_updates.is_some()
@@ -554,6 +561,9 @@ impl AppEventBatch {
         match event {
             AppEvent::PlanWorkflowLoaded { completion } => {
                 self.plan_workflow_completions.push(completion);
+            }
+            AppEvent::TaskChainGraphLoaded { completion } => {
+                self.task_chain_graph_completions.push(completion);
             }
             AppEvent::ProjectDiscoveryCompleted { completion } => {
                 self.project_discovery_completions.push(completion);
@@ -730,6 +740,7 @@ impl AppEventBatch {
             | AppEvent::ReviewRequestStatusUpdated { .. }) => self.collect_workflow_event(event),
             AppEvent::PlanWorkflowLoaded { .. }
             | AppEvent::ImplementerAttemptSucceeded { .. }
+            | AppEvent::TaskChainGraphLoaded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
@@ -881,6 +892,7 @@ impl AppEventBatch {
             } => self.collect_review_request_status_updated(generation, result, session_id),
             AppEvent::PlanWorkflowLoaded { .. }
             | AppEvent::ImplementerAttemptSucceeded { .. }
+            | AppEvent::TaskChainGraphLoaded { .. }
             | AppEvent::ProjectDiscoveryCompleted { .. }
             | AppEvent::ReviewProgressUpdated { .. }
             | AppEvent::SessionCreationCompleted { .. }
@@ -1285,6 +1297,9 @@ impl App {
         }
         for completion in std::mem::take(&mut event_batch.plan_workflow_completions) {
             self.complete_plan_workflow(completion);
+        }
+        for completion in std::mem::take(&mut event_batch.task_chain_graph_completions) {
+            self.complete_task_chain_graph(completion);
         }
     }
 

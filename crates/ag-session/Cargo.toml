@@ -17,10 +17,10 @@ ag-protocol.workspace = true
 async-trait.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 tokio.workspace = true
 
 [features]

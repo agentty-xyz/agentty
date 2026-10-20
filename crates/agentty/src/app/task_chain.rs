@@ -2,7 +2,7 @@
 
 use ag_session::{
     AcceptTaskChainPlanRequest, BuiltinAgentDefinition, ContinueTaskChainRequest, SessionError,
-    SessionId, StartPlanThenImplementRequest, TaskChain,
+    SessionId, SessionMessageKind, StartPlanThenImplementRequest, TaskChain,
 };
 use tracing::warn;
 
@@ -12,6 +12,11 @@ use crate::infra::db::DbError;
 impl App {
     /// Starts only newly admitted work; matching launch redelivery is a
     /// receipt.
+    ///
+    /// New admission records the original request and the live
+    /// execution-graph marker in the session transcript before dispatch, so
+    /// redelivery never duplicates them and a dispatch failure keeps the graph
+    /// visible with its failed state.
     pub(super) async fn start_api_task_chain(
         &mut self,
         session_id: &SessionId,
@@ -36,11 +41,39 @@ impl App {
             .await
             .map_err(|error| api_error(&error))?;
         if admitted {
+            self.append_task_chain_transcript_message(
+                session_id,
+                SessionMessageKind::UserPrompt,
+                &request.user_request,
+            )
+            .await;
+            self.append_task_chain_transcript_message(
+                session_id,
+                SessionMessageKind::AgentGraph,
+                &request.chain_id,
+            )
+            .await;
             self.dispatch_task_chain(&request.chain_id, &request.planner_attempt_id)
                 .await?;
         }
 
         Ok(())
+    }
+
+    /// Records one chain-owned transcript message for the owning session
+    /// through the ordinary persistence and live-mirror path.
+    ///
+    /// Callers own idempotency: append only after a newly admitted transition
+    /// so redelivered requests never duplicate transcript rows.
+    pub(crate) async fn append_task_chain_transcript_message(
+        &self,
+        session_id: &SessionId,
+        kind: SessionMessageKind,
+        content: &str,
+    ) {
+        self.sessions
+            .append_transcript_message_for_session(&self.services, session_id, kind, content)
+            .await;
     }
 
     /// Accepts and dispatches the exact version recorded by the transaction.

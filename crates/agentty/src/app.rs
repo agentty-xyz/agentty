@@ -36,6 +36,7 @@ mod sync;
 pub(crate) mod tab;
 mod task;
 mod task_chain;
+pub(crate) mod task_chain_graph;
 mod view;
 
 pub use core::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};

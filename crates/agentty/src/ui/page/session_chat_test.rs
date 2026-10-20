@@ -45,6 +45,7 @@ fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> Sessio
         session_index: 0,
         session_update_version: 0,
         sessions: std::slice::from_ref(session),
+        task_chain_graph: None,
     })
 }
 
@@ -345,6 +346,7 @@ fn test_rendered_output_line_count_counts_wrapped_content() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
+            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,
@@ -417,6 +419,7 @@ fn test_rendered_output_line_count_includes_question_review_output() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
+            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,
@@ -442,6 +445,7 @@ fn test_rendered_output_line_count_includes_question_review_output() {
             active_prompt_output: None,
             active_progress: None,
             session_update_version: 0,
+            task_chain_graph: None,
         },
         &markdown_render_cache,
         &output_layout_cache,

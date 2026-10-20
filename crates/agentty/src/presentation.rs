@@ -14,3 +14,5 @@ pub mod prompt;
 /// Stable selection projection for grouped review-comment snapshots.
 pub(crate) mod review_comment;
 pub(crate) mod setting;
+/// Live execution-graph projection and bounded per-session snapshot cache.
+pub(crate) mod task_chain_graph;

@@ -5,12 +5,13 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{
     AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnRequest,
 };
-use ag_session::{BuiltinAgentDefinition, SubmitAgentTaskRequest};
+use ag_session::{AgentAnswerContent, BuiltinAgentDefinition, SubmitAgentTaskRequest};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
+use super::task::{SessionTaskService, SessionTranscriptMessageAppend};
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
 use crate::app::AppEvent;
@@ -109,7 +110,7 @@ async fn execute(
     } else {
         None
     };
-    context
+    let is_recorded = context
         .db
         .tasks()
         .persist_agent_turn(
@@ -124,6 +125,9 @@ async fn execute(
             },
         )
         .await?;
+    if is_recorded {
+        append_chain_answer(context, request, &result.assistant_message).await?;
+    }
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
@@ -169,6 +173,50 @@ async fn execute(
                 session_id: context.session_id.clone(),
             });
     }
+
+    Ok(())
+}
+
+/// Mirrors a newly recorded chain-owned role answer into the session chat.
+///
+/// Only the first save of an attempt reaches this point, so redelivered or
+/// duplicate saves never append twice. Standalone role tasks keep their output
+/// out of the ordinary transcript.
+async fn append_chain_answer(
+    context: &SessionWorkerContext,
+    request: &SubmitAgentTaskRequest,
+    response: &ag_protocol::AgentResponse,
+) -> Result<(), SessionError> {
+    let text = response.to_display_text();
+    let is_chain_owned = context
+        .db
+        .tasks()
+        .list_task_chains(&context.session_id)
+        .await?
+        .iter()
+        .any(|chain| {
+            chain.planner_task_id == request.task_id || chain.implementer_task_id == request.task_id
+        });
+    if !is_chain_owned || text.trim().is_empty() {
+        return Ok(());
+    }
+    let encoded_answer = AgentAnswerContent {
+        agent: request.assignment.definition,
+        text,
+    }
+    .encode();
+    SessionTaskService::append_session_transcript_message(
+        &context.transcript,
+        &context.db,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        SessionTranscriptMessageAppend {
+            kind: SessionMessageKind::AgentAnswer,
+            raw_content: &encoded_answer,
+        },
+    )
+    .await;
 
     Ok(())
 }

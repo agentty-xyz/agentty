@@ -169,15 +169,16 @@ only a successful manual target sync archives it as `Done`.
 ## Session Chat Rendering
 
 <a id="architecture-runtime-flow-session-chat"></a> Durable transcript rows contain user
-prompts, final answers, and workflow notices. Typed transient slots hold progress,
-queued actions, and review output with explicit placement and lifetime. Chat messages
-and workflow actions, including selected review-comment batches, share one submission
-sequence for both display and execution. Review-comment commands retain their thread
-allowlist and replace the queued row with loading progress only when execution starts.
-Queued review batches wait for clarification answers, including after session
-restoration. A restored question session creates a paused worker when accepting the
-batch. Generated prompts enter durable history when the worker starts them, so canceled
-waiting work cannot be replayed.
+prompts, final answers, workflow notices, role-attributed task-chain answers, and
+execution-graph markers. Typed transient slots hold progress, queued actions, and review
+output with explicit placement and lifetime. Chat messages and workflow actions,
+including selected review-comment batches, share one submission sequence for both
+display and execution. Review-comment commands retain their thread allowlist and replace
+the queued row with loading progress only when execution starts. Queued review batches
+wait for clarification answers, including after session restoration. A restored question
+session creates a paused worker when accepting the batch. Generated prompts enter
+durable history when the worker starts them, so canceled waiting work cannot be
+replayed.
 
 Completion replaces matching progress with its result in one reducer update. Stale
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
@@ -187,8 +188,14 @@ The planning panel reads task-chain and role-history snapshots through `SessionS
 Its launch, acceptance, revision, clarification, retry, and cancellation actions use the
 same command gateway as programmatic callers. Background replies return through the
 reducer with a panel request identity; navigation and newer requests invalidate late
-results. Role output remains outside the ordinary session transcript, and rendering
-never advances a workflow.
+results. Rendering never advances a workflow.
+
+Newly admitted launches append the original request and an execution-graph marker to the
+session transcript; the worker appends one role-attributed answer only when it first
+saves a chain-owned response. These rows render in chat but stay out of provider replay,
+so each role keeps its isolated conversation. The marker stores only the chain identity.
+The reducer keeps a bounded latest-chain snapshot for the visible session, reloaded when
+its update version changes, and the card renders that live state.
 
 Foreground gateway admission records each workflow stage and its attempt atomically;
 only a new claim reaches the session worker. Duplicate deliveries acknowledge their

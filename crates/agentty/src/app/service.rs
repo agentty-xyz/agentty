@@ -459,6 +459,7 @@ impl AppServices {
     fn app_event_label(event: &AppEvent) -> &'static str {
         match event {
             AppEvent::PlanWorkflowLoaded { .. } => "PlanWorkflowLoaded",
+            AppEvent::TaskChainGraphLoaded { .. } => "TaskChainGraphLoaded",
             AppEvent::ProjectDiscoveryCompleted { .. } => "ProjectDiscoveryCompleted",
             AppEvent::SessionCreationCompleted { .. } => "SessionCreationCompleted",
             AppEvent::AtMentionEntriesLoaded { .. } => "AtMentionEntriesLoaded",

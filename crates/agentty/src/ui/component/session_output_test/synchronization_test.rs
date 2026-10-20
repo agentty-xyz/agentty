@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use ratatui::layout::Rect;
 
-use super::super::{SessionOutputLayoutCache, SessionOutputLineContext, live_activity_lines};
+use super::super::{
+    SessionOutput, SessionOutputLayout, SessionOutputLayoutCache, SessionOutputLineContext,
+    live_activity_lines,
+};
 use super::support::{line_context, output_lines, session_fixture, set_conversation_transcript};
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionMessageKind;
@@ -10,7 +13,16 @@ use crate::domain::transient_message::{
     TransientMessage, TransientMessageAnchor, TransientMessageBody, TransientMessageLifecycle,
     TransientMessageSlot,
 };
-use crate::ui::markdown;
+use crate::ui::{markdown, session_output_assembly};
+
+fn layout_text(layout: &SessionOutputLayout) -> String {
+    layout
+        .lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 /// Verifies workflow-only status changes reuse the stable transcript body
 /// while a rebase adds progress output.
@@ -142,6 +154,45 @@ fn test_output_lines_orders_post_sync_statuses_chronologically() {
     assert!(commit_index < sync_index);
     assert!(sync_index < auto_push_index);
     assert!(auto_push_index < review_index);
+}
+
+#[test]
+fn test_task_chain_graph_updates_refresh_cached_body_and_line_count() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    set_conversation_transcript(
+        &mut session,
+        vec![
+            (SessionMessageKind::UserPrompt, "Add search"),
+            (SessionMessageKind::AgentGraph, "chain"),
+        ],
+    );
+    let cache = SessionOutputLayoutCache::default();
+    let area = Rect::new(0, 0, 60, 30);
+    let graph = session_output_assembly::tests::task_chain_graph("chain");
+    let graph_context = SessionOutputLineContext {
+        task_chain_graph: Some(&graph),
+        ..line_context()
+    };
+
+    // Act
+    let loading = cache.layout(&session, area, line_context(), None);
+    let live = cache.layout(&session, area, graph_context, None);
+    let live_again = cache.layout(&session, area, graph_context, None);
+    let measured =
+        SessionOutput::rendered_line_count(&session, 60, 30, graph_context, None, Some(&cache));
+
+    // Assert
+    let loading_text = layout_text(&loading);
+    let live_text = layout_text(&live);
+    assert!(loading_text.contains("Loading status…"));
+    assert!(live_text.contains("● Awaiting your approval"));
+    assert!(!live_text.contains("Loading status…"));
+    assert!(Arc::ptr_eq(&live.lines, &live_again.lines));
+    assert_eq!(usize::from(live.line_count), live.lines.len());
+    assert_eq!(measured, live.line_count);
+    assert!(live.line_count > loading.line_count);
 }
 
 #[test]
