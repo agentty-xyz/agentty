@@ -74,6 +74,13 @@ Plan acceptance uses a versioned ledger independent of task completion. Reposito
 prove exact plan handoff, latest-version checks, ownership and captured-selection
 validation, and transactional rejection before Implementer admission.
 
+Static workflow storage atomically reserves role tasks, accepts exact plan versions, and
+admits attempts. Its phase is projected from operation-backed attempts rather than
+stored as a second lifecycle. Pure tests cover phase projection; SQLite boundary tests
+cover historical delivery receipts, cancellation scope, and rollback of failed handoffs.
+A public reopening contract proves interrupted implementation remains failed until an
+explicit retry.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

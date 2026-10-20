@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS(SELECT 1 FROM task_chain WHERE planner_task_id = ? OR implementer_task_id = ?) AS \"owned!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "owned!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e7b1833fb800b22d2a1ba253649fc13615626d1a0057affb3952308f9dcc32f0"
+}

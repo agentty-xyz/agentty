@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.task_id, a.message, a.is_visible AS \"is_visible!: bool\", t.session_id FROM task_attempt a JOIN task t ON t.id = a.task_id WHERE a.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "task_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "task_id"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "message"
+          }
+        }
+      },
+      {
+        "name": "is_visible!: bool",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "is_visible"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task",
+            "name": "session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "53bad4496ec3b99ff4ffa716a46d1712a5e387dae5719c3094c7ef8276924433"
+}

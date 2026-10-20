@@ -3,14 +3,16 @@
 use std::sync::Arc;
 
 use ag_session::{
-    AcceptTaskPlanRequest, AcceptedTaskPlan, CreateTaskRequest, DurableMessageVisibility,
-    SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AcceptedTaskPlan, ContinueTaskChainRequest,
+    CreateTaskRequest, DurableMessageVisibility, SessionId, StartPlanThenImplementRequest,
+    SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus, TaskChain,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
+use crate::task_chain::TaskChainStore;
 use crate::task_plan::TaskPlanStore;
 use crate::{DbError, TimestampSource};
 
@@ -21,6 +23,61 @@ use crate::{DbError, TimestampSource};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
+    /// Atomically reserves both role tasks and admits the first Planner.
+    /// Returns false for identical launch redelivery, without replaying work.
+    async fn start_task_chain(
+        &self,
+        session_id: &str,
+        request: &StartPlanThenImplementRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let _ = (session_id, request, operation_kind);
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Reads a consistent stage projection; never dispatches pending work.
+    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
+        let _ = chain_id;
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Lists session workflow snapshots in creation order.
+    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
+        let _ = session_id;
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Atomically accepts a Planner version and admits its Implementer.
+    /// Returns false for identical handoff redelivery.
+    async fn accept_task_chain_plan(
+        &self,
+        chain_id: &str,
+        request: &AcceptTaskChainPlanRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let _ = (chain_id, request, operation_kind);
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Admits an explicit new attempt for the current role. Identical old
+    /// delivery never clears cancellation or restarts work.
+    async fn continue_task_chain(
+        &self,
+        chain_id: &str,
+        request: &ContinueTaskChainRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let _ = (chain_id, request, operation_kind);
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Cancels only operations belonging to this workflow; queued attempts
+    /// settle immediately and active workers observe their cancellation flag.
+    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), DbError> {
+        let _ = chain_id;
+        Err(TaskChainStore::unsupported())
+    }
+
     /// Accepts the latest successful Planner response by immutable version.
     /// Reads the exact plan from storage; task completion is independent.
     async fn accept_agent_plan(
@@ -269,6 +326,51 @@ impl SqliteTaskRepository {
         operation_kind: &str,
         agent_request: Option<&SubmitAgentTaskRequest>,
     ) -> Result<bool, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        TaskChainStore::require_unowned(&mut transaction, &request.task_id).await?;
+        let claimed = Self::claim_attempt_in_transaction(
+            &mut transaction,
+            session_id,
+            request,
+            operation_kind,
+            agent_request,
+            now,
+        )
+        .await?;
+        transaction.commit().await?;
+
+        Ok(claimed)
+    }
+
+    pub(crate) async fn claim_agent_in_transaction(
+        connection: &mut SqliteConnection,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+        operation_kind: &str,
+        now: i64,
+    ) -> Result<bool, DbError> {
+        let attempt = TaskAgentStore::attempt(request)?;
+
+        Self::claim_attempt_in_transaction(
+            connection,
+            session_id,
+            &attempt,
+            operation_kind,
+            Some(request),
+            now,
+        )
+        .await
+    }
+
+    async fn claim_attempt_in_transaction(
+        connection: &mut SqliteConnection,
+        session_id: &str,
+        request: &SubmitTaskRequest,
+        operation_kind: &str,
+        agent_request: Option<&SubmitAgentTaskRequest>,
+        now: i64,
+    ) -> Result<bool, DbError> {
         if [
             &request.task_id,
             &request.attempt_id,
@@ -282,8 +384,6 @@ impl SqliteTaskRepository {
                 "Task, attempt, objective, and message must be nonempty",
             ));
         }
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
         sqlx::query!(
             "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
              CONFLICT(id) DO NOTHING",
@@ -292,24 +392,24 @@ impl SqliteTaskRepository {
             request.objective,
             now
         )
-        .execute(&mut *transaction)
+        .execute(&mut *connection)
         .await?;
         if let Some(agent_request) = agent_request {
-            TaskAgentStore::bind(&mut transaction, session_id, agent_request).await?;
+            TaskAgentStore::bind(connection, session_id, agent_request).await?;
         } else {
-            TaskAgentStore::require_ordinary(&mut transaction, &request.task_id).await?;
+            TaskAgentStore::require_ordinary(connection, &request.task_id).await?;
         }
-        if Self::matching_attempt(&mut transaction, session_id, request, agent_request).await? {
+        if Self::matching_attempt(connection, session_id, request, agent_request).await? {
             return Ok(false);
         }
         if let Some(agent_request) = agent_request {
-            TaskPlanStore::verify(&mut transaction, session_id, agent_request).await?;
+            TaskPlanStore::verify(connection, session_id, agent_request).await?;
         }
         let task = sqlx::query!(
             "SELECT session_id, objective, completed_at FROM task WHERE id = ?",
             request.task_id
         )
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut *connection)
         .await?;
         if task.session_id != session_id || task.objective != request.objective {
             return Err(Self::invalid("Task session and objective are immutable"));
@@ -323,7 +423,7 @@ impl SqliteTaskRepository {
                WHERE a.task_id = ? AND o.status IN ('queued', 'running')) AS "active!: bool""#,
             request.task_id
         )
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut *connection)
         .await?;
         if active.active {
             return Err(Self::invalid("Task already has an unfinished attempt"));
@@ -337,7 +437,7 @@ impl SqliteTaskRepository {
             operation_kind,
             now
         )
-        .execute(&mut *transaction)
+        .execute(&mut *connection)
         .await?;
         let is_visible = request.visibility == DurableMessageVisibility::Visible;
         sqlx::query!(
@@ -349,9 +449,8 @@ impl SqliteTaskRepository {
             request.message,
             is_visible
         )
-        .execute(&mut *transaction)
+        .execute(&mut *connection)
         .await?;
-        transaction.commit().await?;
 
         Ok(true)
     }
@@ -359,6 +458,79 @@ impl SqliteTaskRepository {
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
+    async fn start_task_chain(
+        &self,
+        session_id: &str,
+        request: &StartPlanThenImplementRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        let claimed =
+            TaskChainStore::start(&mut transaction, session_id, request, operation_kind, now)
+                .await?;
+        transaction.commit().await?;
+
+        Ok(claimed)
+    }
+
+    async fn load_task_chain(&self, chain_id: &str) -> Result<Option<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chain = TaskChainStore::load(&mut transaction, chain_id).await?;
+        transaction.commit().await?;
+
+        Ok(chain)
+    }
+
+    async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chains = TaskChainStore::list(&mut transaction, session_id).await?;
+        transaction.commit().await?;
+
+        Ok(chains)
+    }
+
+    async fn accept_task_chain_plan(
+        &self,
+        chain_id: &str,
+        request: &AcceptTaskChainPlanRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        let claimed =
+            TaskChainStore::accept(&mut transaction, chain_id, request, operation_kind, now)
+                .await?;
+        transaction.commit().await?;
+
+        Ok(claimed)
+    }
+
+    async fn continue_task_chain(
+        &self,
+        chain_id: &str,
+        request: &ContinueTaskChainRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        let claimed =
+            TaskChainStore::resume(&mut transaction, chain_id, request, operation_kind, now)
+                .await?;
+        transaction.commit().await?;
+
+        Ok(claimed)
+    }
+
+    async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        TaskChainStore::cancel(&mut transaction, chain_id, now).await?;
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
     async fn accept_agent_plan(
         &self,
         session_id: &str,
