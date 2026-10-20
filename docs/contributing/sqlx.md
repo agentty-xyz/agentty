@@ -14,9 +14,12 @@ sqlx_database_url="sqlite://${PWD}/target/sqlx/ag-store.sqlite"
 (
   cd crates/ag-store
   DATABASE_URL="${sqlx_database_url}" cargo sqlx database reset -y
-  DATABASE_URL="${sqlx_database_url}" cargo sqlx prepare -- --all-targets --all-features
+  AGENTTY_STORE_DATABASE_URL="${sqlx_database_url}" cargo sqlx prepare -- --all-targets --all-features
 )
 ```
+
+The store uses a crate-specific database variable so its native-harness dependencies
+continue to compile against their own offline metadata during preparation.
 
 ## Harness Queries
 

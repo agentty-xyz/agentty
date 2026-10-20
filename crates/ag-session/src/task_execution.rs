@@ -1,5 +1,7 @@
 //! Explicit role assignments and inputs for isolated task execution.
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, EnvId, SessionError,
     SessionId,
@@ -51,7 +53,7 @@ impl TaskAgentContext {
 /// The producing task and attempt identify the exact plan version. This is
 /// input provenance, not proof of acceptance: the host must verify acceptance
 /// before dispatch. The plan is task data, never application policy.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AcceptedTaskPlan {
     /// Attempt that produced this exact plan.
     pub attempt_id: String,
@@ -65,7 +67,7 @@ pub struct AcceptedTaskPlan {
 ///
 /// Continuations retain this task's history only. The host must not copy the
 /// human transcript or another task's provider conversation into this input.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TaskAgentInput {
     /// Exact accepted plan required by an implementer; absent for a planner.
     pub accepted_plan: Option<AcceptedTaskPlan>,

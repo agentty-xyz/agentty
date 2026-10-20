@@ -67,6 +67,13 @@ This request is a library contract, not a supported submission method yet. Conve
 identity and history must be task-owned, while execution still uses the session-owned
 Env and serial worker. Session permissions remain authoritative.
 
+`TaskRepository` can atomically bind that assignment and a host-allocated conversation
+identity when admitting a role-aware attempt. The binding and original inputs survive
+restart; clarification belongs to each attempt. Tasks with ordinary session-context
+history cannot acquire an isolated assignment, and assigned tasks require role-aware
+delivery. This persistence support does not yet add a `SessionService` submission path
+or execute roles.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

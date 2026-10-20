@@ -1,0 +1,2 @@
+[common]
+database-url-var = "AGENTTY_STORE_DATABASE_URL"
