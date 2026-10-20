@@ -335,6 +335,7 @@ async fn drive_panel(app: &mut crate::app::App) {
 async fn empty_panel_queries_use_mailbox_and_reload_without_discarding_a_draft() {
     // Arrange
     let (mut app, _root) = test_support::new_test_app().await;
+    let _consumer = app.sessions.foreground_consumer();
     app.open_plan_workflow(SessionId::from("missing"));
 
     // Act
@@ -458,6 +459,7 @@ async fn action_guards_keep_missing_or_replaced_stage_inputs_out_of_admission() 
 async fn terminal_admission_failure_retains_composer_and_reloads_durable_phase() {
     // Arrange
     let (mut app, _root) = test_support::new_test_app().await;
+    let _consumer = app.sessions.foreground_consumer();
     let session = test_support::SessionFixtureBuilder::new().build();
     let session_id = session.id.clone();
     app.sessions.push_session(session);
@@ -502,6 +504,71 @@ async fn terminal_admission_failure_retains_composer_and_reloads_durable_phase()
             );
         }
     }
+}
+
+#[tokio::test]
+async fn an_unprepared_draft_keeps_its_request_and_explains_how_to_start() {
+    // Arrange
+    let (mut app, root) = test_support::new_test_app().await;
+    let _consumer = app.sessions.foreground_consumer();
+    let session = test_support::SessionFixtureBuilder::new()
+        .draft(true)
+        .status(ag_session::SessionStatus::Draft)
+        .folder(root.path().join("unprepared"))
+        .build();
+    let id = session.id.clone();
+    let project = app
+        .services
+        .db()
+        .projects()
+        .upsert_project(root.path().to_str().expect("fixture path"), None)
+        .await
+        .expect("project");
+    app.services
+        .db()
+        .sessions()
+        .insert_session(
+            &id,
+            session.agent.model().as_str(),
+            "main",
+            "Draft",
+            project,
+        )
+        .await
+        .expect("deferred session row");
+    app.sessions.push_session(session);
+    let mut state = PlanWorkflowState::default();
+    state.begin_editing(PlanEditorKind::New);
+    state
+        .editor
+        .as_mut()
+        .expect("editor")
+        .input
+        .insert_text("Keep this request");
+    app.mode = AppMode::PlanWorkflow {
+        session_id: id,
+        state: Box::new(state),
+    };
+
+    // Act
+    app.handle_plan_workflow_intent(PlanWorkflowIntent::Submit);
+    drive_panel(&mut app).await;
+
+    // Assert
+    let state = match &app.mode {
+        AppMode::PlanWorkflow { state, .. } => Some(state),
+        _ => None,
+    }
+    .expect("workflow panel");
+    let error = state.error.as_deref().expect("actionable admission error");
+    assert!(error.contains("prepared workspace"), "{error}");
+    assert!(error.contains("regular session"), "{error}");
+    assert_eq!(
+        state.editor.as_ref().expect("retained editor").input.text(),
+        "Keep this request"
+    );
+    assert_eq!(state.chains.len(), 1);
+    assert_eq!(state.chains[0].status, "Failed · explicit retry required");
 }
 
 #[tokio::test]
