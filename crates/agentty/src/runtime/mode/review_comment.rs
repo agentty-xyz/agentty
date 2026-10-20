@@ -64,7 +64,7 @@ pub(crate) async fn handle_with_cache(
         let outcome = app
             .resolve_session_review_comments(&session_id, &snapshot, &submitted_comments)
             .await;
-        apply_review_comment_resolution_outcome(app, outcome);
+        apply_review_comment_resolution_outcome(&mut app.mode, outcome);
 
         return EventResult::Continue;
     }
@@ -238,11 +238,14 @@ fn toggle_selected_comment(
 }
 
 /// Applies presentation navigation returned by the review-comment workflow.
-fn apply_review_comment_resolution_outcome(app: &mut App, outcome: ReviewCommentResolutionOutcome) {
+fn apply_review_comment_resolution_outcome(
+    mode: &mut AppMode,
+    outcome: ReviewCommentResolutionOutcome,
+) {
     match outcome {
         ReviewCommentResolutionOutcome::KeepReviewComments => {}
         ReviewCommentResolutionOutcome::ShowSession { session_id } => {
-            app.mode = AppMode::View {
+            *mode = AppMode::View {
                 session_id,
                 scroll_offset: None,
             };
