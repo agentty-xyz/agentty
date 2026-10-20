@@ -1190,7 +1190,7 @@ impl SessionWorkerService {
             },
             Arc::clone(&runtime.queued_work_sequence),
         );
-        services.track_session_worker(worker.task());
+        services.track_session_worker(&runtime.session_id, worker.task());
         self.workers
             .insert(runtime.session_id.clone(), worker.clone());
 

@@ -92,8 +92,8 @@ async fn task_runtime_keys_are_stable_and_separate_from_ordinary_chat() {
     }
 
     // Assert
-    let first_key = format!("task-{}", context.id);
-    let second_key = format!("task-{}", another_context.id);
+    let first_key = SessionRunClient::task_runtime_id(&context).expect("cleanup identity");
+    let second_key = SessionRunClient::task_runtime_id(&another_context).expect("cleanup identity");
     assert_eq!(
         *dispatched.lock().expect("turn IDs"),
         [

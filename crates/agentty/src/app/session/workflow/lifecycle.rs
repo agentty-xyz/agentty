@@ -276,6 +276,7 @@ struct DeletedSessionCleanup {
     has_git_branch: bool,
     session_id: SessionId,
     staged_draft_root: PathBuf,
+    task_runtime_ids: Vec<String>,
     working_dir: PathBuf,
 }
 
@@ -2340,9 +2341,9 @@ impl SessionManager {
 
         let fs_client = services.fs_client();
         let git_client = services.git_client();
-        tokio::spawn(async move {
+        services.track_cleanup_task(tokio::spawn(async move {
             SessionManager::cleanup_deleted_session_resources(fs_client, git_client, cleanup).await;
-        });
+        }));
     }
 
     /// Removes the selected session from app state and persistence, returning
@@ -2372,6 +2373,17 @@ impl SessionManager {
             }
             return None;
         }
+        let task_runtime_ids = match Self::load_task_runtime_ids(services.db(), &session_id).await {
+            Ok(ids) => ids,
+            Err(error) => {
+                warn!(%session_id, %error, "failed to retain task history ownership before deletion");
+
+                return None;
+            }
+        };
+        if let Ok(handles) = self.session_handles_or_err(&session_id) {
+            Self::signal_session_cancellation(services, handles, &session_id).await;
+        }
         services.finish_session_agent_runs(&session_id).await;
         let session = self.remove_session_at(selected_index)?;
         self.state.remove_handle(&session.id);
@@ -2384,18 +2396,6 @@ impl SessionManager {
             &session.id,
         );
 
-        if let Err(error) = services
-            .db()
-            .operations()
-            .request_cancel_for_session_operations(&session.id)
-            .await
-        {
-            warn!(
-                session_id = %session.id,
-                error = %error,
-                "failed to cancel pending session operations during deletion"
-            );
-        }
         self.clear_session_worker(&session.id);
         if let Err(error) = services.db().sessions().delete_session(&session.id).await {
             warn!(
@@ -2414,6 +2414,7 @@ impl SessionManager {
             has_git_branch: projects.has_git_branch(),
             session_id: session.id,
             staged_draft_root,
+            task_runtime_ids,
             working_dir: projects.working_dir().to_path_buf(),
         })
     }
@@ -2450,6 +2451,9 @@ impl SessionManager {
             );
         }
         Self::cleanup_session_harness_directory(Arc::clone(&fs_client), &cleanup.session_id).await;
+        for runtime_id in cleanup.task_runtime_ids {
+            Self::cleanup_session_harness_directory(Arc::clone(&fs_client), &runtime_id).await;
+        }
         Self::cleanup_session_temp_directory(fs_client, &cleanup.session_id).await;
     }
 
@@ -3862,6 +3866,20 @@ impl SessionManager {
             cleanup_services
                 .finish_session_agent_runs(&session_id)
                 .await;
+            match Self::load_task_runtime_ids(cleanup_services.db(), &session_id).await {
+                Ok(ids) => {
+                    for runtime_id in ids {
+                        Self::cleanup_session_harness_directory(
+                            Arc::clone(&fs_client),
+                            &runtime_id,
+                        )
+                        .await;
+                    }
+                }
+                Err(error) => {
+                    warn!(%session_id, %error, "failed to load canceled task history ownership");
+                }
+            }
             if has_worktree {
                 let repo_root = git_client.main_repo_root(folder.clone()).await.ok();
                 let cleanup_errors = Self::cleanup_session_worktree_resources(
@@ -4024,9 +4042,26 @@ impl SessionManager {
         }
     }
 
-    /// Removes the session's durable harness history, which Harness sessions
-    /// keep outside their worktree. Sessions without one have nothing to
-    /// remove.
+    /// Resolves trusted context identities before session deletion cascades
+    /// away the task records. Caller-supplied task IDs never select paths.
+    async fn load_task_runtime_ids(
+        repositories: &db::AppRepositories,
+        session_id: &str,
+    ) -> Result<Vec<String>, SessionError> {
+        let mut ids = Vec::new();
+        for task in repositories.tasks().list_tasks(session_id).await? {
+            if let Some(row) = repositories.tasks().load_agent_context(&task.id).await? {
+                ids.push(
+                    ag_worker::SessionRunClient::task_runtime_id(&row.context)
+                        .map_err(|error| SessionError::Workflow(error.to_string()))?,
+                );
+            }
+        }
+
+        Ok(ids)
+    }
+
+    /// Removes durable harness history kept outside the session worktree.
     async fn cleanup_session_harness_directory(fs_client: Arc<dyn FsClient>, session_id: &str) {
         if let Err(error) = fs_client
             .remove_dir_all(session_harness_directory(session_id))

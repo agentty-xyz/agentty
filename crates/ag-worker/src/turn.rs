@@ -54,16 +54,28 @@ impl SessionRunClient {
         context: &ag_session::TaskAgentContext,
         config: &crate::RuntimeConfig,
     ) -> Result<Self, AgentError> {
-        let context_id = Uuid::parse_str(&context.id)
-            .map_err(|_| AgentError::Runtime("Task context ID must be a UUID".to_string()))?;
+        let runtime_id = Self::task_runtime_id(context)?;
         let mut client = Self::new(
             context.session_id.to_string(),
             context.assignment.agent.kind(),
             config,
         );
-        client.runtime_id = format!("task-{context_id}");
+        client.runtime_id = runtime_id;
 
         Ok(client)
+    }
+
+    /// Returns the validated resource identity used by a task runtime.
+    /// Hosts may retain this identity before deleting task rows, then remove
+    /// the corresponding native history after worker shutdown.
+    ///
+    /// # Errors
+    /// Returns an error when the host-allocated context ID is not a UUID.
+    pub fn task_runtime_id(context: &ag_session::TaskAgentContext) -> Result<String, AgentError> {
+        let context_id = Uuid::parse_str(&context.id)
+            .map_err(|_| AgentError::Runtime("Task context ID must be a UUID".to_string()))?;
+
+        Ok(format!("task-{context_id}"))
     }
 
     /// Executes a turn under worker cancellation and runtime cleanup.
