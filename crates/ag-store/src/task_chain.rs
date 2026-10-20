@@ -220,12 +220,22 @@ impl TaskChainStore {
                     "Workflow already accepted a different plan version",
                 ));
             }
+            let continuation = sqlx::query!(
+                r#"SELECT EXISTS(SELECT 1 FROM task_chain_continuation WHERE task_attempt_id = ?) AS "exists!: bool""#,
+                request.attempt_id
+            ).fetch_one(&mut *connection).await?;
+            if continuation.exists {
+                return Err(Self::invalid(
+                    "Attempt identity belongs to a continuation, not plan acceptance",
+                ));
+            }
             if Self::matches_delivery(
                 connection,
                 &chain,
                 &ContinueTaskChainRequest {
                     attempt_id: request.attempt_id.clone(),
                     clarification: None,
+                    expected_attempt_id: request.plan_attempt_id.clone(),
                 },
                 Some(&chain.implementer_task_id),
             )
@@ -287,8 +297,13 @@ impl TaskChainStore {
     ) -> Result<bool, DbError> {
         Self::lock_chain(connection, chain_id).await?;
         let chain = Self::required(connection, chain_id).await?;
-        if Self::matches_delivery(connection, &chain, request, None).await? {
+        if Self::matches_continuation_receipt(connection, &chain, request).await? {
             return Ok(false);
+        }
+        if chain.current_request.attempt_id != request.expected_attempt_id {
+            return Err(Self::invalid(
+                "Workflow advanced after the continuation source was observed",
+            ));
         }
         let continuation = chain.continuation_request(request);
         let claimed = SqliteTaskRepository::claim_agent_in_transaction(
@@ -298,6 +313,14 @@ impl TaskChainStore {
             operation_kind,
             now,
         )
+        .await?;
+        sqlx::query!(
+            "INSERT INTO task_chain_continuation (task_attempt_id, expected_task_attempt_id) \
+             VALUES (?, ?)",
+            request.attempt_id,
+            request.expected_attempt_id
+        )
+        .execute(&mut *connection)
         .await?;
         sqlx::query!(
             "UPDATE task_chain SET canceled_at = NULL WHERE id = ?",
@@ -402,6 +425,33 @@ impl TaskChainStore {
         }
 
         Ok(true)
+    }
+
+    async fn matches_continuation_receipt(
+        connection: &mut SqliteConnection,
+        chain: &TaskChain,
+        request: &ContinueTaskChainRequest,
+    ) -> Result<bool, DbError> {
+        let previous = sqlx::query!(
+            "SELECT r.expected_task_attempt_id FROM task_attempt a LEFT JOIN \
+             task_chain_continuation r ON r.task_attempt_id = a.id WHERE a.id = ?",
+            request.attempt_id
+        )
+        .fetch_optional(&mut *connection)
+        .await?;
+        let Some(previous) = previous else {
+            return Ok(false);
+        };
+        let expected = previous.expected_task_attempt_id.ok_or_else(|| {
+            Self::invalid("Attempt identity belongs to a different workflow action")
+        })?;
+        if expected != request.expected_attempt_id {
+            return Err(Self::invalid(
+                "Continuation identity was already used with a different source attempt",
+            ));
+        }
+
+        Self::matches_delivery(connection, chain, request, None).await
     }
 
     fn phase(

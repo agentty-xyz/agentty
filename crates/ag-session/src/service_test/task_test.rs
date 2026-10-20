@@ -101,6 +101,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
             ContinueTaskChainRequest {
                 attempt_id: "continued".into(),
                 clarification: None,
+                expected_attempt_id: "plan".into(),
             },
         )
         .await;

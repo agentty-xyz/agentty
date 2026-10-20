@@ -81,6 +81,10 @@ cover historical delivery receipts, cancellation scope, and rollback of failed h
 A public reopening contract proves interrupted implementation remains failed until an
 explicit retry.
 
+Continuation receipts bind each delivery to its observed source attempt. Transactional
+tests cover stale guidance after a role change, changed anchors on repeated deliveries,
+cross-action identity reuse, and rollback when the receipt cannot be saved.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

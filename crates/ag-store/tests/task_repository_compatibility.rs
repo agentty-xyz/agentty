@@ -92,6 +92,7 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
             &ContinueTaskChainRequest {
                 attempt_id: "retry".into(),
                 clarification: None,
+                expected_attempt_id: "plan".into(),
             },
             "reply",
         )

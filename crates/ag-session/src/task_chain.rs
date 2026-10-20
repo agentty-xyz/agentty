@@ -60,6 +60,10 @@ pub struct ContinueTaskChainRequest {
     pub attempt_id: String,
     /// User guidance addressed only to the current role's own context.
     pub clarification: Option<String>,
+    /// Current attempt observed when this guidance was authored. Admission
+    /// rejects a new delivery if the workflow has advanced since that snapshot.
+    /// Identical redelivery retains its original anchor after later progress.
+    pub expected_attempt_id: String,
 }
 
 /// Consistent durable workflow snapshot; reading never dispatches work.

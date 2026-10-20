@@ -166,6 +166,7 @@ async fn historical_receipts_are_idempotent_after_stage_changes_and_later_retrie
     let retry = ContinueTaskChainRequest {
         attempt_id: "retry".into(),
         clarification: Some("Use file A".into()),
+        expected_attempt_id: "implement".into(),
     };
     database
         .tasks()
@@ -287,18 +288,19 @@ async fn cancellation_is_scoped_and_requires_a_new_explicit_delivery_to_resume()
             .expect("redelivery")
     );
     assert!(
-        !database
+        database
             .tasks()
             .continue_task_chain(
                 "chain",
                 &ContinueTaskChainRequest {
                     attempt_id: "plan".into(),
-                    clarification: None
+                    clarification: None,
+                    expected_attempt_id: "plan".into(),
                 },
                 "reply"
             )
             .await
-            .expect("old receipt")
+            .is_err()
     );
 
     // Assert
@@ -329,7 +331,8 @@ async fn cancellation_is_scoped_and_requires_a_new_explicit_delivery_to_resume()
                 "chain",
                 &ContinueTaskChainRequest {
                     attempt_id: "explicit-retry".into(),
-                    clarification: Some("Retry".into())
+                    clarification: Some("Retry".into()),
+                    expected_attempt_id: "plan".into(),
                 },
                 "reply"
             )
@@ -367,7 +370,8 @@ async fn running_cancellation_must_settle_before_a_new_attempt() {
                 "chain",
                 &ContinueTaskChainRequest {
                     attempt_id: "too-soon".into(),
-                    clarification: None
+                    clarification: None,
+                    expected_attempt_id: "plan".into(),
                 },
                 "reply"
             )
@@ -567,7 +571,8 @@ async fn workflow_tasks_cannot_be_admitted_outside_the_chain() {
                 "missing",
                 &ContinueTaskChainRequest {
                     attempt_id: "missing".into(),
-                    clarification: None
+                    clarification: None,
+                    expected_attempt_id: "missing".into(),
                 },
                 "reply"
             )
@@ -680,22 +685,28 @@ async fn corrupted_workflow_snapshots_and_historical_receipts_fail_closed() {
         // Assert
         assert!(snapshot.is_err(), "{change}");
     }
-    let database = accepted_database().await;
-    sqlx::query("UPDATE task_attempt SET message = 'invalid' WHERE id = 'plan'")
+    let database = task_database_fixture().await;
+    let revision = revised_plan(&database).await;
+    database
+        .tasks()
+        .accept_task_chain_plan(
+            "chain",
+            &AcceptTaskChainPlanRequest {
+                plan_attempt_id: "revision".into(),
+                ..accept_request()
+            },
+            "reply",
+        )
+        .await
+        .expect("accept revised plan");
+    sqlx::query("UPDATE task_attempt SET message = 'invalid' WHERE id = 'revision'")
         .execute(database.pool())
         .await
         .expect("corrupt receipt");
     assert!(
         database
             .tasks()
-            .continue_task_chain(
-                "chain",
-                &ContinueTaskChainRequest {
-                    attempt_id: "plan".into(),
-                    clarification: None
-                },
-                "reply"
-            )
+            .continue_task_chain("chain", &revision, "reply")
             .await
             .is_err()
     );
@@ -729,6 +740,169 @@ async fn launch_failure_rolls_back_both_reserved_tasks_and_operation() {
     .await
     .expect("counts");
     assert_eq!(counts, (0, 0, 0));
+}
+
+#[tokio::test]
+async fn continuation_rejects_stale_sources_and_changed_receipt_anchors() {
+    // Arrange
+    let database = task_database_fixture().await;
+    let revision = revised_plan(&database).await;
+    let stale = ContinueTaskChainRequest {
+        attempt_id: "stale-planner-answer".into(),
+        clarification: Some("Planner guidance".into()),
+        expected_attempt_id: "revision".into(),
+    };
+    database
+        .tasks()
+        .accept_task_chain_plan(
+            "chain",
+            &AcceptTaskChainPlanRequest {
+                plan_attempt_id: "revision".into(),
+                ..accept_request()
+            },
+            "reply",
+        )
+        .await
+        .expect("handoff advances role");
+    response(
+        &database,
+        "implement",
+        r#"{"answer":"Implemented","questions":[]}"#,
+        true,
+    )
+    .await;
+
+    // Act
+    let stale_result = database
+        .tasks()
+        .continue_task_chain("chain", &stale, "reply")
+        .await;
+    let changed_anchor = database
+        .tasks()
+        .continue_task_chain(
+            "chain",
+            &ContinueTaskChainRequest {
+                expected_attempt_id: "implement".into(),
+                ..revision.clone()
+            },
+            "reply",
+        )
+        .await;
+    let original_receipt = database
+        .tasks()
+        .continue_task_chain("chain", &revision, "reply")
+        .await;
+
+    // Assert
+    assert!(stale_result.is_err());
+    assert!(changed_anchor.is_err());
+    assert!(!original_receipt.expect("old anchored Planner receipt"));
+    let implementation = database
+        .tasks()
+        .load_task("chain:chain:implementer")
+        .await
+        .expect("task")
+        .expect("present");
+    assert_eq!(implementation.attempts.len(), 1);
+    assert_eq!(
+        chain(&database).await.current_request.attempt_id,
+        "implement"
+    );
+}
+
+#[tokio::test]
+async fn action_receipts_cannot_be_reused_as_different_workflow_actions() {
+    // Arrange
+    let database = accepted_database().await;
+    response(
+        &database,
+        "implement",
+        r#"{"answer":"Implemented","questions":[]}"#,
+        true,
+    )
+    .await;
+    let continuation = ContinueTaskChainRequest {
+        attempt_id: "continuation".into(),
+        clarification: None,
+        expected_attempt_id: "implement".into(),
+    };
+    database
+        .tasks()
+        .continue_task_chain("chain", &continuation, "reply")
+        .await
+        .expect("new continuation");
+
+    // Act and Assert
+    for attempt in ["plan", "implement"] {
+        assert!(
+            database
+                .tasks()
+                .continue_task_chain(
+                    "chain",
+                    &ContinueTaskChainRequest {
+                        attempt_id: attempt.into(),
+                        ..continuation.clone()
+                    },
+                    "reply"
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        database
+            .tasks()
+            .accept_task_chain_plan(
+                "chain",
+                &AcceptTaskChainPlanRequest {
+                    attempt_id: "continuation".into(),
+                    ..accept_request()
+                },
+                "reply"
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn failed_continuation_receipt_write_rolls_back_its_attempt_and_cancellation() {
+    // Arrange
+    let database = accepted_database().await;
+    database
+        .tasks()
+        .cancel_task_chain("chain")
+        .await
+        .expect("cancel queued implementation");
+    sqlx::query(
+        "CREATE TRIGGER reject_continuation BEFORE INSERT ON task_chain_continuation BEGIN SELECT \
+         RAISE(ABORT,'receipt failed'); END",
+    )
+    .execute(database.pool())
+    .await
+    .expect("failure injection");
+    let continuation = ContinueTaskChainRequest {
+        attempt_id: "retry".into(),
+        clarification: None,
+        expected_attempt_id: "implement".into(),
+    };
+
+    // Act
+    let result = database
+        .tasks()
+        .continue_task_chain("chain", &continuation, "reply")
+        .await;
+
+    // Assert
+    assert!(result.is_err());
+    assert_eq!(chain(&database).await.phase, TaskChainPhase::Canceled);
+    let implementation = database
+        .tasks()
+        .load_task("chain:chain:implementer")
+        .await
+        .expect("task")
+        .expect("present");
+    assert_eq!(implementation.attempts.len(), 1);
 }
 
 async fn response(database: &Database, attempt_id: &str, text: &str, settled: bool) {
@@ -827,6 +1001,7 @@ async fn revised_plan(database: &Database) -> ContinueTaskChainRequest {
     let revision = ContinueTaskChainRequest {
         attempt_id: "revision".into(),
         clarification: Some("Use option one".into()),
+        expected_attempt_id: "plan".into(),
     };
     database
         .tasks()

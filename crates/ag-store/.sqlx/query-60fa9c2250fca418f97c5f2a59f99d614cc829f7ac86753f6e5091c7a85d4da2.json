@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT r.expected_task_attempt_id FROM task_attempt a LEFT JOIN task_chain_continuation r ON r.task_attempt_id = a.id WHERE a.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "expected_task_attempt_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain_continuation",
+            "name": "expected_task_attempt_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "60fa9c2250fca418f97c5f2a59f99d614cc829f7ac86753f6e5091c7a85d4da2"
+}

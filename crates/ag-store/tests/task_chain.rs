@@ -79,6 +79,7 @@ async fn reopening_never_replays_an_interrupted_implementation() {
             &ContinueTaskChainRequest {
                 attempt_id: "explicit-retry".into(),
                 clarification: Some("Retry after inspection".into()),
+                expected_attempt_id: "implement".into(),
             },
             "reply",
         )

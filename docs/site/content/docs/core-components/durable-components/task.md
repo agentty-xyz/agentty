@@ -112,6 +112,12 @@ reopening a workflow never replays implementation.
 adapter admits each action atomically; hosts dispatch newly admitted requests through
 the session's serialized worker.
 
+Continuations include `expected_attempt_id`, captured from the workflow snapshot when
+guidance is authored. Admission rejects stale guidance if another action has advanced
+the workflow. The continuation receipt retains that source identity, so exact repeats
+remain safe after later progress; changing the source under an existing delivery ID or
+reusing a launch or acceptance ID as a continuation is rejected.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

@@ -30,6 +30,7 @@ fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     let continuation = chain.continuation_request(&ContinueTaskChainRequest {
         attempt_id: "second".into(),
         clarification: Some("  Answer.\n".into()),
+        expected_attempt_id: "first".into(),
     });
 
     // Assert
