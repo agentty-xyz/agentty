@@ -1545,22 +1545,26 @@ async fn session_list_jk_navigation() -> E2eResult {
             |scenario| {
                 // Act
                 scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .wait_for_text("alpha", 5000)
+                    // Seeded labels make these text waits sufficient for
+                    // readiness in both the PTY proof and VHS replay.
+                    .wait_for_text("alpha", 30000)
                     .wait_for_text("beta", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("two_sessions", "Two sessions in list")
                     // Navigate down with j, open the selection, and capture.
                     .press_key("j")
                     .wait_for_stable_frame(300, 3000)
-                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_j", "Session opened after pressing j")
-                    .compose(&common::return_to_session_list())
+                    .press_key("q")
+                    .wait_for_text("new session", 5000)
                     // Navigate back up with k, open the selection, and capture.
                     .press_key("k")
                     .wait_for_stable_frame(300, 3000)
-                    .compose(&common::open_selected_session_view())
+                    .press_key("Enter")
+                    .wait_for_text("q: back", 5000)
                     .viewing_pause_ms(2000)
                     .capture_labeled("opened_after_k", "Session opened after pressing k")
             },

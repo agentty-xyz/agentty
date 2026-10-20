@@ -1,7 +1,6 @@
 //! Host temperature scenarios.
 
 use std::os::unix::fs::PermissionsExt;
-use std::time::Duration;
 
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
@@ -75,18 +74,12 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
                         .capture_labeled("temperature", "Host CPU temperature awaiting a sample")
                         .write_text("Measure session resources")
                         .press_key("Enter")
-                        .step(testty::step::Step::eventually(
-                            Duration::from_secs(15),
-                            Duration::from_millis(50),
-                            |frame| {
-                                assertion::match_text_in_region(
-                                    frame,
-                                    "Processes: 2  CPU: 15.0%  Memory: 3.0 MiB  Host CPU temp: 64.5°C",
-                                    &Region::full(frame.cols(), frame.rows()),
-                                )
-                            },
-                        ))
+                        .wait_for_text(
+                            "Processes: 2  CPU: 15.0%  Memory: 3.0 MiB  Host CPU temp: 64.5°C",
+                            15000,
+                        )
                         .wait_for_stable_frame(300, 5000)
+                        .viewing_pause_ms(1500)
                         .capture_labeled("resources", "Tracked agent and child process usage")
                 },
                 |frame, report| Box::pin(async move {

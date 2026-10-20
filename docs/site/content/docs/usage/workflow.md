@@ -32,23 +32,24 @@ Session chat titles and their `[size]` prefixes keep the bold, in-progress highl
 every status.
 
 Agentty restores your last list tab on startup. Session chat shows `[size]` before the
-title, with green added-line and red removed-line totals on its right. A linked review
-request appears below the title. The composer’s bottom border shows the active-work
-timer alongside how long ago the session started, such as
-`Timer: 2m 0s · Started 4m ago`, and keeps them visible when you switch focus to the
-chat. In narrow terminals, the footer omits the session age to keep the timer visible.
-The composer shows `agent/model [reasoning]`, response style, speed when supported, and
-permissions. Its border separates the input from the transcript without an extra
-horizontal rule. A fixed blank row above the composer stays clear while scrolling. While
-viewing an active session, the inactive composer collapses to its borders, hiding the
-empty input row. Press `Enter` to activate a reply when available. On every page, the
-help row sits directly above the bottom status bar without a blank row between them.
-Archived sessions hide the composer and keep the frozen active-work timer and session
-age above the navigation and continuation controls. The session returns to transcript
-view if it is archived while you are typing; unsent drafts, partial answers, and their
-attached images are discarded. The footer shows the active directory, branch, and
-ahead/behind counts. Up to eight session agent turns can execute at once; additional
-turns wait for capacity while their sessions remain responsive.
+title, immediately followed by green added-line and red removed-line totals. A linked
+review request appears on the right of the same row when it fits, or below the title in
+narrow terminals. The composer’s bottom border shows the active-work timer alongside how
+long ago the session started, such as `Timer: 2m 0s · Started 4m ago`, and keeps them
+visible when you switch focus to the chat. In narrow terminals, the footer omits the
+session age to keep the timer visible. The composer shows `agent/model [reasoning]`,
+response style, speed when supported, and permissions. Its border separates the input
+from the transcript without an extra horizontal rule. A fixed blank row above the
+composer stays clear while scrolling. While viewing an active session, the inactive
+composer collapses to its borders, hiding the empty input row. Press `Enter` to activate
+a reply when available. On every page, the help row sits directly above the bottom
+status bar without a blank row between them. Archived sessions hide the composer and
+keep the frozen active-work timer and session age above the navigation and continuation
+controls. The session returns to transcript view if it is archived while you are typing;
+unsent drafts, partial answers, and their attached images are discarded. The footer
+shows the active directory, branch, and ahead/behind counts. Up to eight session agent
+turns can execute at once; additional turns wait for capacity while their sessions
+remain responsive.
 
 ### Projects and Discovery
 

@@ -832,9 +832,11 @@ fn diff_line_comments_scenario(scenario: Scenario) -> Scenario {
     const ENTER_KEY: &str = "Ctrl+m";
 
     // Act
+    // Wait on this fixture's labels so VHS advances when each view is ready.
     let scenario = scenario
-        .compose(&common::wait_for_agentty_startup())
-        .compose(&common::open_selected_session_view())
+        .wait_for_text("Review-ready session shortcuts", 30000)
+        .press_key("Enter")
+        .wait_for_text("q: back", 5000)
         .press_key("d")
         .wait_for_text("j/k: select file", 5000)
         .wait_for_text("main.rs", 5000)

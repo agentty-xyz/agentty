@@ -101,8 +101,9 @@ fn session_age_text(age_seconds: i64) -> String {
     format!("{minute_count}m")
 }
 
-/// Formats the size-prefixed title with right-aligned, color-coded change
-/// totals, followed by any merge conflict and linked review-request URL.
+/// Formats the size-prefixed title with adjacent color-coded change totals
+/// and a right-aligned review URL, moving the URL below when space is limited.
+/// Any merge conflict follows the title row.
 /// The title keeps the in-progress highlight in every session status.
 pub fn session_header_lines(
     session: &Session,
@@ -135,10 +136,26 @@ pub fn session_header_lines(
         title_width.saturating_sub(totals_width + 1),
     );
     let used_width: usize = title_spans.iter().map(Span::width).sum();
-    title_spans.push(Span::raw(
-        " ".repeat(title_width.saturating_sub(used_width + totals_width)),
-    ));
+    if used_width > 0 {
+        title_spans.push(Span::raw(" "));
+    }
     title_spans.extend(text_util::truncate_spans_with_ellipsis(totals, title_width));
+
+    let review_url = session
+        .review_request
+        .as_ref()
+        .map(|request| request.summary.web_url.trim())
+        .filter(|url| !url.is_empty());
+    let used_width: usize = title_spans.iter().map(Span::width).sum();
+    let inline_review_url =
+        review_url.filter(|url| used_width + 1 + Span::raw(*url).width() <= title_width);
+    let review_style = Style::default().fg(style::palette::text_muted());
+    if let Some(url) = inline_review_url {
+        title_spans.push(Span::raw(
+            " ".repeat(title_width - used_width - Span::raw(url).width()),
+        ));
+        title_spans.push(Span::styled(url.to_string(), review_style));
+    }
 
     let mut lines = Vec::with_capacity(3);
     lines.push(Line::from(title_spans));
@@ -152,15 +169,10 @@ pub fn session_header_lines(
         )));
     }
 
-    if let Some(url) = session
-        .review_request
-        .as_ref()
-        .map(|request| request.summary.web_url.trim())
-        .filter(|url| !url.is_empty())
-    {
+    if let Some(url) = review_url.filter(|_| inline_review_url.is_none()) {
         lines.push(Line::styled(
             text_util::truncate_with_ellipsis(url, title_width),
-            Style::default().fg(style::palette::text_muted()),
+            review_style,
         ));
     }
 

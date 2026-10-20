@@ -331,7 +331,10 @@ fn compile_tape(
     }
 
     // Hidden teardown.
+    // VHS saves screenshots on the next recorded frame. Let the final capture
+    // finish before Hide stops frame recording.
     let _ = writeln!(tape);
+    let _ = writeln!(tape, "Sleep 100ms");
     let _ = writeln!(tape, "Hide");
     let _ = writeln!(tape, "Type \"q\"");
     let _ = writeln!(tape, "Sleep 1s");
