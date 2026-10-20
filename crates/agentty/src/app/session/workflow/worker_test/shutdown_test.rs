@@ -54,7 +54,7 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
         Arc::default(),
     );
     let task = worker.task();
-    app.services.track_session_worker(task.clone());
+    app.services.track_session_worker("sess1", task.clone());
     assert!(
         worker
             .submit(ScheduledSessionCommand::immediate(command))

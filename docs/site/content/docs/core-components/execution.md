@@ -60,6 +60,10 @@ serial worker, supply task-only continuation, and clean up each owned context. O
 chat retains its existing runtime identity. This boundary alone does not enable
 role-aware task submission or apply role permissions.
 
+Session deletion retains validated task resource identities before database cascades
+remove ownership records. Cancellation and deletion wait for the owning serial worker
+and utility cleanup before reclaiming task-native history outside the worktree.
+
 Caller drop, parent cancellation, or shutdown stops owned execution. Nested scopes
 retain parent cancellation. Cleanup precedes terminal bookkeeping and resource deletion;
 durable admission closures reject late session work. Shutdown has one shared five-second

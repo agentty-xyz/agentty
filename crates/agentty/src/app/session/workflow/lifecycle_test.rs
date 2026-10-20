@@ -38,3 +38,6 @@ mod synchronization;
 
 #[path = "lifecycle_test/transition_test.rs"]
 mod transition;
+
+#[path = "lifecycle_test/task_cleanup_test.rs"]
+mod task_cleanup;

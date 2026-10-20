@@ -49,7 +49,7 @@ pub struct AppServices {
     run_worker: Arc<RunWorker>,
     session_run_factory: Arc<dyn SessionRunFactory>,
     session_update_versions: SessionUpdateVersionMap,
-    session_worker_tasks: Arc<Mutex<Vec<SessionWorkerTask>>>,
+    session_worker_tasks: Arc<Mutex<Vec<(String, SessionWorkerTask)>>>,
     telemetry_task_handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
@@ -222,8 +222,22 @@ impl AppServices {
         }));
     }
 
-    /// Waits for a deleted session's utility cleanup before removing resources.
+    /// Stops the owning serial worker and utilities before removing resources.
     pub(crate) async fn finish_session_agent_runs(&self, session_id: &str) {
+        let tasks: Vec<_> = self
+            .session_worker_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .filter(|(owner, _)| owner == session_id)
+            .map(|(_, task)| task.clone())
+            .collect();
+        for task in &tasks {
+            task.request_shutdown();
+        }
+        for task in tasks {
+            task.shutdown().await;
+        }
         self.run_worker.cancel_session_and_wait(session_id).await;
     }
 
@@ -312,13 +326,13 @@ impl AppServices {
     }
 
     /// Retains shutdown ownership even after a session mailbox is removed.
-    pub(crate) fn track_session_worker(&self, task: SessionWorkerTask) {
+    pub(crate) fn track_session_worker(&self, session_id: &str, task: SessionWorkerTask) {
         let mut tasks = self
             .session_worker_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tasks.retain(|task| !task.is_finished());
-        tasks.push(task);
+        tasks.retain(|(_, task)| !task.is_finished());
+        tasks.push((session_id.to_string(), task));
     }
 
     /// Settles worker execution, worktree creation, cleanup, and telemetry
@@ -344,10 +358,10 @@ impl AppServices {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
-        for task in &session_tasks {
+        for (_, task) in &session_tasks {
             task.request_shutdown();
         }
-        for task in session_tasks {
+        for (_, task) in session_tasks {
             if time::timeout_at(deadline, task.clone().shutdown())
                 .await
                 .is_err()
