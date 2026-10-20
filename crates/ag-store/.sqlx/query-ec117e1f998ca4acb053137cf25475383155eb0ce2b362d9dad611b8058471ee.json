@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT task_chain_id, message FROM task_chain_reply WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "task_chain_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain_reply",
+            "name": "task_chain_id"
+          }
+        }
+      },
+      {
+        "name": "message",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain_reply",
+            "name": "message"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "ec117e1f998ca4acb053137cf25475383155eb0ce2b362d9dad611b8058471ee"
+}

@@ -8,7 +8,10 @@ mod admission;
 mod command;
 mod review;
 
-pub(crate) use command::{CommandDelivery, CommandInitiator, SessionCommand, SessionMutation};
+pub(crate) use command::{
+    CommandDelivery, CommandInitiator, SessionCommand, SessionMutation, TaskChainReplyAction,
+    TaskChainReplyCommand,
+};
 pub(crate) use review::ReviewRequestCommand;
 
 #[cfg(test)]

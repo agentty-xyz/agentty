@@ -66,6 +66,46 @@ pub struct ContinueTaskChainRequest {
     pub expected_attempt_id: String,
 }
 
+/// Natural-language user reply addressed to a session's latest workflow.
+///
+/// The host decides what the reply means: plan approval, plan revision, or
+/// guidance for the current role. No words are reserved.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplyToTaskChainRequest {
+    /// User-authored reply, recorded once as a visible session prompt.
+    pub message: String,
+    /// Globally unique delivery identity. Redelivery returns the original
+    /// outcome without recording, deciding, or admitting work again.
+    pub reply_id: String,
+}
+
+/// Workflow action admitted for one natural-language reply.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskChainReplyOutcome {
+    /// The reply clearly approved the plan; the Implementer was admitted.
+    PlanAccepted,
+    /// The reply was delivered to the Planner as plan revision guidance.
+    PlanRevised,
+    /// The reply was delivered to the current role as an answer or retry.
+    Continued,
+}
+
+impl TaskChainReplyOutcome {
+    /// Every outcome, in the order hosts look up delivery receipts.
+    pub const ALL: [Self; 3] = [Self::PlanAccepted, Self::PlanRevised, Self::Continued];
+
+    /// Derives the attempt identity admitted when one reply has this outcome.
+    pub fn attempt_id(self, reply_id: &str) -> String {
+        let action = match self {
+            Self::PlanAccepted => "implement",
+            Self::PlanRevised => "revise",
+            Self::Continued => "continue",
+        };
+
+        format!("reply:{reply_id}:{action}")
+    }
+}
+
 /// Consistent durable workflow snapshot; reading never dispatches work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskChain {

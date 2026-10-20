@@ -243,6 +243,15 @@ before dispatch. Duplicate requests acknowledge their saved attempt; queries and
 reopening never start work. Cancellation targets the current attempt, and retries
 require an explicit new delivery. Failed delivery remains visible in operation state.
 
+Natural-language workflow replies also enter through the gateway. Foreground admission
+returns earlier receipts, rejects busy workflows, and stores the reply with its
+transcript prompt atomically. While a plan awaits acceptance, the gateway transfers the
+caller's response channel to a background task and treats the chain as busy until the
+decided action returns. That task runs the orchestrator decision through the
+session-scoped `RunClient`, then submits the decided acceptance or revision through the
+runtime mailbox for ordinary admission. Every other settled phase continues the current
+role immediately in the foreground.
+
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients
 retain an explicit capture policy across background task spawns, even when captured
