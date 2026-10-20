@@ -671,6 +671,7 @@ async fn corrupted_workflow_snapshots_and_historical_receipts_fail_closed() {
          id = 'implement'",
         "UPDATE task_attempt SET is_visible = 1 WHERE id = 'implement'",
         "DELETE FROM task_attempt WHERE id = 'implement'",
+        "UPDATE session_operation SET status = 'done' WHERE id = 'task-attempt:implement'",
     ];
     for change in changes {
         let database = accepted_database().await;
