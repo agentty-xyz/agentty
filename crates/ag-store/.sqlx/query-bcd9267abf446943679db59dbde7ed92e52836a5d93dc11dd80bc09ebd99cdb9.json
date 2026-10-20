@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.id, c.role, c.agent, c.model, c.input, t.session_id\n               FROM task_agent_context c JOIN task t ON t.id = c.task_id\n               WHERE c.task_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "role",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "agent",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "agent"
+          }
+        }
+      },
+      {
+        "name": "model",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "model"
+          }
+        }
+      },
+      {
+        "name": "input",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_agent_context",
+            "name": "input"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task",
+            "name": "session_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bcd9267abf446943679db59dbde7ed92e52836a5d93dc11dd80bc09ebd99cdb9"
+}

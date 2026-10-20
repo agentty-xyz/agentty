@@ -59,6 +59,11 @@ operations. In-memory SQLite contract tests cover planning without execution, id
 conflicts, rollback, cancellation, and restart settlement. Scripted worker tests cover
 the task API's handoff and completion timing without live providers.
 
+Role-aware task admission also binds immutable role/model selections and task-owned
+conversation identities in the same transaction. Cached SQLite boundary tests cover
+isolation from ordinary task delivery, immutable inputs, and rollback. A public on-disk
+contract test verifies identity and delivery checks after reopening.
+
 Use `mockall` mocks at the narrowest useful boundary. Smaller command-runner traits
 isolate subprocess sequencing when a public client is too broad. Runtime rendering can
 use an injected terminal backend. [Module Map](@/docs/architecture/module-map.md)

@@ -7,6 +7,84 @@ use super::support::insert_session_fixture;
 use crate::connection::Database;
 
 #[tokio::test]
+async fn task_context_migration_preserves_unassigned_task_history() {
+    // Arrange
+    let database = Database::open_in_memory().await.expect("database");
+    sqlx::query("DROP TABLE task_agent_context")
+        .execute(database.pool())
+        .await
+        .expect("previous schema");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    insert_session_fixture(&database, "legacy-context", "main", "Review", project).await;
+    let request = ag_session::SubmitTaskRequest {
+        attempt_id: "legacy-attempt".to_string(),
+        message: "ordinary task input".to_string(),
+        objective: "existing outcome".to_string(),
+        task_id: "legacy-task".to_string(),
+        visibility: ag_session::DurableMessageVisibility::Visible,
+    };
+    // Insert the pre-context records directly: current admission also reads
+    // the context table, which does not exist in the previous schema.
+    sqlx::query("INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, 1)")
+        .bind(&request.task_id)
+        .bind("legacy-context")
+        .bind(&request.objective)
+        .execute(database.pool())
+        .await
+        .expect("legacy task");
+    database
+        .operations()
+        .insert_session_operation(&request.operation_id(), "legacy-context", "reply")
+        .await
+        .expect("operation");
+    sqlx::query(
+        "INSERT INTO task_attempt (id, task_id, session_operation_id, message, is_visible) VALUES \
+         (?, ?, ?, ?, 1)",
+    )
+    .bind(&request.attempt_id)
+    .bind(&request.task_id)
+    .bind(request.operation_id())
+    .bind(&request.message)
+    .execute(database.pool())
+    .await
+    .expect("legacy attempt");
+    let before = database
+        .tasks()
+        .load_task(&request.task_id)
+        .await
+        .expect("history");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 93).await;
+    let after = database
+        .tasks()
+        .load_task(&request.task_id)
+        .await
+        .expect("history");
+    let duplicate = database
+        .tasks()
+        .contains_attempt("legacy-context", &request)
+        .await
+        .expect("legacy delivery");
+
+    // Assert
+    assert_eq!(after, before);
+    assert!(duplicate);
+    assert_eq!(
+        database
+            .tasks()
+            .load_agent_context(&request.task_id)
+            .await
+            .expect("no assignment"),
+        None
+    );
+}
+
+#[tokio::test]
 async fn task_migration_preserves_existing_sessions_and_operation_retry_semantics() {
     // Arrange
     let database = Database::open_in_memory().await.expect("database");

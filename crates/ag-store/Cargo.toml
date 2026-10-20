@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 description.workspace = true
 repository.workspace = true
-include = ["/.sqlx/**", "/migrations/**", "/src/**"]
+include = ["/.sqlx/**", "/migrations/**", "/sqlx.toml", "/src/**"]
 
 [dependencies]
 ag-contracts.workspace = true
@@ -14,7 +14,8 @@ ag-session.workspace = true
 ag-worker.workspace = true
 async-trait.workspace = true
 mockall = { workspace = true, optional = true }
-sqlx.workspace = true
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["sqlx-toml"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

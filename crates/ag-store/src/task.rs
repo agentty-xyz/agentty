@@ -3,18 +3,43 @@
 use std::sync::Arc;
 
 use ag_session::{
-    CreateTaskRequest, DurableMessageVisibility, SessionId, SubmitTaskRequest, Task, TaskAttempt,
-    TaskAttemptStatus,
+    CreateTaskRequest, DurableMessageVisibility, SessionId, SubmitAgentTaskRequest,
+    SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
+use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::{DbError, TimestampSource};
 
 /// Persistence boundary for desired outcomes and immutable attempt identities.
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
+    /// Atomically assigns an isolated context and admits its first or next
+    /// attempt. Legacy attempts cannot acquire an assignment. Repeated
+    /// deliveries retain the original assignment, context identity, and
+    /// captured model selection.
+    async fn claim_agent_attempt(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError>;
+
+    /// Checks a complete role-aware delivery before live session eligibility.
+    async fn contains_agent_attempt(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+    ) -> Result<bool, DbError>;
+
+    /// Loads task-owned identity and immutable inputs without session replay.
+    async fn load_agent_context(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskAgentContextRow>, DbError>;
+
     /// Creates an outcome with zero attempts in any persisted session.
     /// Identical requests are idempotent; session and objective are immutable.
     async fn create_task(
@@ -79,6 +104,7 @@ impl SqliteTaskRepository {
         connection: &mut SqliteConnection,
         session_id: &str,
         request: &SubmitTaskRequest,
+        agent_request: Option<&SubmitAgentTaskRequest>,
     ) -> Result<bool, DbError> {
         let row = sqlx::query!(
             r#"SELECT t.id AS "task_id!", t.session_id, t.objective,
@@ -91,10 +117,17 @@ impl SqliteTaskRepository {
         let Some(row) = row else {
             return Ok(false);
         };
+        let same_message = if let Some(agent_request) = agent_request {
+            let input: ag_session::TaskAgentInput = serde_json::from_str(&row.message)
+                .map_err(|_| TaskAgentStore::invalid("Invalid task attempt input"))?;
+            input == agent_request.input
+        } else {
+            row.message == request.message
+        };
         if row.task_id != request.task_id
             || row.session_id != session_id
             || row.objective != request.objective
-            || row.message != request.message
+            || !same_message
             || row.is_visible != (request.visibility == DurableMessageVisibility::Visible)
         {
             return Err(Self::invalid(
@@ -156,10 +189,142 @@ impl SqliteTaskRepository {
             })
             .collect()
     }
+
+    /// Takes the writer lock before checking identity, binding, and readiness.
+    async fn claim_attempt_inner(
+        &self,
+        session_id: &str,
+        request: &SubmitTaskRequest,
+        operation_kind: &str,
+        agent_request: Option<&SubmitAgentTaskRequest>,
+    ) -> Result<bool, DbError> {
+        if [
+            &request.task_id,
+            &request.attempt_id,
+            &request.objective,
+            &request.message,
+        ]
+        .iter()
+        .any(|value| value.trim().is_empty())
+        {
+            return Err(Self::invalid(
+                "Task, attempt, objective, and message must be nonempty",
+            ));
+        }
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query!(
+            "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
+             CONFLICT(id) DO NOTHING",
+            request.task_id,
+            session_id,
+            request.objective,
+            now
+        )
+        .execute(&mut *transaction)
+        .await?;
+        if let Some(agent_request) = agent_request {
+            TaskAgentStore::bind(&mut transaction, session_id, agent_request).await?;
+        } else {
+            TaskAgentStore::require_ordinary(&mut transaction, &request.task_id).await?;
+        }
+        if Self::matching_attempt(&mut transaction, session_id, request, agent_request).await? {
+            return Ok(false);
+        }
+        let task = sqlx::query!(
+            "SELECT session_id, objective, completed_at FROM task WHERE id = ?",
+            request.task_id
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        if task.session_id != session_id || task.objective != request.objective {
+            return Err(Self::invalid("Task session and objective are immutable"));
+        }
+        if task.completed_at.is_some() {
+            return Err(Self::invalid("Task is already complete"));
+        }
+        let active = sqlx::query!(
+            r#"SELECT EXISTS(SELECT 1 FROM task_attempt a
+               JOIN session_operation o ON o.id = a.session_operation_id
+               WHERE a.task_id = ? AND o.status IN ('queued', 'running')) AS "active!: bool""#,
+            request.task_id
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        if active.active {
+            return Err(Self::invalid("Task already has an unfinished attempt"));
+        }
+        let operation_id = request.operation_id();
+        sqlx::query!(
+            "INSERT INTO session_operation (id, session_id, kind, status, queued_at) VALUES (?, \
+             ?, ?, 'queued', ?)",
+            operation_id,
+            session_id,
+            operation_kind,
+            now
+        )
+        .execute(&mut *transaction)
+        .await?;
+        let is_visible = request.visibility == DurableMessageVisibility::Visible;
+        sqlx::query!(
+            "INSERT INTO task_attempt (id, task_id, session_operation_id, message, is_visible) \
+             VALUES (?, ?, ?, ?, ?)",
+            request.attempt_id,
+            request.task_id,
+            operation_id,
+            request.message,
+            is_visible
+        )
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+
+        Ok(true)
+    }
 }
 
 #[async_trait]
 impl TaskRepository for SqliteTaskRepository {
+    async fn claim_agent_attempt(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+        operation_kind: &str,
+    ) -> Result<bool, DbError> {
+        let attempt = TaskAgentStore::attempt(request)?;
+        self.claim_attempt_inner(session_id, &attempt, operation_kind, Some(request))
+            .await
+    }
+
+    async fn contains_agent_attempt(
+        &self,
+        session_id: &str,
+        request: &SubmitAgentTaskRequest,
+    ) -> Result<bool, DbError> {
+        let attempt = TaskAgentStore::attempt(request)?;
+        let mut transaction = self.pool.begin().await?;
+        let context = TaskAgentStore::load(&mut transaction, &request.task_id).await?;
+        if let Some(context) = &context {
+            TaskAgentStore::matches(context, session_id, request)?;
+        }
+        let found =
+            Self::matching_attempt(&mut transaction, session_id, &attempt, Some(request)).await?;
+        if found && context.is_none() {
+            return Err(TaskAgentStore::invalid(
+                "Task already uses the ordinary session conversation",
+            ));
+        }
+
+        Ok(found)
+    }
+
+    async fn load_agent_context(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskAgentContextRow>, DbError> {
+        TaskAgentStore::load(&mut *self.pool.acquire().await?, task_id).await
+    }
+
     async fn create_task(
         &self,
         session_id: &str,
@@ -225,84 +390,8 @@ impl TaskRepository for SqliteTaskRepository {
         request: &SubmitTaskRequest,
         operation_kind: &str,
     ) -> Result<bool, DbError> {
-        if [
-            &request.task_id,
-            &request.attempt_id,
-            &request.objective,
-            &request.message,
-        ]
-        .iter()
-        .any(|value| value.trim().is_empty())
-        {
-            return Err(Self::invalid(
-                "Task, attempt, objective, and message must be nonempty",
-            ));
-        }
-        let now = self.timestamp_source.now_timestamp_seconds();
-        let mut transaction = self.pool.begin().await?;
-        // Take the writer lock before checking identity and readiness.
-        sqlx::query!(
-            "INSERT INTO task (id, session_id, objective, created_at) VALUES (?, ?, ?, ?) ON \
-             CONFLICT(id) DO NOTHING",
-            request.task_id,
-            session_id,
-            request.objective,
-            now
-        )
-        .execute(&mut *transaction)
-        .await?;
-        if Self::matching_attempt(&mut transaction, session_id, request).await? {
-            return Ok(false);
-        }
-        let task = sqlx::query!(
-            "SELECT session_id, objective, completed_at FROM task WHERE id = ?",
-            request.task_id
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        if task.session_id != session_id || task.objective != request.objective {
-            return Err(Self::invalid("Task session and objective are immutable"));
-        }
-        if task.completed_at.is_some() {
-            return Err(Self::invalid("Task is already complete"));
-        }
-        let active = sqlx::query!(
-            r#"SELECT EXISTS(SELECT 1 FROM task_attempt a
-               JOIN session_operation o ON o.id = a.session_operation_id
-               WHERE a.task_id = ? AND o.status IN ('queued', 'running')) AS "active!: bool""#,
-            request.task_id
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        if active.active {
-            return Err(Self::invalid("Task already has an unfinished attempt"));
-        }
-        let operation_id = request.operation_id();
-        sqlx::query!(
-            "INSERT INTO session_operation (id, session_id, kind, status, queued_at) VALUES (?, \
-             ?, ?, 'queued', ?)",
-            operation_id,
-            session_id,
-            operation_kind,
-            now
-        )
-        .execute(&mut *transaction)
-        .await?;
-        let is_visible = request.visibility == DurableMessageVisibility::Visible;
-        sqlx::query!(
-            "INSERT INTO task_attempt (id, task_id, session_operation_id, message, is_visible) \
-             VALUES (?, ?, ?, ?, ?)",
-            request.attempt_id,
-            request.task_id,
-            operation_id,
-            request.message,
-            is_visible
-        )
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
-
-        Ok(true)
+        self.claim_attempt_inner(session_id, request, operation_kind, None)
+            .await
     }
 
     async fn contains_attempt(
@@ -310,7 +399,10 @@ impl TaskRepository for SqliteTaskRepository {
         session_id: &str,
         request: &SubmitTaskRequest,
     ) -> Result<bool, DbError> {
-        Self::matching_attempt(&mut *self.pool.acquire().await?, session_id, request).await
+        let mut transaction = self.pool.begin().await?;
+        TaskAgentStore::require_ordinary(&mut transaction, &request.task_id).await?;
+
+        Self::matching_attempt(&mut transaction, session_id, request, None).await
     }
 
     async fn load_task(&self, task_id: &str) -> Result<Option<Task>, DbError> {
