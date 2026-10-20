@@ -106,20 +106,34 @@ fn session_with_review_request(url: &str) -> Session {
 }
 
 #[test]
-fn test_session_header_lines_shows_review_request_url_below_title() {
+fn test_session_header_lines_right_aligns_review_request_url_after_title_and_totals() {
     // Arrange
-    let session = session_with_review_request("https://github.com/agentty-xyz/agentty/pull/42");
+    let url = "https://github.com/agentty-xyz/agentty/pull/42";
+    let mut session = session_with_review_request(url);
+    session.title = Some("修复 **layout**".to_string());
     let header_width = 180;
 
     // Act
     let header_lines = session_header_lines(&session, header_width, false);
-    let metadata_line = header_lines[1].to_string();
+    let title = &header_lines[0];
 
     // Assert
-    assert_eq!(header_lines.len(), 2);
+    assert_eq!(header_lines.len(), 1);
+    assert_eq!(title.width(), usize::from(header_width));
+    assert!(
+        title
+            .to_string()
+            .starts_with(&format!("[{}] 修复 layout (+0 -0) ", session.size))
+    );
+    assert!(title.to_string().ends_with(url));
     assert_eq!(
-        metadata_line,
-        "https://github.com/agentty-xyz/agentty/pull/42"
+        title
+            .spans
+            .last()
+            .expect("review URL span should be present")
+            .style
+            .fg,
+        Some(style::palette::text_muted())
     );
 }
 
@@ -141,6 +155,35 @@ fn test_session_header_lines_truncates_review_url_and_omits_empty_urls() {
 
         // Assert
         assert_eq!(header.get(1).map(ToString::to_string).as_deref(), expected);
+    }
+}
+
+#[test]
+fn session_header_moves_review_url_below_when_inline_space_runs_out() {
+    // Arrange
+    let url = "https://example.test/pull/42";
+    let mut session = session_with_review_request(&format!(" {url} "));
+    session.title = Some("Short title".to_string());
+    let title = format!("[{}] Short title (+0 -0)", session.size);
+    let exact_width = u16::try_from(title.len() + 1 + url.len())
+        .expect("fixture header should fit within terminal dimensions");
+
+    for (width, expected_lines) in [(exact_width, 2), (exact_width - 1, 3)] {
+        // Act
+        let header = session_header_lines(&session, width, true);
+
+        // Assert
+        assert_eq!(header.len(), expected_lines);
+        assert_eq!(
+            header[1].to_string(),
+            format!("Merge conflict with {}", session.base_branch)
+        );
+        if expected_lines == 2 {
+            assert_eq!(header[0].to_string(), format!("{title} {url}"));
+        } else {
+            assert_eq!(header[0].to_string(), title);
+            assert_eq!(header[2].to_string(), url);
+        }
     }
 }
 
@@ -205,8 +248,10 @@ fn test_session_header_shows_colored_totals_without_composer_fields() {
 
     // Assert
     assert_eq!(header.len(), 1);
-    assert_eq!(title.width(), 160);
-    assert!(title.to_string().ends_with("(+12 -3)"));
+    assert_eq!(
+        title.to_string(),
+        format!("[{}] {} (+12 -3)", session.size, session.display_title())
+    );
     for (text, color) in [
         ("(", style::palette::warning()),
         ("+12", style::palette::success()),
@@ -317,7 +362,6 @@ fn header_preserves_totals_at_constrained_widths() {
         assert!(header[0].width() <= usize::from(width));
         if width >= 7 {
             assert!(header[0].to_string().ends_with("(+0 -0)"));
-            assert_eq!(header[0].width(), usize::from(width));
         }
     }
 }

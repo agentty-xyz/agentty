@@ -143,17 +143,8 @@ printf '%s 1 12.5 2048 S\n2147483640 %s 2.5 1024 S\n2147483639 1 90.0 8192 S\n' 
                     .wait_for_text("Processes: --  CPU: --  Memory: --", 5000)
                     .write_text("Measure session resources")
                     .press_key("Enter")
-                    .step(testty::step::Step::eventually(
-                        Duration::from_secs(15),
-                        Duration::from_millis(50),
-                        |frame| {
-                            assertion::match_text_in_region(
-                                frame,
-                                "Processes: 2  CPU: 15.0%  Memory: 3.0 MiB",
-                                &Region::full(frame.cols(), frame.rows()),
-                            )
-                        },
-                    ))
+                    .wait_for_text("Processes: 2  CPU: 15.0%  Memory: 3.0 MiB", 15000)
+                    .viewing_pause_ms(1500)
                     .capture_labeled("resources", "Tracked agent and child process usage")
             },
             |frame, _report| Box::pin(async move {

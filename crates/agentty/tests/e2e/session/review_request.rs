@@ -1034,13 +1034,13 @@ async fn merged_review_request_cleanup_does_not_block_quit() -> E2eResult {
     Ok(())
 }
 
-/// Verify that linked review requests expose their browser URL in the session
-/// header.
+/// Verify that the title, change totals, and review URL share the header row.
 #[tokio::test]
 async fn review_request_url_appears_in_session_header() -> E2eResult {
     // Arrange, Act, Assert
     FeatureTest::new("review_request_url_header")
         .with_git()
+        .with_terminal_size(120, 24)
         .setup(|env| {
             Box::pin(async move { seed_review_ready_session_with_review_request(env).await })
         })
@@ -1060,12 +1060,18 @@ async fn review_request_url_appears_in_session_header() -> E2eResult {
             },
             |frame, _report| {
                 Box::pin(async move {
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "https://github.com/agentty-xyz/agentty/pull/42",
-                        &full,
-                    );
+                    let title = frame
+                        .find_text("Review-ready session shortcuts (+")
+                        .into_iter()
+                        .next()
+                        .expect("title should be immediately followed by change totals");
+                    let url = frame
+                        .find_text("https://github.com/agentty-xyz/agentty/pull/42")
+                        .into_iter()
+                        .next()
+                        .expect("review URL should be visible");
+                    assert_eq!(title.rect.row, url.rect.row);
+                    assert!(title.rect.col < url.rect.col);
                 })
             },
         )

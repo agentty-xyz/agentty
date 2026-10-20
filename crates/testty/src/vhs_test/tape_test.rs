@@ -229,7 +229,7 @@ fn from_scenario_with_output_path_separates_gif_and_screenshot() {
     assert!(tape.render().contains("Output \"/tmp/feature.gif\""));
     assert!(
         tape.render()
-            .contains("Screenshot \"/tmp/.feature.capture.png\"")
+            .contains("Screenshot \"/tmp/.feature.capture.png\"\n\nSleep 100ms\nHide\n")
     );
     assert_eq!(tape.screenshot_path(), screenshot_path);
 }
