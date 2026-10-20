@@ -38,3 +38,6 @@ mod shutdown;
 
 #[path = "worker_test/task_attempt_test.rs"]
 mod task_attempt;
+
+#[path = "worker_test/task_agent_test.rs"]
+mod task_agent;

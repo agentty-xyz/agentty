@@ -1,5 +1,6 @@
 //! Agentty adapter for the frontend-neutral `ag-session` programmatic API.
 
+use std::collections::HashSet;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -25,6 +26,21 @@ use crate::infra::db::{SessionMessageRow, SessionReviewRequestRow, SessionRow};
 
 #[async_trait]
 impl SessionBackend for SessionRuntimeHandle {
+    async fn submit_agent_task(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::SubmitAgentTaskRequest,
+    ) -> Result<(), ApiSessionError> {
+        SessionRuntimeHandle::submit_agent_task(self, session_id, request).await
+    }
+
+    async fn get_agent_task_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<ag_session::TaskAgentHistory>, ApiSessionError> {
+        SessionRuntimeHandle::get_agent_task_history(self, task_id).await
+    }
+
     async fn create_task(
         &self,
         session_id: &SessionId,
@@ -170,6 +186,36 @@ impl App {
     /// Routes mutations to shared admission and keeps reads on the query path.
     pub(crate) async fn apply_session_runtime_command(&mut self, command: SessionRuntimeCommand) {
         match command {
+            SessionRuntimeCommand::GetAgentTaskHistory {
+                response_tx,
+                task_id,
+            } => {
+                let result = self
+                    .services
+                    .db()
+                    .tasks()
+                    .load_agent_history(&task_id)
+                    .await
+                    .map(|history| {
+                        history.map(|history| ag_session::TaskAgentHistory {
+                            context: history.context.context,
+                            input: history.context.input,
+                            turns: history
+                                .turns
+                                .into_iter()
+                                .map(|turn| ag_session::TaskAgentTurn {
+                                    assistant_message: turn.assistant_message,
+                                    attempt_id: turn.attempt_id,
+                                    input: turn.input,
+                                    input_tokens: turn.input_tokens,
+                                    output_tokens: turn.output_tokens,
+                                })
+                                .collect(),
+                        })
+                    })
+                    .map_err(|error| ApiSessionError::Operation(error.to_string()));
+                let _ = response_tx.send(result);
+            }
             SessionRuntimeCommand::ListTasks {
                 response_tx,
                 session_id,
@@ -455,7 +501,7 @@ impl App {
             )));
         }
 
-        if self
+        let outcome = self
             .sessions
             .reply_to_durable_message(
                 &self.services,
@@ -464,14 +510,92 @@ impl App {
                 request.visibility == DurableMessageVisibility::Visible,
                 TurnPrompt::from_agent_data(request.message),
             )
-            .await
-        {
+            .await;
+        if outcome.is_accepted() {
+            if outcome.is_new() {
+                self.clear_review_output_for_new_turn(session_id);
+            }
             return Ok(());
         }
 
         Err(ApiSessionError::Operation(format!(
             "Session `{session_id}` could not enqueue the durable message"
         )))
+    }
+
+    /// Admits explicit work after checking durable delivery identity.
+    pub(super) async fn submit_api_agent_task(
+        &mut self,
+        session_id: &SessionId,
+        request: ag_session::SubmitAgentTaskRequest,
+    ) -> Result<(), ApiSessionError> {
+        if self
+            .services
+            .db()
+            .tasks()
+            .contains_agent_attempt(session_id, &request)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        {
+            return Ok(());
+        }
+        self.sessions
+            .validate_agent_task_admission(session_id, request.assignment.definition)
+            .map_err(api_error_from_session)?;
+        self.services
+            .db()
+            .tasks()
+            .verify_agent_plan(session_id, &request)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        self.sessions
+            .validate_agent_task_workspace(&self.services, session_id)
+            .map_err(api_error_from_session)?;
+        let operation_id = format!("task-attempt:{}", request.attempt_id);
+        let claimed = self
+            .services
+            .db()
+            .tasks()
+            .claim_agent_attempt(session_id, &request, "agent_task")
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
+        if claimed {
+            if let Err(error) = self.suppress_agent_task_automation(session_id).await {
+                self.services
+                    .db()
+                    .operations()
+                    .mark_session_operation_failed(&operation_id, &error.to_string())
+                    .await
+                    .map_err(|failure| ApiSessionError::Operation(failure.to_string()))?;
+
+                return Err(error);
+            }
+            self.sessions
+                .enqueue_claimed_agent_task(&self.services, session_id, request)
+                .await
+                .map_err(api_error_from_session)?;
+        }
+
+        Ok(())
+    }
+
+    /// Invalidates prior ordinary review work and its durable startup trigger
+    /// before an admitted role attempt can run. Only a new ordinary admission
+    /// or explicit review can release this ownership barrier.
+    pub(in crate::app) async fn suppress_agent_task_automation(
+        &mut self,
+        session_id: &SessionId,
+    ) -> Result<(), ApiSessionError> {
+        self.supersede_review_diff_loads(&HashSet::from([session_id.clone()]));
+        self.deferred_auto_review_session_ids.remove(session_id);
+        self.suppress_review_output(session_id);
+        self.role_review_suppression.insert(session_id.clone());
+        self.services
+            .db()
+            .sessions()
+            .update_session_focused_review(session_id, None, None, None)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))
     }
 
     /// Admits explicit work after checking durable delivery identity.
@@ -503,11 +627,14 @@ impl App {
                 session.status
             )));
         }
-        if self
+        let outcome = self
             .sessions
             .reply_to_task(&self.services, session_id, request)
-            .await
-        {
+            .await;
+        if outcome.is_accepted() {
+            if outcome.is_new() {
+                self.clear_review_output_for_new_turn(session_id);
+            }
             return Ok(());
         }
 
@@ -578,6 +705,7 @@ impl App {
 
             return Err(send_error);
         }
+        self.clear_review_output_for_new_turn(session_id);
         self.clear_diff_comment_progress(session_id);
         self.services.emit_app_event(AppEvent::RefreshSessions);
 

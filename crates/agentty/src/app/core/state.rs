@@ -185,6 +185,9 @@ pub struct App {
     /// Retains automatic focused-review triggers for completed sessions whose
     /// owning project is not currently loaded.
     pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
+    /// Keeps role-owned review suppression until a new ordinary turn or
+    /// explicit review is admitted, regardless of stale reducer events.
+    pub(crate) role_review_suppression: HashSet<SessionId>,
     /// Saves completed file and inline comments per session while Diff mode is
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
@@ -792,6 +795,7 @@ impl App {
         self.sessions
             .start_session(&self.services, session_id, prompt)
             .await?;
+        self.clear_review_output_for_new_turn(session_id);
         self.clear_diff_comment_progress(session_id);
 
         Ok(())
@@ -884,6 +888,7 @@ impl App {
         self.sessions
             .start_staged_session(&self.services, session_id)
             .await?;
+        self.clear_review_output_for_new_turn(session_id);
         self.clear_diff_comment_progress(session_id);
 
         Ok(())
@@ -923,6 +928,7 @@ impl App {
             .reply(&self.services, session_id, prompt)
             .await;
         if enqueued {
+            self.clear_review_output_for_new_turn(session_id);
             self.clear_diff_comment_progress(session_id);
         }
 
@@ -995,6 +1001,12 @@ impl App {
             self.sessions.state_mut(),
             session_id,
         );
+    }
+
+    /// Releases role ownership only for an explicitly admitted ordinary turn.
+    pub(crate) fn clear_review_output_for_new_turn(&mut self, session_id: &str) {
+        self.role_review_suppression.remove(session_id);
+        self.clear_review_output(session_id);
     }
 
     /// Clears cached focused-review state, invalidates pending `/apply`

@@ -178,6 +178,7 @@ impl App {
         self.pending_session_diff_requests
             .retain(|_, request| request.session_id != *session_id);
         self.deferred_auto_review_session_ids.remove(session_id);
+        self.role_review_suppression.remove(session_id);
     }
 
     /// Saves completed diff comments while their session's Diff mode is
@@ -317,7 +318,12 @@ impl App {
     /// Starts one manual focused-review diff load unless that session already
     /// has a current request.
     pub(crate) fn start_manual_review_diff_load(&mut self, session_id: &SessionId) -> bool {
-        self.start_review_diff_load(session_id, true)
+        let started = self.start_review_diff_load(session_id, true);
+        if started {
+            self.role_review_suppression.remove(session_id);
+        }
+
+        started
     }
 
     /// Starts one focused-review freshness check without blocking prompt
@@ -343,6 +349,9 @@ impl App {
         cached_diff_hash: u64,
         suggestions: String,
     ) -> bool {
+        if self.role_review_suppression.contains(session_id) {
+            return false;
+        }
         self.start_apply_review_diff_load_with_mode(session_id, cached_diff_hash, suggestions, true)
     }
 
@@ -377,10 +386,20 @@ impl App {
     /// background.
     pub(super) fn start_auto_review_diff_loads(&mut self, session_ids: &HashSet<SessionId>) {
         for session_id in session_ids {
+            if self.role_review_suppression.contains(session_id) {
+                continue;
+            }
             let Some(session) = self.sessions.session_for_id(session_id) else {
                 continue;
             };
             let current_status = session.status;
+
+            if matches!(
+                self.review_cache.get(session_id),
+                Some(ReviewCacheEntry::Suppressed)
+            ) {
+                continue;
+            }
 
             if current_status == Status::InProgress {
                 self.discard_pending_review_action_diff_loads(session_id);
@@ -391,7 +410,7 @@ impl App {
             if !matches!(current_status, Status::Review | Status::AgentReview)
                 || matches!(
                     self.review_cache.get(session_id),
-                    Some(ReviewCacheEntry::Loading { .. } | ReviewCacheEntry::Suppressed)
+                    Some(ReviewCacheEntry::Loading { .. })
                 )
             {
                 continue;
@@ -407,6 +426,9 @@ impl App {
         &mut self,
         session_id: &SessionId,
     ) -> bool {
+        if self.role_review_suppression.contains(session_id) {
+            return false;
+        }
         if self.pending_session_diff_requests.values().any(|request| {
             request.session_id == *session_id
                 && matches!(&request.purpose, SessionDiffPurpose::Review { .. })
@@ -464,6 +486,9 @@ impl App {
     /// completed turns, then clears their stale focused-review generations.
     pub(super) fn supersede_review_diff_loads(&mut self, session_ids: &HashSet<SessionId>) {
         for session_id in session_ids {
+            if self.role_review_suppression.contains(session_id) {
+                continue;
+            }
             self.discard_pending_review_action_diff_loads(session_id);
             self.clear_review_output(session_id);
             review::restore_session_review_status(self.sessions.state_mut(), session_id);

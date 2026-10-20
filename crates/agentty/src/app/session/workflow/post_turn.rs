@@ -40,6 +40,13 @@ pub(super) struct TurnPersonalityPersistence {
     pub(super) applied_personality_prompt_hash: Option<String>,
 }
 
+/// Completion requirements for ordered effects after a persisted response.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum TurnEffectPolicy {
+    Ordinary,
+    Task,
+}
+
 /// Narrow dependency set used to apply a completed provider turn.
 ///
 /// This context intentionally excludes channel execution, filesystem diff
@@ -489,18 +496,48 @@ async fn apply_successful_turn_result(
         session_id: context.session_id.clone(),
         turn_applied_state,
     });
+    apply_successful_turn_effects(
+        context,
+        turn_metadata,
+        &review_comment_resolutions,
+        target_status,
+        TurnEffectPolicy::Ordinary,
+    )
+    .await?;
+
+    Ok(target_status)
+}
+
+/// Applies the same ordered branch effects after ordinary or task persistence.
+pub(super) async fn apply_successful_turn_effects(
+    context: &PostTurnContext,
+    turn_metadata: TurnMetadata,
+    review_comment_resolutions: &[NewSessionReviewCommentResolution],
+    target_status: Status,
+    policy: TurnEffectPolicy,
+) -> Result<(), SessionError> {
     let (can_auto_push, review_request_commit_message) = run_auto_commit(
         context,
         turn_metadata.session_agent,
         !turn_metadata.review_comment_thread_ids.is_empty(),
-        &review_comment_resolutions,
+        review_comment_resolutions,
     )
     .await?;
+    if !can_auto_push && policy == TurnEffectPolicy::Task {
+        return Err(SessionError::Workflow(
+            "Task automatic commit failed".to_string(),
+        ));
+    }
     if can_auto_push
         && (turn_metadata.review_comment_thread_ids.is_empty() || target_status != Status::Question)
     {
-        start_published_branch_auto_push(context, turn_metadata, review_request_commit_message)
-            .await?;
+        start_published_branch_auto_push(
+            context,
+            turn_metadata,
+            review_request_commit_message,
+            policy,
+        )
+        .await?;
     }
     if target_status.allows_review_actions() && has_review_ready_stacked_children(context).await {
         let _ = context
@@ -510,7 +547,7 @@ async fn apply_successful_turn_result(
             });
     }
 
-    Ok(target_status)
+    Ok(())
 }
 
 /// Builds durable operations for accepted review-comment outcomes.
@@ -822,12 +859,14 @@ async fn start_published_branch_auto_push(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
     review_request_commit_message: Option<String>,
+    policy: TurnEffectPolicy,
 ) -> Result<(), SessionError> {
     let Some(published_upstream_ref) = turn_metadata.published_upstream_ref else {
         return Ok(());
     };
     let finishes_review_comments = !turn_metadata.review_comment_thread_ids.is_empty();
-    if context.has_queued_messages() && !finishes_review_comments {
+    let task_owned = policy == TurnEffectPolicy::Task;
+    if context.has_queued_messages() && !finishes_review_comments && !task_owned {
         return Ok(());
     }
     let branch_operation_guard = tokio::select! {
@@ -838,41 +877,54 @@ async fn start_published_branch_auto_push(
         guard = Arc::clone(&context.branch_operation_lock).lock_owned() => guard,
     };
     if context.has_unfinished_branch_operation().await {
+        if task_owned {
+            return Err(SessionError::Workflow(
+                "Task publication is blocked by another branch operation".to_string(),
+            ));
+        }
         return Ok(());
     }
 
-    let push_task = published_branch::start_published_branch_auto_push(
-        published_branch::PublishedBranchAutoPushStartInput {
-            app_event_tx: context.app_event_tx.clone(),
-            branch_operation_guard,
-            clock: Arc::clone(&context.clock),
-            db: context.db.clone(),
-            folder: context.folder.clone(),
-            git_client: Arc::clone(&context.git_client),
-            run_client: Arc::clone(&context.run_client),
-            published_upstream_ref,
-            review_request_client: Arc::clone(&context.review_request_client),
-            review_request_commit_message,
-            session_agent: turn_metadata.session_agent,
-            session_id: context.session_id.clone(),
-            session_update_versions: context.session_update_versions.clone(),
-            transcript: Arc::clone(&context.transcript),
-        },
-        if finishes_review_comments {
-            context.cancel_token.clone()
-        } else {
-            CancellationToken::new()
-        },
-    );
-    if finishes_review_comments {
+    let input = published_branch::PublishedBranchAutoPushStartInput {
+        app_event_tx: context.app_event_tx.clone(),
+        branch_operation_guard,
+        clock: Arc::clone(&context.clock),
+        db: context.db.clone(),
+        folder: context.folder.clone(),
+        git_client: Arc::clone(&context.git_client),
+        run_client: Arc::clone(&context.run_client),
+        published_upstream_ref,
+        review_request_client: Arc::clone(&context.review_request_client),
+        review_request_commit_message,
+        session_agent: turn_metadata.session_agent,
+        session_id: context.session_id.clone(),
+        session_update_versions: context.session_update_versions.clone(),
+        transcript: Arc::clone(&context.transcript),
+    };
+    let cancellation = if finishes_review_comments || task_owned {
+        context.cancel_token.clone()
+    } else {
+        CancellationToken::new()
+    };
+    let push_task = if task_owned {
+        published_branch::start_task_published_branch_auto_push(input, cancellation)
+    } else {
+        published_branch::start_published_branch_auto_push(input, cancellation)
+    };
+    if finishes_review_comments || task_owned {
         // Keep the worker serialized through forge effects so a queued turn
         // cannot replace the commit being acknowledged on the forge.
-        let _ = push_task.await;
+        let result = push_task.await;
         if context.cancel_token.is_cancelled() {
             return Err(SessionError::StoppedByUser(
                 "[Stopped] Review publishing canceled; unfinished thread updates remain pending."
                     .to_string(),
             ));
+        }
+        if task_owned {
+            result.map_err(|error| {
+                SessionError::Workflow(format!("Task publishing worker failed: {error}"))
+            })??;
         }
     }
 

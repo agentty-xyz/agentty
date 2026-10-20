@@ -57,8 +57,15 @@ remains authoritative when an active host phase supplies a trace link.
 history to a host-allocated task-context UUID. Session ownership, shared capacity, and
 tracing stay attached to the owning session. Hosts must dispatch through that session's
 serial worker, supply task-only continuation, and clean up each owned context. Ordinary
-chat retains its existing runtime identity. This boundary alone does not enable
-role-aware task submission or apply role permissions.
+chat retains its existing runtime identity. Role-aware task admission through
+`SessionService::submit_agent_task` uses this boundary on the owning session worker.
+Tasks require a prepared workspace. A new regular session can start with a Planner
+without an ordinary chat turn; unmaterialized deferred drafts are rejected before model
+execution. Planner requests enforce `ReadOnly` permissions and skip mutating host
+effects. Implementer requests require a verified accepted plan, retain session
+permissions, and finish permitted commit and publication effects before another turn
+starts. Task-owned inputs, responses, and effect diagnostics never enter ordinary chat
+replay.
 
 Session deletion retains validated task resource identities before database cascades
 remove ownership records. Cancellation and deletion wait for the owning serial worker

@@ -152,6 +152,10 @@ impl App {
         request: SessionMutation,
     ) -> Result<(), SessionError> {
         match request {
+            SessionMutation::SubmitAgentTask {
+                request,
+                session_id,
+            } => Box::pin(self.submit_api_agent_task(&session_id, *request)).await,
             SessionMutation::Prompt {
                 session_id,
                 intent,

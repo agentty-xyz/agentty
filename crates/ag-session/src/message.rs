@@ -203,6 +203,7 @@ pub struct SessionTranscript {
     content_hash: u64,
     messages: Vec<SessionMessage>,
     total_content_len: usize,
+    ephemeral: bool,
 }
 
 impl SessionTranscript {
@@ -217,7 +218,23 @@ impl SessionTranscript {
             content_hash,
             messages,
             total_content_len,
+            ephemeral: false,
         }
+    }
+
+    /// Creates an isolated projection for task-owned host effects. Messages
+    /// appended here must never enter the owning session's ordinary history.
+    pub fn ephemeral(messages: Vec<SessionMessage>) -> Self {
+        Self {
+            ephemeral: true,
+            ..Self::new(messages)
+        }
+    }
+
+    /// Whether host append operations may persist into ordinary session
+    /// history.
+    pub fn should_persist(&self) -> bool {
+        !self.ephemeral
     }
 
     /// Returns whether the transcript contains no saved messages.

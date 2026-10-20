@@ -21,6 +21,36 @@ use crate::domain::session::SessionId;
 use crate::test_support::{new_test_app, new_test_app_with_clients, test_app_clients};
 
 #[tokio::test]
+async fn real_task_factory_validates_context_before_composing_runtime() {
+    // Arrange
+    let factory = RealSessionRunFactory::new(RuntimeConfig::default());
+    let mut context = ag_session::TaskAgentContext {
+        assignment: ag_session::TaskAgentAssignment {
+            agent: ag_session::AgentSelection::new(
+                AgentKind::Codex,
+                ag_session::AgentModel::Gpt61Sol,
+            ),
+            definition: ag_session::BuiltinAgentDefinition::Planner,
+        },
+        id: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
+        session_id: "session".into(),
+        task_id: "task".to_string(),
+    };
+
+    // Act / Assert
+    assert!(
+        factory
+            .create_task(&context)
+            .expect("task runtime")
+            .shutdown()
+            .await
+            .is_ok()
+    );
+    context.id = "invalid".to_string();
+    assert!(factory.create_task(&context).is_err());
+}
+
+#[tokio::test]
 async fn session_factory_receives_identity_and_provider_through_app_composition() {
     // Arrange
     let mut factory = MockSessionRunFactory::new();

@@ -24,7 +24,7 @@ use super::merge::{
     ExistingSessionRebaseAssistClient, RebaseAssistFuture, RebaseAssistMode, RebaseCommandInput,
 };
 use super::task::SessionTranscriptMessageAppend;
-use super::{SessionTaskService, isolation, session_folder, turn};
+use super::{SessionTaskService, isolation, session_folder, task_turn, turn};
 use crate::analytics::TurnOutcome;
 use crate::app::branch_publish::{
     BranchPublishTaskContext, BranchPublishTaskSession, review_request_from_publish_result,
@@ -84,6 +84,13 @@ pub(super) struct TurnMetadata {
 /// `StartPrompt`, `StartPromptAppServer`) with a single provider-agnostic
 /// variant. The underlying channel adapter handles transport-specific details.
 pub(super) enum SessionCommand {
+    /// Runs a role-bound task through its independently owned runtime.
+    RunAgentTask {
+        cancellation: Arc<CancellationToken>,
+        operation_id: String,
+        request: Box<ag_session::SubmitAgentTaskRequest>,
+        factory: Arc<dyn crate::app::service::SessionRunFactory>,
+    },
     /// Publishes the session branch and creates or refreshes its forge review
     /// request after earlier work on this worker has completed.
     CreateReviewRequest {
@@ -140,13 +147,28 @@ impl SessionCommand {
         match self {
             Self::CreateReviewRequest { operation_id, .. }
             | Self::Rebase { operation_id, .. }
-            | Self::Run { operation_id, .. } => operation_id,
+            | Self::Run { operation_id, .. }
+            | Self::RunAgentTask { operation_id, .. } => operation_id,
+        }
+    }
+
+    /// Returns the captured selection for a model turn's live accounting.
+    fn turn_agent(&self) -> Option<AgentSelection> {
+        match self {
+            Self::Run {
+                request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
+                turn_metadata,
+                ..
+            } => Some(turn_metadata.session_agent),
+            Self::RunAgentTask { request, .. } => Some(request.assignment.agent),
+            _ => None,
         }
     }
 
     /// Returns the operation kind persisted in the operations table.
     fn kind(&self) -> &'static str {
         match self {
+            Self::RunAgentTask { .. } => "agent_task",
             Self::CreateReviewRequest { .. } => CREATE_REVIEW_REQUEST_OPERATION_KIND,
             Self::Rebase { .. } => REBASE_OPERATION_KIND,
             Self::Run {
@@ -193,7 +215,7 @@ pub(super) struct ScheduledSessionCommand {
 impl ScheduledSessionCommand {
     fn trace(command: &SessionCommand) -> QueuedTrace {
         let name = match command {
-            SessionCommand::Run { .. } => "session.turn",
+            SessionCommand::Run { .. } | SessionCommand::RunAgentTask { .. } => "session.turn",
             SessionCommand::Rebase { .. } => "session.sync",
             SessionCommand::CreateReviewRequest { .. } => "session.publish",
         };
@@ -214,6 +236,9 @@ impl ScheduledSessionCommand {
 
     /// Returns whether this command can make a questioned session runnable.
     fn can_run_while_question(&self) -> bool {
+        if let SessionCommand::RunAgentTask { cancellation, .. } = &self.command {
+            return cancellation.is_cancelled();
+        }
         self.command.review_comment_count() == 0
             && (self.queued_order.is_none() || matches!(self.command, SessionCommand::Run { .. }))
     }
@@ -324,7 +349,7 @@ impl ag_worker::WorkerHost for SessionWorkerHost {
             &work,
             ScheduledSessionWork::Message(_)
                 | ScheduledSessionWork::Command(ScheduledSessionCommand {
-                    command: SessionCommand::Run { .. },
+                    command: SessionCommand::Run { .. } | SessionCommand::RunAgentTask { .. },
                     ..
                 })
         );
@@ -517,7 +542,7 @@ impl SessionWorkerContext {
     /// Queued prompts are created while another turn is still running, so
     /// their auto-push metadata is resolved at drain time from persistence
     /// instead of being captured when the user submits the queued prompt.
-    async fn load_published_upstream_ref(&self) -> Option<String> {
+    pub(super) async fn load_published_upstream_ref(&self) -> Option<String> {
         self.db
             .sessions()
             .load_session_published_upstream_ref(&self.session_id)
@@ -811,6 +836,7 @@ pub(super) struct SessionWorkerRuntime {
 pub(crate) struct SessionWorkerService {
     message_traces: Arc<Mutex<HashMap<(SessionId, u64), QueuedTrace>>>,
     preparation_reservations: HashMap<SessionId, Weak<()>>,
+    task_cancellations: HashMap<String, (SessionId, Weak<CancellationToken>)>,
     workers: HashMap<SessionId, SessionWorkerHandle>,
 }
 
@@ -820,6 +846,7 @@ impl SessionWorkerService {
         Self {
             message_traces: Arc::new(Mutex::new(HashMap::new())),
             preparation_reservations: HashMap::new(),
+            task_cancellations: HashMap::new(),
             workers: HashMap::new(),
         }
     }
@@ -843,7 +870,7 @@ impl SessionWorkerService {
             .remove(&(SessionId::from(session_id), order));
     }
 
-    /// Returns whether a saved first turn still owns queued or running work.
+    /// Returns whether saved preparation or a mutating task owns branch work.
     pub(super) fn has_preparation_reservation(&self, session_id: &str) -> bool {
         self.preparation_reservations
             .get(session_id)
@@ -858,7 +885,8 @@ impl SessionWorkerService {
         session_id: &SessionId,
         command: &mut ScheduledSessionCommand,
     ) {
-        if !command.command.is_preparation_prompt(session_id) {
+        let mutating_task = matches!(&command.command, SessionCommand::RunAgentTask { request, .. } if request.assignment.definition == ag_session::BuiltinAgentDefinition::Implementer);
+        if !command.command.is_preparation_prompt(session_id) && !mutating_task {
             return;
         }
         self.preparation_reservations
@@ -1035,6 +1063,31 @@ impl SessionWorkerService {
             return Ok(false);
         }
 
+        self.enqueue_claimed_command(services, runtime, command)
+            .await?;
+
+        Ok(true)
+    }
+
+    /// Hands an already durable claim to its serial owner exactly once.
+    async fn enqueue_claimed_command(
+        &mut self,
+        services: &AppServices,
+        runtime: SessionWorkerRuntime,
+        command: SessionCommand,
+    ) -> Result<(), SessionError> {
+        let session_id = runtime.session_id.clone();
+        let operation_id = command.operation_id().to_string();
+
+        if let SessionCommand::RunAgentTask { cancellation, .. } = &command {
+            self.task_cancellations
+                .retain(|_, (_, token)| token.strong_count() > 0);
+            self.task_cancellations.insert(
+                operation_id.clone(),
+                (session_id.clone(), Arc::downgrade(cancellation)),
+            );
+        }
+
         let worker = self.ensure_session_worker(services, &runtime);
         let mut scheduled_command = ScheduledSessionCommand::immediate(command);
         self.reserve_preparation_command(&session_id, &mut scheduled_command);
@@ -1046,7 +1099,7 @@ impl SessionWorkerService {
         )
         .await?;
 
-        Ok(true)
+        Ok(())
     }
 
     /// Persists and enqueues a command only when the session already owns a
@@ -1270,6 +1323,7 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Option<Result<(), SessionError>> {
         let operation_id = command.operation_id().to_string();
+        let is_agent_task = matches!(&command, SessionCommand::RunAgentTask { .. });
         ag_telemetry::current_attribute("agentty.operation.id", operation_id.clone());
         ag_telemetry::current_attribute("agentty.purpose", command.kind());
         if let SessionCommand::Run { turn_metadata, .. } = &command {
@@ -1320,21 +1374,13 @@ impl SessionWorkerService {
 
         let review_comment_count = Self::begin_review_comment_resolution(context, &command).await;
 
-        let turn_agent = if let SessionCommand::Run {
-            request_kind: AgentRequestKind::SessionStart | AgentRequestKind::SessionResume,
-            turn_metadata,
-            ..
-        } = &command
-        {
+        let turn_agent = command.turn_agent();
+        if let Some(agent) = turn_agent {
             let _ = context.app_event_tx.send(AppEvent::SessionTurnStarted {
-                agent: turn_metadata.session_agent,
+                agent,
                 session_id: context.session_id.clone(),
             });
-
-            Some(turn_metadata.session_agent)
-        } else {
-            None
-        };
+        }
 
         let result = ag_worker::execute(
             context.db.operations(),
@@ -1352,6 +1398,10 @@ impl SessionWorkerService {
             |error| tracing::warn!(%error, "Worker operation tracking failed"),
         )
         .await;
+
+        if is_agent_task {
+            Self::emit_queue_session_updated(context);
+        }
 
         if review_comment_count > 0 {
             Self::emit_review_comment_resolution_update(context, None);
@@ -1595,6 +1645,21 @@ impl SessionWorkerService {
         command: SessionCommand,
     ) -> Result<(), SessionError> {
         match command {
+            SessionCommand::RunAgentTask {
+                request,
+                factory,
+                cancellation,
+                ..
+            } => {
+                task_turn::run(
+                    context,
+                    Arc::clone(run_client),
+                    &request,
+                    factory.as_ref(),
+                    cancellation.as_ref().clone(),
+                )
+                .await
+            }
             SessionCommand::CreateReviewRequest {
                 branch_publish_session,
                 remote_branch_name,
@@ -1852,6 +1917,134 @@ impl SessionWorkerService {
 }
 
 impl SessionManager {
+    /// Checks live readiness and stack ownership before isolated admission.
+    /// Reading every handle prevents delayed reducer events from hiding an
+    /// active sibling's branch work.
+    pub(in crate::app) fn validate_agent_task_admission(
+        &mut self,
+        session_id: &str,
+        definition: ag_session::BuiltinAgentDefinition,
+    ) -> Result<(), SessionError> {
+        let sessions = self.session_handles().keys().cloned().collect::<Vec<_>>();
+        for session in sessions {
+            self.sync_session_from_handle(&session);
+        }
+        let session = self.session_or_err(session_id)?;
+        let status = session.status;
+        let planner_start =
+            definition == ag_session::BuiltinAgentDefinition::Planner && status == Status::Draft;
+        let needs_workspace = planner_start && session.is_draft_session();
+        let parent = session.parent_session_id.clone();
+        if !matches!(status, Status::Review | Status::AgentReview) && !planner_start {
+            return Err(SessionError::Workflow(format!(
+                "Session cannot accept isolated task in status `{status}`"
+            )));
+        }
+        if needs_workspace
+            && (!self.can_reply_to_session_in_stack(session_id)
+                || parent
+                    .as_ref()
+                    .is_some_and(|id| !self.can_create_stacked_child(id)))
+        {
+            return Err(SessionError::Workflow(
+                "Task workspace preparation requires a review-ready parent and an idle stack"
+                    .to_string(),
+            ));
+        }
+        if definition == ag_session::BuiltinAgentDefinition::Implementer
+            && !self.can_reply_to_session_in_stack(session_id)
+        {
+            return Err(SessionError::Workflow(
+                "Stacked task execution requires no other active stack session".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Enqueues a new role attempt already claimed by an atomic coordinator
+    /// mutation. This method never adopts or repeats a running/settled attempt.
+    pub(in crate::app) async fn enqueue_claimed_agent_task(
+        &mut self,
+        services: &AppServices,
+        session_id: &str,
+        request: ag_session::SubmitAgentTaskRequest,
+    ) -> Result<(), SessionError> {
+        let operation_id = format!("task-attempt:{}", request.attempt_id);
+        let tasks = services.db().tasks();
+        let queued = tasks
+            .load_task(&request.task_id)
+            .await?
+            .is_some_and(|task| {
+                task.attempts.iter().any(|attempt| {
+                    attempt.id == request.attempt_id
+                        && attempt.status == ag_session::TaskAttemptStatus::Queued
+                })
+            });
+        if !queued || !tasks.contains_agent_attempt(session_id, &request).await? {
+            return Err(SessionError::Workflow(
+                "Task attempt is not a matching queued claim".to_string(),
+            ));
+        }
+        let result = async {
+            self.validate_agent_task_admission(session_id, request.assignment.definition)?;
+            tasks.verify_agent_plan(session_id, &request).await?;
+            self.validate_agent_task_workspace(services, session_id)?;
+            self.ensure_session_worktree_ready(services, session_id)
+                .await?;
+            self.clear_session_draft_flag(services, session_id).await?;
+            let runtime = self.session_worker_runtime_or_err(services, session_id)?;
+            let command = SessionCommand::RunAgentTask {
+                cancellation: Arc::new(CancellationToken::new()),
+                operation_id: operation_id.clone(),
+                request: Box::new(request),
+                factory: services.task_run_factory(),
+            };
+            self.worker_service_mut()
+                .enqueue_claimed_command(services, runtime, command)
+                .await
+        }
+        .await;
+        if let Err(error) = &result {
+            services
+                .db()
+                .operations()
+                .mark_session_operation_failed(&operation_id, &error.to_string())
+                .await?;
+        }
+
+        result
+    }
+
+    pub(in crate::app) fn validate_agent_task_workspace(
+        &self,
+        services: &AppServices,
+        session_id: &str,
+    ) -> Result<(), SessionError> {
+        let session = self.session_or_err(session_id)?;
+        if session.is_draft_session() && !services.fs_client().is_dir(session.folder.clone()) {
+            return Err(SessionError::Workflow(
+                "Task execution requires a prepared workspace; create a regular session"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Interrupts only the admitted task attempt owning this operation.
+    pub(in crate::app) fn cancel_agent_task_attempt(&mut self, operation_id: &str) {
+        if let Some((owner, token)) = self
+            .worker_service_mut()
+            .task_cancellations
+            .get(operation_id)
+            .and_then(|(owner, token)| token.upgrade().map(|token| (owner.clone(), token)))
+        {
+            token.cancel();
+            self.worker_service_mut().wake_session_worker(&owner);
+        }
+    }
+
     /// Marks unfinished operations from previous process runs as failed.
     ///
     /// # Errors
@@ -2004,6 +2197,16 @@ impl SessionManager {
 
     /// Drops the in-memory worker sender for a session.
     pub(super) fn clear_session_worker(&mut self, session_id: &str) {
+        let operations = self
+            .worker_service_mut()
+            .task_cancellations
+            .iter()
+            .filter(|(_, (owner, _))| owner.as_str() == session_id)
+            .map(|(operation, _)| operation.clone())
+            .collect::<Vec<_>>();
+        for operation in operations {
+            self.cancel_agent_task_attempt(&operation);
+        }
         self.worker_service_mut().clear_session_worker(session_id);
     }
 

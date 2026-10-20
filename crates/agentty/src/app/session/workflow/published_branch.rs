@@ -75,6 +75,14 @@ pub(super) fn start_published_branch_auto_push(
     start_published_branch_auto_push_inner(input, cancel_token, true)
 }
 
+/// Publishes task work without adopting ordinary review-comment operations.
+pub(super) fn start_task_published_branch_auto_push(
+    input: PublishedBranchAutoPushStartInput,
+    cancel_token: CancellationToken,
+) -> tokio::task::JoinHandle<Result<(), SessionError>> {
+    start_published_branch_auto_push_inner(input, cancel_token, false)
+}
+
 /// Starts a result-bearing push with explicit ownership of pending review
 /// effects. Task callers leave ordinary session review operations untouched.
 fn start_published_branch_auto_push_inner(
@@ -127,7 +135,7 @@ fn start_published_branch_auto_push_inner(
             biased;
             () = cancel_token.cancelled() => {
                 let _ = auto_push_input.app_event_tx.send(AppEvent::PublishedBranchSyncUpdated {
-                    persistent_notice: Some(TranscriptNotice::BranchPushError.format(
+                    persistent_notice: persistent_notice(&auto_push_input.transcript, TranscriptNotice::BranchPushError.format(
                         "Publishing stopped; unfinished review thread updates remain pending.",
                     )),
                     session_id: auto_push_input.session_id.clone(),
@@ -270,7 +278,7 @@ async fn run_published_branch_auto_push_task(
             let _ = input
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
-                    persistent_notice: Some(message),
+                    persistent_notice: persistent_notice(&input.transcript, message),
                     session_id: input.session_id.clone(),
                     sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Succeeded,
@@ -284,7 +292,7 @@ async fn run_published_branch_auto_push_task(
             let _ = input
                 .app_event_tx
                 .send(AppEvent::PublishedBranchSyncUpdated {
-                    persistent_notice: Some(message),
+                    persistent_notice: persistent_notice(&input.transcript, message),
                     session_id: input.session_id.clone(),
                     sync_operation_id: input.sync_operation_id.clone(),
                     sync_status: PublishedBranchSyncStatus::Failed,
@@ -1091,6 +1099,14 @@ fn warn_review_request_metadata_sync(input: &PublishedBranchAutoPushInput, error
         error,
         "failed to sync linked review-request metadata"
     );
+}
+
+fn persistent_notice(transcript: &Mutex<SessionTranscript>, message: String) -> Option<String> {
+    transcript
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .should_persist()
+        .then_some(message)
 }
 
 #[cfg(test)]

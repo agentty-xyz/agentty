@@ -1434,15 +1434,24 @@ impl SessionTaskService {
         persistence: impl Future<Output = Result<(), DbError>>,
         persistence_error_message: &'static str,
     ) {
+        let should_persist;
         match transcript.lock() {
-            Ok(mut transcript) => transcript.append_message(kind, content),
+            Ok(mut transcript) => {
+                should_persist = transcript.should_persist();
+                transcript.append_message(kind, content);
+            }
             Err(error) => {
+                should_persist = error.get_ref().should_persist();
                 warn!(
                     session_id = id,
                     error = %error,
                     "failed to lock session transcript buffer"
                 );
             }
+        }
+
+        if !should_persist {
+            return;
         }
 
         if let Err(error) = persistence.await {

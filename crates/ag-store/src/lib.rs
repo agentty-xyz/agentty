@@ -41,6 +41,8 @@ pub use session_preparation::{
     SessionPreparationRepository, SessionPreparationRow, SessionPreparationState,
 };
 pub use setting::SettingRepository;
+#[cfg(any(test, feature = "test-utils"))]
+pub use task::MockTaskRepository;
 pub use task::TaskRepository;
 pub use task_agent::TaskAgentContextRow;
 pub use task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnRow};

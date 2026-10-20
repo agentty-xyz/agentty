@@ -40,6 +40,10 @@ impl SessionCommand {
                 request: SessionMutation::SubmitTask { request, .. },
                 ..
             } => Some(request.operation_id()),
+            CommandDelivery::Admission {
+                request: SessionMutation::SubmitAgentTask { request, .. },
+                ..
+            } => Some(format!("task-attempt:{}", request.attempt_id)),
             CommandDelivery::Review { request, .. } => Some(request.operation_id.clone()),
             _ => None,
         };
@@ -88,6 +92,11 @@ impl CommandDelivery {
 
 /// Application inputs for workflows that return an admission result.
 pub(crate) enum SessionMutation {
+    /// Admits one role-bound attempt with an isolated conversation.
+    SubmitAgentTask {
+        request: Box<ag_session::SubmitAgentTaskRequest>,
+        session_id: SessionId,
+    },
     /// Submits the terminal's prepared prompt without losing attachment or
     /// staging intent.
     Prompt {
@@ -134,6 +143,7 @@ impl SessionMutation {
     /// Describes the routing target without exposing message or answer content.
     pub(super) fn target(&self) -> (&'static str, Option<&SessionId>) {
         match self {
+            Self::SubmitAgentTask { session_id, .. } => ("submit_agent_task", Some(session_id)),
             Self::Prompt { session_id, .. } => ("prompt", Some(session_id)),
             Self::StartStaged { session_id } => ("start_staged", Some(session_id)),
             Self::SendMessage { session_id, .. } => ("send_message", Some(session_id)),

@@ -408,6 +408,7 @@ impl App {
                     prompt,
                 )
                 .await
+                .is_accepted()
             {
                 return Err(AppError::Workflow(
                     "Could not start the saved prompt".to_string(),

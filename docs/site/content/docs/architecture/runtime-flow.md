@@ -99,11 +99,19 @@ ordering, and wakeups. Hosts supply command policy and ordered effects. The shar
 `ag-scheduler` admission pool limits concurrent session turns across regular and managed
 sessions without changing their mailbox order.
 
-The worker also supports task-context clients with independent runtime identities. They
-retain the owning session for admission and tracing. Hosts must supply the task's own
-continuation and dispatch it through the same serial mailbox; this support does not yet
-expose role-aware task submission. See [Execution](@/docs/core-components/execution.md)
-for context ownership and cleanup.
+Role-aware task commands share that mailbox and the session's Env while using separate
+runtime identities, captured models, and durable response histories. Task continuation
+and clarification contain only that task's input and responses; ordinary session
+questions, personality application state, and provider continuation remain unchanged.
+Planner execution restricts permissions to `ReadOnly` and performs no commit or forge
+effects. Implementer post-processing uses an isolated transcript projection and remains
+ordered through publication. A settled task attempt refreshes its owning session only
+after operation bookkeeping finishes, so consumers observe its final durable status.
+
+Role admission invalidates earlier ordinary review work and its durable recovery
+trigger. Task completion does not start automatic review or auto-address follow-ups;
+explicit review and later ordinary turns retain their existing behavior. See
+[Execution](@/docs/core-components/execution.md) for context ownership and cleanup.
 
 Application shutdown closes every session worker's admission and waits for active
 effects, queued-work cancellation, and runtime cleanup within the shared five-second

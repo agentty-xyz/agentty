@@ -13,14 +13,114 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::worker::TurnMetadata;
 use super::{
-    PostTurnContext, TURN_ERROR_NOTICE_MAX_CHARS, prepare_review_comment_resolutions,
-    run_auto_commit, start_published_branch_auto_push, truncate_turn_error_notice,
-    validate_review_comment_outcomes,
+    PostTurnContext, TURN_ERROR_NOTICE_MAX_CHARS, TurnEffectPolicy,
+    prepare_review_comment_resolutions, run_auto_commit, start_published_branch_auto_push,
+    truncate_turn_error_notice, validate_review_comment_outcomes,
 };
 use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
+use crate::domain::session::QueuedMessage;
 use crate::domain::session_message::SessionTranscript;
+use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::AppRepositories;
+
+#[tokio::test]
+async fn task_publication_awaits_success_and_propagates_blocked_failed_and_panicked_effects() {
+    for scenario in ["success", "push-failure", "join-failure", "blocked"] {
+        // Arrange
+        let db = AppRepositories::in_memory().await.expect("database");
+        let project = db
+            .projects()
+            .upsert_project("/project", None)
+            .await
+            .expect("project");
+        db.sessions()
+            .insert_session(
+                "session-id",
+                "gemini-3.8-flash",
+                "main",
+                "InProgress",
+                project,
+            )
+            .await
+            .expect("session");
+        let mut git = MockGitClient::new();
+        if scenario == "blocked" {
+            db.operations()
+                .insert_session_operation("branch", "session-id", "rebase")
+                .await
+                .expect("queued branch work");
+        } else {
+            git.expect_in_progress_operation()
+                .once()
+                .returning(move |_| {
+                    if scenario == "join-failure" {
+                        std::panic::resume_unwind(Box::new("publication panic"));
+                    }
+                    Box::pin(async move {
+                        if scenario == "push-failure" {
+                            Err(GitError::OutputParse("push preparation failed".to_string()))
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                });
+            if scenario == "success" {
+                git.expect_detect_git_info().once().returning(|_| {
+                    Box::pin(async { Some(crate::app::session::session_branch("session-id")) })
+                });
+                git.expect_push_current_branch_to_remote_branch_with_outcome()
+                    .once()
+                    .returning(|_, _| {
+                        Box::pin(async {
+                            Ok(ag_git::BranchPushOutcome {
+                                updated: false,
+                                upstream_reference: "origin/wt/session-id".to_string(),
+                            })
+                        })
+                    });
+            }
+        }
+        let mut context = review_operation_test_context(db, git);
+        context.transcript = Arc::new(Mutex::new(SessionTranscript::ephemeral(Vec::new())));
+        context
+            .queued_messages
+            .lock()
+            .expect("queue")
+            .push_back(QueuedMessage::new(
+                1,
+                TurnPrompt::from_text("Ordinary queued turn".to_string()),
+            ));
+        let metadata = TurnMetadata {
+            published_upstream_ref: Some("origin/wt/session-id".to_string()),
+            review_comment_thread_ids: Vec::new(),
+            session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
+        };
+
+        // Act
+        let result =
+            start_published_branch_auto_push(&context, metadata, None, TurnEffectPolicy::Task)
+                .await;
+
+        // Assert
+        assert_eq!(
+            result.is_ok(),
+            scenario == "success",
+            "{scenario}: {result:?}"
+        );
+        assert_eq!(
+            context
+                .db
+                .sessions()
+                .load_session_messages("session-id")
+                .await
+                .expect("ordinary history")
+                .len(),
+            0
+        );
+        assert_eq!(context.queued_messages.lock().expect("queue").len(), 1);
+    }
+}
 
 /// Builds the narrow post-turn context used by review-operation tests.
 fn review_operation_test_context(
@@ -421,6 +521,7 @@ async fn test_auto_push_rechecks_queued_rebase_after_waiting_for_branch_lock() {
                     ),
                 },
                 None,
+                TurnEffectPolicy::Ordinary,
             )
             .await
             .expect("queued sync should suppress auto-push");
@@ -533,7 +634,12 @@ async fn stopped_review_does_not_wait_for_publish_lock() {
         review_comment_thread_ids: vec!["thread-42".to_string()],
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),
     };
-    let mut publishing = Box::pin(start_published_branch_auto_push(&context, metadata, None));
+    let mut publishing = Box::pin(start_published_branch_auto_push(
+        &context,
+        metadata,
+        None,
+        TurnEffectPolicy::Ordinary,
+    ));
 
     // Act
     assert!(

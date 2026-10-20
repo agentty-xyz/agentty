@@ -1094,7 +1094,8 @@ impl App {
             event_batch.collect_event(event);
         }
 
-        self.apply_app_event_batch(event_batch).await;
+        // Bound reducer effect state across session creation and event loops.
+        Box::pin(self.apply_app_event_batch(event_batch)).await;
         self.reconcile_terminal_session_input_mode().await;
     }
 
@@ -2296,6 +2297,9 @@ impl App {
         let mut loaded_session_ids = HashSet::new();
 
         for session_id in session_ids {
+            if self.role_review_suppression.contains(session_id) {
+                continue;
+            }
             let loaded_status = self
                 .sessions
                 .session_for_id(session_id)

@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteOwnedBuf, SqlitePoolOptions};
 
 use crate::connection::{Database, MIGRATOR, in_memory_connect_options, open_in_memory_pool};
-use crate::repository::AppRepositories;
+use crate::repository::{AppRepositories, RepositorySet};
 use crate::timestamp::system_timestamp_source;
 
 impl Database {
@@ -30,6 +30,27 @@ impl Database {
 }
 
 impl AppRepositories {
+    /// Replaces only task persistence for deterministic host admission tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_task_repository(&self, task: Arc<dyn crate::TaskRepository>) -> Self {
+        let existing = &self.repositories;
+
+        Self {
+            repositories: Arc::new(RepositorySet {
+                activity: Arc::clone(&existing.activity),
+                operation: Arc::clone(&existing.operation),
+                project: Arc::clone(&existing.project),
+                review: Arc::clone(&existing.review),
+                run: Arc::clone(&existing.run),
+                session: Arc::clone(&existing.session),
+                setting: Arc::clone(&existing.setting),
+                task,
+                usage: Arc::clone(&existing.usage),
+            }),
+        }
+    }
+
     /// Opens an isolated in-memory repository bundle for tests.
     ///
     /// # Errors
