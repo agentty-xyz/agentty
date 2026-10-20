@@ -34,6 +34,7 @@ mod startup;
 mod sync;
 pub(crate) mod tab;
 mod task;
+mod task_chain;
 mod view;
 
 pub use core::{AGENTTY_HARNESS_DIR, AGENTTY_WT_DIR, App, UpdateStatus, agentty_home};

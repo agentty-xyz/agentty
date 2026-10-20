@@ -35,6 +35,14 @@ pub(crate) enum SessionRuntimeCommand {
         response_tx: oneshot::Sender<Result<Option<ag_session::TaskAgentHistory>, SessionError>>,
         task_id: String,
     },
+    GetTaskChain {
+        chain_id: String,
+        response_tx: oneshot::Sender<Result<Option<ag_session::TaskChain>, SessionError>>,
+    },
+    ListTaskChains {
+        response_tx: oneshot::Sender<Result<Vec<ag_session::TaskChain>, SessionError>>,
+        session_id: SessionId,
+    },
     ListTasks {
         response_tx: oneshot::Sender<Result<Vec<ag_session::Task>, SessionError>>,
         session_id: SessionId,
@@ -72,6 +80,19 @@ impl SessionRuntimeHandle {
         .await
     }
 
+    /// Records standalone acceptance through the shared mutation gateway.
+    pub(crate) async fn accept_agent_plan(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::AcceptTaskPlanRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::AcceptAgentPlan {
+            request,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
     /// Loads a task-owned conversation through the foreground query path.
     pub(crate) async fn get_agent_task_history(
         &self,
@@ -80,6 +101,77 @@ impl SessionRuntimeHandle {
         self.request(|response_tx| SessionRuntimeCommand::GetAgentTaskHistory {
             response_tx,
             task_id: task_id.to_string(),
+        })
+        .await
+    }
+
+    /// Starts one static workflow through foreground admission.
+    pub(crate) async fn start_plan_then_implement(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::StartPlanThenImplementRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::StartTaskChain {
+            request,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
+    /// Reads one durable workflow without dispatching work.
+    pub(crate) async fn get_task_chain(
+        &self,
+        chain_id: &str,
+    ) -> Result<Option<ag_session::TaskChain>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::GetTaskChain {
+            chain_id: chain_id.to_string(),
+            response_tx,
+        })
+        .await
+    }
+
+    /// Lists persisted workflows for a session.
+    pub(crate) async fn list_task_chains(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Vec<ag_session::TaskChain>, SessionError> {
+        self.request(|response_tx| SessionRuntimeCommand::ListTaskChains {
+            response_tx,
+            session_id: session_id.clone(),
+        })
+        .await
+    }
+
+    /// Accepts an exact plan and admits implementation through the gateway.
+    pub(crate) async fn accept_task_chain_plan(
+        &self,
+        chain_id: &str,
+        request: ag_session::AcceptTaskChainPlanRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::AcceptTaskChainPlan {
+            chain_id: chain_id.to_string(),
+            request,
+        })
+        .await
+    }
+
+    /// Explicitly revises, clarifies, or retries the current workflow stage.
+    pub(crate) async fn continue_task_chain(
+        &self,
+        chain_id: &str,
+        request: ag_session::ContinueTaskChainRequest,
+    ) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::ContinueTaskChain {
+            chain_id: chain_id.to_string(),
+            request,
+        })
+        .await
+    }
+
+    /// Cancels only the selected workflow's current attempt.
+    pub(crate) async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
+        self.request_admission(SessionMutation::CancelTaskChain {
+            chain_id: chain_id.to_string(),
         })
         .await
     }

@@ -41,3 +41,6 @@ mod task_attempt;
 
 #[path = "worker_test/task_agent_test.rs"]
 mod task_agent;
+
+#[path = "worker_test/task_chain_test.rs"]
+mod task_chain;
