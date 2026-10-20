@@ -169,10 +169,14 @@ async fn model_switch_commits_before_retiring_runtime_and_discards_queue() {
 
     // Act
     let mut switch = Box::pin(app.set_session_model(&session_id, new_agent));
-    tokio::select! {
-        () = started.notified() => {}
-        result = &mut switch => panic!("switch completed before cleanup: {result:?}"),
-    }
+    let early_result = tokio::select! {
+        () = started.notified() => None,
+        result = &mut switch => Some(result),
+    };
+    assert!(
+        early_result.is_none(),
+        "switch completed before cleanup: {early_result:?}"
+    );
 
     // Assert: the switch is durable before pending work is discarded, while
     // the caller still waits for runtime cleanup.

@@ -1434,10 +1434,18 @@ async fn assert_stopped_review_call_retains_operation(block_reply: bool) {
     ));
 
     // Act
-    tokio::select! {
-        result = &mut turn => panic!("turn finished before the blocked forge call: {result:?}"),
-        started = entered_rx => started.expect("forge call entered"),
-    }
+    let early_result = tokio::select! {
+        result = &mut turn => Some(result),
+        started = entered_rx => {
+            started.expect("forge call entered");
+
+            None
+        },
+    };
+    assert!(
+        early_result.is_none(),
+        "turn finished before the blocked forge call: {early_result:?}"
+    );
     assert!(context.branch_operation_lock.try_lock().is_err());
     context.cancel_token.lock().expect("token").cancel();
     let result = tokio::time::timeout(Duration::from_secs(1), &mut turn)

@@ -13,6 +13,7 @@ use super::support::{
     apply_next_prompt_image_paste, apply_next_session_diff, install_mock_clipboard_image_client,
     new_test_app_with_session,
 };
+use crate::app::AppEvent;
 use crate::domain::session::Status;
 use crate::infra::tmux::MockTmuxClient;
 use crate::presentation::app_mode::AppMode;
@@ -166,6 +167,53 @@ fn test_view_session_state_maps_stacked_draft_status() {
 
     // Assert
     assert_eq!(state, ViewSessionState::StackedDraft);
+}
+
+#[tokio::test]
+async fn session_diff_waiter_observes_completion_after_unrelated_event_in_same_batch() {
+    // Arrange
+    let (mut app, _base_dir) = crate::test_support::new_test_app().await;
+    let mut git_client = ag_git::MockGitClient::new();
+    git_client
+        .expect_diff()
+        .returning(|_, _| Box::pin(std::future::pending()));
+    app.services.set_git_client(Arc::new(git_client));
+    let session = SessionFixtureBuilder::new().status(Status::Review).build();
+    let session_id = session.id.clone();
+    app.sessions.push_session(session);
+    let context = ViewContext {
+        scroll_offset: Some(0),
+        session_id: session_id.clone(),
+        session_index: 0,
+    };
+    assert!(show_diff_for_view_session(&mut app, &context));
+    let request_id = *app
+        .pending_session_diff_requests
+        .keys()
+        .next()
+        .expect("pending diff request");
+    let sender = app.services.event_sender();
+    sender
+        .send(AppEvent::SessionProgressUpdated {
+            progress_message: Some("unrelated progress".to_string()),
+            session_id: "unrelated-session".into(),
+        })
+        .expect("queue unrelated event");
+    let diff = "diff --git a/file.txt b/file.txt\n+change\n";
+    sender
+        .send(AppEvent::SessionDiffLoaded {
+            request_id,
+            result: Ok(diff.to_string()),
+            session_id,
+        })
+        .expect("queue diff completion in the same batch");
+
+    // Act
+    apply_next_session_diff(&mut app).await;
+
+    // Assert
+    assert!(app.pending_session_diff_requests.is_empty());
+    assert!(matches!(app.mode, AppMode::Diff { diff: ref loaded, .. } if loaded == diff));
 }
 
 #[tokio::test]

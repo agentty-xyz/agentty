@@ -82,10 +82,11 @@ async fn app_cleanup_waits_for_active_turn_and_cancels_paused_queue_traces() {
 
     // Act
     let mut cleanup = Box::pin(app.services.wait_for_cleanup_tasks(None));
-    tokio::select! {
-        () = &mut cleanup => panic!("cleanup returned before the active turn"),
-        () = tokio::task::yield_now() => {}
-    }
+    let cleaned_up = tokio::select! {
+        () = &mut cleanup => true,
+        () = tokio::task::yield_now() => false,
+    };
+    assert!(!cleaned_up, "cleanup returned before the active turn");
     release.notify_one();
     cleanup.await;
 

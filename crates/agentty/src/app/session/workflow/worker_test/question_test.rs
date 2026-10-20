@@ -163,16 +163,20 @@ async fn test_non_session_turn_keeps_questions_and_status_before_provider_work()
         TurnPrompt::from_text("review this change".to_string()),
     );
     tokio::pin!(turn);
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let early_result = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::select! {
-            () = started.notified() => {}
-            result = &mut turn => panic!("turn ended before provider work: {result:?}"),
+            () = started.notified() => None,
+            result = &mut turn => Some(result),
         }
     })
     .await
     .expect("provider must start");
 
     // Assert
+    assert!(
+        early_result.is_none(),
+        "turn ended before provider work: {early_result:?}"
+    );
     assert_eq!(*context.status.lock().expect("status"), Status::Question);
     let session = db
         .sessions()
