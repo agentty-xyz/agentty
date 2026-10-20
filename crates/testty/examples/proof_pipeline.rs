@@ -12,21 +12,27 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use testty::frame::TerminalFrame;
+use testty::proof::backend::ProofBackend;
 use testty::proof::frame_text::FrameTextBackend;
 use testty::proof::gif::GifBackend;
 use testty::proof::html::HtmlBackend;
 use testty::proof::junit::JunitBackend;
-use testty::proof::report::ProofReport;
+use testty::proof::report::{ProofError, ProofReport};
 use testty::proof::strip::ScreenshotStripBackend;
 
 fn main() -> Result<(), Box<dyn Error>> {
     run(
         &output_dir(std::env::args().skip(1)),
         &mut io::stdout().lock(),
+        ProofReport::save,
     )
 }
 
-fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>> {
+fn run(
+    output_path: &Path,
+    output: &mut impl Write,
+    mut render: impl FnMut(&ProofReport, &dyn ProofBackend, &Path) -> Result<(), ProofError>,
+) -> Result<(), Box<dyn Error>> {
     std::fs::create_dir_all(output_path)?;
 
     // Simulate a three-step user journey through a TUI application.
@@ -79,7 +85,7 @@ fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>
 
     // 1. Frame-text backend (annotated plain text).
     let text_path = output_path.join("proof.txt");
-    report.save(&FrameTextBackend, &text_path)?;
+    render(&report, &FrameTextBackend, &text_path)?;
     writeln!(
         output,
         "Frame-text proof written to: {}",
@@ -89,7 +95,7 @@ fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>
 
     // 2. Screenshot strip backend (vertical PNG).
     let strip_path = output_path.join("proof_strip.png");
-    report.save(&ScreenshotStripBackend, &strip_path)?;
+    render(&report, &ScreenshotStripBackend, &strip_path)?;
     let strip_size = std::fs::metadata(&strip_path).map_or(0, |metadata| metadata.len());
     writeln!(
         output,
@@ -101,7 +107,7 @@ fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>
     // 3. Animated GIF backend.
     let gif_path = output_path.join("proof.gif");
     let gif_backend = GifBackend::default();
-    report.save(&gif_backend, &gif_path)?;
+    render(&report, &gif_backend, &gif_path)?;
     let gif_size = std::fs::metadata(&gif_path).map_or(0, |metadata| metadata.len());
     writeln!(
         output,
@@ -112,7 +118,7 @@ fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>
 
     // 4. Self-contained HTML backend.
     let html_path = output_path.join("proof.html");
-    report.save(&HtmlBackend, &html_path)?;
+    render(&report, &HtmlBackend, &html_path)?;
     let html_size = std::fs::metadata(&html_path).map_or(0, |metadata| metadata.len());
     writeln!(
         output,
@@ -123,7 +129,7 @@ fn run(output_path: &Path, output: &mut impl Write) -> Result<(), Box<dyn Error>
 
     // 5. JUnit-XML backend (CI ingestion).
     let junit_path = output_path.join("proof.xml");
-    report.save(&JunitBackend, &junit_path)?;
+    render(&report, &JunitBackend, &junit_path)?;
     let junit_size = std::fs::metadata(&junit_path).map_or(0, |metadata| metadata.len());
     writeln!(
         output,
