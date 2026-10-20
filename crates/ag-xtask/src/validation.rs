@@ -677,7 +677,7 @@ impl Host for ProcessHost {
             .env("CARGO_TARGET_DIR", target)
             .env("AGENTTY_TEST_PACKAGES", packages.join(" "))
             .env("AGENTTY_TEST_FILTER", filter);
-        if hook.id == "clippy" {
+        if matches!(hook.id.as_str(), "clippy" | "clippy-agentty-e2e") {
             command.env(crate::affected_clippy::PACKAGES_ENV, packages.join(" "));
         } else {
             command.env_remove(crate::affected_clippy::PACKAGES_ENV);

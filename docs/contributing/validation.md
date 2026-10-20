@@ -77,6 +77,13 @@ The coordinator executes `clippy` and unrestricted `test-focused` selections thr
 `AGENTTY_CLIPPY_PACKAGES`, so the hook's full file inventory cannot widen that
 selection. Ordinary Clippy hook invocations continue to select owners and dependents
 from their changed files, with root configuration changes selecting the whole workspace.
+
+`clippy` also lints Agentty's explicit PTY targets when its dependency graph, including
+development dependencies, says Agentty is affected. Shared files and an unspecified
+scope still run those targets. Their feature selection is unchanged. The manual
+`clippy-agentty-e2e` hook runs just those targets for diagnosis; default validation
+includes them through `clippy` without repeating the dependency lookup.
+
 The coordinator holds an OS lock in Cargo's effective target directory, resolved from
 metadata and pinned for each check. Cargo configuration and target-directory environment
 overrides are honored. The check subprocesses clear `SKIP` and `PREK_SKIP` so requested
