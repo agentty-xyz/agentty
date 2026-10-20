@@ -61,6 +61,76 @@ impl Fixture {
         self.run_in_target(arguments, exit_code, "target")
     }
 
+    fn automatic() -> Result<Self, Box<dyn Error>> {
+        let fixture = Self::new()?;
+        let root = fixture.directory.path().canonicalize()?;
+        fs::remove_file(root.join("git"))?;
+        fs::write(root.join(".gitignore"), "target/\ncalls\n")?;
+        let packages = ["core", "app", "other"].map(|name| {
+            serde_json::json!({
+                "id": name, "name": name,
+                "manifest_path": root.join(name).join("Cargo.toml"),
+                "dependencies": if name == "app" { vec![serde_json::json!({"name":"core", "path":"core"})] } else { vec![] },
+            })
+        });
+        fs::write(
+            root.join("metadata.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "target_directory": "target", "workspace_members": ["core", "app", "other"], "packages": packages,
+            }))?,
+        )?;
+        for package in ["core", "app", "other"] {
+            fs::create_dir(root.join(package))?;
+            fs::write(root.join(package).join("source.rs"), "original")?;
+        }
+        fixture.git(&["init", "-q", "-b", "main"])?;
+        fixture.git(&["add", "."])?;
+        fixture.git(&["commit", "-qm", "base"])?;
+        fixture.git(&["switch", "-qc", "change"])?;
+
+        Ok(fixture)
+    }
+
+    fn git(&self, arguments: &[&str]) -> Result<(), Box<dyn Error>> {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(arguments)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .current_dir(self.directory.path())
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        Ok(())
+    }
+
+    fn automatic_command(&self, arguments: &[&str]) -> Result<Command, Box<dyn Error>> {
+        let mut command = self.command(arguments, 0);
+        command
+            .env_remove("AGENTTY_TEST_PACKAGES")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.directory.path().display(),
+                    std::env::var("PATH")?
+                ),
+            );
+
+        Ok(command)
+    }
+
     fn run_in_target(
         &self,
         arguments: &[&str],
@@ -162,6 +232,122 @@ fi
             .map(str::to_string)
             .collect())
     }
+}
+
+#[test]
+fn automatic_plan_includes_every_git_transition_and_executes_the_selected_contracts()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::automatic()?;
+    let root = fixture.directory.path();
+    fs::write(root.join("core/source.rs"), "committed")?;
+    fixture.git(&["add", "core/source.rs"])?;
+    fixture.git(&["commit", "-qm", "core change"])?;
+
+    // Act
+    let owned = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+
+    // Assert
+    assert!(
+        owned.status.success(),
+        "{}",
+        String::from_utf8_lossy(&owned.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&owned.stdout)?;
+    assert_eq!(plan["packages"], serde_json::json!(["app", "core"]));
+    assert_eq!(plan["hooks"], serde_json::json!(["clippy", "test-focused"]));
+    assert!(!root.join("target").exists());
+    assert!(!root.join("calls").exists());
+
+    // Arrange: rename across packages, stage a change then undo it in the
+    // worktree, delete a tracked file, and add an untracked path containing
+    // a newline.
+    fixture.git(&["mv", "core/source.rs", "app/renamed.rs"])?;
+    fs::write(root.join("app/source.rs"), "staged")?;
+    fixture.git(&["add", "app/source.rs"])?;
+    fs::write(root.join("app/source.rs"), "original")?;
+    fs::remove_file(root.join("other/source.rs"))?;
+    fs::write(root.join("core/new file\n.rs"), "untracked")?;
+
+    // Act
+    let complete = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    let executed = fixture.automatic_command(&["--base", "main"])?.output()?;
+
+    // Assert
+    assert!(complete.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&complete.stdout)?;
+    assert_eq!(
+        plan["changed_files"],
+        serde_json::json!([
+            "app/renamed.rs",
+            "app/source.rs",
+            "core/new file\n.rs",
+            "core/source.rs",
+            "other/source.rs"
+        ])
+    );
+    assert_eq!(
+        plan["packages"],
+        serde_json::json!(["app", "core", "other"])
+    );
+    assert!(
+        executed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&executed.stderr)
+    );
+    assert_eq!(fixture.calls()?.len(), 2);
+    assert!(fixture.calls()?[0].contains("|app core other|"));
+
+    Ok(())
+}
+
+#[test]
+fn automatic_plan_expands_shared_changes_and_fails_closed_on_invalid_inputs()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let fixture = Fixture::automatic()?;
+    let root = fixture.directory.path();
+
+    // Act
+    let clean = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    let missing = fixture
+        .automatic_command(&["--base", "$(touch unexpected)", "--plan"])?
+        .output()?;
+    fs::write(root.join("Cargo.lock"), "shared configuration")?;
+    let shared = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+    fs::remove_file(root.join("Cargo.lock"))?;
+    fs::write(root.join("git"), "#!/bin/sh\nprintf '\\377'\n")?;
+    fs::set_permissions(root.join("git"), fs::Permissions::from_mode(0o755))?;
+    let invalid = fixture
+        .automatic_command(&["--base", "main", "--plan"])?
+        .output()?;
+
+    // Assert
+    assert!(!clean.status.success());
+    assert!(!missing.status.success());
+    assert!(!root.join("unexpected").exists());
+    assert!(shared.status.success());
+    let plan: serde_json::Value = serde_json::from_slice(&shared.stdout)?;
+    assert_eq!(
+        plan["packages"],
+        serde_json::json!(["app", "core", "other"])
+    );
+    assert_eq!(
+        plan["reason"],
+        "shared or unowned paths require the whole workspace"
+    );
+    assert!(!invalid.status.success());
+    assert!(!root.join("calls").exists());
+
+    Ok(())
 }
 
 #[test]

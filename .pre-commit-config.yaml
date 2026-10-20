@@ -137,7 +137,7 @@ repos:
         stages: [manual]
       - id: validate
         name: coordinated affected-package validation
-        description: Run cataloged clippy and focused tests with build coordination; requires AGENTTY_TEST_PACKAGES.
+        description: Run cataloged clippy and focused tests for changed packages and dependents, with optional explicit package selection and build coordination.
         entry: cargo run --locked -q -p ag-xtask -- validate
         language: system
         always_run: true

@@ -38,8 +38,28 @@ not necessarily compilation. Use `test-workspace` when impact is uncertain.
 
 ## Coordinated Validation
 
-To expand changed packages through their workspace dependents, use the cataloged
-coordinator:
+For final Rust validation, the coordinator automatically selects changed packages and
+their workspace dependents:
+
+```sh
+prek run validate --all-files --hook-stage manual
+```
+
+Selection includes committed changes since the fork from `origin/main`, staged and
+unstaged changes, deleted and renamed paths, and untracked files. Shared or unowned
+paths conservatively select the whole workspace. A missing base or empty change set
+fails with an error; select packages explicitly for a clean checkout. The command prints
+the selected packages, hooks, paths, and reason before running checks.
+
+Preview that plan without running checks or writing reuse stamps:
+
+```sh
+cargo run --locked -q -p ag-xtask -- validate --plan
+```
+
+Use `--base` with an existing ref when comparing against a different branch. Explicit
+`--packages` or `AGENTTY_TEST_PACKAGES` replaces automatic path selection; dependents
+are still included:
 
 ```sh
 AGENTTY_TEST_PACKAGES='ag-git ag-agent' \
@@ -61,8 +81,8 @@ left in their default shared locations. The target must not contain tracked sour
 files. Target artifacts, including paths linked into that directory, are excluded from
 input fingerprints even when the target is not Git-ignored.
 
-Direct `ag-xtask validate` invocation accepts `--packages`, ordered `--hook` IDs, and
-optional `--reuse`. Fresh execution is the default. Reuse applies only to allowlisted
+Direct `ag-xtask validate` invocation accepts ordered `--hook` IDs and optional
+`--reuse`. Fresh execution is the default. Reuse applies only to allowlisted
 deterministic hooks with matching package selection, tracked and untracked source, Git
 state/configuration, tool versions, and environment. Changes or failures invalidate
 success; inputs changing during execution cannot produce a successful stamp. Coverage

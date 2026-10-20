@@ -7,7 +7,7 @@ use std::process::Command;
 use std::{env, fs};
 
 use crate::validation::{
-    Catalog, Hook, Host, Ledger, Metadata, Options, ProcessHost, Runner, ValidationGuard,
+    Catalog, Changes, Hook, Host, Ledger, Metadata, Options, ProcessHost, Runner, ValidationGuard,
 };
 
 struct Guard;
@@ -15,6 +15,7 @@ impl ValidationGuard for Guard {}
 
 struct ScriptedHost {
     calls: RefCell<Vec<String>>,
+    changed_files: Vec<PathBuf>,
     error: &'static str,
     fingerprints: RefCell<VecDeque<String>>,
     ledger: RefCell<Ledger>,
@@ -26,6 +27,7 @@ impl ScriptedHost {
     fn new() -> Self {
         Self {
             calls: RefCell::default(),
+            changed_files: Vec::new(),
             error: "",
             fingerprints: RefCell::default(),
             ledger: RefCell::default(),
@@ -47,6 +49,16 @@ impl ScriptedHost {
 impl Host for ScriptedHost {
     fn packages(&self) -> Vec<String> {
         self.seeds.clone()
+    }
+
+    fn changes(&self, base: &str) -> Result<Changes, String> {
+        self.check("changes")?;
+        assert_eq!(base, "origin/main");
+
+        Ok(Changes {
+            files: self.changed_files.clone(),
+            root: "/workspace".into(),
+        })
     }
 
     fn metadata(&self) -> Result<Metadata, String> {
@@ -115,9 +127,98 @@ fn catalog() -> Catalog {
 
 fn options(reuse: bool) -> Options {
     Options {
+        base: "origin/main".into(),
         packages: Vec::new(),
+        plan: false,
         hooks: vec!["clippy".into(), "test-focused".into()],
         reuse,
+    }
+}
+
+#[test]
+fn automatic_plan_write_failure_stops_before_checks_and_stamps() {
+    // Arrange
+    let host = ScriptedHost::new();
+    let mut bytes = [];
+
+    // Act
+    let result = Runner { host: &host }.run_with_output(options(false), bytes.as_mut_slice());
+
+    // Assert
+    assert!(result.is_err());
+    assert_eq!(*host.calls.borrow(), ["metadata", "catalog"]);
+    assert!(host.ledger.borrow().is_empty());
+}
+
+#[test]
+fn automatic_selection_executes_dependents_and_plan_does_not_run_checks() {
+    // Arrange
+    let mut host = ScriptedHost::new();
+    host.seeds.clear();
+    host.changed_files = vec!["crates/core/src/lib.rs".into()];
+    let runner = Runner { host: &host };
+
+    // Act
+    runner.run(options(false)).expect("automatic checks");
+    host.calls.borrow_mut().clear();
+    runner
+        .run(Options {
+            plan: true,
+            ..options(false)
+        })
+        .expect("plan");
+
+    // Assert
+    assert_eq!(*host.calls.borrow(), ["metadata", "changes", "catalog"]);
+    assert_eq!(host.ledger.borrow().len(), 2);
+}
+
+#[test]
+fn shared_paths_expand_selection_and_explicit_packages_bypass_git_discovery() {
+    // Arrange
+    let mut host = ScriptedHost::new();
+    host.seeds.clear();
+    host.changed_files = vec!["Cargo.lock".into()];
+
+    // Act
+    Runner { host: &host }
+        .run(Options {
+            plan: true,
+            ..options(false)
+        })
+        .expect("workspace plan");
+    host.calls.borrow_mut().clear();
+    host.error = "changes";
+    let explicit = Runner { host: &host }.run(Options {
+        packages: vec!["core".into()],
+        plan: true,
+        ..options(false)
+    });
+    let discovery_failure = Runner { host: &host }.run(options(false));
+
+    // Assert
+    assert!(explicit.is_ok());
+    assert_eq!(discovery_failure.expect_err("Git failure"), "changes");
+}
+
+#[test]
+fn git_path_decoding_preserves_unusual_names_and_rejects_escaping_paths() {
+    // Arrange
+    let paths = "crates/core/a file.rs\0crates/core/a\nfile.rs\0";
+
+    // Act
+    let decoded = ProcessHost::git_paths(paths).expect("relative paths");
+
+    // Assert
+    assert_eq!(
+        decoded,
+        [
+            PathBuf::from("crates/core/a file.rs"),
+            PathBuf::from("crates/core/a\nfile.rs")
+        ]
+    );
+    for invalid in ["../outside\0", "/outside\0"] {
+        assert!(ProcessHost::git_paths(invalid).is_err());
     }
 }
 
@@ -225,7 +326,7 @@ fn coverage_is_always_fresh_and_changed_inputs_cannot_create_a_stamp() {
     let coverage = Options {
         packages: vec!["core".into()],
         hooks: vec!["coverage".into()],
-        reuse: true,
+        ..options(true)
     };
     // Act
     Runner { host: &host }
