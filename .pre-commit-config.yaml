@@ -120,7 +120,7 @@ repos:
         stages: [manual]
       - id: test-focused
         name: cargo nextest focused
-        description: Run tests selected by AGENTTY_TEST_FILTER, optionally compiling only AGENTTY_TEST_PACKAGES; Agentty PTY suites run only through `test-agentty-e2e`.
+        description: Run selected tests with the fail-fast local profile, optionally compiling only AGENTTY_TEST_PACKAGES; Agentty PTY suites run only through `test-agentty-e2e`.
         entry: >-
           bash -eu -o pipefail -c 'package_args=(--workspace);
           if [[ -n "${AGENTTY_TEST_PACKAGES:-}" ]]; then
@@ -129,7 +129,7 @@ repos:
           echo "AGENTTY_TEST_PACKAGES must contain package names" >&2; exit 1; fi;
           package_args=();
           for package in "${packages[@]}"; do package_args+=(-p "$package"); done; fi;
-          cargo nextest run --locked --timings --profile ci "${package_args[@]}"
+          cargo nextest run --locked --timings --profile local "${package_args[@]}"
           --no-tests=fail -E "${AGENTTY_TEST_FILTER:?Set AGENTTY_TEST_FILTER to a nextest filterset}"'
         language: system
         always_run: true

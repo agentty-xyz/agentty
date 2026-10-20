@@ -108,6 +108,11 @@ fn default_build_scope_preserves_public_tests() -> Result<(), Box<dyn Error>> {
     assert!(arguments.iter().any(|argument| argument == "--timings"));
     assert!(
         arguments
+            .windows(2)
+            .any(|pair| pair == ["--profile", "local"])
+    );
+    assert!(
+        arguments
             .iter()
             .any(|argument| argument == "--no-tests=fail")
     );
