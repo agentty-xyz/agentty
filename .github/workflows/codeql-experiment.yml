@@ -1,0 +1,117 @@
+name: CodeQL Latency Experiment
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/codeql-experiment.yml
+
+# This experiment does not publish security results or replace default setup.
+permissions:
+  contents: read
+  security-events: read
+
+concurrency:
+  group: codeql-experiment-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Rust (${{ matrix.threads }} threads, sample ${{ matrix.sample }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        # Zero asks CodeQL to use all available cores, matching default setup.
+        include:
+          - {threads: 0, sample: 1}
+          - {threads: 2, sample: 1}
+          - {threads: 2, sample: 2}
+          - {threads: 0, sample: 2}
+          - {threads: 0, sample: 3}
+          - {threads: 2, sample: 3}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record runner and source
+        env:
+          EXPERIMENT_THREADS: ${{ matrix.threads }}
+          EXPERIMENT_SAMPLE: ${{ matrix.sample }}
+        run: |
+          mkdir -p target/codeql-experiment
+          lscpu --json > target/codeql-experiment/cpu.json
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg sha "$(git rev-parse HEAD)" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg runner_os "$RUNNER_OS" \
+            --arg runner_arch "$RUNNER_ARCH" \
+            --arg image_os "$ImageOS" \
+            --arg image_version "$ImageVersion" \
+            --arg started_at "$(date --utc +%FT%TZ)" \
+            --argjson cores "$(nproc)" \
+            --argjson memory_kib "$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)" \
+            --argjson threads "$EXPERIMENT_THREADS" \
+            --argjson sample "$EXPERIMENT_SAMPLE" \
+            '{schema: 1, repository: $repository, sha: $sha, run_id: $run_id,
+              run_attempt: $run_attempt, event: $event, runner_os: $runner_os,
+              runner_arch: $runner_arch, image_os: $image_os,
+              image_version: $image_version, started_at: $started_at,
+              cores: $cores, memory_kib: $memory_kib, threads: $threads,
+              sample: $sample, query_suite: "default", ram_mib: 14575,
+              project_cache: "disabled", trap_cache: "disabled"}' \
+            > target/codeql-experiment/source.json
+
+      - name: Initialize pinned CodeQL
+        id: initialize
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          languages: rust
+          build-mode: none
+          # The immutable action revision links CLI and query bundle 2.27.2.
+          tools: linked
+          threads: ${{ matrix.threads }}
+          ram: 14575
+          trap-caching: false
+          dependency-caching: false
+
+      - name: Extract and analyze the default Rust query suite
+        id: analyze
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          output: target/codeql-experiment/results
+          upload: never
+          upload-database: false
+
+      - name: Record outcome
+        if: ${{ always() }}
+        env:
+          CODEQL_VERSION: ${{ steps.initialize.outputs.codeql-version }}
+          INITIALIZE_OUTCOME: ${{ steps.initialize.outcome }}
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+        run: |
+          mkdir -p target/codeql-experiment
+          jq -n \
+            --arg codeql_version "$CODEQL_VERSION" \
+            --arg initialize_outcome "$INITIALIZE_OUTCOME" \
+            --arg analyze_outcome "$ANALYZE_OUTCOME" \
+            --arg finished_at "$(date --utc +%FT%TZ)" \
+            '{codeql_version: $codeql_version, initialize_outcome: $initialize_outcome,
+              analyze_outcome: $analyze_outcome, finished_at: $finished_at}' \
+            > target/codeql-experiment/outcome.json
+
+      - name: Retain comparable results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: codeql-experiment-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.threads }}-${{ matrix.sample }}
+          path: target/codeql-experiment/
+          if-no-files-found: error
+          retention-days: 14
