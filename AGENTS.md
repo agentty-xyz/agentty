@@ -65,62 +65,30 @@ and `crates/agentty/src/app/AGENTS.md` for workflow integration rules.
 
 ## Quality Gates
 
-`.pre-commit-config.yaml` is the executable source of truth for hook IDs and commands.
-Invoke cataloged checks through `prek`. The focused E2E validation and container
-recording commands in `docs/contributing/feature-test/` are explicit exceptions because
-the E2E hook runs the complete suite. Keep those commands there; do not duplicate hook
-implementations elsewhere.
+`.pre-commit-config.yaml` owns hook IDs and executable definitions. Invoke checks
+through `prek`. Focused E2E and container recording commands in
+`docs/contributing/feature-test/` are explicit exceptions; keep those commands there.
 
-- While iterating, first run the relevant formatter or fixer on touched paths, then
-  focused tests for the changed behavior. Use `test-focused` with an explicit
-  `AGENTTY_TEST_FILTER`; use `docs/contributing/validation.md` for selection recipes and
-  `docs/contributing/setup.md` for environment setup. Keep gate policy here and
-  executable definitions in the hook catalog.
-- Run hooks in the session's inherited environment. Do not override `CARGO_HOME`,
-  `PREK_HOME`, `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, and do not copy
-  registries, toolchains, or caches into the worktree; relocated caches force cold
-  rebuilds. When the environment itself blocks a check, report the exact failure instead
-  of building a replacement environment.
-- Before any container work, read `docs/contributing/feature-test/recording.md`. Run
-  containers only through cataloged hooks and the commands in
-  `docs/contributing/feature-test/`; do not compose ad hoc `podman run` invocations,
-  images, or wrapper scripts.
-- Handoff means the task's final state, not each reply in a multi-turn session. Before
-  handoff, run one impact-based validation rung covering every touched file and all
-  affected dependents:
-  - Markdown: `mdformat` and the default hooks for the touched paths.
-  - Docs site: the Markdown checks plus `zola-check`; reformat touched templates with
-    `djlint-reformat`.
-  - Rust: `rustfmt-fix`, `clippy`, and `test-focused` for the touched crates and their
-    dependents.
-  - Manifests, migrations, and the hook catalog: add their dedicated checks from
-    `.pre-commit-config.yaml`.
-- Run required checks once for the final relevant state. Reuse successful results while
-  their source, tests, dependencies, toolchain, configuration, and relevant environment
-  remain unchanged; rerun after invalidating edits, failures, or new evidence. Record
-  the command, scope, and result so the handoff shows what was covered.
-- Preserve public-contract integration tests when selecting affected suites. Source test
-  hooks do not replace them; use `test-focused` without a test-name restriction for the
-  changed packages and their dependents, or `test-workspace`. Unchanged dependencies
-  need no retest.
-- For cross-cutting changes, run `prek run --all-files` and `test-focused` for the
-  changed packages and their dependents, only after the touched paths pass their
-  formatters and focused tests. Run `test-workspace` locally when the impact cannot be
-  bounded confidently.
-- Run mutating fixers one at a time and inspect their diffs before continuing. When a
-  fixer reports that it modified files, rerun only that hook, not the whole hook set.
-- Pull-request CI runs `cargo-check`, `coverage` (which runs the `test-workspace`
-  selection), and the full `test-agentty-e2e` suite. Do not run them locally by default;
-  run one with `--hook-stage manual` only to diagnose its CI failure or when the user
-  asks. Diagnose with the single failing hook, not a rerun of every gate after each
-  edit.
-- Let the runner's configured timeouts govern individual tests. Run long checks in the
-  foreground; redirect large output to a log and read its summary once the command
-  exits. Do not poll with repeated `tail`, `ps`, or sleep loops. After five minutes
-  without output, inspect build and process activity once; terminate and report a
-  confirmed stall rather than treating silence alone as failure. After three failed
-  repair attempts, stop and report the test, output, and attempted fixes; never skip,
-  ignore, or delete the test.
+- Follow the required iteration, handoff, and failure-diagnosis procedure in
+  `docs/contributing/validation.md`; use `docs/contributing/setup.md` for setup. Format
+  touched paths before focused tests. Final validation covers every touched file,
+  changed package, affected dependent, and public contract. Unchanged dependencies need
+  no retest.
+- Run required checks once for the final relevant state. Reuse success only while
+  source, tests, dependencies, toolchain, configuration, and relevant environment remain
+  unchanged; rerun after invalidating edits, failures, or new evidence. Record each
+  command, scope, and result at handoff.
+- Pull-request CI owns `cargo-check`, fresh `coverage` (including the `test-workspace`
+  selection), and full `test-agentty-e2e`. Run these locally only to diagnose their CI
+  failure or when requested; also run `test-workspace` when impact cannot be bounded.
+  Diagnose the single failing hook.
+- Run hooks in the inherited environment. Do not override `CARGO_HOME`, `PREK_HOME`,
+  `RUSTC_WRAPPER`, `TMPDIR`, or `CARGO_TARGET_DIR`, or copy registries, toolchains, or
+  caches into the worktree. Report environment failures instead of building a
+  replacement environment.
+- Before container work, read `docs/contributing/feature-test/recording.md`. Use only
+  cataloged hooks and commands in `docs/contributing/feature-test/`; do not compose ad
+  hoc container invocations, images, or wrappers.
 
 ## Documentation
 
