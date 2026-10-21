@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,7 +8,8 @@ use ag_session::{
     BuiltinAgentDefinition, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
     SessionService, StartPlanThenImplementRequest, TaskChainPhase, TaskChainReplyOutcome,
 };
-use ag_worker::{MockRunClient, RunClient};
+use ag_worker::test_support::{AppServerError, AppServerTurnResponse, MockAppServerClient};
+use ag_worker::{HeartbeatClock, MockRunClient, RunClient, RunWorker, RuntimeConfig};
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
@@ -211,14 +213,10 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
 }
 
 #[tokio::test]
-async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
+async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_admission() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
-    let decision = Arc::new(GatedDecision::default());
-    fixture
-        .app
-        .services
-        .set_run_client(Arc::clone(&decision) as Arc<dyn RunClient>);
+    let decision = CancelableDecisionWorker::install(&mut fixture);
     let launch = awaiting_plan(&mut fixture).await;
     let service = fixture.service.clone();
     let session_id = fixture.session_id.clone();
@@ -231,15 +229,13 @@ async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
             tokio::pin!(pending);
             let early = tokio::select! {
                 result = &mut pending => Some(result),
-                () = decision.entered.cancelled() => None,
+                () = decision.started.cancelled() => None,
             };
             assert_eq!(early, None, "decision must still be running");
             service
                 .cancel_task_chain(&launch.chain_id)
                 .await
                 .expect("cancel chain");
-            decision.release.cancel();
-
             pending.await
         })
         .await;
@@ -253,6 +249,10 @@ async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
         ))
     );
     assert_eq!(canceled.phase, TaskChainPhase::Canceled);
+    assert!(
+        decision.interrupted.is_cancelled(),
+        "the worker stopped its provider turn"
+    );
     assert_eq!(
         canceled.current_request.attempt_id,
         launch.planner_attempt_id
@@ -262,7 +262,7 @@ async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
             .app
             .sessions
             .deciding_task_chain_ids
-            .contains(&launch.chain_id)
+            .contains_key(&launch.chain_id)
     );
     assert_eq!(
         fixture.persisted_transcript().await,
@@ -275,6 +275,25 @@ async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
         ]
         .concat()
     );
+
+    // Arrange: retry the canceled role, then decide a fresh approval through
+    // the same session-owned worker to prove utility admission stayed open.
+    let retried_plan =
+        fixture.register_result(&launch.planner_request().task_id, "Exact plan", false);
+
+    // Act
+    let retried = reply(&mut fixture, "reply-2", "Try again").await;
+    fixture.settle(&retried_plan).await;
+    let implementation =
+        fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
+    let accepted = reply(&mut fixture, "reply-3", "Go ahead").await;
+    fixture.settle(&implementation).await;
+    decision.worker.shutdown().await;
+
+    // Assert
+    assert_eq!(retried, Ok(TaskChainReplyOutcome::Continued));
+    assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
+    assert_eq!(fixture.snapshot().await.phase, TaskChainPhase::Succeeded);
 }
 
 #[tokio::test]
@@ -365,6 +384,77 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
             .count(),
         2
     );
+}
+
+/// Real utility worker whose first provider turn waits for cancellation and
+/// whose next turn approves the plan.
+struct CancelableDecisionWorker {
+    interrupted: CancellationToken,
+    started: CancellationToken,
+    worker: Arc<RunWorker>,
+}
+
+impl CancelableDecisionWorker {
+    fn install(fixture: &mut ChainFixture) -> Self {
+        let started = CancellationToken::new();
+        let interrupted = CancellationToken::new();
+        let mut provider = MockAppServerClient::new();
+        let started_observer = started.clone();
+        let interrupted_observer = interrupted.clone();
+        provider
+            .expect_run_isolated_turn()
+            .once()
+            .return_once(move |_, _| {
+                Box::pin(async move {
+                    started_observer.cancel();
+                    interrupted_observer.cancelled().await;
+
+                    Err(AppServerError::InterruptedByUser(
+                        "decision canceled".to_string(),
+                    ))
+                })
+            });
+        provider
+            .expect_run_isolated_turn()
+            .once()
+            .returning(|_, _| {
+                Box::pin(async {
+                    Ok(AppServerTurnResponse {
+                        assistant_message: r#"{"answer":"implement"}"#.to_string(),
+                        context_reset: false,
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        pid: None,
+                        provider_conversation_id: None,
+                    })
+                })
+            });
+        let interrupted_observer = interrupted.clone();
+        provider
+            .expect_shutdown_session()
+            .times(1..)
+            .returning(move |_| {
+                interrupted_observer.cancel();
+
+                Box::pin(async {})
+            });
+        let worker = Arc::new(RunWorker::new(
+            &RuntimeConfig::with_app_server(Arc::new(provider)),
+            fixture.app.services.db().runs(),
+            Arc::new(HeartbeatClock),
+            NonZeroUsize::MIN,
+        ));
+        fixture
+            .app
+            .services
+            .set_run_client(Arc::clone(&worker) as Arc<dyn RunClient>);
+
+        Self {
+            interrupted,
+            started,
+            worker,
+        }
+    }
 }
 
 /// Decision client that waits for the test before revising the plan.
