@@ -195,13 +195,14 @@ reject replies instead of queueing them, and the composer keeps the draft. Stopp
 running role cancels the chain through the gateway, which records the cancellation
 before interrupting the attempt. Rendering never advances a workflow.
 
-Newly admitted launches append the original request and an execution-graph marker to the
-session transcript; the worker appends one role-attributed answer only when it first
-saves a chain-owned response. These rows render in chat but stay out of provider replay,
-so each role keeps its isolated conversation. The marker stores only the chain identity.
-The reducer keeps a bounded latest-chain snapshot for the visible session, reloaded when
-its update version changes, and the card renders that live state. Failed reads retain
-the previous graph and retry after a short delay, even when the session stays idle.
+Launch admission saves the original request and execution-graph marker in its
+transaction; saving a chain-owned response likewise saves its role-attributed answer
+atomically. The host mirrors committed messages into live chat without a second write.
+These rows stay out of ordinary provider replay, so each role keeps its isolated
+conversation. The marker preserves the exact chain identity. The reducer keeps a bounded
+latest-chain snapshot for the visible session, reloaded when its update version changes,
+and the card renders that live state. Failed reads retain the previous graph and retry
+after a short delay, even when the session stays idle.
 
 Foreground gateway admission records each workflow stage and its attempt atomically;
 only a new claim reaches the session worker. Duplicate deliveries acknowledge their

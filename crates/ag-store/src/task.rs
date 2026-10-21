@@ -26,6 +26,7 @@ use crate::{DbError, TimestampSource};
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
     /// Atomically reserves both role tasks and admits the first Planner.
+    /// The launch prompt and graph marker commit with the workflow receipt.
     /// Returns false for identical launch redelivery, without replaying work.
     async fn start_task_chain(
         &self,
@@ -46,6 +47,17 @@ pub trait TaskRepository: Send + Sync {
     /// Lists session workflow snapshots in creation order.
     async fn list_task_chains(&self, session_id: &str) -> Result<Vec<TaskChain>, DbError> {
         let _ = session_id;
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Reads the workflow already bound to a reply in its owning session.
+    /// Returns `None` for a new reply or a reply owned by another session.
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let _ = (session_id, reply_id);
         Err(TaskChainStore::unsupported())
     }
 
@@ -134,6 +146,8 @@ pub trait TaskRepository: Send + Sync {
     /// Commits a running, uncanceled attempt's observed response, continuation,
     /// and usage atomically. Identical repeats do not duplicate usage or rewind
     /// continuation. This does not settle the operation or accept the task.
+    /// Chain-owned role answers join the session transcript in that same
+    /// transaction; standalone role responses remain task-only.
     /// Returns `true` only when this call recorded the response, so callers
     /// can run once-only follow-up effects; identical repeats return `false`.
     async fn persist_agent_turn(
@@ -487,6 +501,25 @@ impl TaskRepository for SqliteTaskRepository {
         let claimed =
             TaskChainStore::start(&mut transaction, session_id, request, operation_kind, now)
                 .await?;
+        if claimed {
+            for (kind, raw_content) in [
+                (
+                    SessionMessageKind::UserPrompt,
+                    request.user_request.as_str(),
+                ),
+                (SessionMessageKind::AgentGraph, request.chain_id.as_str()),
+            ] {
+                let content = stored_message_content(kind, raw_content);
+                SessionMessageStore::append_normalized_in_transaction(
+                    &mut transaction,
+                    session_id,
+                    kind,
+                    &content,
+                    now,
+                )
+                .await?;
+            }
+        }
         transaction.commit().await?;
 
         Ok(claimed)
@@ -506,6 +539,18 @@ impl TaskRepository for SqliteTaskRepository {
         transaction.commit().await?;
 
         Ok(chains)
+    }
+
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chain = TaskChainStore::load_for_reply(&mut transaction, session_id, reply_id).await?;
+        transaction.commit().await?;
+
+        Ok(chain)
     }
 
     async fn accept_task_chain_plan(

@@ -81,15 +81,25 @@ impl App {
                 "A task chain reply needs a message and a reply id".to_string(),
             ));
         }
-        let chain = self
+        let recorded_chain = self
             .services
             .db()
             .tasks()
-            .list_task_chains(session_id)
+            .load_task_chain_for_reply(session_id, &request.reply_id)
             .await
-            .map_err(|error| api_error(&error))?
-            .pop()
-            .ok_or(SessionError::TaskChainNotFound)?;
+            .map_err(|error| api_error(&error))?;
+        let chain = if let Some(chain) = recorded_chain {
+            chain
+        } else {
+            self.services
+                .db()
+                .tasks()
+                .list_task_chains(session_id)
+                .await
+                .map_err(|error| api_error(&error))?
+                .pop()
+                .ok_or(SessionError::TaskChainNotFound)?
+        };
         if let Some(outcome) = self
             .task_chain_reply_receipt(&chain, &request.reply_id)
             .await?
@@ -179,12 +189,17 @@ impl App {
                 },
             )
             .await?;
-            self.append_task_chain_transcript_message(
-                &action.session_id,
-                SessionMessageKind::WorkflowNotice,
-                PLAN_ACCEPTED_NOTICE,
-            )
-            .await;
+            if let Ok(handles) = self.sessions.session_handles_or_err(&action.session_id) {
+                SessionTaskService::append_workflow_notice(
+                    &handles.transcript,
+                    self.services.db(),
+                    &self.services.event_sender(),
+                    &self.services.session_update_versions(),
+                    &action.session_id,
+                    PLAN_ACCEPTED_NOTICE,
+                )
+                .await;
+            }
         } else {
             self.continue_api_task_chain(
                 &action.chain_id,

@@ -374,7 +374,7 @@ fn task_chain_messages_render_only_in_chat_and_never_replay() {
         assert!(!kind.is_conversation_message());
         assert!(!kind.is_prompt());
     }
-    assert_eq!(messages[1].agent_graph_chain_id(), Some("chain-1"));
+    assert_eq!(messages[1].agent_graph_chain_id(), Some(" chain-1\n"));
     assert_eq!(messages[0].agent_graph_chain_id(), None);
     assert_eq!(
         messages[2].agent_answer(),

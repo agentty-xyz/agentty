@@ -927,6 +927,22 @@ async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
         .record_task_chain_reply("chain", "reply-1", "  Looks good, go ahead\n")
         .await
         .expect("redelivered reply");
+    let owner = database
+        .tasks()
+        .load_task_chain_for_reply("session", "reply-1")
+        .await
+        .expect("reply owner")
+        .expect("recorded reply");
+    let mut unbound = Vec::new();
+    for (session_id, reply_id) in [("other-session", "reply-1"), ("session", "missing")] {
+        unbound.push(
+            database
+                .tasks()
+                .load_task_chain_for_reply(session_id, reply_id)
+                .await
+                .expect("reply lookup"),
+        );
+    }
     let rejected = [
         ("chain", "reply-1", "Different text"),
         ("other-chain", "reply-1", "  Looks good, go ahead\n"),
@@ -954,6 +970,8 @@ async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
     // Assert
     assert!(recorded);
     assert!(!redelivered);
+    assert_eq!(owner.id, "chain");
+    assert_eq!(unbound, [None, None]);
     assert_eq!(
         errors,
         [
@@ -969,7 +987,11 @@ async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
             .iter()
             .map(|message| (message.kind.as_str(), message.content.as_str()))
             .collect::<Vec<_>>(),
-        [("user_prompt", "  Looks good, go ahead")]
+        [
+            ("user_prompt", "  Original objective."),
+            ("agent_graph", "chain"),
+            ("user_prompt", "  Looks good, go ahead"),
+        ]
     );
 }
 

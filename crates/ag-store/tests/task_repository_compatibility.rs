@@ -75,6 +75,10 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
         .list_task_chains("session")
         .await
         .expect_err("unsupported");
+    let reply_owner = adapter
+        .load_task_chain_for_reply("session", "reply")
+        .await
+        .expect_err("unsupported");
     let accept = adapter
         .accept_task_chain_plan(
             "chain",
@@ -108,7 +112,16 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
         .expect_err("unsupported");
 
     // Assert
-    for error in [start_error, load, list, accept, continued, cancel, reply] {
+    for error in [
+        start_error,
+        load,
+        list,
+        reply_owner,
+        accept,
+        continued,
+        cancel,
+        reply,
+    ] {
         assert_eq!(
             error.to_string(),
             "Invalid task chain: Host does not support task chains"
