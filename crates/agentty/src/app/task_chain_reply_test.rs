@@ -14,6 +14,15 @@ use tokio_util::sync::CancellationToken;
 use crate::app::command_gateway::TaskChainReplyAction;
 use crate::app::task_chain::test_support::{ChainFixture, agent_answer, launch_request};
 
+/// Fails reply recording before its transcript prompt is written.
+const REJECT_REPLY: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON task_chain_reply BEGIN \
+                            SELECT RAISE(ABORT, 'task_chain_reply unavailable'); END";
+
+/// Fails continuation admission after the reply was recorded.
+const REJECT_CONTINUATION: &str = "CREATE TRIGGER reject_insert BEFORE INSERT ON \
+                                   task_chain_continuation BEGIN SELECT RAISE(ABORT, \
+                                   'task_chain_continuation unavailable'); END";
+
 #[tokio::test]
 async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implementer() {
     // Arrange
@@ -175,6 +184,23 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
         ]
         .concat()
     );
+
+    // Arrange: an older Planner turn can no longer be decoded.
+    sqlx::query("UPDATE task_attempt SET message = 'not json' WHERE id = 'initial'")
+        .execute(&fixture.pool)
+        .await
+        .expect("corrupt planner history");
+
+    // Act
+    let unreadable = reply(&mut fixture, "reply-3", "Go ahead").await;
+
+    // Assert
+    assert!(
+        unreadable
+            .expect_err("history read fails")
+            .to_string()
+            .contains("Invalid task attempt input")
+    );
 }
 
 #[tokio::test]
@@ -209,6 +235,14 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
         .expect("cancel workflow");
     fixture.settle(&first).await;
     let retry = fixture.register_result(&planner_id, "Retried plan", false);
+    let unrecorded =
+        reply_while_rejecting(&mut fixture, REJECT_REPLY, "Try again, smaller scope").await;
+    let unadmitted = reply_while_rejecting(
+        &mut fixture,
+        REJECT_CONTINUATION,
+        "Try again, smaller scope",
+    )
+    .await;
     let continued = reply(&mut fixture, "reply-3", "Try again, smaller scope").await;
     fixture.settle(&retry).await;
     let retried = fixture.snapshot().await;
@@ -220,6 +254,18 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
     assert_eq!(
         busy,
         Err(SessionError::TaskChainBusy(TaskChainPhase::Planning))
+    );
+    assert!(
+        unrecorded
+            .expect_err("reply persistence fails")
+            .to_string()
+            .contains("task_chain_reply unavailable")
+    );
+    assert!(
+        unadmitted
+            .expect_err("continuation admission fails")
+            .to_string()
+            .contains("task_chain_continuation unavailable")
     );
     assert_eq!(continued, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(retried.phase, TaskChainPhase::AwaitingPlanAcceptance);
@@ -315,6 +361,26 @@ fn install_decision(fixture: &mut ChainFixture, answer: &'static str) {
         })
     });
     fixture.app.services.set_run_client(Arc::new(run_client));
+}
+
+/// Sends `reply-3` while the `reject_insert` trigger is installed, then drops
+/// it.
+async fn reply_while_rejecting(
+    fixture: &mut ChainFixture,
+    trigger_sql: &'static str,
+    message: &str,
+) -> Result<TaskChainReplyOutcome, SessionError> {
+    sqlx::query(trigger_sql)
+        .execute(&fixture.pool)
+        .await
+        .expect("reject inserts");
+    let result = reply(fixture, "reply-3", message).await;
+    sqlx::query("DROP TRIGGER reject_insert")
+        .execute(&fixture.pool)
+        .await
+        .expect("restore inserts");
+
+    result
 }
 
 /// Sends one reply through the public service while the fixture drives it.
