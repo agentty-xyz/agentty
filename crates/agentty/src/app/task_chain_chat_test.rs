@@ -126,10 +126,10 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         .await;
     let approval = fixture
         .app
-        .submit_task_chain_prompt(
+        .submit_prompt(submission(
             &fixture.session_id,
-            &TurnPrompt::from_text("Looks good, start implementing".into()),
-        )
+            "Looks good, start implementing",
+        ))
         .await;
     drive_until_started(&mut fixture, &implementation).await;
     let while_busy = fixture
@@ -158,7 +158,7 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
     });
     assert_eq!(ordinary, None);
     assert_eq!(with_image, Some(PromptWorkflowOutcome::KeepPrompt));
-    assert_eq!(approval, show_session);
+    assert_eq!(Some(approval), show_session);
     assert_eq!(while_busy, Some(PromptWorkflowOutcome::KeepPrompt));
     assert_eq!(after_success, show_session);
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
@@ -185,6 +185,7 @@ async fn failed_decided_action_is_reported_after_the_reply_was_accepted() {
     let _terminal_consumer = fixture.app.sessions.foreground_consumer();
     awaiting_plan(&mut fixture).await;
     install_decision(&mut fixture, "implement");
+    let (missing_sender, missing_receiver) = tokio::sync::oneshot::channel();
 
     // Act
     let approval = fixture
@@ -194,6 +195,9 @@ async fn failed_decided_action_is_reported_after_the_reply_was_accepted() {
             &TurnPrompt::from_text("Start implementing".into()),
         )
         .await;
+    fixture
+        .app
+        .report_deferred_task_chain_reply(&SessionId::from("missing"), missing_receiver);
     set_session_status_for_test(
         &mut fixture.app,
         &fixture.session_id,
@@ -229,6 +233,7 @@ async fn failed_decided_action_is_reported_after_the_reply_was_accepted() {
         .await;
 
     // Assert
+    assert!(missing_sender.is_closed());
     assert_eq!(
         approval,
         Some(PromptWorkflowOutcome::ShowSession {
@@ -260,62 +265,68 @@ async fn generated_instructions_follow_the_session_routing() {
     assert!(!ordinary);
     assert_eq!(list_chains(&fixture).await.len(), 0);
 
-    // Arrange
-    let mut fixture = ChainFixture::new().await;
-    let _terminal_consumer = fixture.app.sessions.foreground_consumer();
-    let launch = awaiting_plan(&mut fixture).await;
-    let implementation =
-        fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
-    let service = fixture.service.clone();
-    fixture
-        .app
-        .drive_session_request(service.accept_task_chain_plan(
-            &launch.chain_id,
-            AcceptTaskChainPlanRequest {
-                attempt_id: "implementation".to_string(),
-                plan_attempt_id: launch.planner_attempt_id.clone(),
-            },
-        ))
-        .await
-        .expect("accepted plan");
-    fixture.settle(&implementation).await;
-    let applied = fixture.register_result(&launch.implementer_task_id(), "Review applied", true);
-    fixture
-        .app
-        .auto_address_review_iterations
-        .insert(fixture.session_id.clone(), 2);
-
-    // Act
-    let routed = fixture
-        .app
-        .reply_through_task_chain_or_session(
-            &fixture.session_id,
-            TurnPrompt::from_agent_data("Apply the review suggestions".to_string()),
-        )
-        .await;
-    drive_until_started(&mut fixture, &applied).await;
-    applied.release.cancel();
-    fixture.settle(&applied).await;
-
-    // Assert
-    assert!(routed);
-    let revised = fixture.snapshot().await;
-    assert_eq!(revised.phase, TaskChainPhase::Succeeded);
-    assert_eq!(
-        revised.current_request.assignment.definition,
-        BuiltinAgentDefinition::Implementer
-    );
-    assert_eq!(
+    for previous_count in [Some(2), None] {
+        // Arrange
+        let mut fixture = ChainFixture::new().await;
+        let _terminal_consumer = fixture.app.sessions.foreground_consumer();
+        let launch = awaiting_plan(&mut fixture).await;
+        let implementation =
+            fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
+        let service = fixture.service.clone();
         fixture
             .app
-            .auto_address_review_iterations
-            .get(&fixture.session_id),
-        Some(&2)
-    );
-    assert_eq!(
-        revised.current_request.input.clarification.as_deref(),
-        Some("Apply the review suggestions")
-    );
+            .drive_session_request(service.accept_task_chain_plan(
+                &launch.chain_id,
+                AcceptTaskChainPlanRequest {
+                    attempt_id: "implementation".to_string(),
+                    plan_attempt_id: launch.planner_attempt_id.clone(),
+                },
+            ))
+            .await
+            .expect("accepted plan");
+        fixture.settle(&implementation).await;
+        let applied =
+            fixture.register_result(&launch.implementer_task_id(), "Review applied", true);
+        if let Some(previous_count) = previous_count {
+            fixture
+                .app
+                .auto_address_review_iterations
+                .insert(fixture.session_id.clone(), previous_count);
+        }
+
+        // Act
+        let routed = fixture
+            .app
+            .reply_through_task_chain_or_session(
+                &fixture.session_id,
+                TurnPrompt::from_agent_data("Apply the review suggestions".to_string()),
+            )
+            .await;
+        drive_until_started(&mut fixture, &applied).await;
+        applied.release.cancel();
+        fixture.settle(&applied).await;
+
+        // Assert
+        assert!(routed);
+        let revised = fixture.snapshot().await;
+        assert_eq!(revised.phase, TaskChainPhase::Succeeded);
+        assert_eq!(
+            revised.current_request.assignment.definition,
+            BuiltinAgentDefinition::Implementer
+        );
+        assert_eq!(
+            fixture
+                .app
+                .auto_address_review_iterations
+                .get(&fixture.session_id)
+                .copied(),
+            previous_count
+        );
+        assert_eq!(
+            revised.current_request.input.clarification.as_deref(),
+            Some("Apply the review suggestions")
+        );
+    }
 }
 
 #[tokio::test]

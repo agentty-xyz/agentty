@@ -177,16 +177,22 @@ fn test_transcript_view_height_shrinks_for_open_suggestion_dropdown() {
     let area = Rect::new(0, 0, 80, 30);
     let plain_mode = prompt_mode("draft");
     let slash_mode = prompt_mode("/");
+    let mut armed_slash_mode = prompt_mode("/");
+    if let AppMode::Prompt { slash_state, .. } = &mut armed_slash_mode {
+        slash_state.is_plan_armed = true;
+    }
 
     // Act
     let plain_height = transcript_view_height(layout_input(area, &session, &plain_mode));
     let slash_height = transcript_view_height(layout_input(area, &session, &slash_mode));
+    let armed_height = transcript_view_height(layout_input(area, &session, &armed_slash_mode));
 
     // Assert
     assert!(
         slash_height < plain_height,
         "slash dropdown rows must shrink the transcript viewport: {slash_height} < {plain_height}"
     );
+    assert_eq!(armed_height, plain_height);
 }
 
 /// Returns a leaked markdown cache for test page builders that need a
@@ -1202,6 +1208,7 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
     let replying_text = rendered_text(&session, &replying, Some(&graph));
     let viewing_text = rendered_text(&session, &viewing, Some(&graph));
     let ordinary_text = rendered_text(&session, &replying, None);
+    let slash_text = rendered_text(&session, &prompt_mode("/"), None);
 
     // Assert
     assert!(armed_text.contains("Plan · describe the task for the Planner"));
@@ -1210,6 +1217,32 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
     assert!(replying_text.contains("tell the orchestrator to start implementing"));
     assert!(viewing_text.contains("Orchestrator · Planner · Awaiting your approval"));
     assert!(ordinary_text.contains("Type your message"));
+    assert!(slash_text.contains("/mode"));
+}
+
+#[test]
+fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
+    // Arrange
+    let session = session_fixture();
+    let mode = prompt_mode("draft");
+    let page = test_session_chat_page(&session, &mode);
+    let panel = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 100, 14), &session, &mode))
+        .prompt_panel
+        .expect("prompt panel");
+    let input = InputState::with_text("draft".to_string());
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 1)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            page.render_prompt_composer(frame, frame.area(), &panel, (&input, false), "Timer: 0s");
+        })
+        .expect("render short composer");
+    let text = buffer_text(terminal.backend().buffer());
+
+    // Assert
+    assert!(text.chars().any(|glyph| matches!(glyph, '╭' | '╰' | '─')));
 }
 
 /// Renders one session page with an optional task-chain graph.

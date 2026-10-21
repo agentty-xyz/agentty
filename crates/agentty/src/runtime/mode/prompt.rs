@@ -463,10 +463,11 @@ fn prompt_context(app: &mut App) -> Option<PromptContext> {
             input,
             scroll_offset,
             session_id,
+            slash_state,
             ..
         } => (
             is_active_at_mention(at_mention_state.as_ref(), input),
-            input.text().starts_with('/'),
+            input.text().starts_with('/') && !slash_state.is_plan_armed,
             *scroll_offset,
             session_id.clone(),
         ),
@@ -885,9 +886,7 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 /// `/plan <task>` arms the composer and submits the task in one step.
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
     if arm_inline_plan_request(&mut app.mode) {
-        if let Some(plan_context) = self::prompt_context(app) {
-            Box::pin(handle_prompt_submit_key(app, &plan_context)).await;
-        }
+        Box::pin(submit_current_text_prompt(app)).await;
 
         return;
     }
@@ -895,23 +894,28 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
     let session_agent_kind = app
         .session_at(prompt_context.session_index)
         .map_or(AgentKind::Codex, |session| session.agent.kind());
-    let selection = match &app.mode {
+    let allow_apply_command = app.prompt_apply_command_is_available_for_session(session_id);
+    let selection = match &mut app.mode {
         AppMode::Prompt {
             input, slash_state, ..
-        } => resolve_prompt_slash_selection(
-            input.text(),
-            slash_state,
-            session_agent_kind,
-            app.prompt_apply_command_is_available_for_session(session_id),
-        ),
+        } => {
+            let selection = resolve_prompt_slash_selection(
+                input.text(),
+                slash_state,
+                session_agent_kind,
+                allow_apply_command,
+            );
+            if matches!(selection, Some(PromptSuggestionSelection::Command("/plan"))) {
+                slash_state.is_plan_armed = true;
+            }
+
+            selection
+        }
         _ => None,
     };
     match selection {
         Some(PromptSuggestionSelection::Command("/plan")) => {
             clear_prompt_slash_input(app).await;
-            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-                slash_state.is_plan_armed = true;
-            }
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {
             let outcome = app

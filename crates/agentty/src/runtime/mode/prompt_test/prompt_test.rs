@@ -1,6 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ag_session::test_support as model_fixture;
+use ag_store::{DbError, MockTaskRepository};
 use crossterm::event;
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -2285,29 +2287,68 @@ async fn plan_slash_command_arms_the_composer_without_submitting_an_ordinary_tur
 }
 
 #[tokio::test]
-async fn plan_command_with_task_submits_it_and_keeps_a_rejected_draft_armed() {
+async fn plan_tasks_keep_leading_slashes_as_literal_text() {
     // Arrange
     let (mut app, _root) = crate::test_support::new_test_app().await;
     app.sessions.push_session(
         crate::test_support::SessionFixtureBuilder::new()
             .id("prompt-test-session")
-            .status(Status::InProgress)
+            .status(Status::Review)
             .build(),
     );
     app.experimental_multi_agent = true;
-    app.mode = plan_prompt_mode(&app, "/plan   Add search  ");
-    let context = prompt_context(&mut app).expect("prompt context");
+    let mut tasks = MockTaskRepository::new();
+    tasks.expect_list_task_chains().times(5).returning(|_| {
+        Err(DbError::InvalidData {
+            entity: "task chain",
+            reason: "unavailable".to_string(),
+        })
+    });
+    app.services.set_task_repository(Arc::new(tasks));
 
-    // Act
-    handle_prompt_slash_submit(&mut app, &context).await;
+    for (command, task, armed) in [
+        ("/plan   Add search  ", "Add search", false),
+        ("/plan /mode", "/mode", false),
+        (
+            "/plan /src/main.rs needs refactoring",
+            "/src/main.rs needs refactoring",
+            false,
+        ),
+        ("/mode", "/mode", true),
+        (
+            "/src/main.rs needs refactoring",
+            "/src/main.rs needs refactoring",
+            true,
+        ),
+    ] {
+        app.mode = plan_prompt_mode(&app, command);
+        if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+            slash_state.is_plan_armed = armed;
+        }
+        let context = prompt_context(&mut app).expect("prompt context");
 
-    // Assert: the running session rejects the start and the task stays armed.
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, slash_state, .. }
-            if input.text() == "Add search" && slash_state.is_plan_armed
-    ));
-    assert_eq!(app.sessions.sessions()[0].prompt, "");
+        // Act
+        handle_prompt_submit_key(&mut app, &context).await;
+
+        // Assert: failed ownership loading keeps the literal task armed.
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.text() == task && slash_state.is_plan_armed
+        ));
+        assert_eq!(app.sessions.sessions()[0].prompt, "");
+        let context = prompt_context(&mut app).expect("armed context");
+
+        // Act
+        handle_prompt_cancel_key(&mut app, &context).await;
+
+        // Assert: Esc disarms the task without clearing a leading slash.
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.text() == task && !slash_state.is_plan_armed
+        ));
+    }
 }
 
 #[test]

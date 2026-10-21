@@ -220,7 +220,9 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Plan · describe the task for the Planner", 5000)
                     .capture_labeled("armed", "/plan arms the regular composer")
-                    .write_text("Add search")
+                    .press_key("Esc")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("/plan /src/search.rs needs indexed search")
                     .press_key("Enter")
                     .wait_for_text("Which index should search use?", 20000)
                     .wait_for_text("Planner      ? Needs your input", 10000)
@@ -311,7 +313,7 @@ fn assert_orchestrated_chat(frame: &TerminalFrame, report: &ProofReport) {
     assert_visible(
         &capture(1),
         &[
-            "› Add search",
+            "› /src/search.rs needs indexed search",
             "⬡ Execution graph",
             "◆ Planner",
             "Which index should search use?",

@@ -59,7 +59,7 @@ struct PreparedPromptPanel {
     is_chat_focused: bool,
     /// Whether the footer carries the clipboard image-capture loader.
     is_pasting_image: bool,
-    status: Option<String>,
+    status: String,
     suggestion_list: Option<SuggestionList>,
     title: String,
     total_height: u16,
@@ -468,11 +468,8 @@ impl<'a> SessionChatPage<'a> {
         let mut chat_input = ChatInput::new(&title, input.text(), input.cursor)
             .placeholder(&placeholder)
             .footer(timing_label)
-            .active(!prepared_prompt_panel.is_chat_focused);
-
-        if let Some(status) = prepared_prompt_panel.status.as_deref() {
-            chat_input = chat_input.status(status);
-        }
+            .active(!prepared_prompt_panel.is_chat_focused)
+            .status(&prepared_prompt_panel.status);
 
         if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
             chat_input = chat_input.suggestion_list(suggestion_list);
@@ -631,8 +628,10 @@ fn prepare_prompt_panel(
     // While the session is `InProgress` the composer queues a leading
     // `/` as plain text instead of running a slash command, so suppress
     // the slash dropdown to avoid implying the menu is actionable. The
-    // `@` mention dropdown is still useful for editing queued messages.
-    let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
+    // `@` mention dropdown is still useful for editing queued messages. An
+    // armed plan composer also treats its task as literal text.
+    let suppress_slash_dropdown =
+        slash_state.is_plan_armed || session.status == crate::domain::session::Status::InProgress;
     let allow_apply_command = review::has_actionable_review_suggestions(review_text);
     let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
         None
@@ -663,7 +662,7 @@ fn prepare_prompt_panel(
         ),
         is_chat_focused: *focus == ChatFocus::Chat,
         is_pasting_image: attachment_state.is_pasting_image(),
-        status: Some(session_format::prompt_session_status(session)),
+        status: session_format::prompt_session_status(session),
         suggestion_list,
         title: session_composer_title(session),
         total_height: desired_bottom_height.min(max_bottom_height),
