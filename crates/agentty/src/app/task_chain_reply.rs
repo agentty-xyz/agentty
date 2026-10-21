@@ -5,7 +5,7 @@
 //! an orchestrator decision runs in the background through the Run Worker and
 //! applies its action through the command gateway again.
 
-use std::sync::PoisonError;
+use std::sync::{Arc, PoisonError};
 
 use ag_protocol::AgentResponse;
 use ag_session::{
@@ -181,6 +181,13 @@ impl App {
         }
         let attempt_id = action.outcome.attempt_id(&action.reply_id);
         if action.outcome == TaskChainReplyOutcome::PlanAccepted {
+            let transcript = Arc::clone(
+                &self
+                    .sessions
+                    .session_handles_or_err(&action.session_id)
+                    .map_err(|error| SessionError::Operation(error.to_string()))?
+                    .transcript,
+            );
             self.accept_api_task_chain_plan(
                 &action.chain_id,
                 AcceptTaskChainPlanRequest {
@@ -189,17 +196,15 @@ impl App {
                 },
             )
             .await?;
-            if let Ok(handles) = self.sessions.session_handles_or_err(&action.session_id) {
-                SessionTaskService::append_workflow_notice(
-                    &handles.transcript,
-                    self.services.db(),
-                    &self.services.event_sender(),
-                    &self.services.session_update_versions(),
-                    &action.session_id,
-                    PLAN_ACCEPTED_NOTICE,
-                )
-                .await;
-            }
+            SessionTaskService::append_workflow_notice(
+                &transcript,
+                self.services.db(),
+                &self.services.event_sender(),
+                &self.services.session_update_versions(),
+                &action.session_id,
+                PLAN_ACCEPTED_NOTICE,
+            )
+            .await;
         } else {
             self.continue_api_task_chain(
                 &action.chain_id,
