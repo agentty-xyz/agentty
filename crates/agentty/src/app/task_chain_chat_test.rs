@@ -5,8 +5,9 @@ use std::time::Duration;
 use ag_contracts::{OneShotSubmission, SessionStats};
 use ag_protocol::AgentResponse;
 use ag_session::{
-    BuiltinAgentDefinition, SessionError, SessionId, SessionMessageKind, SessionStatus,
-    StartPlanThenImplementRequest, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
+    AcceptTaskChainPlanRequest, BuiltinAgentDefinition, SessionError, SessionId,
+    SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
+    TaskChainReplyOutcome,
 };
 use ag_store::{DbError, MockTaskRepository};
 use ag_worker::MockRunClient;
@@ -263,8 +264,26 @@ async fn generated_instructions_follow_the_session_routing() {
     let mut fixture = ChainFixture::new().await;
     let _terminal_consumer = fixture.app.sessions.foreground_consumer();
     let launch = awaiting_plan(&mut fixture).await;
-    install_decision(&mut fixture, "revise");
-    let revision = fixture.register_result(&launch.planner_request().task_id, "Plan v2", true);
+    let implementation =
+        fixture.register_result(&launch.implementer_task_id(), "Implemented", false);
+    let service = fixture.service.clone();
+    fixture
+        .app
+        .drive_session_request(service.accept_task_chain_plan(
+            &launch.chain_id,
+            AcceptTaskChainPlanRequest {
+                attempt_id: "implementation".to_string(),
+                plan_attempt_id: launch.planner_attempt_id.clone(),
+            },
+        ))
+        .await
+        .expect("accepted plan");
+    fixture.settle(&implementation).await;
+    let applied = fixture.register_result(&launch.implementer_task_id(), "Review applied", true);
+    fixture
+        .app
+        .auto_address_review_iterations
+        .insert(fixture.session_id.clone(), 2);
 
     // Act
     let routed = fixture
@@ -274,14 +293,25 @@ async fn generated_instructions_follow_the_session_routing() {
             TurnPrompt::from_agent_data("Apply the review suggestions".to_string()),
         )
         .await;
-    drive_until_started(&mut fixture, &revision).await;
-    revision.release.cancel();
-    fixture.settle(&revision).await;
+    drive_until_started(&mut fixture, &applied).await;
+    applied.release.cancel();
+    fixture.settle(&applied).await;
 
     // Assert
     assert!(routed);
     let revised = fixture.snapshot().await;
-    assert_eq!(revised.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(revised.phase, TaskChainPhase::Succeeded);
+    assert_eq!(
+        revised.current_request.assignment.definition,
+        BuiltinAgentDefinition::Implementer
+    );
+    assert_eq!(
+        fixture
+            .app
+            .auto_address_review_iterations
+            .get(&fixture.session_id),
+        Some(&2)
+    );
     assert_eq!(
         revised.current_request.input.clarification.as_deref(),
         Some("Apply the review suggestions")

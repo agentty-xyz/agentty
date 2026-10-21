@@ -17,6 +17,9 @@ use crate::session::fixture::{E2eResult, seed_project_settings};
 
 const WORKFLOW_MODEL_ID: &str = "claude-haiku-4-5-20251001";
 
+const IMPLEMENTER_REVIEW_TEXT: &str = "Implementer focused review completed.";
+const CLEAN_REVIEW_TEXT: &str = "No suggestions remain after implementation review.";
+
 /// Seeds a scripted Claude provider for every chain role and the
 /// orchestrator decision.
 ///
@@ -29,6 +32,8 @@ async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
         &[
             ("DefaultSmartAgent", "claude"),
             ("DefaultSmartModel", WORKFLOW_MODEL_ID),
+            ("DefaultReviewAgent", "claude"),
+            ("DefaultReviewModel", WORKFLOW_MODEL_ID),
         ],
     )
     .await?;
@@ -43,6 +48,15 @@ stub_root=$(dirname "$0")
 printf '%s\n' '{"type":"system","subtype":"init"}'
 questions=''
 case "$prompt" in
+  *'Review the Git diff for display in a terminal UI.'*)
+    if grep -q 'reviewed' search.txt 2>/dev/null; then
+      result='{\"project_impact\":[\"No suggestions remain after implementation review.\"],\"suggestions\":[]}'
+    else
+      result='{\"project_impact\":[\"Implementer focused review completed.\"],\"suggestions\":[{\"details\":\"Mark the indexed search implementation as reviewed.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"The fixture search implementation needs review.\"}]}'
+    fi
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
+    exit 0
+    ;;
   *"Decide whether the user's reply approves"*)
     case "$prompt" in
       *'start implementing'*) answer='implement' ;;
@@ -66,8 +80,18 @@ case "$prompt" in
       exit 0
     fi
     case "$prompt" in
-      *'Also update the docs'*) answer='Docs updated for indexed search.' ;;
-      *) answer='Implementation finished from accepted plan version 2.' ;;
+      *'Also update the docs'*)
+        printf 'Indexed search documentation\n' > search-guide.txt
+        answer='Docs updated for indexed search.'
+        ;;
+      *'Verify the focused-review suggestions against the current code'*)
+        printf 'reviewed indexed search\n' > search.txt
+        answer='Review suggestion applied by the Implementer.'
+        ;;
+      *)
+        printf 'indexed search\n' > search.txt
+        answer='Implementation finished from accepted plan version 2.'
+        ;;
     esac
     ;;
   *) answer='Session unchanged.' ;;
@@ -174,7 +198,7 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
     let started = gate.path().join("implementation-started");
     FeatureTest::new("plan_then_implement")
         .with_git()
-        .with_terminal_size(100, 60)
+        .with_terminal_size(100, 80)
         .args(["--experimental-multi-agent".to_string()])
         .env(
             "AGENTTY_TEST_IMPLEMENTER_STARTED",
@@ -233,24 +257,7 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
                     .wait_for_text("Enter: reply", 20000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("canceled", "Ctrl+c cancels the running Implementer");
-                let scenario = send_chat_message(scenario, "Retry please")
-                    .wait_for_text(
-                        "Implementation finished from accepted plan version 2.",
-                        20000,
-                    )
-                    .wait_for_text("Implementer  ✓ Done", 10000)
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("implemented", "The retried Implementer finishes");
-
-                let scenario = send_chat_message(scenario, "Also update the docs")
-                    .wait_for_text("Docs updated for indexed search.", 20000)
-                    .wait_for_text("Implementer  ✓ Done", 10000)
-                    .wait_for_stable_frame(300, 5000);
-
-                open_composer(scenario)
-                    .wait_for_text("Ask the Implementer for more changes", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled("follow_up", "Follow-ups reach the Implementer")
+                complete_reviewed_implementation(scenario)
             },
             |frame, report| {
                 Box::pin(async move {
@@ -261,6 +268,34 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
         .await?;
 
     Ok(())
+}
+
+/// Finishes the retry, applies focused-review feedback, and sends a follow-up.
+fn complete_reviewed_implementation(scenario: Scenario) -> Scenario {
+    let scenario = send_chat_message(scenario, "Retry please")
+        .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 30000)
+        .wait_for_text("Implementer  ✓ Done", 10000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled("implemented", "The Implementer starts focused review");
+    let scenario = open_composer(scenario)
+        .write_text("/apply")
+        .press_key("Enter")
+        .wait_for_text("Review suggestion applied by the Implementer.", 30000)
+        .wait_for_text(CLEAN_REVIEW_TEXT, 30000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "applied",
+            "/apply routes review feedback to the Implementer",
+        );
+    let scenario = send_chat_message(scenario, "Also update the docs")
+        .wait_for_text("Docs updated for indexed search.", 20000)
+        .wait_for_text(CLEAN_REVIEW_TEXT, 30000)
+        .wait_for_stable_frame(300, 5000);
+
+    open_composer(scenario)
+        .wait_for_text("Ask the Implementer for more changes", 5000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled("follow_up", "Follow-ups reach the Implementer")
 }
 
 /// Checks the visible conversation states captured by the chat journey.
@@ -311,6 +346,14 @@ fn assert_orchestrated_chat(frame: &TerminalFrame, report: &ProofReport) {
             "◆ Implementer",
             "Implementation finished from accepted plan version 2.",
             "Implementer  ✓ Done",
+            IMPLEMENTER_REVIEW_TEXT,
+        ],
+    );
+    assert_visible(
+        &capture(7),
+        &[
+            "Review suggestion applied by the Implementer.",
+            CLEAN_REVIEW_TEXT,
         ],
     );
     assert_visible(
