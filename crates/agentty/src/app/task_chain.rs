@@ -42,6 +42,9 @@ impl App {
             .await
             .map_err(|error| api_error(&error))?;
         if admitted {
+            self.sessions
+                .initialize_task_chain_title(&self.services, session_id, &request.user_request)
+                .await;
             self.mirror_task_chain_transcript_message(
                 session_id,
                 SessionMessageKind::UserPrompt,
@@ -269,3 +272,7 @@ mod tests;
 #[cfg(test)]
 #[path = "task_chain_test_support_test.rs"]
 pub(super) mod test_support;
+
+#[cfg(test)]
+#[path = "task_chain_title_test.rs"]
+mod title_tests;

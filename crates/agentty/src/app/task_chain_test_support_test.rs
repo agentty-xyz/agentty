@@ -57,6 +57,32 @@ pub(in crate::app) struct ChainFixture {
 impl ChainFixture {
     /// Creates a read-only, review-ready session with scripted role turns.
     pub(in crate::app) async fn new() -> Self {
+        let mut fixture = Self::new_untitled().await;
+        fixture
+            .app
+            .services
+            .db()
+            .sessions()
+            .update_session_title(&fixture.session_id, "Scoped change")
+            .await
+            .expect("existing title keeps role tests independent of title utilities");
+        let index = fixture
+            .app
+            .sessions
+            .session_index_or_err(&fixture.session_id)
+            .expect("session index");
+        fixture
+            .app
+            .sessions
+            .session_at_mut(index)
+            .expect("session")
+            .title = Some("Scoped change".into());
+
+        fixture
+    }
+
+    /// Creates a blank session for first-message metadata and title tests.
+    pub(in crate::app) async fn new_untitled() -> Self {
         let (mut app, directory, pool) = new_git_test_app_with_pool().await;
         let session_id = SessionId::from(app.create_session().await.expect("session"));
         set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);

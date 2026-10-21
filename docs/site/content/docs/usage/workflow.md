@@ -547,8 +547,9 @@ global definitions. Choose `None (default)` to clear it. File edits apply on the
 turn; missing or invalid definitions fall back without stopping work and show a notice.
 
 <a id="usage-title-refinement"></a> Agentty refines session titles from the overall goal
-using the Fast model. Draft titles update as messages are staged; committed work uses
-the commit title. Failed refinement leaves the provisional title in place.
+using the Fast model, including `/plan` sessions from your original task message. Draft
+titles update as messages are staged; committed work uses the commit title. Failed
+refinement leaves the provisional title in place.
 
 ## Settings Scope
 

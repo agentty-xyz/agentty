@@ -40,6 +40,8 @@ async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
             ("DefaultSmartModel", WORKFLOW_MODEL_ID),
             ("DefaultReviewAgent", "claude"),
             ("DefaultReviewModel", WORKFLOW_MODEL_ID),
+            ("DefaultFastAgent", "claude"),
+            ("DefaultFastModel", WORKFLOW_MODEL_ID),
         ],
     )
     .await?;
@@ -54,6 +56,9 @@ stub_root=$(dirname "$0")
 printf '%s\n' '{"type":"system","subtype":"init"}'
 questions=''
 case "$prompt" in
+  *"Generate a concise, commit-style title"*)
+    answer='Add indexed search'
+    ;;
   *'Review the Git diff for display in a terminal UI.'*)
     if grep -q 'reviewed' search.txt 2>/dev/null; then
       result='{\"project_impact\":[\"No suggestions remain after implementation review.\"],\"suggestions\":[]}'
@@ -243,6 +248,7 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Which index should search use?", 20000)
                     .wait_for_text("Planner      ? Needs your input", 10000)
+                    .wait_for_text("Add indexed search", 10000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("question", "The Planner asks in the chat");
                 let scenario = send_chat_message(scenario, "Use the title index")
@@ -334,6 +340,7 @@ fn assert_orchestrated_chat(frame: &TerminalFrame, report: &ProofReport) {
             "⬡ Execution graph",
             "◆ Planner",
             "Which index should search use?",
+            "Add indexed search",
             "Orchestrator · Planner · Needs your input",
         ],
     );

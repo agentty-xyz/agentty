@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, BuiltinAgentDefinition,
     ContinueTaskChainRequest, FocusedReviewStatus, ReplyToTaskChainRequest, SessionError,
     SessionId, SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn,
     TaskChainPhase,
 };
+use ag_worker::MockRunClient;
 use tempfile::TempDir;
 
 use super::test_support::{ChainFixture, agent_answer, launch_request};
@@ -185,7 +188,10 @@ async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
 #[tokio::test]
 async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
     // Arrange
-    let mut fixture = ChainFixture::new().await;
+    let mut fixture = ChainFixture::new_untitled().await;
+    let mut client = MockRunClient::new();
+    client.expect_submit().never();
+    fixture.app.services.set_run_client(Arc::new(client));
     let launch = launch_request();
 
     // Act / Assert

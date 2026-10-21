@@ -2777,6 +2777,62 @@ impl SessionManager {
         ))
     }
 
+    /// Initializes a new chain's original request and refines its provisional
+    /// title through the same utility used by ordinary session turns.
+    /// Existing prompt and title metadata remain authoritative.
+    pub(crate) async fn initialize_task_chain_title(
+        &mut self,
+        services: &AppServices,
+        session_id: &SessionId,
+        prompt: &str,
+    ) {
+        let Ok(index) = self.session_index_or_err(session_id) else {
+            return;
+        };
+        let session = &mut self.state.sessions[index];
+        let folder = session.folder.clone();
+        let session_agent = session.agent;
+        if session.prompt.is_empty() {
+            services
+                .db()
+                .sessions()
+                .update_session_prompt(session_id, prompt)
+                .await
+                .unwrap_or_else(|error| {
+                    warn!(%session_id, %error, "failed to persist task-chain session prompt");
+                });
+            session.prompt = prompt.to_string();
+            if session.title.is_none() {
+                services
+                    .db()
+                    .sessions()
+                    .update_session_provisional_title(session_id, prompt)
+                    .await
+                    .unwrap_or_else(|error| {
+                        warn!(%session_id, %error, "failed to persist task-chain session title");
+                    });
+                session.title = Some(prompt.to_string());
+            }
+        }
+
+        let session_project_id =
+            super::turn::load_session_project_id(services.db(), session_id).await;
+        super::turn::spawn_request_title_generation(
+            super::turn::RequestTitleInput {
+                app_event_tx: services.event_sender(),
+                available_agent_kinds: services.available_agent_kinds().into(),
+                db: services.db().clone(),
+                folder,
+                prompt: prompt.to_string(),
+                run_client: services.session_run_client(session_id),
+                session_agent,
+                session_id: session_id.clone(),
+            },
+            session_project_id,
+        )
+        .await;
+    }
+
     /// Persists first-message prompt/title metadata before queueing execution.
     ///
     /// This writes the initial prompt/title.
