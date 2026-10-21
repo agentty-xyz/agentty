@@ -93,6 +93,8 @@ impl App {
             .task_chain_reply_receipt(&chain, &request.reply_id)
             .await?
         {
+            self.record_task_chain_reply(&chain, &request).await?;
+
             return Ok(TaskChainReplyRoute::Admitted(outcome));
         }
         if matches!(
@@ -155,6 +157,13 @@ impl App {
             .await?
         {
             return Ok(outcome);
+        }
+        if action.outcome != TaskChainReplyOutcome::Continued
+            && chain.phase != TaskChainPhase::AwaitingPlanAcceptance
+        {
+            return Err(SessionError::Operation(
+                "Workflow changed before reply decision completed".to_string(),
+            ));
         }
         let attempt_id = action.outcome.attempt_id(&action.reply_id);
         if action.outcome == TaskChainReplyOutcome::PlanAccepted {

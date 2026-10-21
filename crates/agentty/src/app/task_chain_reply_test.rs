@@ -36,6 +36,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     let accepted = reply(&mut fixture, "reply-1", "Looks good, go ahead").await;
     implementation.started().await;
     let redelivered = reply(&mut fixture, "reply-1", "Looks good, go ahead").await;
+    let conflicting = reply(&mut fixture, "reply-1", "Actually, revise the plan").await;
     let racing_decision = fixture
         .app
         .apply_task_chain_reply(TaskChainReplyAction {
@@ -57,6 +58,12 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     // Assert
     assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
     assert_eq!(redelivered, Ok(TaskChainReplyOutcome::PlanAccepted));
+    assert_eq!(
+        conflicting,
+        Err(SessionError::Operation(
+            "Invalid task chain: Reply identity was already used with different inputs".to_string()
+        ))
+    );
     assert_eq!(racing_decision, Ok(TaskChainReplyOutcome::PlanAccepted));
     assert_eq!(
         busy,
@@ -200,6 +207,73 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
             .expect_err("history read fails")
             .to_string()
             .contains("Invalid task attempt input")
+    );
+}
+
+#[tokio::test]
+async fn canceling_during_a_reply_decision_never_restarts_the_planner() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let decision = Arc::new(GatedDecision::default());
+    fixture
+        .app
+        .services
+        .set_run_client(Arc::clone(&decision) as Arc<dyn RunClient>);
+    let launch = awaiting_plan(&mut fixture).await;
+    let service = fixture.service.clone();
+    let session_id = fixture.session_id.clone();
+
+    // Act
+    let result = fixture
+        .app
+        .drive_session_request(async {
+            let pending = send_reply(&service, &session_id, "reply-1", "Add tests first");
+            tokio::pin!(pending);
+            let early = tokio::select! {
+                result = &mut pending => Some(result),
+                () = decision.entered.cancelled() => None,
+            };
+            assert_eq!(early, None, "decision must still be running");
+            service
+                .cancel_task_chain(&launch.chain_id)
+                .await
+                .expect("cancel chain");
+            decision.release.cancel();
+
+            pending.await
+        })
+        .await;
+    let canceled = fixture.snapshot().await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(SessionError::Operation(
+            "Workflow changed before reply decision completed".to_string()
+        ))
+    );
+    assert_eq!(canceled.phase, TaskChainPhase::Canceled);
+    assert_eq!(
+        canceled.current_request.attempt_id,
+        launch.planner_attempt_id
+    );
+    assert!(
+        !fixture
+            .app
+            .sessions
+            .deciding_task_chain_ids
+            .contains(&launch.chain_id)
+    );
+    assert_eq!(
+        fixture.persisted_transcript().await,
+        [
+            launch_transcript(),
+            vec![(
+                SessionMessageKind::UserPrompt,
+                "Add tests first".to_string()
+            )],
+        ]
+        .concat()
     );
 }
 
