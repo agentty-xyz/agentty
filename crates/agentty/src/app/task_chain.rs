@@ -161,8 +161,8 @@ impl App {
             "task-attempt:{}",
             chain.current_request.attempt_id
         ));
-        if self.sessions.deciding_task_chain_ids.contains(chain_id) {
-            self.services.cancel_agent_runs(&chain.session_id);
+        if let Some(cancellation) = self.sessions.deciding_task_chain_ids.get(chain_id) {
+            cancellation.cancel();
         }
 
         Ok(())
