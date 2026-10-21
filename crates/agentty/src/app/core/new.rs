@@ -35,7 +35,7 @@ impl App {
     /// hourly follow-up check. When `experimental_harness` is `true`, Harness
     /// sessions run in process and keep their history under
     /// [`AGENTTY_HARNESS_DIR`](super::AGENTTY_HARNESS_DIR).
-    /// `experimental_multi_agent` enables `/plan` and the planning panel.
+    /// `experimental_multi_agent` enables the `/plan` orchestrated chat.
     ///
     /// # Errors
     /// Returns an error if startup project metadata cannot be persisted,

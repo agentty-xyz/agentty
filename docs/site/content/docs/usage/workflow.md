@@ -16,30 +16,41 @@ session workers and do not automatically complete sessions.
 
 ## Plan Then Implement
 
-Start Agentty with `--experimental-multi-agent` to enable `/plan` and the `T` shortcut.
-Without this flag, the planning commands and panel are unavailable in session chat.
+Start Agentty with `--experimental-multi-agent` to enable `/plan`. Without this flag,
+`/plan` is unavailable in session chat.
 
-Create a **Regular** session, then open the commands menu with `/` and select `/plan`
-before sending your first ordinary prompt. You can also plan a new request in an
-existing idle session whose workspace is prepared. An unprepared deferred draft shows an
-error and retains your request; use a prepared regular session to start planning. Enter
-your request in the **New plan** composer and submit it to the read-only **Planner**.
-Use `n` to compose another workflow later. The planning panel shows the captured model.
-Session chat also shows your request, a live execution graph with each role's status,
-and each role's answer under a **Planner** or **Implementer** header.
+`/plan` turns the regular session chat into a conversation with an orchestrator that
+runs a fixed graph: a read-only **Planner**, then an **Implementer** that receives the
+accepted plan. Select `/plan` in a new **Regular** session, or in an idle session whose
+workspace is prepared, then describe the task in the composer, titled **Plan · describe
+the task for the Planner**. `/plan <task>` does the same in one line. `Esc` disarms the
+composer and keeps your text. Image attachments are not supported in plan or
+orchestrator messages; Agentty keeps the draft and asks you to remove them.
 
-Inspect the latest plan before pressing `Enter` to accept that exact version and start
-the **Implementer**. Press `r` instead to request a revision. The panel labels its input
-as a revision, question answer, or explicit retry so each action is clear. Answer role
-questions in this panel; they do not replace ordinary chat questions.
+Once a session owns a plan workflow, every message you send goes to the orchestrator,
+and `/plan` is no longer offered. The chat shows your messages, each answer under a
+**Planner** or **Implementer** header, and a live execution graph with each role's
+status: Waiting, Working, Needs your input, Awaiting your approval, Done, Failed, or
+Canceled. The composer title names the active role and its status, and its placeholder
+says what to send next.
 
-Press `x` to cancel running work. Failed or canceled work stays paused until you request
-a retry with `r`. Wait for a stopping worker before retrying; a rejected submission
-keeps your draft. An implementation retry retains its accepted plan. Leaving the panel
-with `Esc` keeps accepted work running; press `T` in session view to reopen the panel,
-including while work is running. Reopening `/plan` also reloads saved results. Use `Tab`
-to inspect another workflow and `F5` to refresh. Both roles share the session's
-worktree. Review and merge the resulting changes through the ordinary session actions.
+- **Questions**: answer the Planner in the composer.
+- **Revision**: reply with feedback; the Planner returns a new plan version.
+- **Approval**: approve in your own words, such as "looks good, start implementing". A
+  model decides whether the reply approves the plan as written. Anything that is not a
+  clear approval without changes, including a failed decision, goes back to the Planner
+  as a revision.
+- **After implementation**: follow-up messages, `/apply`, and automatic review
+  remediation go to the Implementer. The Planner is not used again.
+
+While a role is working or a reply is being decided, a new message is rejected rather
+than queued; Agentty keeps the draft in the composer and explains why. Press `Ctrl+C` in
+session view to cancel the running role or pending approval decision. After a
+cancellation or failure, your next message retries the current role with that message as
+guidance. An implementation retry keeps its accepted plan. Both roles share the
+session's worktree. Review and merge the resulting changes through the ordinary session
+actions.
+
 When the **Implementer** finishes without questions, the session starts the same
 [focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
 Planner results, questions, and failed or canceled work do not start a review.

@@ -109,8 +109,8 @@ pub fn prompt_footer_line(
 
 /// Builds the prompt suggestion dropdown for the current input state.
 ///
-/// Slash-command input renders the command/model suggestion set. Otherwise an
-/// active `@` mention query renders the matching file lookup list. The
+/// An active `@` mention query takes priority, matching runtime key routing.
+/// Otherwise slash-command input renders the command/model suggestion set. The
 /// returned dropdown is already windowed so the highlighted row stays visible.
 /// `allow_apply_command` must match runtime slash selection so the visible
 /// rows and submitted command indexes stay synchronized.
@@ -124,6 +124,17 @@ pub(crate) fn prompt_suggestion_list(
     let input_text = input.text();
     let cursor = input.cursor;
 
+    if let Some(state) = at_mention_state
+        && input.at_mention_query().is_some()
+    {
+        return file_lookup_suggestion_list(
+            input_text,
+            cursor,
+            state,
+            AT_MENTION_DEFAULT_MAX_VISIBLE,
+        );
+    }
+
     if input_text.starts_with('/') {
         return build_prompt_slash_suggestion_list(
             input_text,
@@ -134,9 +145,7 @@ pub(crate) fn prompt_suggestion_list(
         .map(render_prompt_suggestion_list);
     }
 
-    at_mention_state.and_then(|state| {
-        file_lookup_suggestion_list(input_text, cursor, state, AT_MENTION_DEFAULT_MAX_VISIBLE)
-    })
+    None
 }
 
 /// Converts prompt-suggestion state into chat-input dropdown rows.

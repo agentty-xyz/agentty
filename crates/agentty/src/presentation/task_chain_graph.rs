@@ -134,6 +134,19 @@ impl TaskChainGraph {
         }
     }
 
+    /// Returns the node the user interacts with next: the first role that is
+    /// not done, or the last role once every role is done.
+    ///
+    /// Waiting roles always follow an unfinished role, so they are never
+    /// active while the graph has nodes before them.
+    pub(crate) fn active_node(&self) -> Option<TaskChainGraphNode> {
+        self.nodes
+            .iter()
+            .find(|node| node.status != TaskChainNodeStatus::Done)
+            .or_else(|| self.nodes.last())
+            .copied()
+    }
+
     /// Applies a terminal stage status to the chain's current role.
     fn current_role_statuses(
         chain: &TaskChain,

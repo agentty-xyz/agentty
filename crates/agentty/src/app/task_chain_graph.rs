@@ -73,7 +73,9 @@ impl App {
         );
     }
 
-    fn session_has_task_chain_graph_marker(&self, session_id: &str) -> bool {
+    /// Returns whether the loaded transcript contains an execution-graph
+    /// marker.
+    pub(super) fn session_has_task_chain_graph_marker(&self, session_id: &str) -> bool {
         self.sessions
             .session_for_id(session_id)
             .and_then(|session| session.transcript.as_ref())

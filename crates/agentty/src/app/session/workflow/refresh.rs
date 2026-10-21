@@ -242,7 +242,6 @@ impl SessionManager {
             | AppMode::Prompt { session_id, .. }
             | AppMode::Question { session_id, .. }
             | AppMode::View { session_id, .. }
-            | AppMode::PlanWorkflow { session_id, .. }
             | AppMode::DiffLoading { session_id, .. }
             | AppMode::Diff { session_id, .. }
             | AppMode::Help {

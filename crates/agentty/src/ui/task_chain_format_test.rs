@@ -6,7 +6,9 @@ use crate::presentation::task_chain_graph::{
     TaskChainNodeStatus,
 };
 use crate::ui::style;
-use crate::ui::task_chain_format::{agent_answer_header_line, graph_card_lines};
+use crate::ui::task_chain_format::{
+    agent_answer_header_line, composer_placeholder, composer_title, graph_card_lines,
+};
 
 #[test]
 fn agent_answer_header_names_the_role_with_accent() {
@@ -115,6 +117,82 @@ fn graph_card_shows_placeholder_until_the_snapshot_loads() {
 
     // Assert
     assert_eq!(texts(&lines), ["⬡ Execution graph", "  Loading status…"]);
+}
+
+#[test]
+fn composer_names_the_active_role_and_what_to_send_next() {
+    // Arrange
+    let cases = [
+        (
+            TaskChainNodeStatus::Working,
+            TaskChainNodeStatus::Waiting,
+            "Orchestrator · Planner · Working",
+            "Planner is working · wait, or press Esc then Ctrl+c to cancel",
+        ),
+        (
+            TaskChainNodeStatus::NeedsInput,
+            TaskChainNodeStatus::Waiting,
+            "Orchestrator · Planner · Needs your input",
+            "Answer the Planner's questions",
+        ),
+        (
+            TaskChainNodeStatus::AwaitingApproval,
+            TaskChainNodeStatus::Waiting,
+            "Orchestrator · Planner · Awaiting your approval",
+            "Reply with feedback, or tell the orchestrator to start implementing",
+        ),
+        (
+            TaskChainNodeStatus::Done,
+            TaskChainNodeStatus::Canceled,
+            "Orchestrator · Implementer · Canceled",
+            "Reply to retry the Implementer, optionally with guidance",
+        ),
+        (
+            TaskChainNodeStatus::Failed,
+            TaskChainNodeStatus::Waiting,
+            "Orchestrator · Planner · Failed",
+            "Reply to retry the Planner, optionally with guidance",
+        ),
+        (
+            TaskChainNodeStatus::Done,
+            TaskChainNodeStatus::Done,
+            "Orchestrator · Implementer · Done",
+            "Ask the Implementer for more changes",
+        ),
+        (
+            TaskChainNodeStatus::Waiting,
+            TaskChainNodeStatus::Waiting,
+            "Orchestrator · Planner · Waiting",
+            "Message the orchestrator",
+        ),
+    ];
+
+    for (planner, implementer, expected_title, expected_placeholder) in cases {
+        // Act
+        let graph = graph(planner, implementer, false);
+
+        // Assert
+        assert_eq!(composer_title(&graph), expected_title);
+        assert_eq!(composer_placeholder(&graph), expected_placeholder);
+    }
+}
+
+#[test]
+fn composer_falls_back_to_the_orchestrator_for_an_empty_graph() {
+    // Arrange
+    let graph = TaskChainGraph {
+        chain_id: "chain".into(),
+        edges: Vec::new(),
+        nodes: Vec::new(),
+    };
+
+    // Act
+    let title = composer_title(&graph);
+    let placeholder = composer_placeholder(&graph);
+
+    // Assert
+    assert_eq!(title, "Orchestrator");
+    assert_eq!(placeholder, "Message the orchestrator");
 }
 
 fn graph(

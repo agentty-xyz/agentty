@@ -450,6 +450,9 @@ pub struct PromptSlashState {
     pub allow_plan_command: bool,
     /// Agent kinds currently runnable on this machine for `/model`.
     pub available_agent_kinds: Vec<AgentKind>,
+    /// Whether `/plan` armed the composer, so the next submit starts the
+    /// Planner with the typed task. Menu resets keep it; `Esc` disarms it.
+    pub is_plan_armed: bool,
     /// Workspace personalities loaded when `/personality` was accepted.
     pub personalities: Vec<PersonalitySummary>,
     /// Agent selected for the current slash workflow, when applicable.
@@ -468,6 +471,7 @@ impl PromptSlashState {
         Self {
             allow_plan_command: false,
             available_agent_kinds,
+            is_plan_armed: false,
             personalities: Vec::new(),
             selected_agent: None,
             selected_index: 0,
@@ -1153,7 +1157,7 @@ fn command_description(command: &str) -> &'static str {
         "/apply" => "Verify focused-review suggestions, then apply the correct ones.",
         "/mode" => "Choose editing permissions and focused-review automation.",
         "/model" => "Choose an agent and model for this session.",
-        "/plan" => "Plan then implement: inspect and accept a read-only Planner's plan.",
+        "/plan" => "Plan then implement: chat with the orchestrated Planner and Implementer.",
         "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",

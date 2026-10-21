@@ -51,7 +51,6 @@ where
         Ok(handle_publish_branch_input_key(app, key).await)
     } else {
         match &app.mode {
-            AppMode::PlanWorkflow { .. } => Ok(mode::plan_workflow::handle(app, key)),
             AppMode::List => mode::list::handle(app, key).await,
             AppMode::ProjectCatalog { .. } => Ok(mode::project_catalog::handle(app, key).await),
             AppMode::SessionCreation { .. } => {

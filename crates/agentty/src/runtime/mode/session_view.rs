@@ -494,11 +494,6 @@ async fn handle_workflow_view_key(
     pending_update: &mut ViewPendingUpdate,
 ) -> Option<bool> {
     match key.code {
-        KeyCode::Char('T') if is_insertable_char_key(key) => {
-            app.open_plan_workflow(view_context.session_id.clone());
-
-            return Some(false);
-        }
         KeyCode::Char('d')
             if !key.modifiers.contains(event::KeyModifiers::CONTROL)
                 && view_session_snapshot.inspect_diff.is_enabled() =>
@@ -544,21 +539,18 @@ async fn handle_workflow_view_key(
         KeyCode::Char('r') if view_session_snapshot.can_rebase_session() => {
             rebase_view_session(app, &view_context.session_id).await;
         }
-        KeyCode::Char('c')
-            if key.modifiers.contains(event::KeyModifiers::CONTROL)
-                && view_session_snapshot.session_status == Status::InProgress =>
-        {
-            end_in_progress_turn(app, &view_context.session_id).await;
+        KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+            if view_session_snapshot.session_status == Status::InProgress {
+                end_in_progress_turn(app, &view_context.session_id).await;
+            } else {
+                app.cancel_running_task_chain(&SessionId::from(view_context.session_id.as_str()))
+                    .await;
+            }
 
             return Some(false);
         }
         KeyCode::Char('?') => {
-            open_view_help_overlay(
-                &mut app.mode,
-                view_context,
-                view_session_snapshot,
-                app.experimental_multi_agent,
-            );
+            open_view_help_overlay(&mut app.mode, view_context, view_session_snapshot);
             return Some(false);
         }
         _ => return None,
@@ -714,11 +706,19 @@ fn apply_view_scroll_and_output_mode(mode: &mut AppMode, scroll_offset: Option<u
 /// interrupting the running turn. The running turn keeps streaming, status
 /// stays `InProgress`, and no cancellation token, database status update, or
 /// auto-review suppression runs while a queued message is being dropped.
-/// When the queue is already empty, the press falls through to
-/// [`cancel_in_progress_turn`] which performs the existing
+/// When the queue is already empty, a session whose task chain is running a
+/// role cancels that chain through the orchestrator, which records the
+/// cancellation durably before interrupting the attempt; otherwise the press
+/// falls through to [`cancel_in_progress_turn`] which performs the existing
 /// cancel-and-return-to-`Review` flow.
 async fn end_in_progress_turn(app: &mut App, session_id: &str) {
     if pop_last_queued_chat_message_if_any(app, session_id).await {
+        return;
+    }
+    if app
+        .cancel_running_task_chain(&SessionId::from(session_id))
+        .await
+    {
         return;
     }
 
@@ -937,11 +937,9 @@ fn open_view_help_overlay(
     mode: &mut AppMode,
     view_context: &ViewContext,
     view_session_snapshot: &ViewSessionSnapshot,
-    can_open_plan_workflow: bool,
 ) {
     *mode = AppMode::Help {
         context: HelpContext::View {
-            can_open_plan_workflow,
             can_fork_session: view_session_snapshot.can_fork_session(),
             can_merge_session_branch: view_session_snapshot.can_merge_session_branch(),
             can_mutate_session_branch: view_session_snapshot.can_mutate_session_branch(),

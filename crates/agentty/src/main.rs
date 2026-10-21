@@ -48,7 +48,8 @@ struct ExperimentalFeatures {
     /// `DASHSCOPE_API_KEY` with `DASHSCOPE_BASE_URL` is set.
     #[arg(long = "experimental-harness")]
     harness: bool,
-    /// Enables preview multi-agent planning with `/plan` and the `T` shortcut.
+    /// Enables preview multi-agent planning: `/plan` turns the session chat
+    /// into a Planner → Implementer orchestrator conversation.
     #[arg(long = "experimental-multi-agent")]
     multi_agent: bool,
 }

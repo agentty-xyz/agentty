@@ -194,7 +194,7 @@ pub struct App {
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
     pub(crate) diff_comment_progress: HashMap<SessionId, DiffLineComments>,
-    /// Enables the preview planning panel and its chat entry points.
+    /// Enables the preview `/plan` command that starts an orchestrated chat.
     pub(crate) experimental_multi_agent: bool,
     /// Receives app events emitted by background tasks and workflows.
     pub(super) event_rx: mpsc::UnboundedReceiver<AppEvent>,
@@ -1845,7 +1845,6 @@ impl App {
     /// Returns `true` when the fallback poll refreshed render-visible session
     /// state.
     pub async fn refresh_sessions_if_needed(&mut self) -> bool {
-        self.refresh_plan_workflow_if_needed();
         self.refresh_task_chain_graph_if_needed();
         let resources_refreshed = self.sessions.refresh_resources().await;
         let refreshed = self

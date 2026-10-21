@@ -195,6 +195,9 @@ impl App {
 
     /// Routes one presentation-owned prompt submission through the matching
     /// session workflow and returns the requested navigation effect.
+    ///
+    /// Sessions that own a task chain send the message to its orchestrator
+    /// instead of starting an ordinary turn.
     pub(crate) async fn submit_prompt(
         &mut self,
         submission: PromptSubmission,
@@ -226,6 +229,9 @@ impl App {
             return PromptWorkflowOutcome::KeepPrompt;
         }
         if session_mode != PromptSessionMode::NewDraft {
+            if let Some(outcome) = self.submit_task_chain_prompt(&session_id, &prompt).await {
+                return outcome;
+            }
             match self.queue_preparation_prompt(&session_id, &prompt).await {
                 Ok(true) => return PromptWorkflowOutcome::ShowSession { session_id },
                 Ok(false) => {}

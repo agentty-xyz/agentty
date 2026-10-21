@@ -1,4 +1,4 @@
-use ag_session::test_support as model_fixture;
+use ag_session::{BuiltinAgentDefinition, test_support as model_fixture};
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
@@ -18,6 +18,9 @@ use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
+use crate::presentation::task_chain_graph::{
+    TaskChainGraph, TaskChainGraphNode, TaskChainNodeStatus,
+};
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
 use crate::ui::{Page, layout, markdown, prompt_format, style};
 
@@ -30,7 +33,12 @@ fn session_fixture() -> Session {
 
 /// Builds a default test page for one session and mode.
 fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPage<'a> {
-    SessionChatPage::new(SessionChatPageInput {
+    SessionChatPage::new(test_page_input(session, mode))
+}
+
+/// Builds default page inputs for one session and mode.
+fn test_page_input<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPageInput<'a> {
+    SessionChatPageInput {
         active_prompt_output: None,
         active_progress: None,
         resources: None,
@@ -46,7 +54,7 @@ fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> Sessio
         session_update_version: 0,
         sessions: std::slice::from_ref(session),
         task_chain_graph: None,
-    })
+    }
 }
 
 /// Builds prompt mode with `input_text` staged in the composer.
@@ -169,16 +177,22 @@ fn test_transcript_view_height_shrinks_for_open_suggestion_dropdown() {
     let area = Rect::new(0, 0, 80, 30);
     let plain_mode = prompt_mode("draft");
     let slash_mode = prompt_mode("/");
+    let mut armed_slash_mode = prompt_mode("/");
+    if let AppMode::Prompt { slash_state, .. } = &mut armed_slash_mode {
+        slash_state.is_plan_armed = true;
+    }
 
     // Act
     let plain_height = transcript_view_height(layout_input(area, &session, &plain_mode));
     let slash_height = transcript_view_height(layout_input(area, &session, &slash_mode));
+    let armed_height = transcript_view_height(layout_input(area, &session, &armed_slash_mode));
 
     // Assert
     assert!(
         slash_height < plain_height,
         "slash dropdown rows must shrink the transcript viewport: {slash_height} < {plain_height}"
     );
+    assert_eq!(armed_height, plain_height);
 }
 
 /// Returns a leaked markdown cache for test page builders that need a
@@ -1157,4 +1171,131 @@ fn terminal_diff_help_requires_retained_archive() {
             );
         }
     }
+}
+
+#[test]
+fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    let graph = TaskChainGraph {
+        chain_id: "chain".into(),
+        edges: Vec::new(),
+        nodes: vec![TaskChainGraphNode {
+            agent: BuiltinAgentDefinition::Planner,
+            status: TaskChainNodeStatus::AwaitingApproval,
+        }],
+    };
+    let mut armed = prompt_mode("");
+    if let AppMode::Prompt {
+        focus, slash_state, ..
+    } = &mut armed
+    {
+        *focus = ChatFocus::Input;
+        slash_state.is_plan_armed = true;
+    }
+    let mut replying = prompt_mode("");
+    if let AppMode::Prompt { focus, .. } = &mut replying {
+        *focus = ChatFocus::Input;
+    }
+    let viewing = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: None,
+    };
+
+    // Act
+    let armed_text = rendered_text(&session, &armed, None);
+    let replying_text = rendered_text(&session, &replying, Some(&graph));
+    let viewing_text = rendered_text(&session, &viewing, Some(&graph));
+    let ordinary_text = rendered_text(&session, &replying, None);
+    let slash_text = rendered_text(&session, &prompt_mode("/"), None);
+
+    // Assert
+    assert!(armed_text.contains("Plan · describe the task for the Planner"));
+    assert!(armed_text.contains("Describe the task for the Planner"));
+    assert!(replying_text.contains("Orchestrator · Planner · Awaiting your approval"));
+    assert!(replying_text.contains("tell the orchestrator to start implementing"));
+    assert!(viewing_text.contains("Orchestrator · Planner · Awaiting your approval"));
+    assert!(ordinary_text.contains("Type your message"));
+    assert!(slash_text.contains("/mode"));
+}
+
+#[test]
+fn slash_leading_drafts_keep_active_file_mentions_visible() {
+    for (status, armed, input, active_mention) in [
+        (Status::Draft, true, "/src/main.rs @session", true),
+        (Status::InProgress, false, "/src/main.rs @session", true),
+        (Status::Draft, false, "/src/main.rs @session", true),
+        (Status::Draft, false, "/", false),
+    ] {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = status;
+        let mut mode = prompt_mode(input);
+        if let AppMode::Prompt {
+            at_mention_state,
+            slash_state,
+            ..
+        } = &mut mode
+        {
+            slash_state.is_plan_armed = armed;
+            *at_mention_state = Some(PromptAtMentionState::new(vec![
+                crate::domain::file_entry::FileEntry {
+                    is_dir: false,
+                    path: "src/session_chat.rs".to_string(),
+                },
+            ]));
+        }
+
+        // Act
+        let text = rendered_text(&session, &mode, None);
+
+        // Assert
+        assert_eq!(text.contains("src/session_chat.rs"), active_mention);
+        assert_eq!(text.contains("/mode"), !active_mention);
+    }
+}
+
+#[test]
+fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
+    // Arrange
+    let session = session_fixture();
+    let mode = prompt_mode("draft");
+    let page = test_session_chat_page(&session, &mode);
+    let panel = SessionChatLayoutPlan::new(layout_input(Rect::new(0, 0, 100, 14), &session, &mode))
+        .prompt_panel
+        .expect("prompt panel");
+    let input = InputState::with_text("draft".to_string());
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 1)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            page.render_prompt_composer(frame, frame.area(), &panel, (&input, false), "Timer: 0s");
+        })
+        .expect("render short composer");
+    let text = buffer_text(terminal.backend().buffer());
+
+    // Assert
+    assert!(text.chars().any(|glyph| matches!(glyph, '╭' | '╰' | '─')));
+}
+
+/// Renders one session page with an optional task-chain graph.
+fn rendered_text(session: &Session, mode: &AppMode, graph: Option<&TaskChainGraph>) -> String {
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        task_chain_graph: graph,
+        ..test_page_input(session, mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(100, 14);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session page");
+
+    buffer_text(terminal.backend().buffer())
 }

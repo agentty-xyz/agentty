@@ -487,7 +487,6 @@ fn mode_session_id_uses_view_help_context() {
     // Arrange
     let mode = AppMode::Help {
         context: HelpContext::View {
-            can_open_plan_workflow: false,
             can_fork_session: false,
             can_merge_session_branch: false,
             can_mutate_session_branch: false,
@@ -516,10 +515,6 @@ fn mode_session_id_uses_view_help_context() {
 fn mode_session_id_uses_diff_and_session_overlay_contexts() {
     // Arrange
     let modes = [
-        AppMode::PlanWorkflow {
-            session_id: "workflow-session".into(),
-            state: Box::default(),
-        },
         AppMode::DiffLoading {
             fallback_view_scroll_offset: None,
             request_id: 1,
@@ -571,7 +566,6 @@ fn mode_session_id_uses_diff_and_session_overlay_contexts() {
     assert_eq!(
         session_ids,
         [
-            Some("workflow-session"),
             Some("loading-session"),
             Some("diff-session"),
             Some("launch-session"),

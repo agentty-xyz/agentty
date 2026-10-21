@@ -129,6 +129,51 @@ pub(crate) fn graph_card_lines(graph: Option<&TaskChainGraph>, width: usize) -> 
     lines
 }
 
+/// Composer title while `/plan` waits for the task description.
+pub(crate) const PLAN_ARMED_COMPOSER_TITLE: &str = "Plan · describe the task for the Planner";
+
+/// Composer placeholder while `/plan` waits for the task description.
+pub(crate) const PLAN_ARMED_COMPOSER_PLACEHOLDER: &str = "Describe the task for the Planner";
+
+/// Returns the composer title naming the active role and its graph status.
+///
+/// The status uses the same label as the execution-graph card.
+pub(crate) fn composer_title(graph: &TaskChainGraph) -> String {
+    graph.active_node().map_or_else(
+        || "Orchestrator".to_string(),
+        |node| {
+            format!(
+                "Orchestrator · {} · {}",
+                node.agent.display_name(),
+                node.status.label()
+            )
+        },
+    )
+}
+
+/// Returns the composer placeholder telling the user what to send next.
+pub(crate) fn composer_placeholder(graph: &TaskChainGraph) -> String {
+    let Some(node) = graph.active_node() else {
+        return "Message the orchestrator".to_string();
+    };
+    let agent = node.agent.display_name();
+
+    match node.status {
+        TaskChainNodeStatus::Working => {
+            format!("{agent} is working · wait, or press Esc then Ctrl+c to cancel")
+        }
+        TaskChainNodeStatus::NeedsInput => format!("Answer the {agent}'s questions"),
+        TaskChainNodeStatus::AwaitingApproval => {
+            "Reply with feedback, or tell the orchestrator to start implementing".to_string()
+        }
+        TaskChainNodeStatus::Done => format!("Ask the {agent} for more changes"),
+        TaskChainNodeStatus::Failed | TaskChainNodeStatus::Canceled => {
+            format!("Reply to retry the {agent}, optionally with guidance")
+        }
+        TaskChainNodeStatus::Waiting => "Message the orchestrator".to_string(),
+    }
+}
+
 /// Returns the glyph and label spans for one node status.
 fn status_spans(status: TaskChainNodeStatus) -> [Span<'static>; 2] {
     let (glyph, color) = status_glyph(status);

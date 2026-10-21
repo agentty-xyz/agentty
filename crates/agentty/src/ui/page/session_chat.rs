@@ -28,10 +28,14 @@ use crate::ui::input_layout::{
 };
 use crate::ui::{
     Component, Page, layout, markdown, prompt_format, question_format, session_format, style,
+    task_chain_format,
 };
 
 /// Archived sessions reserve one timing row and one navigation row.
 const ARCHIVED_FOOTER_HEIGHT: u16 = 2;
+
+/// Placeholder of an ordinary session composer.
+const DEFAULT_COMPOSER_PLACEHOLDER: &str = "Type your message";
 
 /// Maximum rendered height of the prompt input panel, including borders.
 const CHAT_INPUT_MAX_PANEL_HEIGHT: u16 = 10;
@@ -55,7 +59,7 @@ struct PreparedPromptPanel {
     is_chat_focused: bool,
     /// Whether the footer carries the clipboard image-capture loader.
     is_pasting_image: bool,
-    status: Option<String>,
+    status: String,
     suggestion_list: Option<SuggestionList>,
     title: String,
     total_height: u16,
@@ -380,43 +384,17 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        if let AppMode::Prompt { input, .. } = self.mode {
-            let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref() else {
-                return;
-            };
-
-            let mut chat_input =
-                ChatInput::new(&prepared_prompt_panel.title, input.text(), input.cursor)
-                    .placeholder("Type your message")
-                    .footer(timing_label)
-                    .active(!prepared_prompt_panel.is_chat_focused);
-
-            if let Some(status) = prepared_prompt_panel.status.as_deref() {
-                chat_input = chat_input.status(status);
-            }
-
-            if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
-                chat_input = chat_input.suggestion_list(suggestion_list);
-            }
-
-            if bottom_area.height <= 1 {
-                chat_input.render(f, bottom_area);
-
-                return;
-            }
-
-            let panel_areas = layout::prompt_panel_areas(bottom_area);
-
-            chat_input.render(f, panel_areas.input_area);
-            f.render_widget(
-                Paragraph::new(prepared_prompt_panel.footer_text.clone()),
-                panel_areas.footer_area,
-            );
-            if prepared_prompt_panel.is_pasting_image {
-                TachyonLoaderEffect::apply_to_last_glyph(
-                    f.buffer_mut(),
-                    panel_areas.footer_area,
-                    Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
+        if let AppMode::Prompt {
+            input, slash_state, ..
+        } = self.mode
+        {
+            if let Some(prepared_prompt_panel) = layout_plan.prompt_panel.as_ref() {
+                self.render_prompt_composer(
+                    f,
+                    bottom_area,
+                    prepared_prompt_panel,
+                    (input, slash_state.is_plan_armed),
+                    timing_label,
                 );
             }
 
@@ -452,7 +430,10 @@ impl<'a> SessionChatPage<'a> {
             return;
         }
 
-        let title = session_composer_title(session);
+        let title = self.task_chain_graph.map_or_else(
+            || session_composer_title(session),
+            task_chain_format::composer_title,
+        );
         let status = session_format::prompt_session_status(session);
         let panel_areas = layout::prompt_panel_areas(bottom_area);
         ChatInput::new(&title, "", 0)
@@ -465,6 +446,55 @@ impl<'a> SessionChatPage<'a> {
             self.view_help_state(session),
         ));
         f.render_widget(help_message, panel_areas.footer_area);
+    }
+
+    /// Renders the active composer, its suggestion dropdown, and its footer.
+    ///
+    /// `composer` carries the edited input and whether `/plan` armed it.
+    fn render_prompt_composer(
+        &self,
+        f: &mut Frame,
+        bottom_area: Rect,
+        prepared_prompt_panel: &PreparedPromptPanel,
+        composer: (&input::InputState, bool),
+        timing_label: &str,
+    ) {
+        let (input, is_plan_armed) = composer;
+        let (title, placeholder) = prompt_composer_labels(
+            is_plan_armed,
+            self.task_chain_graph,
+            &prepared_prompt_panel.title,
+        );
+        let mut chat_input = ChatInput::new(&title, input.text(), input.cursor)
+            .placeholder(&placeholder)
+            .footer(timing_label)
+            .active(!prepared_prompt_panel.is_chat_focused)
+            .status(&prepared_prompt_panel.status);
+
+        if let Some(suggestion_list) = &prepared_prompt_panel.suggestion_list {
+            chat_input = chat_input.suggestion_list(suggestion_list);
+        }
+
+        if bottom_area.height <= 1 {
+            chat_input.render(f, bottom_area);
+
+            return;
+        }
+
+        let panel_areas = layout::prompt_panel_areas(bottom_area);
+
+        chat_input.render(f, panel_areas.input_area);
+        f.render_widget(
+            Paragraph::new(prepared_prompt_panel.footer_text.clone()),
+            panel_areas.footer_area,
+        );
+        if prepared_prompt_panel.is_pasting_image {
+            TachyonLoaderEffect::apply_to_last_glyph(
+                f.buffer_mut(),
+                panel_areas.footer_area,
+                Icon::spinner_frame_from_millis(self.frame_time.unix_millis()),
+            );
+        }
     }
 
     /// Resolves which view-mode footer actions apply to `session` within its
@@ -496,6 +526,39 @@ impl<'a> SessionChatPage<'a> {
             session_state: help_action::session_view_state(session),
         }
     }
+}
+
+/// Returns the active composer title and placeholder.
+///
+/// An armed `/plan` asks for the Planner task; a session that owns a task
+/// chain shows the active role and its graph status; other sessions keep the
+/// session settings title.
+fn prompt_composer_labels(
+    is_plan_armed: bool,
+    task_chain_graph: Option<&TaskChainGraph>,
+    session_title: &str,
+) -> (String, String) {
+    if is_plan_armed {
+        return (
+            task_chain_format::PLAN_ARMED_COMPOSER_TITLE.to_string(),
+            task_chain_format::PLAN_ARMED_COMPOSER_PLACEHOLDER.to_string(),
+        );
+    }
+
+    task_chain_graph.map_or_else(
+        || {
+            (
+                session_title.to_string(),
+                DEFAULT_COMPOSER_PLACEHOLDER.to_string(),
+            )
+        },
+        |graph| {
+            (
+                task_chain_format::composer_title(graph),
+                task_chain_format::composer_placeholder(graph),
+            )
+        },
+    )
 }
 
 /// Returns the session settings title shared by active and inactive composers.
@@ -565,20 +628,24 @@ fn prepare_prompt_panel(
     // While the session is `InProgress` the composer queues a leading
     // `/` as plain text instead of running a slash command, so suppress
     // the slash dropdown to avoid implying the menu is actionable. The
-    // `@` mention dropdown is still useful for editing queued messages.
-    let suppress_slash_dropdown = session.status == crate::domain::session::Status::InProgress;
+    // `@` mention dropdown is still useful for editing queued messages. An
+    // armed plan composer also treats its task as literal text.
+    let suppress_slash_dropdown =
+        slash_state.is_plan_armed || session.status == crate::domain::session::Status::InProgress;
+    let has_active_mention = at_mention_state.is_some() && input.at_mention_query().is_some();
     let allow_apply_command = review::has_actionable_review_suggestions(review_text);
-    let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
-        None
-    } else {
-        prompt_format::prompt_suggestion_list(
-            input,
-            slash_state,
-            at_mention_state.as_ref(),
-            session.agent.kind(),
-            allow_apply_command,
-        )
-    };
+    let suggestion_list =
+        if suppress_slash_dropdown && input.text().starts_with('/') && !has_active_mention {
+            None
+        } else {
+            prompt_format::prompt_suggestion_list(
+                input,
+                slash_state,
+                at_mention_state.as_ref(),
+                session.agent.kind(),
+                allow_apply_command,
+            )
+        };
     let dropdown_row_count =
         prompt_format::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
     let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())
@@ -597,7 +664,7 @@ fn prepare_prompt_panel(
         ),
         is_chat_focused: *focus == ChatFocus::Chat,
         is_pasting_image: attachment_state.is_pasting_image(),
-        status: Some(session_format::prompt_session_status(session)),
+        status: session_format::prompt_session_status(session),
         suggestion_list,
         title: session_composer_title(session),
         total_height: desired_bottom_height.min(max_bottom_height),

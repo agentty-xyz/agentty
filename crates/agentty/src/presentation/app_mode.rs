@@ -728,13 +728,6 @@ pub enum ChatFocus {
 
 /// Represents the active UI mode for the application.
 pub enum AppMode {
-    /// Displays isolated planning and implementation tasks for one session.
-    PlanWorkflow {
-        /// Session whose environment is shared by the two roles.
-        session_id: SessionId,
-        /// Foreground-owned presentation snapshot and composer.
-        state: Box<crate::presentation::plan_workflow::PlanWorkflowState>,
-    },
     /// Explicit project registration, discovery, and startup suggestion.
     ProjectCatalog {
         /// Current project dialog state.
@@ -963,8 +956,6 @@ pub enum HelpContext {
         can_mutate_session_branch: bool,
         /// Whether the session worktree may be opened externally.
         can_open_worktree: bool,
-        /// Whether the preview planning panel is enabled for this launch.
-        can_open_plan_workflow: bool,
         /// Whether the session branch may be rebased.
         can_rebase_session_branch: bool,
         /// Whether the session has a diff available to inspect.
@@ -1019,7 +1010,6 @@ impl HelpContext {
         match self {
             HelpContext::View {
                 can_fork_session,
-                can_open_plan_workflow,
                 can_merge_session_branch,
                 can_mutate_session_branch,
                 can_open_worktree,
@@ -1031,36 +1021,29 @@ impl HelpContext {
                 publish_pull_request_action,
                 session_state,
                 ..
-            } => {
-                let mut actions = help_action::view_actions_with_review_comments(
-                    ViewHelpState {
-                        can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
-                        can_merge_session_branch: ViewActionAvailability::from_bool(
-                            *can_merge_session_branch,
-                        ),
-                        can_mutate_session_branch: ViewActionAvailability::from_bool(
-                            *can_mutate_session_branch,
-                        ),
-                        can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
-                        can_rebase_session_branch: ViewActionAvailability::from_bool(
-                            *can_rebase_session_branch,
-                        ),
-                        can_show_diff: ViewActionAvailability::from_bool(*can_show_diff),
-                        reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
-                        can_start_staged_session: ViewActionAvailability::from_bool(
-                            *can_start_staged_session,
-                        ),
-                        publish_pull_request_action: *publish_pull_request_action,
-                        session_state: *session_state,
-                    },
-                    *can_view_review_comments,
-                );
-                if !can_open_plan_workflow {
-                    actions.retain(|action| action.key != "T");
-                }
-
-                actions
-            }
+            } => help_action::view_actions_with_review_comments(
+                ViewHelpState {
+                    can_fork_session: ViewActionAvailability::from_bool(*can_fork_session),
+                    can_merge_session_branch: ViewActionAvailability::from_bool(
+                        *can_merge_session_branch,
+                    ),
+                    can_mutate_session_branch: ViewActionAvailability::from_bool(
+                        *can_mutate_session_branch,
+                    ),
+                    can_open_worktree: ViewActionAvailability::from_bool(*can_open_worktree),
+                    can_rebase_session_branch: ViewActionAvailability::from_bool(
+                        *can_rebase_session_branch,
+                    ),
+                    can_show_diff: ViewActionAvailability::from_bool(*can_show_diff),
+                    reply_to_session: ViewActionAvailability::from_bool(*can_reply_to_session),
+                    can_start_staged_session: ViewActionAvailability::from_bool(
+                        *can_start_staged_session,
+                    ),
+                    publish_pull_request_action: *publish_pull_request_action,
+                    session_state: *session_state,
+                },
+                *can_view_review_comments,
+            ),
             HelpContext::List { keybindings } => keybindings.clone(),
             HelpContext::Diff { can_comment, .. } => help_action::diff_actions(*can_comment),
         }

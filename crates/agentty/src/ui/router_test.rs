@@ -252,32 +252,12 @@ fn render_list_backed_mode(mode: &AppMode) -> (bool, String) {
 }
 
 #[test]
-fn plan_workflow_routes_to_its_own_page_without_ordinary_session_output() {
-    // Arrange
-    let mode = AppMode::PlanWorkflow {
-        session_id: "session-overlay".into(),
-        state: Box::default(),
-    };
-
-    // Act
-    let (handled, text) = render_list_backed_mode(&mode);
-    let kind = surface_for_mode(&mode).kind();
-
-    // Assert
-    assert!(handled);
-    assert_eq!(kind, SurfaceKind::Session);
-    assert!(text.contains("Plan then implement"));
-    assert!(!text.contains("Captured output"));
-}
-
-#[test]
 fn surface_for_help_context_classifies_each_restored_page() {
     // Arrange
     let list_context = HelpContext::List {
         keybindings: vec![],
     };
     let view_context = HelpContext::View {
-        can_open_plan_workflow: false,
         can_fork_session: true,
         can_merge_session_branch: true,
         can_mutate_session_branch: true,
@@ -751,7 +731,6 @@ fn render_help_modes_forward_frame_time_to_list_and_view_backgrounds() {
         (
             AppMode::Help {
                 context: crate::presentation::app_mode::HelpContext::View {
-                    can_open_plan_workflow: false,
                     can_fork_session: true,
                     can_merge_session_branch: true,
                     can_mutate_session_branch: true,

@@ -1,7 +1,9 @@
-//! One terminal journey through explicit plan acceptance and stage retry.
+//! One regular-chat journey through the orchestrated Planner → Implementer
+//! chain: questions, revision, natural-language approval, cancel, retry, and
+//! follow-up.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use testty::assertion;
@@ -11,14 +13,26 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common::{self, BuilderEnv, FeatureTest};
-use crate::session::fixture::{E2eResult, seed_project_settings};
+use crate::session::fixture::{E2eResult, run_git, seed_project_settings};
 
 const WORKFLOW_MODEL_ID: &str = "claude-haiku-4-5-20251001";
 
-/// Focused-review text shown after the Implementer changes the worktree.
 const IMPLEMENTER_REVIEW_TEXT: &str = "Implementer focused review completed.";
+const CLEAN_REVIEW_TEXT: &str = "No suggestions remain after implementation review.";
 
+/// Seeds a scripted Claude provider for every chain role and the
+/// orchestrator decision.
+///
+/// The Planner first asks a question, then plans from the answer and
+/// revision. The decision approves only "start implementing". The first
+/// Implementer run blocks until canceled; later runs finish immediately.
 async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
+    std::fs::write(
+        env.workdir.join("plan_lookup_target.rs"),
+        "// lookup target\n",
+    )?;
+    run_git(&env.workdir, &["add", "plan_lookup_target.rs"])?;
+    run_git(&env.workdir, &["commit", "-m", "Add plan lookup target"])?;
     seed_project_settings(
         env,
         &[
@@ -38,19 +52,31 @@ if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
 prompt=$(cat)
 stub_root=$(dirname "$0")
 printf '%s\n' '{"type":"system","subtype":"init"}'
+questions=''
 case "$prompt" in
   *'Review the Git diff for display in a terminal UI.'*)
-    case "$prompt" in
-      *'Reduce review:'*|*'Cross-file review:'*) ;;
-      *) printf 'review\n' >> "$AGENTTY_TEST_REVIEW_LOG" ;;
-    esac
-    printf '%s\n' '{"type":"result","subtype":"success","result":"{\"project_impact\":[\"Implementer focused review completed.\"],\"suggestions\":[]}","usage":{"input_tokens":5,"output_tokens":9}}'
+    if grep -q 'reviewed' search.txt 2>/dev/null; then
+      result='{\"project_impact\":[\"No suggestions remain after implementation review.\"],\"suggestions\":[]}'
+    else
+      result='{\"project_impact\":[\"Implementer focused review completed.\"],\"suggestions\":[{\"details\":\"Mark the indexed search implementation as reviewed.\",\"severity\":\"medium\"}],\"candidate_decisions\":[{\"candidate_index\":0,\"suggestion_index\":0,\"reason\":\"The fixture search implementation needs review.\"}]}'
+    fi
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$result\",\"usage\":{\"input_tokens\":5,\"output_tokens\":9}}"
     exit 0
+    ;;
+  *"Decide whether the user's reply approves"*)
+    case "$prompt" in
+      *'start implementing'*) answer='implement' ;;
+      *) answer='revise' ;;
+    esac
     ;;
   *'Act as the planner'*)
     case "$prompt" in
-      *'Include search tests'*) answer='Plan version 2: add indexed search and tests.' ;;
-      *) answer='Plan version 1: add indexed search.' ;;
+      *'Include search tests'*) answer='Plan version 2: index titles and add search tests.' ;;
+      *'Use the title index'*) answer='Plan version 1: index titles.' ;;
+      *)
+        answer=''
+        questions=',"questions":[{"text":"Which index should search use?","options":[]}]'
+        ;;
     esac
     ;;
   *'Act as the implementer'*)
@@ -59,12 +85,24 @@ case "$prompt" in
       while [ -d "$stub_root" ]; do sleep 0.02; done
       exit 0
     fi
-    printf 'indexed search\n' > search.txt
-    answer='Implementation finished from accepted plan version 2.'
+    case "$prompt" in
+      *'Also update the docs'*)
+        printf 'Indexed search documentation\n' > search-guide.txt
+        answer='Docs updated for indexed search.'
+        ;;
+      *'Verify the focused-review suggestions against the current code'*)
+        printf 'reviewed indexed search\n' > search.txt
+        answer='Review suggestion applied by the Implementer.'
+        ;;
+      *)
+        printf 'indexed search\n' > search.txt
+        answer='Implementation finished from accepted plan version 2.'
+        ;;
+    esac
     ;;
   *) answer='Session unchanged.' ;;
 esac
-printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"},"usage":{"input_tokens":8,"output_tokens":6}}\n' "$answer"
+printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"%s},"usage":{"input_tokens":8,"output_tokens":6}}\n' "$answer" "$questions"
 "#,
     )?;
     std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o750))?;
@@ -72,15 +110,32 @@ printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"}
     Ok(())
 }
 
-/// Wait until cancellation can exercise the running worker rather than queued
-/// admission.
+/// Footer text shown only while the composer owns input.
+const COMPOSER_FOOTER: &str = "Enter: send";
+
+/// Opens the composer, sends `message`, and returns to the chat view.
+fn send_chat_message(scenario: Scenario, message: &str) -> Scenario {
+    open_composer(scenario)
+        .write_text(message)
+        .press_key("Enter")
+}
+
+/// Opens the composer from the chat view.
+fn open_composer(scenario: Scenario) -> Scenario {
+    scenario
+        .press_key("Enter")
+        .wait_for_text(COMPOSER_FOOTER, 5000)
+}
+
+/// Waits until the scripted Implementer process runs, so cancellation
+/// exercises the running worker rather than queued admission.
 fn wait_for_implementer(scenario: Scenario, started: PathBuf) -> Scenario {
     scenario.eventually(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         Duration::from_millis(20),
         move |frame| {
             let expected = if started.is_file() {
-                "Implementer running"
+                "Implementer  ◐ Working"
             } else {
                 "Scripted Implementer startup marker"
             };
@@ -93,21 +148,11 @@ fn wait_for_implementer(scenario: Scenario, started: PathBuf) -> Scenario {
     )
 }
 
-/// Ordinary chat shows the request, live graph, and role-attributed answers.
-fn assert_chat_shows_chain(chat: &TerminalFrame) {
-    let full = Region::full(chat.cols(), chat.rows());
-    for expected in [
-        "› Add search",
-        "⬡ Execution graph",
-        "Planner      ✓ Done",
-        "│ accepted plan ✓",
-        "Implementer  ✓ Done",
-        "◆ Planner",
-        "Plan version 2: add indexed search and tests.",
-        "◆ Implementer",
-        "Implementation finished from accepted plan version 2.",
-    ] {
-        assertion::assert_text_in_region(chat, expected, &full);
+/// Asserts each expected text is visible in one captured frame.
+fn assert_visible(frame: &TerminalFrame, expected: &[&str]) {
+    let full = Region::full(frame.cols(), frame.rows());
+    for text in expected {
+        assertion::assert_text_in_region(frame, text, &full);
     }
 }
 
@@ -131,14 +176,14 @@ async fn plan_command_is_unavailable_by_default() -> E2eResult {
                     .write_text("plan")
                     .press_key("Enter")
                     .wait_for_stable_frame(300, 3000)
-                    .capture_labeled("disabled", "Typing /plan cannot open the panel")
+                    .capture_labeled("disabled", "Typing /plan cannot arm the composer")
             },
             |frame, report| {
                 Box::pin(async move {
                     let menu = common::frame_from_capture(&report.captures[0]);
                     assertion::assert_not_visible(&menu, "/plan");
                     assertion::assert_not_visible(frame, "Plan then implement");
-                    assertion::assert_not_visible(frame, "New plan");
+                    assertion::assert_not_visible(frame, "describe the task for the Planner");
                     assertion::assert_text_in_region(
                         frame,
                         "/plan",
@@ -153,21 +198,18 @@ async fn plan_command_is_unavailable_by_default() -> E2eResult {
 }
 
 #[tokio::test]
-async fn plan_then_implement_requires_acceptance_and_preserves_role_history() -> E2eResult {
-    // Arrange, Act, Assert: lower tests own phase and identity permutations.
+async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
+    // Arrange, Act, Assert: lower tests own routing and phase permutations.
     let gate = tempfile::tempdir()?;
     let started = gate.path().join("implementation-started");
-    let review_log = gate.path().join("review-runs");
-    let review_runs = review_log.clone();
     FeatureTest::new("plan_then_implement")
         .with_git()
-        .with_terminal_size(100, 60)
+        .with_terminal_size(100, 80)
         .args(["--experimental-multi-agent".to_string()])
         .env(
             "AGENTTY_TEST_IMPLEMENTER_STARTED",
             started.to_string_lossy(),
         )
-        .env("AGENTTY_TEST_REVIEW_LOG", review_log.to_string_lossy())
         .setup(|env| Box::pin(async move { seed_workflow_project(env).await }))
         .run(
             move |scenario| {
@@ -182,64 +224,63 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
                     .write_text("plan")
                     .wait_for_text("Plan then implement", 3000)
                     .press_key("Enter")
-                    .wait_for_text("New plan · original request", 5000)
-                    .write_text("Add search")
+                    .wait_for_text("Plan · describe the task for the Planner", 5000)
+                    .capture_labeled("armed", "/plan arms the regular composer")
+                    .write_text("/src/search.rs @plan_lookup")
+                    .wait_for_text("plan_lookup_target.rs", 5000)
+                    .press_key("Tab")
+                    .wait_for_text("/src/search.rs @plan_lookup_target.rs", 5000)
+                    .press_key("Esc")
+                    .eventually(Duration::from_secs(5), Duration::from_millis(20), |frame| {
+                        assertion::match_not_visible(
+                            frame,
+                            "Plan · describe the task for the Planner",
+                        )
+                    })
+                    .press_key("ctrl+u")
+                    .wait_for_text("Type your message", 5000)
+                    .write_text("/plan /src/search.rs needs indexed search")
                     .press_key("Enter")
-                    .wait_for_text("Awaiting plan acceptance", 20000)
-                    .wait_for_text("Plan version 1", 5000)
+                    .wait_for_text("Which index should search use?", 20000)
+                    .wait_for_text("Planner      ? Needs your input", 10000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("question", "The Planner asks in the chat");
+                let scenario = send_chat_message(scenario, "Use the title index")
+                    .wait_for_text("Plan version 1: index titles.", 20000)
+                    .wait_for_text("Planner      ● Awaiting your approval", 10000)
+                    .wait_for_stable_frame(300, 5000);
+                let scenario = open_composer(scenario)
+                    .wait_for_text("tell the orchestrator to start implementing", 5000)
                     .capture_labeled(
-                        "planner_ready",
-                        "Read-only Planner waits for explicit acceptance",
+                        "awaiting_approval",
+                        "The composer shows the orchestrator state",
                     )
-                    .press_key("r")
-                    .wait_for_text("Revise plan · instructions for Planner", 3000)
                     .write_text("Include search tests")
                     .press_key("Enter")
-                    .wait_for_text("Plan version 2", 20000)
-                    // The answer and settled status refresh the panel
-                    // separately; accept only after the last load lands.
-                    .wait_for_stable_frame(500, 5000)
-                    .press_key("Enter")
-                    .wait_for_text("Implementer running", 20000);
-                wait_for_implementer(scenario, started)
-                    .press_key("Esc")
+                    .wait_for_text("Plan version 2: index titles and add search tests.", 20000)
+                    .wait_for_text("Planner      ● Awaiting your approval", 10000)
+                    .wait_for_stable_frame(300, 5000);
+                let scenario = send_chat_message(scenario, "Looks good, start implementing")
+                    .wait_for_text("Plan accepted · Implementer started", 20000);
+                let scenario = wait_for_implementer(scenario, started)
                     .wait_for_stable_frame(300, 5000)
-                    .write_text("T")
-                    .wait_for_text("Implementer running", 5000)
-                    .press_key("x")
-                    .wait_for_text("Canceled · retry after the worker stops", 10000)
-                    .press_key("Esc")
-                    .wait_for_text("Enter: reply", 10000)
-                    .write_text("T")
-                    .wait_for_text("Canceled · retry after the worker stops", 5000)
-                    .press_key("r")
-                    .wait_for_text("Retry Implementer · optional clarification", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("Implementation succeeded", 20000)
-                    .wait_for_text(
-                        "Implementation finished from accepted plan version 2.",
-                        5000,
-                    )
-                    .capture_labeled(
-                        "implementation_done",
-                        "Implementer retry retains the accepted plan",
-                    )
-                    .press_key("Esc")
-                    .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 30000)
-                    .wait_for_text("Implementer  ✓ Done", 10000)
+                    .capture_labeled("implementing", "Planner done, Implementer working");
+                let scenario = send_chat_message(scenario, "Hurry up")
+                    .wait_for_text("The Implementer is still working", 10000)
                     .wait_for_stable_frame(300, 5000)
-                    .capture_labeled(
-                        "session_chat",
-                        "Role answers, live graph, and focused review appear in chat",
-                    )
-                    .press_key("/")
-                    .write_text("plan")
-                    .press_key("Enter")
-                    .wait_for_text("Implementation succeeded", 5000)
+                    .capture_labeled("busy", "A reply while the Implementer works is kept")
+                    .press_key("Esc")
+                    .wait_for_text("Ctrl+c: stop", 10000)
+                    .press_key("ctrl+c")
+                    .wait_for_text("Implementer  ⊘ Canceled", 20000)
+                    .wait_for_text("Enter: reply", 20000)
+                    .wait_for_stable_frame(300, 5000)
+                    .capture_labeled("canceled", "Ctrl+c cancels the running Implementer");
+                complete_reviewed_implementation(scenario)
             },
-            move |frame, report| {
+            |frame, report| {
                 Box::pin(async move {
-                    assert_plan_workflow_report(frame, report, &review_runs);
+                    assert_orchestrated_chat(frame, report);
                 })
             },
         )
@@ -248,28 +289,98 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
     Ok(())
 }
 
-/// Checks the role conversation and the successful Implementer's one focused
-/// review.
-fn assert_plan_workflow_report(frame: &TerminalFrame, report: &ProofReport, review_runs: &Path) {
-    let planner = common::frame_from_capture(&report.captures[0]);
-    let planner_full = Region::full(planner.cols(), planner.rows());
-    assertion::assert_text_in_region(&planner, "Planner", &planner_full);
-    assertion::assert_text_in_region(&planner, "Plan version 1", &planner_full);
-    let chat = common::frame_from_capture(&report.captures[2]);
-    assert_chat_shows_chain(&chat);
-    assertion::assert_text_in_region(
-        &chat,
-        IMPLEMENTER_REVIEW_TEXT,
-        &Region::full(chat.cols(), chat.rows()),
+/// Finishes the retry, applies focused-review feedback, and sends a follow-up.
+fn complete_reviewed_implementation(scenario: Scenario) -> Scenario {
+    let scenario = send_chat_message(scenario, "Retry please")
+        .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 30000)
+        .wait_for_text("Implementer  ✓ Done", 10000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled("implemented", "The Implementer starts focused review");
+    let scenario = open_composer(scenario)
+        .write_text("/apply")
+        .press_key("Enter")
+        .wait_for_text("Review suggestion applied by the Implementer.", 30000)
+        .wait_for_text(CLEAN_REVIEW_TEXT, 30000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled(
+            "applied",
+            "/apply routes review feedback to the Implementer",
+        );
+    let scenario = send_chat_message(scenario, "Also update the docs")
+        .wait_for_text("Docs updated for indexed search.", 20000)
+        .wait_for_text(CLEAN_REVIEW_TEXT, 30000)
+        .wait_for_stable_frame(300, 5000);
+
+    open_composer(scenario)
+        .wait_for_text("Ask the Implementer for more changes", 5000)
+        .wait_for_stable_frame(300, 5000)
+        .capture_labeled("follow_up", "Follow-ups reach the Implementer")
+}
+
+/// Checks the visible conversation states captured by the chat journey.
+fn assert_orchestrated_chat(frame: &TerminalFrame, report: &ProofReport) {
+    let capture = |index: usize| common::frame_from_capture(&report.captures[index]);
+    assert_visible(
+        &capture(0),
+        &[
+            "Plan · describe the task for the Planner",
+            "Describe the task for the Planner",
+        ],
     );
-    // Planner revisions and the canceled Implementer start no review.
-    assert_eq!(
-        std::fs::read_to_string(review_runs).unwrap_or_default(),
-        "review\n"
+    assert_visible(
+        &capture(1),
+        &[
+            "› /src/search.rs needs indexed search",
+            "⬡ Execution graph",
+            "◆ Planner",
+            "Which index should search use?",
+            "Orchestrator · Planner · Needs your input",
+        ],
     );
-    assertion::assert_text_in_region(
+    assert_visible(
+        &capture(2),
+        &["Orchestrator · Planner · Awaiting your approval"],
+    );
+    assert_visible(
+        &capture(3),
+        &[
+            "Planner      ✓ Done",
+            "│ accepted plan ✓",
+            "Implementer  ◐ Working",
+            "Plan version 2: index titles and add search tests.",
+        ],
+    );
+    assert_visible(
+        &capture(4),
+        &[
+            "The Implementer is still working",
+            "Hurry up",
+            "Orchestrator · Implementer · Working",
+        ],
+    );
+    assert_visible(&capture(5), &["Implementer  ⊘ Canceled"]);
+    assert_visible(
+        &capture(6),
+        &[
+            "◆ Implementer",
+            "Implementation finished from accepted plan version 2.",
+            "Implementer  ✓ Done",
+            IMPLEMENTER_REVIEW_TEXT,
+        ],
+    );
+    assert_visible(
+        &capture(7),
+        &[
+            "Review suggestion applied by the Implementer.",
+            CLEAN_REVIEW_TEXT,
+        ],
+    );
+    assert_visible(
         frame,
-        "Implementation succeeded",
-        &Region::full(frame.cols(), frame.rows()),
+        &[
+            "› Also update the docs",
+            "Docs updated for indexed search.",
+            "Orchestrator · Implementer · Done",
+        ],
     );
 }

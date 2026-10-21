@@ -624,9 +624,14 @@ impl App {
             None
         };
 
+        // Chain sessions send the instruction to the Implementer through the
+        // orchestrator instead of starting an ordinary turn.
         let prompt = ag_session::build_apply_review_prompt(suggestions);
         if let Some(completed_iterations) = completed_auto_address_iterations {
-            if !self.reply(session_id, prompt).await {
+            if !self
+                .reply_through_task_chain_or_session(session_id, prompt)
+                .await
+            {
                 let request_id = self.set_review_ready_output(
                     session_id,
                     cached_diff_hash,
@@ -651,7 +656,8 @@ impl App {
             return;
         }
 
-        self.reply(session_id, prompt).await;
+        self.reply_through_task_chain_or_session(session_id, prompt)
+            .await;
     }
 
     /// Discards detached diff tasks whose continuations belong to an obsolete

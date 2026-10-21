@@ -108,9 +108,10 @@ effects. Implementer post-processing uses an isolated transcript projection and 
 ordered through publication. A settled task attempt refreshes its owning session only
 after operation bookkeeping finishes, so consumers observe its final durable status.
 
-The terminal projects planning commands and panel access from the launch-time
-`--experimental-multi-agent` setting; the shared task API retains its own programmatic
-contract.
+The terminal offers `/plan` only with the launch-time `--experimental-multi-agent`
+setting; the shared task API retains its own programmatic contract. Routing does not
+depend on the flag: a session that owns a task chain sends every composer message,
+`/apply` instruction, and automatic review remediation to the orchestrator.
 
 Role admission invalidates earlier ordinary review work and its durable recovery
 trigger, and the admitted attempt owns review suppression. After its effects, a
@@ -184,11 +185,15 @@ Completion replaces matching progress with its result in one reducer update. Sta
 results cannot persist notices. Rendering reads snapshots; it does not perform workflow
 side effects. Runtime-owned caches share derived layout between scrolling and painting.
 
-The planning panel reads task-chain and role-history snapshots through `SessionService`.
-Its launch, acceptance, revision, clarification, retry, and cancellation actions use the
-same command gateway as programmatic callers. Background replies return through the
-reducer with a panel request identity; navigation and newer requests invalidate late
-results. Rendering never advances a workflow.
+Session chat is the only task-chain surface. An armed `/plan` composer launches the
+chain, and the session's later messages become natural-language replies; both use the
+same command gateway as programmatic callers. Chain ownership is read from storage at
+submit time, so routing is correct before the transcript or graph snapshot loads after a
+restart. A reply waiting for an orchestrator decision is accepted at once; a failure of
+the decided action is appended as a transcript notice when it returns. Busy chains
+reject replies instead of queueing them, and the composer keeps the draft. Stopping a
+running role cancels the chain through the gateway, which records the cancellation
+before interrupting the attempt. Rendering never advances a workflow.
 
 Launch admission saves the original request and execution-graph marker in its
 transaction; saving a chain-owned response likewise saves its role-attributed answer
