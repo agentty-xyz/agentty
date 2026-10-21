@@ -59,6 +59,13 @@ case "$prompt" in
   *"Generate a concise, commit-style title"*)
     answer='Add indexed search'
     ;;
+  *'Generate the canonical session commit message'*)
+    if [ "${AGENTTY_TEST_HOLD_COMMIT:-}" = '1' ]; then
+      while [ -d "$stub_root" ]; do sleep 0.02; done
+      exit 0
+    fi
+    answer='Implement indexed search'
+    ;;
   *'Review the Git diff for display in a terminal UI.'*)
     if grep -q 'reviewed' search.txt 2>/dev/null; then
       result='{\"project_impact\":[\"No suggestions remain after implementation review.\"],\"suggestions\":[]}'
@@ -203,6 +210,66 @@ async fn plan_command_is_unavailable_by_default() -> E2eResult {
 }
 
 #[tokio::test]
+async fn implementation_diff_is_available_during_post_processing() -> E2eResult {
+    // Arrange, Act, Assert: inspect implementation changes while commit
+    // generation is held.
+    let gate = tempfile::tempdir()?;
+    let started = gate.path().join("implementation-started");
+    std::fs::write(&started, "started")?;
+    FeatureTest::new("implementation_diff_during_post_processing")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .args(["--experimental-multi-agent".to_string()])
+        .env(
+            "AGENTTY_TEST_IMPLEMENTER_STARTED",
+            started.to_string_lossy(),
+        )
+        .env("AGENTTY_TEST_HOLD_COMMIT", "1")
+        .setup(|env| Box::pin(async move { seed_workflow_project(env).await }))
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 10000)
+                    .write_text("/plan Add indexed search")
+                    .press_key("Enter")
+                    .wait_for_text("Which index should search use?", 20000);
+                let scenario = send_chat_message(scenario, "Use the title index")
+                    .wait_for_text("Planner      ● Awaiting your approval", 20000);
+                send_chat_message(scenario, "Looks good, start implementing")
+                    .wait_for_text(
+                        "Implementation finished from accepted plan version 2.",
+                        20000,
+                    )
+                    .wait_for_text("(+1 -0)", 10000)
+                    .capture_labeled(
+                        "changes",
+                        "Changes remain inspectable during commit generation",
+                    )
+                    .press_key("d")
+                    .wait_for_text("+indexed search", 10000)
+                    .capture_labeled("diff", "The diff shows the Implementer's changes")
+            },
+            |frame, report| {
+                Box::pin(async move {
+                    assert_visible(
+                        &common::frame_from_capture(&report.captures[0]),
+                        &["(+1 -0)", "Implementer  ◐ Working"],
+                    );
+                    assert_visible(frame, &["search.txt", "+indexed search"]);
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
     // Arrange, Act, Assert: lower tests own routing and phase permutations.
     let gate = tempfile::tempdir()?;
@@ -300,8 +367,13 @@ fn complete_reviewed_implementation(scenario: Scenario) -> Scenario {
     let scenario = send_chat_message(scenario, "Retry please")
         .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 30000)
         .wait_for_text("Implementer  ✓ Done", 10000)
+        .wait_for_text("(+1 -0)", 10000)
         .wait_for_stable_frame(300, 5000)
-        .capture_labeled("implemented", "The Implementer starts focused review");
+        .capture_labeled("implemented", "The Implementer starts focused review")
+        .press_key("d")
+        .wait_for_text("+indexed search", 10000)
+        .press_key("q")
+        .wait_for_text(IMPLEMENTER_REVIEW_TEXT, 10000);
     let scenario = open_composer(scenario)
         .write_text("/apply")
         .press_key("Enter")

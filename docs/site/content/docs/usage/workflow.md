@@ -51,6 +51,10 @@ guidance. An implementation retry keeps its accepted plan. Both roles share the
 session's worktree. Review and merge the resulting changes through the ordinary session
 actions.
 
+The changed-line totals refresh when the Implementer returns its answer. Press `d` to
+inspect those changes while automatic commit and publishing finish. The totals refresh
+again after post-processing completes.
+
 When the **Implementer** finishes without questions, the session starts the same
 [focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
 Planner results, questions, and failed or canceled work do not start a review.

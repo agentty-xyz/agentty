@@ -8,8 +8,8 @@ use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, QuestionItem};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SessionId, SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
-    TaskAttemptStatus,
+    SessionDiffState, SessionId, SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment,
+    TaskAgentInput, TaskAttemptStatus,
 };
 use ag_worker::{MockRunClient, SessionRunClient};
 use sqlx::SqlitePool;
@@ -27,6 +27,7 @@ use crate::app::session::workflow::worker::{
 };
 use crate::app::test_support::TestSessionRunFactory;
 use crate::app::{App, AppEvent};
+use crate::domain::session::{SessionDiffStats, SessionSize};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
 use crate::infra::personality::MockPersonalityCatalogClient;
@@ -869,6 +870,113 @@ fn poison_lock<Value: Send + 'static>(lock: Arc<Mutex<Value>>) {
         std::panic::resume_unwind(Box::new("poison test lock"));
     })
     .join();
+}
+
+#[tokio::test]
+async fn implementer_projects_diff_before_commit_finishes_and_refreshes_afterward() {
+    // Arrange
+    let (mut context, _pool) = execution_context().await;
+    let request = accepted_implementation(&context, request("plan")).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    context.app_event_tx = event_tx;
+    let commit_started = Arc::new(Notify::new());
+    let commit_release = Arc::new(Notify::new());
+    let mut git = MockGitClient::new();
+    git.expect_detect_git_info()
+        .once()
+        .returning(|_| Box::pin(async { Some("wt/sess".to_string()) }));
+    git.expect_main_checkout_working_tree()
+        .once()
+        .returning(|_| Box::pin(async { Ok(None) }));
+    git.expect_diff().times(2).returning(|_, _| {
+        Box::pin(async {
+            Ok(
+                "diff --git a/search.txt b/search.txt\n--- a/search.txt\n+++ b/search.txt\n@@ -1 \
+                 +1 @@\n-old search\n+indexed search\n"
+                    .to_string(),
+            )
+        })
+    });
+    let started = Arc::clone(&commit_started);
+    let release = Arc::clone(&commit_release);
+    git.expect_is_worktree_clean().once().returning(move |_| {
+        let started = Arc::clone(&started);
+        let release = Arc::clone(&release);
+        Box::pin(async move {
+            started.notify_one();
+            release.notified().await;
+            Ok(true)
+        })
+    });
+    context.git_client = Arc::new(git);
+    let (request_tx, _request_rx) = mpsc::unbounded_channel();
+    let cancellation = CancellationToken::new();
+    let factory = implementation_factory("writable", request_tx, &cancellation);
+
+    // Act
+    let run = task_turn::run(
+        &context,
+        Arc::new(MockRunClient::new()),
+        &request,
+        &factory,
+        cancellation,
+    );
+    tokio::pin!(run);
+    let completed = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            result = &mut run => Some(result),
+            () = commit_started.notified() => None,
+        }
+    })
+    .await
+    .expect("commit started");
+
+    // Assert: changes are durable and projected while post-processing owns the
+    // turn.
+    assert!(
+        completed.is_none(),
+        "task finished before the commit gate: {completed:?}"
+    );
+    let row = context
+        .db
+        .sessions()
+        .load_session("sess")
+        .await
+        .expect("session")
+        .expect("present");
+    assert_eq!(
+        (row.added_lines, row.deleted_lines, row.has_diff),
+        (1, 1, Some(true))
+    );
+    assert_eq!(
+        *context.status.lock().expect("status"),
+        SessionStatus::InProgress
+    );
+    let projected = std::iter::from_fn(|| event_rx.try_recv().ok()).find_map(|event| {
+        if let AppEvent::SessionDiffStatsUpdated { diff_stats, .. } = event {
+            Some(diff_stats)
+        } else {
+            None
+        }
+    });
+    assert_eq!(
+        projected,
+        Some(SessionDiffStats::Known {
+            added_lines: 1,
+            deleted_lines: 1,
+            has_diff: true,
+            session_size: SessionSize::Xs,
+        })
+    );
+    commit_release.notify_one();
+    run.await.expect("implementation finished");
+    assert_eq!(
+        *context.status.lock().expect("status"),
+        SessionStatus::Review
+    );
+    assert!(std::iter::from_fn(|| event_rx.try_recv().ok()).any(|event| {
+        matches!(event, AppEvent::SessionDiffStatsUpdated { diff_stats, .. } if diff_stats.diff_state() == SessionDiffState::Present)
+    }));
 }
 
 #[tokio::test]

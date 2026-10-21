@@ -105,8 +105,11 @@ and clarification contain only that task's input and responses; ordinary session
 questions, personality application state, and provider continuation remain unchanged.
 Planner execution restricts permissions to `ReadOnly` and performs no commit or forge
 effects. Implementer post-processing uses an isolated transcript projection and remains
-ordered through publication. A settled task attempt refreshes its owning session only
-after operation bookkeeping finishes, so consumers observe its final durable status.
+ordered through publication. Implementer answers refresh persisted and visible diff
+stats before commit and publishing effects, with another refresh during finalization.
+Diff inspection remains available during active work. A settled task attempt refreshes
+its owning session only after operation bookkeeping finishes, so consumers observe its
+final durable status.
 
 The terminal offers `/plan` only with the launch-time `--experimental-multi-agent`
 setting; the shared task API retains its own programmatic contract. Routing does not

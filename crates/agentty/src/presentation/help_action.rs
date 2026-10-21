@@ -200,7 +200,10 @@ impl ViewActionSet {
             && (can_show_review
                 || matches!(
                     state.session_state,
-                    ViewSessionState::Merged | ViewSessionState::Done | ViewSessionState::Canceled
+                    ViewSessionState::InProgress
+                        | ViewSessionState::Merged
+                        | ViewSessionState::Done
+                        | ViewSessionState::Canceled
                 ));
 
         Self {

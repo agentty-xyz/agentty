@@ -126,7 +126,7 @@ fn test_view_actions_in_progress_shows_stop_and_sync_and_hides_open_and_edit_act
     assert!(actions.iter().any(|action| action.key == "r"));
     assert!(!actions.iter().any(|action| action.key == "Enter"));
     assert!(!actions.iter().any(|action| action.key == "o"));
-    assert!(!actions.iter().any(|action| action.key == "d"));
+    assert!(actions.iter().any(|action| action.key == "d"));
 }
 
 #[test]
