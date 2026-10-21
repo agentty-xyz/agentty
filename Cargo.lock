@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ag-agent"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-contracts",
  "ag-harness",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "ag-clipboard"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "image",
  "mockall",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ag-contracts"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-protocol",
  "async-trait",
@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "ag-forge"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "mockall",
  "serde",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "ag-git"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-telemetry",
  "mockall",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-router",
  "async-trait",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "ag-harness-cli"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-harness",
  "ag-telemetry",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "ag-protocol"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "askama",
  "schemars 1.2.3",
@@ -151,7 +151,7 @@ dependencies = [
 
 [[package]]
 name = "ag-router"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "ag-runtime"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-agent",
  "ag-contracts",
@@ -178,14 +178,14 @@ dependencies = [
 
 [[package]]
 name = "ag-scheduler"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "ag-session"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-contracts",
  "ag-forge",
@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "ag-store"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "ag-telemetry"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "ag-tui-text"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ratatui",
  "rustc-hash",
@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "ag-worker"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-contracts",
  "ag-protocol",
@@ -267,7 +267,7 @@ dependencies = [
 
 [[package]]
 name = "ag-xtask"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "clap",
  "mockall",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "agentty"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "ag-clipboard",
  "ag-contracts",
@@ -4516,7 +4516,7 @@ dependencies = [
 
 [[package]]
 name = "testty"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "base64 0.23.1",
  "clap",
