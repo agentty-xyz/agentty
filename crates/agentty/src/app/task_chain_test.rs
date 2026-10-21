@@ -1,7 +1,8 @@
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, BuiltinAgentDefinition,
-    ContinueTaskChainRequest, FocusedReviewStatus, SessionError, SessionId, SessionMessageKind,
-    SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn, TaskChainPhase,
+    ContinueTaskChainRequest, FocusedReviewStatus, ReplyToTaskChainRequest, SessionError,
+    SessionId, SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn,
+    TaskChainPhase,
 };
 use tempfile::TempDir;
 
@@ -391,6 +392,17 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         .await
         .is_err()
     );
+    assert!(matches!(
+        app.drive_session_request(service.reply_to_task_chain(
+            &SessionId::from("missing"),
+            ReplyToTaskChainRequest {
+                message: "Go ahead".into(),
+                reply_id: "reply".into(),
+            },
+        ))
+        .await,
+        Err(SessionError::Operation(_))
+    ));
 }
 
 async fn revised_plan(
