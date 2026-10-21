@@ -18,9 +18,9 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use super::fixture::{
-    E2eResult, RESOLVED_DECISION_REVIEW_TEXT, run_git, seed_review_ready_session,
-    seed_review_ready_session_with_review_request, seed_review_with_resolved_decision,
-    seed_review_worktree_with_diff, seed_sessions_tab,
+    E2eResult, RESOLVED_DECISION_REVIEW_TEXT, run_git, seed_review_description_provider,
+    seed_review_ready_session, seed_review_ready_session_with_review_request,
+    seed_review_with_resolved_decision, seed_review_worktree_with_diff, seed_sessions_tab,
 };
 use crate::common;
 use crate::common::{
@@ -106,6 +106,7 @@ fn seed_successful_review_request_publish(
     review_branch_name: &str,
     remote_branch_was_deleted: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_description_provider(env)?;
     let session_worktree = env.agentty_root.join("wt").join("review-s");
     run_git(&session_worktree, &["branch", "-m", "wt/review-s"])?;
     run_git(&session_worktree, &["branch", "main", "HEAD"])?;
@@ -144,15 +145,26 @@ fi
     };
     let script = format!(
         r#"#!/bin/sh
+if [ "$1" = "ls-remote" ] && [ "$2" = "--refs" ]; then
+  published_hash=$('{}' rev-parse HEAD)
+  printf '%s\trefs/heads/main\n%s\trefs/heads/{review_branch_name}\n' "$published_hash" "$published_hash"
+  exit 0
+fi
+if [ "$1" = "fetch" ] && [ "$2" = "--no-tags" ]; then
+  exit 0
+fi
 {remote_lookup}if [ "$1" = "push" ]; then
 {push_lease_guard}  {hold_push}
   case " $* " in
     *" --porcelain "*) printf '*\tHEAD:refs/heads/{review_branch_name}\t[new branch]\n' ;;
   esac
+  '{}' update-ref 'refs/remotes/origin/{review_branch_name}' HEAD
   exit 0
 fi
 exec '{}' "$@"
 "#,
+        real_git.display(),
+        real_git.display(),
         real_git.display()
     );
     std::fs::write(&git_path, script)?;
@@ -160,7 +172,7 @@ exec '{}' "$@"
     std::fs::set_permissions(&git_path, std::fs::Permissions::from_mode(0o750))?;
 
     let gh_path = env.stub_bin.join("gh");
-    let gh_script = r#"#!/bin/sh
+    let gh_script = r###"#!/bin/sh
 marker_path="${0}.created"
 case "$*" in
   *"auth status"*)
@@ -174,6 +186,10 @@ case "$*" in
     fi
     ;;
   *"pr create"*)
+    case "$*" in
+      *"## Why?"*"## What?"*"## Impact?"*) ;;
+      *) echo 'missing generated review description' >&2; exit 1 ;;
+    esac
     __HOLD_CREATE__
     touch "$marker_path"
     ;;
@@ -185,7 +201,7 @@ case "$*" in
     exit 1
     ;;
 esac
-"#
+"###
     .replace("__HOLD_CREATE__", hold_create)
     .replace("__REVIEW_BRANCH_NAME__", review_branch_name);
     std::fs::write(&gh_path, gh_script)?;

@@ -352,6 +352,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
+ "pulldown-cmark",
  "ratatui",
  "reqwest",
  "rustc-hash",

@@ -1663,6 +1663,7 @@ impl SessionWorkerService {
             } => {
                 Self::run_create_review_request_command(
                     context,
+                    Arc::clone(run_client),
                     branch_publish_session,
                     remote_branch_name,
                     response,
@@ -1741,6 +1742,7 @@ impl SessionWorkerService {
     /// review-ready state instead of the enqueue-time snapshot.
     async fn run_create_review_request_command(
         context: &SessionWorkerContext,
+        run_client: Arc<dyn RunClient>,
         mut branch_publish_session: BranchPublishTaskSession,
         remote_branch_name: Option<String>,
         response: Option<ReviewRequestResponse>,
@@ -1756,7 +1758,9 @@ impl SessionWorkerService {
             BranchPublishTaskContext {
                 app_event_tx: context.app_event_tx.clone(),
                 branch_operation_lock: Arc::clone(&context.branch_operation_lock),
+                run_client,
                 session: branch_publish_session,
+                session_agent: context.session_agent,
                 session_update_versions: context.session_update_versions.clone(),
                 transcript: Arc::clone(&context.transcript),
             },

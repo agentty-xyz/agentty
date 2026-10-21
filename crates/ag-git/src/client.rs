@@ -257,12 +257,42 @@ pub trait GitClient: Send + Sync {
         branch_name: String,
     ) -> GitFuture<Result<(), GitError>>;
 
-    /// Returns a patch diff from `base_branch` to current `HEAD` in
-    /// `repo_path`.
+    /// Returns a cumulative patch including committed, staged, unstaged, and
+    /// untracked changes relative to `base_branch` in `repo_path`.
     ///
     /// # Errors
     /// Returns an error when refs are invalid or diff generation fails.
     fn diff(&self, repo_path: PathBuf, base_branch: String) -> GitFuture<Result<String, GitError>>;
+
+    /// Returns only committed changes on `source_ref` since its merge base
+    /// with `base_branch`. Resolves both refs to immutable commits before
+    /// capturing the patch; the index and working tree are never consulted.
+    ///
+    /// # Errors
+    /// Returns an error when either ref is invalid, no merge base exists, or
+    /// Git cannot generate the patch.
+    fn committed_diff(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+        source_ref: String,
+    ) -> GitFuture<Result<String, GitError>>;
+
+    /// Resolves remote branch tips and acquires their objects independently of
+    /// configured fetch refspecs. Returns `(base_commit, source_commit)` as
+    /// immutable hashes; local branches, tracking refs, index, worktree, and
+    /// `FETCH_HEAD` are unchanged.
+    ///
+    /// # Errors
+    /// Returns an error when either advertised branch is missing or malformed,
+    /// remote lookup fails, or the exact advertised commits cannot be fetched.
+    fn fetch_remote_branch_commits(
+        &self,
+        repo_path: PathBuf,
+        remote: String,
+        base_branch: String,
+        source_branch: String,
+    ) -> GitFuture<Result<(String, String), GitError>>;
 
     /// Returns repository-relative paths changed from `base_branch` to the
     /// current worktree, including untracked files.
@@ -655,6 +685,27 @@ impl GitClient for RealGitClient {
 
     fn diff(&self, repo_path: PathBuf, base_branch: String) -> GitFuture<Result<String, GitError>> {
         Box::pin(async move { diff(repo_path, base_branch).await })
+    }
+
+    fn committed_diff(
+        &self,
+        repo_path: PathBuf,
+        base_branch: String,
+        source_ref: String,
+    ) -> GitFuture<Result<String, GitError>> {
+        Box::pin(async move { sync::committed_diff(repo_path, base_branch, source_ref).await })
+    }
+
+    fn fetch_remote_branch_commits(
+        &self,
+        repo_path: PathBuf,
+        remote: String,
+        base_branch: String,
+        source_branch: String,
+    ) -> GitFuture<Result<(String, String), GitError>> {
+        Box::pin(async move {
+            sync::fetch_remote_branch_commits(repo_path, remote, base_branch, source_branch).await
+        })
     }
 
     fn diff_changed_files(

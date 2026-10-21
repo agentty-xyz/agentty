@@ -53,6 +53,12 @@ explicit expectations so fixture reuse does not hide changes to those contracts.
 | Persistence                      | Repository traits in `ag-store` |
 | Storage timestamps               | `TimestampSource`               |
 
+`GitClient` keeps committed-tree publication evidence separate from worktree diffs. It
+acquires advertised branch commits independently of fetch refspecs without changing
+tracking refs or `FETCH_HEAD`; contract tests include restricted single-branch clones.
+Public Git contract tests cover unpublished local commits and staged, unstaged, and
+untracked edits; description preservation tests protect Markdown blocks and whitespace.
+
 `TaskRepository` supports independent task creation, session-scoped snapshot listing,
 and atomic admission of tasks, attempts, and operations. Attempt status comes from
 operations. In-memory SQLite contract tests cover planning without execution, identity

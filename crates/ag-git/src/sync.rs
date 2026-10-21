@@ -334,6 +334,128 @@ pub(crate) async fn diff(repo_path: PathBuf, base_branch: String) -> Result<Stri
     diff_output(repo_path, base_branch, false).await
 }
 
+/// Captures source-coordinate patches from committed trees only. Pinning the
+/// source ref keeps publication evidence independent of subsequent local
+/// commits, index changes, untracked files, and diff presentation drivers.
+pub(crate) async fn committed_diff(
+    repo_path: PathBuf,
+    base_branch: String,
+    source_ref: String,
+) -> Result<String, GitError> {
+    let source = ref_hash(repo_path.clone(), source_ref).await?;
+    let base = ref_hash(repo_path.clone(), base_branch).await?;
+
+    run_git_command(
+        repo_path,
+        vec![
+            "-c".into(),
+            "diff.suppressBlankEmpty=false".into(),
+            "-c".into(),
+            "diff.noprefix=false".into(),
+            "diff".into(),
+            "--no-color".into(),
+            "--no-textconv".into(),
+            "--no-ext-diff".into(),
+            "--src-prefix=a/".into(),
+            "--dst-prefix=b/".into(),
+            format!("{base}...{source}"),
+            "--".into(),
+        ],
+        "Git committed diff failed".into(),
+    )
+    .await
+}
+
+/// Acquires exact advertised remote commits without depending on, or updating,
+/// tracking refs or `FETCH_HEAD`.
+pub(crate) async fn fetch_remote_branch_commits(
+    repo_path: PathBuf,
+    remote: String,
+    base_branch: String,
+    source_branch: String,
+) -> Result<(String, String), GitError> {
+    fetch_remote_branch_commits_with_runner(
+        repo_path,
+        remote,
+        base_branch,
+        source_branch,
+        &ProcessAsyncGitCommandRunner,
+    )
+    .await
+}
+
+/// Resolves both branch tips in one advertisement, then fetches immutable
+/// object IDs so a moving remote branch cannot change the selected comparison.
+async fn fetch_remote_branch_commits_with_runner(
+    repo_path: PathBuf,
+    remote: String,
+    base_branch: String,
+    source_branch: String,
+    runner: &dyn AsyncGitCommandRunner,
+) -> Result<(String, String), GitError> {
+    let base_ref = format!("refs/heads/{base_branch}");
+    let source_ref = format!("refs/heads/{source_branch}");
+    let output = run_git_command_with_runner(
+        AsyncGitCommand::new(
+            repo_path.clone(),
+            vec![
+                "ls-remote".into(),
+                "--refs".into(),
+                "--".into(),
+                remote.clone(),
+                base_ref.clone(),
+                source_ref.clone(),
+            ],
+        ),
+        "Git published branch lookup failed",
+        runner,
+    )
+    .await?;
+    let base = advertised_commit(&output, &base_ref)?;
+    let source = advertised_commit(&output, &source_ref)?;
+    run_git_command_with_runner(
+        AsyncGitCommand::new(
+            repo_path,
+            vec![
+                "fetch".into(),
+                "--no-tags".into(),
+                "--no-prune".into(),
+                "--no-prune-tags".into(),
+                "--no-write-fetch-head".into(),
+                "--no-recurse-submodules".into(),
+                "--refmap=".into(),
+                "--".into(),
+                remote,
+                base.clone(),
+                source.clone(),
+            ],
+        ),
+        "Git published commit fetch failed",
+        runner,
+    )
+    .await?;
+
+    Ok((base, source))
+}
+
+/// Selects an exact ref name and accepts only full SHA-1 or SHA-256 object IDs.
+fn advertised_commit(output: &str, reference: &str) -> Result<String, GitError> {
+    output
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .find(|(_, name)| *name == reference)
+        .map(|(hash, _)| hash)
+        .filter(|hash| {
+            matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        .map(str::to_string)
+        .ok_or_else(|| {
+            GitError::OutputParse(format!(
+                "Missing or invalid published commit for `{reference}`"
+            ))
+        })
+}
+
 /// Returns repository-relative changed paths using the same isolated index and
 /// fork-point semantics as [`diff`].
 pub(crate) async fn diff_changed_files(

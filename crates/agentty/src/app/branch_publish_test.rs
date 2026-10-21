@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::{self as git, BranchPushOutcome};
@@ -8,14 +8,325 @@ use ag_session::test_support as model_fixture;
 use super::super::session;
 use super::{
     BranchPublishTaskFailure, BranchPublishTaskSession, BranchPublishTaskSuccess,
-    ReviewRequestCreationInfo, branch_push_success_message,
+    ReviewRequestCreationInfo, branch_push_success_message, create_or_refresh_review_request,
     detected_forge_kind_from_git_push_error, git_push_authentication_message,
-    is_git_push_authentication_error, publish_pull_request, push_session_branch_to_remote,
-    review_request_created_notice, review_request_queued_label, review_request_remote,
+    is_git_push_authentication_error, load_review_request_create_input, publish_pull_request,
+    push_session_branch_to_remote, review_request_created_notice, review_request_queued_label,
+    review_request_remote,
 };
+use crate::app::review_request::ReviewRequestGenerator;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Status};
+use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::AppRepositories;
 use crate::test_support::FixedClock;
+
+#[tokio::test]
+async fn manual_review_request_refresh_reconciles_both_forges_and_propagates_failures() {
+    // Arrange
+    for (forge_kind, outcome) in [
+        (forge::ForgeKind::GitHub, "linked"),
+        (forge::ForgeKind::GitLab, "discovered"),
+        (forge::ForgeKind::GitHub, "concurrent"),
+        (forge::ForgeKind::GitLab, "generation"),
+        (forge::ForgeKind::GitHub, "missing_commit"),
+        (forge::ForgeKind::GitLab, "head_error"),
+        (forge::ForgeKind::GitHub, "metadata_error"),
+    ] {
+        let db = review_session_database().await;
+        db.sessions()
+            .update_session_published_upstream_ref("session-id", Some("origin/review/topic".into()))
+            .await
+            .expect("published branch");
+        let summary = forge::ReviewRequestSummary {
+            display_id: "42".into(),
+            forge_kind,
+            source_branch: "review/topic".into(),
+            state: forge::ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".into(),
+            title: "Stable title".into(),
+            web_url: "https://example.com/review/42".into(),
+        };
+        let session = BranchPublishTaskSession {
+            base_branch: "review/custom-parent".into(),
+            folder: PathBuf::from("project"),
+            id: "session-id".into(),
+            published_upstream_ref: Some("origin/review/topic".into()),
+            review_request: (outcome != "discovered").then(|| ReviewRequest {
+                last_refreshed_at: 0,
+                summary: summary.clone(),
+            }),
+            status: Status::Review,
+        };
+        let git_client = refresh_git_client(outcome);
+        let client = refresh_forge_client(forge_kind, outcome, summary);
+        let run_client = refresh_run_client(outcome);
+        let remote = forge::detect_remote(match forge_kind {
+            forge::ForgeKind::GitHub => "https://github.com/org/repo.git",
+            forge::ForgeKind::GitLab => "https://gitlab.com/org/repo.git",
+        })
+        .expect("remote");
+        let transcript = Mutex::new(SessionTranscript::default());
+        let generator = ReviewRequestGenerator {
+            db: &db,
+            folder: &session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        };
+        let clock: Arc<dyn crate::infra::clock::Clock> = Arc::new(FixedClock::unix_epoch());
+
+        // Act
+        let result = create_or_refresh_review_request(
+            &session,
+            &clock,
+            Arc::new(client),
+            &generator,
+            remote,
+            "review/topic".into(),
+        )
+        .await;
+
+        // Assert
+        if matches!(outcome, "linked" | "discovered") {
+            assert_eq!(result.expect("refresh").summary.title, "Stable title");
+        } else {
+            assert!(result.is_err(), "{outcome}");
+            assert!(
+                db.reviews()
+                    .load_session_review_request("session-id")
+                    .await
+                    .expect("review row")
+                    .is_none()
+            );
+        }
+    }
+}
+
+fn refresh_git_client(outcome: &'static str) -> Arc<dyn git::GitClient> {
+    let mut git_client = git::MockGitClient::new();
+    git_client
+        .expect_head_commit_message()
+        .once()
+        .returning(move |_| {
+            Box::pin(async move {
+                match outcome {
+                    "missing_commit" => Ok(None),
+                    "head_error" => Err(git::GitError::CommandFailed {
+                        command: "git log".into(),
+                        stderr: "head unavailable".into(),
+                    }),
+                    _ => Ok(Some("Commit title\n\nCommit details".into())),
+                }
+            })
+        });
+    if !matches!(outcome, "missing_commit" | "head_error" | "metadata_error") {
+        expect_published_commit_diff(&mut git_client, "release", "review/topic");
+    }
+    Arc::new(git_client)
+}
+
+fn expect_published_commit_diff(
+    client: &mut git::MockGitClient,
+    base_branch: &'static str,
+    source_branch: &'static str,
+) {
+    client
+        .expect_fetch_remote_branch_commits()
+        .once()
+        .withf(move |_, remote, base, source| {
+            remote == "origin" && base == base_branch && source == source_branch
+        })
+        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+    client
+        .expect_committed_diff()
+        .once()
+        .withf(|_, base, source| base == &"1".repeat(40) && source == &"2".repeat(40))
+        .returning(|_, _, _| Box::pin(async { Ok("cumulative change".into()) }));
+}
+
+fn refresh_forge_client(
+    forge_kind: forge::ForgeKind,
+    outcome: &'static str,
+    summary: forge::ReviewRequestSummary,
+) -> forge::MockReviewRequestClient {
+    let mut client = forge::MockReviewRequestClient::new();
+    if outcome == "discovered" {
+        let found = summary.clone();
+        client
+            .expect_find_by_source_branch()
+            .once()
+            .return_once(move |_, _| Box::pin(async move { Ok(Some(found)) }));
+    }
+    let mut refreshed = summary.clone();
+    refreshed.target_branch = "release".into();
+    client
+        .expect_refresh_review_request()
+        .once()
+        .return_once(move |_, _| Box::pin(async move { Ok(refreshed) }));
+    if !matches!(outcome, "missing_commit" | "head_error") {
+        client
+            .expect_review_request_metadata()
+            .once()
+            .returning(move |_, _| {
+                Box::pin(async move {
+                    if outcome == "metadata_error" {
+                        return Err(forge::ReviewRequestError::OperationFailed {
+                            forge_kind,
+                            message: "read failed".into(),
+                        });
+                    }
+                    Ok(forge::ReviewRequestMetadata {
+                        title: "Stable title".into(),
+                        body: "- [ ] Keep user note #42\n\nCo-Authored-By: Agentty\nText below \
+                               legacy footer"
+                            .into(),
+                    })
+                })
+            });
+    }
+    if matches!(outcome, "linked" | "discovered" | "concurrent") {
+        client
+            .expect_sync_review_request_metadata()
+            .once()
+            .withf(|_, _, input| {
+                let body = input.body.as_ref().expect("body update");
+                let title = input.title.as_ref().expect("title update");
+                body.current.contains("Co-Authored-By: Agentty")
+                    && !body.desired.contains("Co-Authored-By: Agentty")
+                    && body.desired.ends_with("Text below legacy footer")
+                    && title.current == "Stable title"
+                    && title.desired == "Stable title"
+            })
+            .return_once(move |_, _, _| {
+                Box::pin(async move {
+                    if outcome == "concurrent" {
+                        return Err(forge::ReviewRequestError::OperationFailed {
+                            forge_kind,
+                            message: "remote body changed concurrently".into(),
+                        });
+                    }
+                    Ok(summary)
+                })
+            });
+    }
+    client
+}
+
+fn refresh_run_client(outcome: &'static str) -> ag_worker::MockRunClient {
+    let mut run_client = ag_worker::MockRunClient::new();
+    if !matches!(outcome, "missing_commit" | "head_error" | "metadata_error") {
+        run_client.expect_submit().once().returning(move |_| {
+            if outcome == "generation" {
+                return Err(ag_contracts::OneShotError::new("provider unavailable"));
+            }
+            Ok(ag_contracts::OneShotSubmission { response: ag_protocol::AgentResponse::plain(serde_json::json!({
+                "title": "Cosmetic change", "is_title_change_significant": false,
+                "description": "## Why?\nClearer reviews.\n\n## What?\nUpdate descriptions.\n\n## Impact?\nPreserved context.\n\n- [ ] Keep user note #42\nText below legacy footer",
+            }).to_string()), stats: ag_contracts::SessionStats::default() })
+        });
+    }
+
+    run_client
+}
+
+#[tokio::test]
+async fn review_request_creation_propagates_generation_and_commit_failures() {
+    // Arrange
+    for failure in ["head", "missing", "empty", "generation", "diff", "fetch"] {
+        let db = review_session_database().await;
+        db.sessions()
+            .update_session_published_upstream_ref("session-id", Some("origin/review/topic".into()))
+            .await
+            .expect("published branch");
+        let session = BranchPublishTaskSession {
+            base_branch: "main".into(),
+            folder: PathBuf::from("project"),
+            id: "session-id".into(),
+            published_upstream_ref: None,
+            review_request: None,
+            status: Status::Review,
+        };
+        let mut git_client = git::MockGitClient::new();
+        git_client
+            .expect_head_commit_message()
+            .once()
+            .returning(move |_| {
+                Box::pin(async move {
+                    match failure {
+                        "head" => Err(git::GitError::CommandFailed {
+                            command: "git log".into(),
+                            stderr: "unavailable".into(),
+                        }),
+                        "missing" => Ok(None),
+                        "empty" => Ok(Some("\n".into())),
+                        _ => Ok(Some("Commit title\n\nRaw commit body".into())),
+                    }
+                })
+            });
+        if matches!(failure, "generation" | "diff" | "fetch") {
+            git_client
+                .expect_fetch_remote_branch_commits()
+                .once()
+                .returning(move |_, _, _, _| {
+                    Box::pin(async move {
+                        if failure == "fetch" {
+                            return Err(git::GitError::OutputParse(
+                                "published commits unavailable".into(),
+                            ));
+                        }
+                        Ok(("1".repeat(40), "2".repeat(40)))
+                    })
+                });
+        }
+        if matches!(failure, "generation" | "diff") {
+            git_client
+                .expect_committed_diff()
+                .once()
+                .returning(move |_, _, _| {
+                    Box::pin(async move {
+                        if failure == "diff" {
+                            return Err(git::GitError::CommandFailed {
+                                command: "git diff".into(),
+                                stderr: "unavailable".into(),
+                            });
+                        }
+                        Ok("cumulative change".into())
+                    })
+                });
+        }
+        let git_client: Arc<dyn git::GitClient> = Arc::new(git_client);
+        let mut run_client = ag_worker::MockRunClient::new();
+        if failure == "generation" {
+            run_client
+                .expect_submit()
+                .once()
+                .returning(|_| Err(ag_contracts::OneShotError::new("provider failed")));
+        }
+        let transcript = Mutex::new(SessionTranscript::default());
+        let generator = ReviewRequestGenerator {
+            db: &db,
+            folder: &session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &transcript,
+        };
+
+        // Act
+        let result =
+            load_review_request_create_input(&session, &generator, "review/topic".into()).await;
+
+        // Assert
+        assert!(
+            result.is_err(),
+            "{failure} must not publish a raw commit body"
+        );
+    }
+}
 
 #[test]
 fn review_request_queued_label_describes_waiting_without_loading_punctuation() {
@@ -194,26 +505,15 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
     // Arrange
     let database = review_session_database().await;
     let branch_publish_session = BranchPublishTaskSession {
-        base_branch: "main".to_string(),
+        base_branch: "review/parent".to_string(),
         folder: PathBuf::from("/tmp/session-worktree"),
         id: "session-id".into(),
         published_upstream_ref: Some("origin/review/topic".to_string()),
         review_request: None,
         status: Status::Review,
     };
-    let expected_review_request = ReviewRequest {
-        last_refreshed_at: 0,
-        summary: forge::ReviewRequestSummary {
-            display_id: "#42".to_string(),
-            forge_kind: forge::ForgeKind::GitHub,
-            source_branch: "review/topic".to_string(),
-            state: forge::ReviewRequestState::Open,
-            status_summary: None,
-            target_branch: "main".to_string(),
-            title: "Publish changes".to_string(),
-            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-        },
-    };
+    let mut expected_review_request = published_review_request();
+    expected_review_request.summary.target_branch = "review/parent".into();
     let mut mock_git_client = git::MockGitClient::new();
     expect_safe_session_branch_push(&mut mock_git_client, "session-id");
     mock_git_client
@@ -235,6 +535,8 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         .expect_head_commit_message()
         .once()
         .returning(|_| Box::pin(async { Ok(Some("Publish changes".to_string())) }));
+    expect_published_commit_diff(&mut mock_git_client, "review/parent", "review/topic");
+    let run_client = publication_run_client();
     let mut mock_review_request_client = forge::MockReviewRequestClient::new();
     mock_review_request_client
         .expect_detect_remote()
@@ -251,19 +553,30 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         .once()
         .withf(|_, input| {
             input.source_branch == "review/topic"
-                && input.target_branch == "main"
+                && input.target_branch == "review/parent"
                 && input.title == "Publish changes"
-                && input.body.is_none()
+                && input
+                    .body
+                    .as_ref()
+                    .is_some_and(|body| body.starts_with("## Why?"))
         })
         .return_once(move |_, _| Box::pin(async move { Ok(summary) }));
 
     // Act
+    let git_client: Arc<dyn git::GitClient> = Arc::new(mock_git_client);
     let result = publish_pull_request(
         &branch_publish_session,
-        database.clone(),
         Arc::new(FixedClock::unix_epoch()),
-        Arc::new(mock_git_client),
         Arc::new(mock_review_request_client),
+        &ReviewRequestGenerator {
+            db: &database,
+            folder: &branch_publish_session.folder,
+            git_client: &git_client,
+            run_client: &run_client,
+            session_agent: model_fixture::codex_selection(),
+            session_id: "session-id",
+            transcript: &Mutex::new(SessionTranscript::default()),
+        },
         Some("review/topic"),
     )
     .await
@@ -290,6 +603,35 @@ async fn publish_pull_request_returns_pushed_upstream_and_persists_review_reques
         persisted_review_request.web_url,
         expected_review_request.summary.web_url
     );
+}
+
+fn published_review_request() -> ReviewRequest {
+    ReviewRequest {
+        last_refreshed_at: 0,
+        summary: forge::ReviewRequestSummary {
+            display_id: "#42".to_string(),
+            forge_kind: forge::ForgeKind::GitHub,
+            source_branch: "review/topic".to_string(),
+            state: forge::ReviewRequestState::Open,
+            status_summary: None,
+            target_branch: "main".to_string(),
+            title: "Publish changes".to_string(),
+            web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
+        },
+    }
+}
+
+fn publication_run_client() -> ag_worker::MockRunClient {
+    let mut run_client = ag_worker::MockRunClient::new();
+    run_client.expect_submit().once().returning(|request| {
+        assert!(request.prompt.contains("cumulative change"));
+        Ok(ag_contracts::OneShotSubmission {
+            response: ag_protocol::AgentResponse::plain(r###"{"title":"Publish changes","description":"## Why?\nFix publication.\n\n## What?\nGenerate review descriptions.\n\n## Impact?\nReviewers receive structured context.","is_title_change_significant":false}"###),
+            stats: ag_contracts::SessionStats::default(),
+        })
+    });
+
+    run_client
 }
 
 /// Describes one auth-guidance parsing scenario for `branch_push_failure`.

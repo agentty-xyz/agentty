@@ -939,6 +939,14 @@ pub(super) fn auto_commit_git_client(
     sequence: &mut Sequence,
 ) -> MockGitClient {
     let mut mock_git_client = dirty_auto_commit_git_client(commit_message);
+    mock_git_client
+        .expect_fetch_remote_branch_commits()
+        .once()
+        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+    mock_git_client
+        .expect_committed_diff()
+        .once()
+        .returning(|_, _, _| Box::pin(async { Ok("diff --git a/a.rs b/a.rs".to_string()) }));
     expect_safe_auto_push_state(&mut mock_git_client);
     mock_git_client
         .expect_push_current_branch_to_remote_branch_with_outcome()
@@ -1112,6 +1120,11 @@ pub(super) fn review_metadata_sync_client(
                 })
             })
         });
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .once()
+        .in_sequence(sequence)
+        .returning(|_, _| Box::pin(async { Ok(linked_github_review_request().summary) }));
     mock_review_request_client
         .expect_sync_review_request_metadata()
         .once()

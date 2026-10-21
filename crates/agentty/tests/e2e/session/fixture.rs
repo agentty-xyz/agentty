@@ -55,6 +55,50 @@ const GIT_COMMAND_TIMEOUT: Duration = Duration::from_mins(1);
 /// Poll interval used while waiting for a seeded git invocation to exit.
 const GIT_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
+/// Exercises the production worker and `ReviewMetadata` protocol during
+/// publication, leaving description permutations to pure/boundary tests.
+pub(super) fn seed_review_description_provider(
+    env: &BuilderEnv,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let codex_path = env.stub_bin.join("codex");
+    let server = r###"extract_id() {
+    printf '%s\n' "$1" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p'
+}
+while IFS= read -r request; do
+    case "$request" in
+        *'"method":"initialize"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{}}\n' "$request_id"
+            ;;
+        *'"method":"thread/start"'*)
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"thread":{"id":"description-thread"}}}\n' "$request_id"
+            ;;
+        *'"method":"turn/start"'*)
+            case "$request" in
+                *'"outputSchema":'*'"is_title_change_significant"'*) ;;
+                *) echo 'missing review metadata schema or evidence' >&2; exit 1 ;;
+            esac
+            case "$request" in
+                *'cumulative_diff'*) ;;
+                *) echo 'missing cumulative evidence' >&2; exit 1 ;;
+            esac
+            request_id=$(extract_id "$request")
+            printf '{"id":"%s","result":{"turn":{"id":"description-turn"}}}\n' "$request_id"
+            printf '%s\n' '{"method":"turn/started","params":{"turn":{"id":"description-turn"}}}'
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"description-thread","turnId":"description-turn","item":{"type":"agentMessage","id":"description-answer","text":"{\"title\":\"Publish review changes\",\"description\":\"## Why?\\nReviewers need context.\\n\\n## What?\\nPublish session changes.\\n\\n## Impact?\\nChanges are ready for review.\",\"is_title_change_significant\":false}","phase":"final_answer"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"description-thread","turn":{"id":"description-turn","status":"completed","items":[]}}}'
+            ;;
+    esac
+done
+"###;
+    let script = std::fs::read_to_string(&codex_path)?.replace("exit 1\n", server);
+    std::fs::write(&codex_path, script)?;
+    std::fs::set_permissions(codex_path, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
 /// Installs a deterministic Claude stub for stable-context title generation
 /// and resumed review turns.
 pub(super) async fn seed_session_title_candidate_project(

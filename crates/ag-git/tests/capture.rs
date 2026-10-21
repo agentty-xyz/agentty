@@ -10,6 +10,207 @@ use ag_git::{DiffFile, GitClient, RealGitClient};
 use tempfile::{TempDir, tempdir};
 
 #[tokio::test]
+async fn remote_branch_commits_support_restricted_fetches_and_unfetched_targets()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let publisher = changed_source_repository()?;
+    let remote = tempdir()?;
+    let remote_path = remote.path().to_str().expect("remote path");
+    run_git(publisher.path(), &["clone", "--bare", ".", remote_path])?;
+    let consumer = tempdir()?;
+    run_git(
+        consumer.path(),
+        &[
+            "clone",
+            "--single-branch",
+            "--branch",
+            "main",
+            "--no-local",
+            remote_path,
+            "worktree",
+        ],
+    )?;
+    let repository = consumer.path().join("worktree");
+    run_git(publisher.path(), &["checkout", "-b", "release"])?;
+    commit_capture_source(publisher.path())?;
+    let base = run_git(publisher.path(), &["rev-parse", "HEAD"])?;
+    run_git(publisher.path(), &["push", remote_path, "release"])?;
+    run_git(&repository, &["checkout", "-b", "review"])?;
+    fs::write(repository.join("review.txt"), "published review change\n")?;
+    commit_capture_source(&repository)?;
+    let source = run_git(&repository, &["rev-parse", "HEAD"])?;
+    run_git(
+        &repository,
+        &["push", "--set-upstream", "origin", "HEAD:refs/heads/review"],
+    )?;
+    fs::write(repository.join("local.txt"), "unpublished local change\n")?;
+    commit_capture_source(&repository)?;
+    run_git(&repository, &["config", "remote.origin.prune", "true"])?;
+    run_git(&repository, &["config", "remote.origin.pruneTags", "true"])?;
+    run_git(&repository, &["tag", "local-note"])?;
+    let tracking = run_git(
+        &repository,
+        &["for-each-ref", "--format=%(refname)", "refs/remotes/"],
+    )?;
+    assert!(!tracking.contains("origin/review"));
+    assert!(!tracking.contains("origin/release"));
+    let refspec = run_git(&repository, &["config", "--get-all", "remote.origin.fetch"])?;
+    assert_eq!(refspec.trim(), "+refs/heads/main:refs/remotes/origin/main");
+    let index = fs::read(repository.join(".git/index"))?;
+    fs::write(
+        repository.join(".git/FETCH_HEAD"),
+        "preserve existing fetch state\n",
+    )?;
+    let client = RealGitClient;
+
+    assert!(
+        client
+            .ref_hash(repository.clone(), base.trim().to_string())
+            .await
+            .is_err()
+    );
+
+    // Act
+    let (base_commit, source_commit) = client
+        .fetch_remote_branch_commits(
+            repository.clone(),
+            "origin".into(),
+            "release".into(),
+            "review".into(),
+        )
+        .await?;
+    let captured = client
+        .committed_diff(
+            repository.clone(),
+            base_commit.clone(),
+            source_commit.clone(),
+        )
+        .await?;
+
+    // Assert
+    assert_eq!(base_commit, base.trim());
+    assert_eq!(source_commit, source.trim());
+    assert!(captured.contains("+published review change"));
+    assert!(!captured.contains("unpublished local change"));
+    assert_eq!(
+        run_git(
+            &repository,
+            &["for-each-ref", "--format=%(refname)", "refs/remotes/"]
+        )?,
+        tracking
+    );
+    assert_eq!(
+        run_git(&repository, &["config", "--get-all", "remote.origin.fetch"])?,
+        refspec
+    );
+    assert_eq!(fs::read(repository.join(".git/index"))?, index);
+    assert_eq!(
+        run_git(&repository, &["tag", "--list"])?.trim(),
+        "local-note"
+    );
+    assert_eq!(
+        fs::read_to_string(repository.join(".git/FETCH_HEAD"))?,
+        "preserve existing fetch state\n"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn committed_diff_excludes_local_commits_staged_unstaged_and_untracked_edits()
+-> Result<(), Box<dyn Error>> {
+    // Arrange
+    let directory = changed_source_repository()?;
+    let repository = directory.path();
+    let client = RealGitClient;
+    run_git(repository, &["checkout", "-b", "review"])?;
+    commit_capture_source(repository)?;
+    run_git(
+        repository,
+        &["update-ref", "refs/remotes/origin/review", "HEAD"],
+    )?;
+    fs::write(
+        repository.join("local-only.txt"),
+        "unpublished local commit\n",
+    )?;
+    commit_capture_source(repository)?;
+    fs::write(
+        repository.join("src/source file.rs"),
+        "staged-only change\n",
+    )?;
+    run_git(repository, &["add", "src/source file.rs"])?;
+    fs::write(
+        repository.join("src/source file.rs"),
+        "unstaged-only change\n",
+    )?;
+    fs::write(repository.join("untracked.txt"), "untracked-only change\n")?;
+    run_git(
+        repository,
+        &["config", "diff.external", "missing-diff-driver"],
+    )?;
+    let index_before = fs::read(repository.join(".git/index"))?;
+    let status_before = run_git(
+        repository,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+
+    // Act
+    let captured = client
+        .committed_diff(
+            repository.to_path_buf(),
+            "main".into(),
+            "origin/review".into(),
+        )
+        .await?;
+
+    // Assert
+    assert!(captured.contains("+new();"));
+    assert!(captured.contains("-old();"));
+    assert!(!captured.contains("local-only"));
+    assert!(!captured.contains("staged-only"));
+    assert!(!captured.contains("unstaged-only"));
+    assert!(!captured.contains("untracked"));
+    assert_eq!(fs::read(repository.join(".git/index"))?, index_before);
+    assert_eq!(
+        run_git(
+            repository,
+            &["status", "--porcelain=v1", "--untracked-files=all"]
+        )?,
+        status_before
+    );
+
+    // Arrange, Act, Assert
+    for (base, source) in [("missing", "origin/review"), ("main", "missing")] {
+        assert!(
+            client
+                .committed_diff(repository.to_path_buf(), base.into(), source.into())
+                .await
+                .is_err()
+        );
+    }
+
+    Ok(())
+}
+
+fn commit_capture_source(repository: &Path) -> Result<(), Box<dyn Error>> {
+    run_git(repository, &["add", "."])?;
+    run_git(
+        repository,
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "source snapshot",
+        ],
+    )?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn captured_diff_detects_same_size_edits_with_racy_index_timestamps()
 -> Result<(), Box<dyn Error>> {
     // Arrange
