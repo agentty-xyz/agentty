@@ -890,42 +890,9 @@ impl AppEventBatch {
                 result,
                 session_id,
             } => self.collect_review_request_status_updated(generation, result, session_id),
-            AppEvent::PlanWorkflowLoaded { .. }
-            | AppEvent::ImplementerAttemptSucceeded { .. }
-            | AppEvent::TaskChainGraphLoaded { .. }
-            | AppEvent::ProjectDiscoveryCompleted { .. }
-            | AppEvent::ReviewProgressUpdated { .. }
-            | AppEvent::SessionCreationCompleted { .. }
-            | AppEvent::AtMentionEntriesLoaded { .. }
-            | AppEvent::PromptImagePasted { .. }
-            | AppEvent::DiffPreviewLoaded { .. }
-            | AppEvent::SessionDiffLoaded { .. }
-            | AppEvent::GitStatusUpdated { .. }
-            | AppEvent::VersionAvailabilityUpdated { .. }
-            | AppEvent::AgentCliVersionsUpdated { .. }
-            | AppEvent::UpdateStatusChanged { .. }
-            | AppEvent::SessionModelUpdated { .. }
-            | AppEvent::SessionPersonalityUpdated { .. }
-            | AppEvent::SessionPermissionModeUpdated { .. }
-            | AppEvent::SessionReasoningLevelUpdated { .. }
-            | AppEvent::SessionResponseStyleUpdated { .. }
-            | AppEvent::SessionSpeedModeUpdated { .. }
-            | AppEvent::RefreshSessions
-            | AppEvent::RefreshProjects
-            | AppEvent::RefreshGitStatus
-            | AppEvent::SessionReviewCommentSnapshotLoaded { .. }
-            | AppEvent::SessionWorkflowNoticeUpdated { .. }
-            | AppEvent::SessionActivityReady { .. }
-            | AppEvent::SessionActivityUpdated { .. }
-            | AppEvent::SessionProgressUpdated { .. }
-            | AppEvent::SyncMainCompleted { .. }
-            | AppEvent::SyncMainConflictResolutionStarted { .. }
-            | AppEvent::SessionDiffStatsUpdated { .. }
-            | AppEvent::SessionRebaseReviewInvalidated { .. }
-            | AppEvent::SessionTitleGenerationFinished { .. }
-            | AppEvent::SessionReviewCommentResolutionUpdated { .. }
-            | AppEvent::SessionTurnStarted { .. }
-            | AppEvent::SessionTurnEnded { .. } => unreachable!("event was already collected"),
+            // The exhaustive runtime dispatcher handles other event categories
+            // before calling this collector.
+            _ => unreachable!("event was already collected"),
         }
     }
 

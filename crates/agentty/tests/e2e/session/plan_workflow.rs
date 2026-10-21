@@ -248,7 +248,8 @@ async fn plan_then_implement_requires_acceptance_and_preserves_role_history() ->
     Ok(())
 }
 
-/// Checks the role conversation and the successful Implementer's one focused review.
+/// Checks the role conversation and the successful Implementer's one focused
+/// review.
 fn assert_plan_workflow_report(frame: &TerminalFrame, report: &ProofReport, review_runs: &Path) {
     let planner = common::frame_from_capture(&report.captures[0]);
     let planner_full = Region::full(planner.cols(), planner.rows());

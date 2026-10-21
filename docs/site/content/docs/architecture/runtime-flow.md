@@ -195,7 +195,8 @@ session transcript; the worker appends one role-attributed answer only when it f
 saves a chain-owned response. These rows render in chat but stay out of provider replay,
 so each role keeps its isolated conversation. The marker stores only the chain identity.
 The reducer keeps a bounded latest-chain snapshot for the visible session, reloaded when
-its update version changes, and the card renders that live state.
+its update version changes, and the card renders that live state. Failed reads retain
+the previous graph and retry after a short delay, even when the session stays idle.
 
 Foreground gateway admission records each workflow stage and its attempt atomically;
 only a new claim reaches the session worker. Duplicate deliveries acknowledge their
