@@ -20,7 +20,7 @@ use super::worker::{SessionWorkerContext, SessionWorkerService, TurnMetadata};
 use super::{SessionTaskService, StatusTransition, isolation, post_turn};
 use crate::app::session::SessionError;
 use crate::app::{AppEvent, SessionManager, setting};
-use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
+use crate::domain::agent::{AgentKind, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
@@ -37,6 +37,39 @@ use crate::infra::db::AppRepositories;
 const TURN_EVENT_PROGRESS_COALESCE_BUDGET: usize = 64;
 /// Agent-facing behavior appended to ordinary read-only chat turns.
 const READ_ONLY_CHAT_PROMPT: &str = include_str!("../../template/read_only_chat_prompt.md");
+
+/// Host-owned inputs shared by ordinary turns and task-chain title generation.
+pub(super) struct RequestTitleInput {
+    pub(super) app_event_tx: mpsc::UnboundedSender<AppEvent>,
+    pub(super) available_agent_kinds: Arc<[AgentKind]>,
+    pub(super) db: AppRepositories,
+    pub(super) folder: PathBuf,
+    pub(super) prompt: String,
+    pub(super) run_client: Arc<dyn RunClient>,
+    pub(super) session_agent: AgentSelection,
+    pub(super) session_id: SessionId,
+}
+
+impl RequestTitleInput {
+    /// Captures ordinary-turn ownership before detached title work starts.
+    fn from_worker(
+        context: &SessionWorkerContext,
+        run_client: Arc<dyn RunClient>,
+        prompt: &str,
+        session_agent: AgentSelection,
+    ) -> Self {
+        Self {
+            app_event_tx: context.app_event_tx.clone(),
+            available_agent_kinds: Arc::clone(&context.available_agent_kinds),
+            db: context.db.clone(),
+            folder: context.folder.clone(),
+            prompt: prompt.to_string(),
+            run_client,
+            session_agent,
+            session_id: context.session_id.clone(),
+        }
+    }
+}
 
 /// Live transcript source exposed to provider transports for replay.
 #[derive(Debug)]
@@ -217,12 +250,14 @@ pub(super) async fn run_channel_turn(
         .with_context(ag_telemetry::Context::current()),
     );
 
-    spawn_turn_title_generation(
-        context,
-        Arc::clone(&run_client),
+    spawn_request_title_generation(
+        RequestTitleInput::from_worker(
+            context,
+            Arc::clone(&run_client),
+            &prompt.text,
+            turn_metadata.session_agent,
+        ),
         prepared.session_project_id,
-        &prompt.text,
-        turn_metadata.session_agent,
     )
     .await;
 
@@ -864,23 +899,30 @@ async fn append_main_checkout_warning(context: &SessionWorkerContext, warning: S
 
 /// Spawns read-only title generation while a session still has its
 /// provisional title.
-async fn spawn_turn_title_generation(
-    context: &SessionWorkerContext,
-    run_client: Arc<dyn RunClient>,
+pub(super) async fn spawn_request_title_generation(
+    input: RequestTitleInput,
     session_project_id: Option<i64>,
-    prompt: &str,
-    session_agent: AgentSelection,
 ) {
+    let RequestTitleInput {
+        app_event_tx,
+        available_agent_kinds,
+        db,
+        folder,
+        prompt,
+        run_client,
+        session_agent,
+        session_id,
+    } = input;
     let title_agent = setting::load_session_utility_agent_selection_from_repositories(
-        &context.db,
+        &db,
         session_project_id,
         session_agent,
-        &context.available_agent_kinds,
+        &available_agent_kinds,
     )
     .await;
-    let title_reasoning_level = load_title_reasoning_level(&context.db, session_project_id).await;
+    let title_reasoning_level = load_title_reasoning_level(&db, session_project_id).await;
     let title_speed_mode = setting::load_project_speed_mode_setting(
-        &context.db,
+        &db,
         session_project_id,
         SettingName::DefaultFastSpeedMode,
     )
@@ -894,15 +936,15 @@ async fn spawn_turn_title_generation(
 
     let _title_generation_task =
         SessionManager::spawn_session_title_generation_task(SessionTitleGenerationTaskInput {
-            app_event_tx: context.app_event_tx.clone(),
-            db: context.db.clone(),
-            folder: context.folder.clone(),
-            latest_request: prompt.to_string(),
+            app_event_tx,
+            db,
+            folder,
+            latest_request: prompt,
             run_client,
             requires_provisional_title: true,
             reasoning_level: title_reasoning_level,
             session_agent: title_agent,
-            session_id: context.session_id.clone(),
+            session_id,
             speed_mode: title_speed_mode,
             tracked_generation: None,
         })

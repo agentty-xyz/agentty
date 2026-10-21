@@ -204,6 +204,11 @@ latest-chain snapshot for the visible session, reloaded when its update version 
 and the card renders that live state. Failed reads retain the previous graph and retry
 after a short delay, even when the session stays idle.
 
+New admission initializes blank session prompt metadata and starts the shared Fast-model
+title utility from the original request through the session-scoped `RunClient`.
+Redelivered launches do not restart title generation; authoritative titles stay
+protected.
+
 Foreground gateway admission records each workflow stage and its attempt atomically;
 only a new claim reaches the session worker. Duplicate deliveries acknowledge their
 original receipt without repeating execution. Plan acceptance binds the exact producing
