@@ -14,6 +14,7 @@ use super::post_turn::{PostTurnContext, TurnFinalizerContext};
 use super::task::{SessionTaskService, SessionTranscriptMessageAppend};
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
+use crate::app::AppEvent;
 use crate::app::service::SessionRunFactory;
 use crate::app::session::SessionError;
 use crate::domain::permission::PermissionMode;
@@ -128,10 +129,9 @@ async fn execute(
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
-    if assignment.definition == BuiltinAgentDefinition::Implementer
-        && permission_mode != PermissionMode::ReadOnly
-        && result.assistant_message.questions.is_empty()
-    {
+    let implementation_succeeded = assignment.definition == BuiltinAgentDefinition::Implementer
+        && result.assistant_message.questions.is_empty();
+    if implementation_succeeded && permission_mode != PermissionMode::ReadOnly {
         let run_client = ag_worker::scoped_client(
             run_client,
             ag_worker::RunScope {
@@ -160,6 +160,17 @@ async fn execute(
         .await?;
     }
     check_cancellation(&cancellation)?;
+    if implementation_succeeded {
+        // Sent after implementation effects and before the review-ready
+        // status, matching ordinary completion ordering. Fire-and-forget:
+        // receiver may be dropped during shutdown.
+        let _ = context
+            .app_event_tx
+            .send(AppEvent::ImplementerAttemptSucceeded {
+                attempt_id: request.attempt_id.clone(),
+                session_id: context.session_id.clone(),
+            });
+    }
 
     Ok(())
 }

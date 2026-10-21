@@ -155,9 +155,19 @@ impl App {
     ) -> bool {
         match self.session_owns_task_chain(session_id).await {
             Ok(true) => {
-                return self
+                // Role admission resets user-initiated review cycles. Generated
+                // remediation continues the current cycle instead.
+                let completed_iterations =
+                    self.auto_address_review_iterations.get(session_id).copied();
+                let accepted = self
                     .reply_to_owned_task_chain(session_id, prompt.text)
                     .await;
+                if let Some(completed_iterations) = completed_iterations {
+                    self.auto_address_review_iterations
+                        .insert(session_id.clone(), completed_iterations);
+                }
+
+                return accepted;
             }
             Ok(false) => {}
             Err(error) => {
@@ -203,7 +213,9 @@ impl App {
             }
         };
         let Some(chain) = chain.filter(|chain| {
-            self.sessions.deciding_task_chain_ids.contains(&chain.id)
+            self.sessions
+                .deciding_task_chain_ids
+                .contains_key(&chain.id)
                 || matches!(
                     chain.phase,
                     TaskChainPhase::Planning | TaskChainPhase::Implementing

@@ -6,6 +6,7 @@ use ag_session::{
 use ag_store::MockTaskRepository;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mockall::predicate::eq;
+use tokio_util::sync::CancellationToken;
 
 use super::super::{
     ViewActionState, ViewContext, ViewKeyContext, ViewPendingUpdate, ViewSessionSnapshot,
@@ -768,7 +769,7 @@ async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator(
             chain.phase = TaskChainPhase::AwaitingPlanAcceptance;
             app.sessions
                 .deciding_task_chain_ids
-                .insert(chain.id.clone());
+                .insert(chain.id.clone(), CancellationToken::new());
         }
         let mut tasks = MockTaskRepository::new();
         let listed = chain.clone();

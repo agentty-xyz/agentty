@@ -24,6 +24,110 @@ use crate::test_support::{
     test_app_clients,
 };
 
+/// Role attempt that owns review suppression in these scenarios.
+const ROLE_ATTEMPT: &str = "role-attempt";
+
+#[tokio::test]
+async fn implementer_success_starts_one_ordinary_review_after_review_ready_status() {
+    // Arrange
+    let (mut app, _directory, _) = new_git_test_app_with_pool().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    app.sessions.sessions_mut()[0].stats.diff_state = SessionDiffState::Present;
+    app.sessions.sessions_mut()[0].stats.added_lines = 1;
+    app.auto_address_review_iterations
+        .insert(session_id.clone(), 3);
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
+        .await
+        .expect("suppress");
+    set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    let (diff_calls, diff_started) = install_diff_probe(&mut app);
+
+    // Act: the attempt succeeds while its post-turn effects keep it running.
+    app.apply_app_events(implementer_success(&session_id, ROLE_ATTEMPT))
+        .await;
+    let calls_while_running = diff_calls.load(Ordering::Relaxed);
+    *app.sessions.session_handles()[&session_id]
+        .status
+        .lock()
+        .expect("status") = Status::Review;
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: session_id.clone(),
+        version: 1,
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(1), diff_started.notified())
+        .await
+        .expect("implementer review starts");
+    app.apply_app_events(implementer_success(&session_id, ROLE_ATTEMPT))
+        .await;
+    tokio::task::yield_now().await;
+
+    // Assert
+    assert_eq!(calls_while_running, 0);
+    assert!(!app.role_review_suppression.contains_key(&session_id));
+    assert!(!app.auto_address_review_iterations.contains_key(&session_id));
+    assert_eq!(diff_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(app.pending_session_diff_requests.len(), 1);
+}
+
+#[tokio::test]
+async fn stale_implementer_success_keeps_current_role_review_suppressed() {
+    // Arrange
+    let (mut app, _directory, _) = new_git_test_app_with_pool().await;
+    let session_id = SessionId::from(app.create_session().await.expect("session"));
+    app.sessions.sessions_mut()[0].stats.diff_state = SessionDiffState::Present;
+    app.sessions.sessions_mut()[0].stats.added_lines = 1;
+    app.suppress_agent_task_automation(&session_id, "implementer-attempt")
+        .await
+        .expect("first implementer");
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
+        .await
+        .expect("current role attempt");
+    set_session_status_for_test(&mut app, &session_id, Status::InProgress);
+    let (diff_calls, _) = install_diff_probe(&mut app);
+
+    // Act: an earlier attempt's success and one for another session arrive
+    // before the current attempt reaches review-ready status.
+    app.apply_app_events(implementer_success(&session_id, "implementer-attempt"))
+        .await;
+    app.apply_app_events(implementer_success(
+        &SessionId::from("other-session"),
+        ROLE_ATTEMPT,
+    ))
+    .await;
+    *app.sessions.session_handles()[&session_id]
+        .status
+        .lock()
+        .expect("status") = Status::Review;
+    app.apply_app_events(AppEvent::SessionUpdated {
+        session_id: session_id.clone(),
+        version: 1,
+    })
+    .await;
+    tokio::task::yield_now().await;
+
+    // Assert
+    assert_eq!(
+        app.role_review_suppression
+            .get(&session_id)
+            .map(String::as_str),
+        Some(ROLE_ATTEMPT)
+    );
+    assert!(matches!(
+        app.review_cache.get(&session_id),
+        Some(ReviewCacheEntry::Suppressed)
+    ));
+    assert_eq!(diff_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(app.pending_session_diff_requests.len(), 0);
+}
+
+fn implementer_success(session_id: &SessionId, attempt_id: &str) -> AppEvent {
+    AppEvent::ImplementerAttemptSucceeded {
+        attempt_id: attempt_id.to_string(),
+        session_id: session_id.clone(),
+    }
+}
+
 #[tokio::test]
 async fn role_completion_and_late_review_results_cannot_start_ordinary_automation() {
     // Arrange
@@ -35,7 +139,7 @@ async fn role_completion_and_late_review_results_cannot_start_ordinary_automatio
         .set_review_request_client(Arc::new(ag_forge::MockReviewRequestClient::new()));
 
     // Act: invalidate an older auto-address review before role dispatch.
-    app.suppress_agent_task_automation(&session_id)
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
         .await
         .expect("suppress");
     app.sessions.sessions_mut()[0].status = Status::InProgress;
@@ -103,7 +207,7 @@ async fn role_completion_and_late_review_results_cannot_start_ordinary_automatio
     tokio::time::timeout(Duration::from_secs(1), diff_started.notified())
         .await
         .expect("manual review starts");
-    assert!(!app.role_review_suppression.contains(&session_id));
+    assert!(!app.role_review_suppression.contains_key(&session_id));
     assert_eq!(diff_calls.load(Ordering::Relaxed), 1);
 }
 
@@ -148,7 +252,7 @@ async fn concurrent_role_receipt_does_not_dispatch_or_release_automation() {
 
     // Assert: the second claimant neither dispatches nor changes review
     // ownership.
-    assert!(!app.role_review_suppression.contains(&session_id));
+    assert!(!app.role_review_suppression.contains_key(&session_id));
     assert!(!app.review_cache.contains_key(&session_id));
     assert_eq!(
         app.services
@@ -173,7 +277,7 @@ async fn new_ordinary_intent_restores_review_after_role_ownership() {
         set_session_status_for_test(&mut app, &session_id, Status::Review);
         app.sessions.sessions_mut()[0].stats.diff_state = SessionDiffState::Present;
         app.sessions.sessions_mut()[0].stats.added_lines = 1;
-        app.suppress_agent_task_automation(&session_id)
+        app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
             .await
             .expect("suppress");
         let started = install_pending_ordinary_turn(&mut app, &session_id);
@@ -205,7 +309,7 @@ async fn new_ordinary_intent_restores_review_after_role_ownership() {
         .await;
 
         // Assert
-        assert!(!app.role_review_suppression.contains(&session_id));
+        assert!(!app.role_review_suppression.contains_key(&session_id));
         tokio::time::timeout(Duration::from_secs(1), diff_started.notified())
             .await
             .expect("ordinary review resumes");
@@ -231,7 +335,7 @@ async fn old_ordinary_receipts_and_failed_admission_retain_role_ownership() {
         .mark_session_operation_done("old-message")
         .await
         .expect("settled receipt");
-    app.suppress_agent_task_automation(&session_id)
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
         .await
         .expect("suppress");
     let service = app.session_service();
@@ -242,15 +346,15 @@ async fn old_ordinary_receipts_and_failed_admission_retain_role_ownership() {
     )
     .await
     .expect("old receipt");
-    assert!(app.role_review_suppression.contains(&session_id));
+    assert!(app.role_review_suppression.contains_key(&session_id));
 
     // Act / Assert: generic output clearing during a failed reply cannot
     // release it.
     app.sessions.session_handles_mut().remove(&session_id);
     assert!(!app.reply(&session_id, "Unavailable worker").await);
-    assert!(app.role_review_suppression.contains(&session_id));
+    assert!(app.role_review_suppression.contains_key(&session_id));
     app.discard_deleted_session_diff_state(&session_id);
-    assert!(!app.role_review_suppression.contains(&session_id));
+    assert!(!app.role_review_suppression.contains_key(&session_id));
 }
 
 #[tokio::test]
@@ -259,7 +363,7 @@ async fn competing_ordinary_task_receipt_retains_role_review_ownership() {
     let (mut app, _directory, _) = new_git_test_app_with_pool().await;
     let session_id = SessionId::from(app.create_session().await.expect("session"));
     set_session_status_for_test(&mut app, &session_id, Status::Review);
-    app.suppress_agent_task_automation(&session_id)
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
         .await
         .expect("suppress");
     let request = SubmitTaskRequest {
@@ -297,7 +401,7 @@ async fn competing_ordinary_task_receipt_retains_role_review_ownership() {
         .expect("competing receipt");
 
     // Assert: no new worker turn can release role ownership or start a model.
-    assert!(app.role_review_suppression.contains(&session_id));
+    assert!(app.role_review_suppression.contains_key(&session_id));
     assert!(matches!(
         app.review_cache.get(&session_id),
         Some(ReviewCacheEntry::Suppressed)
@@ -358,7 +462,7 @@ async fn role_review_invalidation_removes_the_restart_trigger() {
     let (session_id, _) = seed_pending_review(&mut app).await;
     let project = app.active_project_id();
     let db = app.services.db().clone();
-    app.suppress_agent_task_automation(&session_id)
+    app.suppress_agent_task_automation(&session_id, ROLE_ATTEMPT)
         .await
         .expect("suppress");
     assert_eq!(

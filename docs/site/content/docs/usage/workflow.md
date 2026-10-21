@@ -51,6 +51,10 @@ guidance. An implementation retry keeps its accepted plan. Both roles share the
 session's worktree. Review and merge the resulting changes through the ordinary session
 actions.
 
+When the **Implementer** finishes without questions, the session starts the same
+[focused review](@/docs/usage/workflow.md#focused-review) as after an ordinary turn.
+Planner results, questions, and failed or canceled work do not start a review.
+
 ## Interface Layout
 
 <a id="usage-interface-layout"></a> Use `Tab` and `Shift+Tab` to move between tabs:
