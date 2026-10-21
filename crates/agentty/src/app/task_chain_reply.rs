@@ -13,6 +13,7 @@ use ag_session::{
     SessionId, SessionMessageKind, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
 };
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::app::command_gateway::{TaskChainReplyAction, TaskChainReplyCommand};
@@ -100,7 +101,10 @@ impl App {
         if matches!(
             chain.phase,
             TaskChainPhase::Planning | TaskChainPhase::Implementing
-        ) || self.sessions.deciding_task_chain_ids.contains(&chain.id)
+        ) || self
+            .sessions
+            .deciding_task_chain_ids
+            .contains_key(&chain.id)
         {
             return Err(SessionError::TaskChainBusy(chain.phase));
         }
@@ -205,12 +209,14 @@ impl App {
         decision: TaskChainReplyDecision,
         response_tx: oneshot::Sender<Result<TaskChainReplyOutcome, SessionError>>,
     ) {
+        let cancellation = CancellationToken::new();
         self.sessions
             .deciding_task_chain_ids
-            .insert(action.chain_id.clone());
+            .insert(action.chain_id.clone(), cancellation.clone());
         let run_client = ag_worker::scoped_client(
             self.services.run_client(),
             ag_worker::RunScope {
+                cancellation: Some(cancellation),
                 purpose: Some(DECISION_RUN_PURPOSE.to_string()),
                 session_id: Some(action.session_id.to_string()),
                 ..ag_worker::RunScope::default()
