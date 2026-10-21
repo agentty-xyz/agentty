@@ -354,6 +354,66 @@ async fn canceling_a_reply_decision_preserves_cancellation_and_later_utility_adm
 }
 
 #[tokio::test]
+async fn acceptance_without_live_session_handles_leaves_the_plan_unaccepted() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let launch = awaiting_plan(&mut fixture).await;
+    fixture
+        .app
+        .sessions
+        .session_handles_mut()
+        .remove(&fixture.session_id);
+    let before = fixture.persisted_transcript().await;
+
+    // Act
+    let result = fixture
+        .app
+        .apply_task_chain_reply(TaskChainReplyAction {
+            chain_id: launch.chain_id,
+            expected_attempt_id: launch.planner_attempt_id,
+            message: "Go ahead".to_string(),
+            outcome: TaskChainReplyOutcome::PlanAccepted,
+            reply_id: "reply-1".to_string(),
+            session_id: fixture.session_id.clone(),
+        })
+        .await;
+    let chain = fixture.snapshot().await;
+
+    // Assert
+    assert_eq!(
+        result,
+        Err(SessionError::Operation(
+            "Session handles not found".to_string()
+        ))
+    );
+    assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(chain.accepted_plan, None);
+    assert_eq!(fixture.persisted_transcript().await, before);
+}
+
+#[tokio::test]
+async fn new_replies_report_workflow_lookup_failures_without_recording_a_prompt() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    sqlx::query("DROP TABLE task_chain")
+        .execute(&fixture.pool)
+        .await
+        .expect("make workflow listing unavailable");
+
+    // Act
+    let result = reply(&mut fixture, "reply-1", "Go ahead").await;
+
+    // Assert
+    assert!(
+        result
+            .expect_err("workflow lookup must fail")
+            .to_string()
+            .contains("no such table: task_chain")
+    );
+    assert_eq!(fixture.persisted_transcript().await, vec![]);
+}
+
+#[tokio::test]
 async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_states() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
