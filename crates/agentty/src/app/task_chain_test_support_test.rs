@@ -127,8 +127,19 @@ impl ChainFixture {
 
     /// Drives reducer events until the current attempt's operation settles.
     pub(in crate::app) async fn settle(&mut self, script: &Script) {
+        self.settle_chain(script, "workflow").await;
+    }
+
+    /// Settles a named workflow when a session owns several chains.
+    pub(in crate::app) async fn settle_chain(&mut self, script: &Script, chain_id: &str) {
         script.started().await;
-        let request = self.snapshot().await.current_request;
+        let request = self
+            .app
+            .drive_session_request(self.service.get_task_chain(chain_id))
+            .await
+            .expect("read workflow")
+            .expect("workflow exists")
+            .current_request;
         let operation_id = format!("task-attempt:{}", request.attempt_id);
         tokio::time::timeout(Duration::from_secs(10), async {
             while self

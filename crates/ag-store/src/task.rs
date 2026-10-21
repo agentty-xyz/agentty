@@ -50,6 +50,17 @@ pub trait TaskRepository: Send + Sync {
         Err(TaskChainStore::unsupported())
     }
 
+    /// Reads the workflow already bound to a reply in its owning session.
+    /// Returns `None` for a new reply or a reply owned by another session.
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let _ = (session_id, reply_id);
+        Err(TaskChainStore::unsupported())
+    }
+
     /// Atomically accepts a Planner version and admits its Implementer.
     /// Returns false for identical handoff redelivery.
     async fn accept_task_chain_plan(
@@ -528,6 +539,18 @@ impl TaskRepository for SqliteTaskRepository {
         transaction.commit().await?;
 
         Ok(chains)
+    }
+
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chain = TaskChainStore::load_for_reply(&mut transaction, session_id, reply_id).await?;
+        transaction.commit().await?;
+
+        Ok(chain)
     }
 
     async fn accept_task_chain_plan(

@@ -352,7 +352,7 @@ async fn reopening_never_replays_an_interrupted_implementation() {
 }
 
 #[tokio::test]
-async fn reopening_keeps_reply_receipts_with_one_transcript_prompt() {
+async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
     // Arrange
     let directory = tempdir().expect("directory");
     let path = directory.path().join("reply.sqlite");
@@ -395,6 +395,12 @@ async fn reopening_keeps_reply_receipts_with_one_transcript_prompt() {
         .record_task_chain_reply("chain", "reply-1", "Go ahead")
         .await
         .expect("reply receipt");
+    let owner = reopened
+        .tasks()
+        .load_task_chain_for_reply("session", "reply-1")
+        .await
+        .expect("reply owner")
+        .expect("recorded reply");
     let messages = reopened
         .sessions()
         .load_session_messages("session")
@@ -404,9 +410,18 @@ async fn reopening_keeps_reply_receipts_with_one_transcript_prompt() {
     // Assert
     assert!(recorded);
     assert!(!redelivered);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].kind, "user_prompt");
-    assert_eq!(messages[0].content, "Go ahead");
+    assert_eq!(owner.id, "chain");
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind.as_str(), message.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("user_prompt", "Implement this change"),
+            ("agent_graph", "chain"),
+            ("user_prompt", "Go ahead")
+        ]
+    );
 }
 
 async fn begin_implementation(

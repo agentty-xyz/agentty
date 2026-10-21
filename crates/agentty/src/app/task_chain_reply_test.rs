@@ -126,6 +126,63 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
 }
 
 #[tokio::test]
+async fn admitted_reply_keeps_its_original_workflow_after_a_new_chain_starts() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    install_decision(&mut fixture, "implement");
+    let original = awaiting_plan(&mut fixture).await;
+    let implementation =
+        fixture.register_result(&original.implementer_task_id(), "Implemented", false);
+    let accepted = reply(&mut fixture, "reply-1", "Go ahead").await;
+    fixture.settle(&implementation).await;
+    let newer = StartPlanThenImplementRequest {
+        chain_id: "workflow-new".to_string(),
+        planner_attempt_id: "new-plan".to_string(),
+        ..launch_request()
+    };
+    let plan = fixture.register_result(&newer.planner_request().task_id, "New plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, newer.clone()),
+        )
+        .await
+        .expect("new workflow");
+    fixture.settle_chain(&plan, &newer.chain_id).await;
+    let before = fixture.persisted_transcript().await;
+
+    // Act
+    let retried = reply(&mut fixture, "reply-1", "Go ahead").await;
+    let conflicting = reply(&mut fixture, "reply-1", "Revise the old plan").await;
+    let latest = fixture
+        .app
+        .drive_session_request(fixture.service.get_task_chain(&newer.chain_id))
+        .await
+        .expect("new workflow read")
+        .expect("new workflow exists");
+    fixture
+        .app
+        .sessions
+        .sync_session_from_handle(&fixture.session_id);
+
+    // Assert
+    assert_eq!(accepted, Ok(TaskChainReplyOutcome::PlanAccepted));
+    assert_eq!(retried, accepted);
+    assert_eq!(
+        conflicting,
+        Err(SessionError::Operation(
+            "Invalid task chain: Reply identity was already used with different inputs".to_string()
+        ))
+    );
+    assert_eq!(latest.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(latest.current_request.attempt_id, newer.planner_attempt_id);
+    assert_eq!(fixture.persisted_transcript().await, before);
+    assert_eq!(fixture.live_transcript(), before);
+}
+
+#[tokio::test]
 async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_while_deciding() {
     // Arrange
     let mut fixture = ChainFixture::new().await;

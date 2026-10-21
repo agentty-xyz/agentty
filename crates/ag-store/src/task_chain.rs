@@ -361,6 +361,35 @@ impl TaskChainStore {
         Ok(())
     }
 
+    /// Loads a reply's bound workflow without exposing another session's
+    /// snapshot. New replies have no binding yet.
+    pub(crate) async fn load_for_reply(
+        connection: &mut SqliteConnection,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let reply = sqlx::query!(
+            "SELECT task_chain_id, message FROM task_chain_reply WHERE id = ?",
+            reply_id
+        )
+        .fetch_optional(&mut *connection)
+        .await?;
+        let Some(reply) = reply else {
+            return Ok(None);
+        };
+        let owner = sqlx::query!(
+            "SELECT session_id FROM task_chain WHERE id = ?",
+            reply.task_chain_id
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        if owner.session_id != session_id {
+            return Ok(None);
+        }
+
+        Self::load(connection, &reply.task_chain_id).await
+    }
+
     /// Records one reply identity for an existing workflow. Returns the owning
     /// session when newly recorded, or `None` for identical redelivery.
     pub(crate) async fn record_reply(
