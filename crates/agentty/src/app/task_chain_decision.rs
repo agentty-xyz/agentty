@@ -61,10 +61,8 @@ impl TaskChainReplyDecision {
         };
 
         Self::parse(&answer).unwrap_or_else(|| {
-            warn!(
-                answer_bytes = answer.len(),
-                "task chain reply decision was not `implement` or `revise`; revising the plan"
-            );
+            let answer_bytes = answer.len();
+            warn!(answer_bytes, "unknown reply decision; revising plan");
 
             TaskChainReplyOutcome::PlanRevised
         })
