@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::task::Poll;
 
 use ag_contracts::{
-    ActivityEvent, ActivityKind, ActivityStatus, AgentError, AgentRequestKind, MockAgentChannel,
-    PermissionMode, PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation,
-    TurnEvent, TurnRequest, TurnResult,
+    ActivityEvent, ActivityKind, ActivityStatus, AgentDefinitionPrompt, AgentError,
+    AgentRequestKind, MockAgentChannel, PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode,
+    TurnContinuation, TurnEvent, TurnRequest, TurnResult,
 };
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_worker::{
@@ -381,7 +381,7 @@ fn turn_request() -> TurnRequest {
         main_checkout_root: None,
         model: "model-independent-of-harness".into(),
         permission_mode: PermissionMode::default(),
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("hello"),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,

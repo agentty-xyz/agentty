@@ -1,8 +1,8 @@
 use ag_contracts::LiveTranscript;
 use ag_protocol::{AgentResponse, TurnPromptAttachment, TurnPromptContentPart};
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SubmitAgentTaskRequest,
+    TaskAgentAssignment, TaskAgentContext, TaskAgentInput, TaskAgentRole,
 };
 
 use super::{TaskReplay, effect_transcript, replay, task_prompt};
@@ -15,7 +15,7 @@ fn task_replay_is_json_encoded() {
     let mut history = TaskAgentHistoryRow {
         context: TaskAgentContextRow {
             context: TaskAgentContext {
-                assignment: request.assignment,
+                assignment: request.assignment.clone(),
                 id: "context".to_string(),
                 session_id: "session".into(),
                 task_id: request.task_id.clone(),
@@ -61,7 +61,8 @@ fn request() -> SubmitAgentTaskRequest {
     SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "attempt".to_string(),
         input: TaskAgentInput {

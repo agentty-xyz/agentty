@@ -5,8 +5,8 @@ use std::time::Duration;
 use ag_contracts::{OneShotError, OneShotRequest, OneShotSubmission, SessionStats};
 use ag_protocol::AgentResponse;
 use ag_session::{
-    BuiltinAgentDefinition, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
-    SessionService, StartPlanThenImplementRequest, TaskChainPhase, TaskChainReplyOutcome,
+    ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind, SessionService,
+    StartPlanThenImplementRequest, TaskAgentRole, TaskChainPhase, TaskChainReplyOutcome,
 };
 use ag_worker::test_support::{AppServerError, AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{HeartbeatClock, MockRunClient, RunClient, RunWorker, RuntimeConfig};
@@ -113,8 +113,8 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     assert_eq!(continued, Ok(TaskChainReplyOutcome::Continued));
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
     assert_eq!(
-        finished.current_request.assignment.definition,
-        BuiltinAgentDefinition::Implementer
+        finished.current_request.assignment.role,
+        TaskAgentRole::Implementer
     );
     assert_eq!(
         finished.current_request.attempt_id,
@@ -137,6 +137,7 @@ async fn admitted_reply_keeps_its_original_workflow_after_a_new_chain_starts() {
     let accepted = reply(&mut fixture, "reply-1", "Go ahead").await;
     fixture.settle(&implementation).await;
     let newer = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         chain_id: "workflow-new".to_string(),
         planner_attempt_id: "new-plan".to_string(),
         ..launch_request()
@@ -246,7 +247,7 @@ async fn approval_with_requested_changes_revises_the_plan_and_blocks_replies_whi
                     SessionMessageKind::UserPrompt,
                     "Looks good, but add tests".to_string(),
                 ),
-                agent_answer(BuiltinAgentDefinition::Planner, "New plan"),
+                agent_answer(TaskAgentRole::Planner, "New plan"),
             ],
         ]
         .concat()
@@ -493,7 +494,7 @@ async fn replies_without_a_plan_to_accept_skip_the_decision_and_reject_invalid_s
                 SessionMessageKind::UserPrompt,
                 "Try again, smaller scope".to_string(),
             ),
-            agent_answer(BuiltinAgentDefinition::Planner, "Retried plan"),
+            agent_answer(TaskAgentRole::Planner, "Retried plan"),
         ]
     );
     assert_eq!(
@@ -628,7 +629,7 @@ fn launch_transcript() -> Vec<(SessionMessageKind, String)> {
             "Implement a scoped change".to_string(),
         ),
         (SessionMessageKind::AgentGraph, "workflow".to_string()),
-        agent_answer(BuiltinAgentDefinition::Planner, "Exact plan"),
+        agent_answer(TaskAgentRole::Planner, "Exact plan"),
     ]
 }
 

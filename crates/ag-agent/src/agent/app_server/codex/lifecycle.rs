@@ -81,7 +81,8 @@ pub(super) async fn start_runtime(
             replay_transcript: None,
             model: &request.model,
             permission_mode: request.permission_mode,
-            personality_prompt: None,
+            agent_profile_prompt: None,
+            agent_profile_update: &ag_contracts::AgentDefinitionPromptUpdate::Unchanged,
             prompt: "",
             reasoning_level: request.reasoning_level,
             request_kind: &request_kind,
@@ -891,7 +892,7 @@ pub(super) fn build_turn_start_payload(input: &CodexTurnStartPayloadInput<'_>) -
             "serviceTier": session::codex_service_tier(input.speed_mode),
             "effort": reasoning::codex(input.reasoning_level),
             "summary": Value::Null,
-            "personality": Value::Null,
+            "agent_profile": Value::Null,
             "outputSchema": protocol_output_schema(
                 input.protocol_profile,
                 SchemaRequiredPolicy::AllProperties,

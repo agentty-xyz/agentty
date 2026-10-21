@@ -514,15 +514,14 @@ and older saved responses have no footer. Detailed previews are not saved in foo
 <a id="usage-slash-commands"></a> Type `/` in the composer. From session view, `/` opens
 a fresh composer, replacing any saved draft. The picker supports fuzzy matching.
 
-| Command        | Action                                               |
-| -------------- | ---------------------------------------------------- |
-| `/apply`       | Verify and apply valid focused-review suggestions.   |
-| `/mode`        | Choose permissions and review automation.            |
-| `/model`       | Choose a locally available backend and model.        |
-| `/personality` | Choose a workspace agent personality.                |
-| `/reasoning`   | Set reasoning effort for this session.               |
-| `/style`       | Choose concise, balanced, or detailed answers.       |
-| `/speed`       | Choose normal or fast responses for Claude or Codex. |
+| Command      | Action                                               |
+| ------------ | ---------------------------------------------------- |
+| `/apply`     | Verify and apply valid focused-review suggestions.   |
+| `/mode`      | Choose permissions and review automation.            |
+| `/model`     | Choose a locally available backend and model.        |
+| `/reasoning` | Set reasoning effort for this session.               |
+| `/style`     | Choose concise, balanced, or detailed answers.       |
+| `/speed`     | Choose normal or fast responses for Claude or Codex. |
 
 `/apply` requires a completed focused review. `/mode` selects:
 
@@ -547,9 +546,37 @@ selected style, including `Balanced`. On narrow terminals, the header preserves 
 totals, and the prompt keeps the style and permission indicators visible by shortening
 less important fields.
 
-`/personality` reads `.agents/agents/*/agent.md` from the session worktree, excluding
-global definitions. Choose `None (default)` to clear it. File edits apply on the next
-turn; missing or invalid definitions fall back without stopping work and show a notice.
+The `/plan` workflow uses bundled `planner` and `implementer` definitions. To override
+their instructions, add `.agents/agents/planner/agent.md` or
+`.agents/agents/implementer/agent.md` in the repository. The catalog also loads other
+repository definitions for workflows to resolve. Global definitions are not loaded.
+
+Definitions use simple `key: value` frontmatter followed by Markdown instructions:
+
+```markdown
+---
+id: planner
+name: Project Planner
+description: Plans changes for this project
+enabled: true
+permission-mode: read-only
+---
+
+Inspect the project and propose a concrete plan, including validation.
+```
+
+`id` defaults to the directory name. `name`, `description`, and the instruction body are
+required. `enabled: false` hides an agent and can disable a bundled ID.
+`permission-mode` accepts `inherit` (default) or `read-only`; it cannot expand session
+permissions. The selected provider and model are inherited (`model: inherit` is
+accepted). Other model overrides, tool lists, hooks, MCP configuration, and
+Claude-specific execution fields are unsupported and produce a diagnostic. Claude's YAML
+subagent format requires conversion to this supported subset.
+
+The plan-and-implement workflow resolves `planner` and `implementer` when it starts and
+retains both definitions across revisions, acceptance, and retries. Overriding their
+instructions does not remove planning's read-only restriction or implementation's
+accepted-plan requirement.
 
 <a id="usage-title-refinement"></a> Agentty refines session titles from the overall goal
 using the Fast model, including `/plan` sessions from your original task message. Draft

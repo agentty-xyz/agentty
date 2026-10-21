@@ -79,6 +79,9 @@ async fn new_chain_titles_the_original_request_once() {
             .drive_session_request(fixture.service.start_plan_then_implement(
                 &fixture.session_id,
                 StartPlanThenImplementRequest {
+                    agents: Box::new(
+                        ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")
+                    ),
                     user_request: "Conflicting request".into(),
                     ..launch.clone()
                 },

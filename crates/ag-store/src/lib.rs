@@ -34,9 +34,9 @@ pub use review::{
     SessionReviewRequestRow,
 };
 pub use session::{
-    ForkSessionSnapshot, PersistedSessionCreation, SessionAgentModelRow, SessionDetailRow,
-    SessionFocusedReviewRow, SessionListRow, SessionMessageRow, SessionRepository,
-    SessionReviewAuditRow, SessionRow, SessionTurnMetadata,
+    ForkSessionSnapshot, LEGACY_SESSION_AGENT_CLEAR_MARKER, PersistedSessionCreation,
+    SessionAgentModelRow, SessionDetailRow, SessionFocusedReviewRow, SessionListRow,
+    SessionMessageRow, SessionRepository, SessionReviewAuditRow, SessionRow, SessionTurnMetadata,
 };
 pub use session_preparation::{
     SessionPreparationRepository, SessionPreparationRow, SessionPreparationState,

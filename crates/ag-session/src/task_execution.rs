@@ -4,8 +4,8 @@ use ag_protocol::TurnPromptAttachment;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, EnvId, SessionError,
-    SessionId,
+    AgentDefinition, AgentSelection, DurableMessageVisibility, EnvId, SessionError, SessionId,
+    TaskAgentRole,
 };
 
 /// Immutable role and provider/model selection assigned to one task.
@@ -14,12 +14,14 @@ use crate::{
 /// reuse that selection across its tasks without reading mutable session
 /// settings again. Permissions still resolve from the role and session at
 /// execution time; assignment never grants access.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskAgentAssignment {
     /// Captured provider/model pair, independent of the role.
     pub agent: AgentSelection,
-    /// Instructions and permission restriction used for every attempt.
-    pub definition: BuiltinAgentDefinition,
+    /// Resolved instructions captured for every attempt in this conversation.
+    pub definition: AgentDefinition,
+    /// Host workflow contract, independent of the chosen agent's identity.
+    pub role: TaskAgentRole,
 }
 
 /// Durable identity of one task's conversation and runtime resources.
@@ -87,7 +89,7 @@ impl TaskAgentInput {
     /// # Errors
     /// Returns an operation error for an empty request, missing implementer
     /// plan, incomplete plan provenance, or a plan supplied to a planner.
-    pub fn validate(&self, definition: BuiltinAgentDefinition) -> Result<(), SessionError> {
+    pub fn validate(&self, definition: TaskAgentRole) -> Result<(), SessionError> {
         if self.user_request.trim().is_empty() {
             return Err(SessionError::Operation(
                 "Task user request is empty".to_string(),
@@ -95,14 +97,14 @@ impl TaskAgentInput {
         }
 
         match (definition, &self.accepted_plan) {
-            (BuiltinAgentDefinition::Planner, None) => Ok(()),
-            (BuiltinAgentDefinition::Planner, Some(_)) => Err(SessionError::Operation(
+            (TaskAgentRole::Planner, None) => Ok(()),
+            (TaskAgentRole::Planner, Some(_)) => Err(SessionError::Operation(
                 "Planner input must not contain an accepted plan".to_string(),
             )),
-            (BuiltinAgentDefinition::Implementer, None) => Err(SessionError::Operation(
+            (TaskAgentRole::Implementer, None) => Err(SessionError::Operation(
                 "Implementer input requires an accepted plan".to_string(),
             )),
-            (BuiltinAgentDefinition::Implementer, Some(plan)) => {
+            (TaskAgentRole::Implementer, Some(plan)) => {
                 if plan.task_id.trim().is_empty()
                     || plan.attempt_id.trim().is_empty()
                     || plan.text.trim().is_empty()

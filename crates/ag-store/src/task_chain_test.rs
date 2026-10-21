@@ -1,13 +1,161 @@
 use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::{
-    AcceptTaskChainPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    ContinueTaskChainRequest, CreateTaskRequest, StartPlanThenImplementRequest, SubmitTaskRequest,
-    TaskChain, TaskChainPhase,
+    AcceptTaskChainPlanRequest, AgentKind, AgentModel, AgentSelection, ContinueTaskChainRequest,
+    CreateTaskRequest, StartPlanThenImplementRequest, SubmitTaskRequest, TaskAgentRole, TaskChain,
+    TaskChainPhase,
 };
 
 use super::TaskChainStore;
 use crate::test_support::task_database_fixture;
 use crate::{Database, TaskAgentTurnMetadata};
+
+#[tokio::test]
+async fn workflow_captures_custom_definitions_and_hands_off_the_saved_implementer() {
+    // Arrange
+    let database = task_database_fixture().await;
+    let mut start = start_request();
+    start.agents.planner.id = "project-planner".into();
+    start.agents.planner.prompt = "Plan with repository conventions.".into();
+    start.agents.implementer.id = "project-builder".into();
+    start.agents.implementer.prompt = "Implement the accepted plan and verify it.".into();
+
+    // Act
+    database
+        .tasks()
+        .start_task_chain("session", &start, "reply")
+        .await
+        .expect("start");
+    let planning = chain(&database).await;
+    response(&database, "plan", r#"{"answer":"Accepted plan"}"#, true).await;
+    database
+        .tasks()
+        .accept_task_chain_plan("chain", &accept_request(), "reply")
+        .await
+        .expect("accept");
+    let implementation = chain(&database).await;
+
+    // Assert
+    assert_eq!(planning.agents, *start.agents);
+    assert_eq!(
+        planning.current_request.assignment.definition,
+        start.agents.planner
+    );
+    assert_eq!(
+        implementation.current_request.assignment.definition,
+        start.agents.implementer
+    );
+    assert_eq!(
+        implementation.current_request.assignment.role,
+        TaskAgentRole::Implementer
+    );
+    let mut conflicting = start.clone();
+    conflicting.agents.planner.prompt.push_str(" Changed");
+    assert!(
+        database
+            .tasks()
+            .start_task_chain("session", &conflicting, "reply")
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn legacy_launch_redelivery_requires_both_bundled_definitions() {
+    // Arrange
+    let database = task_database_fixture().await;
+    let original = start_request();
+    database
+        .tasks()
+        .start_task_chain("session", &original, "reply")
+        .await
+        .expect("start");
+    sqlx::query("UPDATE task_chain SET agent_definitions = NULL WHERE id = 'chain'")
+        .execute(database.pool())
+        .await
+        .expect("legacy workflow");
+    sqlx::query("UPDATE task_agent_context SET definition = NULL")
+        .execute(database.pool())
+        .await
+        .expect("legacy task");
+    let before = chain(&database).await;
+
+    // Act
+    let repeated = database
+        .tasks()
+        .start_task_chain("session", &original, "reply")
+        .await
+        .expect("identical legacy redelivery");
+
+    // Assert
+    assert!(!repeated);
+    for role in [TaskAgentRole::Planner, TaskAgentRole::Implementer] {
+        // Arrange
+        let mut changed = original.clone();
+        let definition = match role {
+            TaskAgentRole::Planner => &mut changed.agents.planner,
+            TaskAgentRole::Implementer => &mut changed.agents.implementer,
+        };
+        definition.prompt.push_str(" Changed after admission.");
+
+        // Act
+        let error = database
+            .tasks()
+            .start_task_chain("session", &changed, "reply")
+            .await
+            .expect_err("changed legacy definitions must conflict");
+
+        // Assert
+        assert!(error.to_string().contains("different inputs"), "{role:?}");
+        assert_eq!(chain(&database).await, before);
+    }
+}
+
+#[tokio::test]
+async fn workflow_rejects_corrupt_or_mismatched_definition_snapshots_and_restores_legacy_defaults()
+{
+    // Arrange
+    let database = task_database_fixture().await;
+    let start = start_request();
+    database
+        .tasks()
+        .start_task_chain("session", &start, "reply")
+        .await
+        .expect("start");
+
+    // Act
+    sqlx::query("UPDATE task_chain SET agent_definitions = 'invalid' WHERE id = 'chain'")
+        .execute(database.pool())
+        .await
+        .expect("corrupt workflow snapshot");
+    let corrupt = database.tasks().load_task_chain("chain").await;
+    sqlx::query("UPDATE task_chain SET agent_definitions = ? WHERE id = 'chain'")
+        .bind(serde_json::to_string(&start.agents).expect("definitions"))
+        .execute(database.pool())
+        .await
+        .expect("restore snapshot");
+    let mut changed = start.agents.planner.clone();
+    changed.prompt.push_str(" Changed after admission");
+    sqlx::query("UPDATE task_agent_context SET definition = ?")
+        .bind(serde_json::to_string(&changed).expect("definition"))
+        .execute(database.pool())
+        .await
+        .expect("mismatched snapshot");
+    let mismatch = database.tasks().load_task_chain("chain").await;
+    sqlx::query("UPDATE task_chain SET agent_definitions = NULL")
+        .execute(database.pool())
+        .await
+        .expect("legacy workflow");
+    sqlx::query("UPDATE task_agent_context SET definition = NULL")
+        .execute(database.pool())
+        .await
+        .expect("legacy task");
+    let legacy = chain(&database).await;
+
+    // Assert
+    assert!(corrupt.is_err());
+    assert!(mismatch.is_err());
+    assert_eq!(legacy.agents, *start.agents);
+}
 
 #[tokio::test]
 async fn workflow_images_survive_handoff_and_bind_delivery_identity() {
@@ -22,6 +170,7 @@ async fn workflow_images_survive_handoff_and_bind_delivery_identity() {
         placeholder: "[Image #1]".into(),
     };
     let start = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: vec![original.clone()],
         ..start_request()
     };
@@ -88,6 +237,9 @@ async fn workflow_images_survive_handoff_and_bind_delivery_identity() {
             .start_task_chain(
                 "session",
                 &StartPlanThenImplementRequest {
+                    agents: Box::new(
+                        ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")
+                    ),
                     attachments: Vec::new(),
                     ..start
                 },
@@ -276,8 +428,8 @@ async fn workflow_admits_two_isolated_roles_only_after_explicit_acceptance() {
         "  Exact plan.\n"
     );
     assert_eq!(
-        implementing.current_request.assignment.definition,
-        BuiltinAgentDefinition::Implementer
+        implementing.current_request.assignment.role,
+        TaskAgentRole::Implementer
     );
     assert_eq!(implementing.current_request.assignment.agent, request.agent);
     assert_eq!(chain(&database).await.phase, TaskChainPhase::Succeeded);
@@ -657,14 +809,23 @@ async fn launch_conflicts_and_reserved_task_bypasses_are_rejected() {
         .expect("start");
     let changes = [
         StartPlanThenImplementRequest {
+            agents: Box::new(
+                ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
+            ),
             user_request: "changed".into(),
             ..original.clone()
         },
         StartPlanThenImplementRequest {
+            agents: Box::new(
+                ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
+            ),
             planner_attempt_id: "changed".into(),
             ..original.clone()
         },
         StartPlanThenImplementRequest {
+            agents: Box::new(
+                ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
+            ),
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt6Astra),
             ..original.clone()
         },
@@ -693,6 +854,9 @@ async fn launch_conflicts_and_reserved_task_bypasses_are_rejected() {
             .start_task_chain(
                 "session",
                 &StartPlanThenImplementRequest {
+                    agents: Box::new(
+                        ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")
+                    ),
                     chain_id: "  ".into(),
                     ..original
                 },
@@ -738,6 +902,7 @@ async fn workflow_tasks_cannot_be_admitted_outside_the_chain() {
             .is_err()
     );
     let occupied = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         chain_id: "occupied".into(),
         planner_attempt_id: "occupied-plan".into(),
         ..start_request()
@@ -791,49 +956,49 @@ fn phases_use_terminal_operation_state_and_never_infer_plan_acceptance() {
     // Arrange
     let cases = [
         (
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             "queued",
             false,
             None,
             TaskChainPhase::Planning,
         ),
         (
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             "running",
             false,
             None,
             TaskChainPhase::Implementing,
         ),
         (
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             "failed",
             false,
             None,
             TaskChainPhase::Failed,
         ),
         (
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             "canceled",
             false,
             None,
             TaskChainPhase::Canceled,
         ),
         (
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             "done",
             true,
             None,
             TaskChainPhase::Canceled,
         ),
         (
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             "done",
             false,
             Some(r#"{"answer":"","questions":[]}"#),
             TaskChainPhase::Failed,
         ),
         (
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             "done",
             false,
             Some(
@@ -854,10 +1019,7 @@ fn phases_use_terminal_operation_state_and_never_infer_plan_acceptance() {
         ("done", Some("bad JSON")),
         ("unknown", None),
     ] {
-        assert!(
-            TaskChainStore::phase(BuiltinAgentDefinition::Planner, status, false, response)
-                .is_err()
-        );
+        assert!(TaskChainStore::phase(TaskAgentRole::Planner, status, false, response).is_err());
     }
 }
 
@@ -1244,6 +1406,7 @@ async fn chain(database: &Database) -> TaskChain {
 
 fn start_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),

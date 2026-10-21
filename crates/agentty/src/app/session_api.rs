@@ -611,8 +611,25 @@ impl App {
     pub(super) async fn submit_api_agent_task(
         &mut self,
         session_id: &SessionId,
-        request: ag_session::SubmitAgentTaskRequest,
+        mut request: ag_session::SubmitAgentTaskRequest,
     ) -> Result<(), ApiSessionError> {
+        if let Some(history) = self
+            .services
+            .db()
+            .tasks()
+            .load_agent_history(&request.task_id)
+            .await
+            .map_err(|error| ApiSessionError::Operation(error.to_string()))?
+        {
+            if history.context.context.assignment.definition.id == request.assignment.definition.id
+            {
+                request.assignment.definition = history.context.context.assignment.definition;
+            }
+        } else {
+            request.assignment.definition = self
+                .resolve_task_agent_definition(session_id, &request.assignment.definition.id)
+                .await?;
+        }
         if self
             .services
             .db()
@@ -624,7 +641,7 @@ impl App {
             return Ok(());
         }
         self.sessions
-            .validate_agent_task_admission(session_id, request.assignment.definition)
+            .validate_agent_task_admission(session_id, request.assignment.role)
             .map_err(api_error_from_session)?;
         self.services
             .db()
@@ -848,7 +865,6 @@ impl App {
             settings: SessionCreationSettings {
                 agent: source.settings.agent,
                 permission_mode: source.settings.permission_mode,
-                personality_id: source.settings.personality_id,
                 reasoning_level: source.settings.reasoning_level,
                 response_style: source.settings.response_style,
                 speed_mode: source.settings.speed_mode,
@@ -1025,7 +1041,6 @@ fn build_api_session(
             is_draft: row.is_draft,
             parent_session_id: row.parent_session_id.map(SessionId::from),
             permission_mode,
-            personality_id: row.personality_id,
             project_id,
             reasoning_level,
             response_style,

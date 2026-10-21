@@ -5,9 +5,8 @@ use std::time::Duration;
 use ag_contracts::{OneShotSubmission, SessionStats};
 use ag_protocol::AgentResponse;
 use ag_session::{
-    AcceptTaskChainPlanRequest, BuiltinAgentDefinition, SessionError, SessionId,
-    SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
-    TaskChainReplyOutcome,
+    AcceptTaskChainPlanRequest, SessionError, SessionId, SessionMessageKind, SessionStatus,
+    StartPlanThenImplementRequest, TaskAgentRole, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
 };
 use ag_store::{DbError, MockTaskRepository};
 use ag_worker::MockRunClient;
@@ -156,8 +155,8 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
     assert_eq!(after_success, show_session);
     assert_eq!(finished.phase, TaskChainPhase::Succeeded);
     assert_eq!(
-        finished.current_request.assignment.definition,
-        BuiltinAgentDefinition::Implementer
+        finished.current_request.assignment.role,
+        TaskAgentRole::Implementer
     );
     assert_eq!(
         finished.current_request.input.clarification.as_deref(),
@@ -343,8 +342,8 @@ async fn generated_instructions_follow_the_session_routing() {
         let revised = fixture.snapshot().await;
         assert_eq!(revised.phase, TaskChainPhase::Succeeded);
         assert_eq!(
-            revised.current_request.assignment.definition,
-            BuiltinAgentDefinition::Implementer
+            revised.current_request.assignment.role,
+            TaskAgentRole::Implementer
         );
         assert_eq!(
             fixture

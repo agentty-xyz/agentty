@@ -42,7 +42,6 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 use crate::infra::db::{AppRepositories, OperationRepository, SessionOperationRow};
 use crate::infra::fs::FsClient;
-use crate::infra::personality::PersonalityCatalogClient;
 
 const RESTART_FAILURE_REASON: &str = "Interrupted by app restart";
 const CANCEL_BEFORE_EXECUTION_REASON: &str = "Session canceled before execution";
@@ -489,8 +488,6 @@ pub(super) struct SessionWorkerContext {
     pub(super) folder: PathBuf,
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
-    /// Workspace-only personality discovery used immediately before turns.
-    pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     /// In-memory queue of prompts staged while the session is `InProgress`.
     ///
     /// Shared with [`SessionHandles::queued_messages`]. The worker drains
@@ -658,7 +655,7 @@ impl SessionWorkerRebaseAssistClient {
             main_checkout_root: self.main_checkout_root.clone(),
             model: self.session_agent.model().provider_model_str().to_string(),
             permission_mode: ag_contracts::PermissionMode::AutoEdit,
-            personality: ag_contracts::PersonalityPrompt::default(),
+            agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
             prompt: TurnPrompt::from_agent_data(prompt),
             reasoning_level,
             request_kind: AgentRequestKind::UtilityPrompt,
@@ -819,7 +816,6 @@ pub(super) struct SessionWorkerRuntime {
     cancel_token: Arc<Mutex<CancellationToken>>,
     child_pid: Arc<Mutex<Option<u32>>>,
     folder: PathBuf,
-    personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
     queued_messages: Arc<Mutex<VecDeque<QueuedMessage>>>,
     queued_work_sequence: Arc<AtomicU64>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
@@ -885,7 +881,7 @@ impl SessionWorkerService {
         session_id: &SessionId,
         command: &mut ScheduledSessionCommand,
     ) {
-        let mutating_task = matches!(&command.command, SessionCommand::RunAgentTask { request, .. } if request.assignment.definition == ag_session::BuiltinAgentDefinition::Implementer);
+        let mutating_task = matches!(&command.command, SessionCommand::RunAgentTask { request, .. } if request.assignment.role == ag_session::TaskAgentRole::Implementer);
         if !command.command.is_preparation_prompt(session_id) && !mutating_task {
             return;
         }
@@ -1226,7 +1222,6 @@ impl SessionWorkerService {
             folder: runtime.folder.clone(),
             fs_client: services.fs_client(),
             git_client: services.git_client(),
-            personality_catalog_client: Arc::clone(&runtime.personality_catalog_client),
             queued_messages: Arc::clone(&runtime.queued_messages),
             review_request_client: Arc::clone(&runtime.review_request_client),
             session_update_versions: Arc::clone(&runtime.session_update_versions),
@@ -1923,7 +1918,7 @@ impl SessionManager {
     pub(in crate::app) fn validate_agent_task_admission(
         &mut self,
         session_id: &str,
-        definition: ag_session::BuiltinAgentDefinition,
+        definition: ag_session::TaskAgentRole,
     ) -> Result<(), SessionError> {
         let sessions = self.session_handles().keys().cloned().collect::<Vec<_>>();
         for session in sessions {
@@ -1932,7 +1927,7 @@ impl SessionManager {
         let session = self.session_or_err(session_id)?;
         let status = session.status;
         let planner_start =
-            definition == ag_session::BuiltinAgentDefinition::Planner && status == Status::Draft;
+            definition == ag_session::TaskAgentRole::Planner && status == Status::Draft;
         let needs_workspace = planner_start && session.is_draft_session();
         let parent = session.parent_session_id.clone();
         if !matches!(status, Status::Review | Status::AgentReview) && !planner_start {
@@ -1951,7 +1946,7 @@ impl SessionManager {
                     .to_string(),
             ));
         }
-        if definition == ag_session::BuiltinAgentDefinition::Implementer
+        if definition == ag_session::TaskAgentRole::Implementer
             && !self.can_reply_to_session_in_stack(session_id)
         {
             return Err(SessionError::Workflow(
@@ -1987,7 +1982,7 @@ impl SessionManager {
             ));
         }
         let result = async {
-            self.validate_agent_task_admission(session_id, request.assignment.definition)?;
+            self.validate_agent_task_admission(session_id, request.assignment.role)?;
             tasks.verify_agent_plan(session_id, &request).await?;
             self.validate_agent_task_workspace(services, session_id)?;
             self.ensure_session_worktree_ready(services, session_id)
@@ -2267,7 +2262,6 @@ impl SessionManager {
             cancel_token: Arc::clone(&handles.cancel_token),
             child_pid: Arc::clone(&handles.child_pid),
             folder: session.folder.clone(),
-            personality_catalog_client: services.personality_catalog_client(),
             queued_messages: Arc::clone(&handles.queued_messages),
             queued_work_sequence: Arc::clone(&handles.queued_work_sequence),
             review_request_client: services.review_request_client(),

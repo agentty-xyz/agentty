@@ -120,7 +120,7 @@ fn turn_request(folder: PathBuf, permission_mode: PermissionMode) -> AppServerTu
         model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode,
         persisted_instruction_conversation_id: None,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("Inspect the architecture"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,

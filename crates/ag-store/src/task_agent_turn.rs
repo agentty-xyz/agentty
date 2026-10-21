@@ -2,8 +2,7 @@
 
 use ag_protocol::AgentResponse;
 use ag_session::{
-    AgentAnswerContent, BuiltinAgentDefinition, SessionMessageKind, TaskAgentInput,
-    stored_message_content,
+    AgentAnswerContent, SessionMessageKind, TaskAgentInput, TaskAgentRole, stored_message_content,
 };
 use sqlx::SqliteConnection;
 
@@ -227,8 +226,8 @@ impl TaskAgentTurnStore {
         if !TaskChainStore::owns_task(transaction, task_id).await? {
             return Ok(());
         }
-        let agent = BuiltinAgentDefinition::from_id(role)
-            .ok_or_else(|| Self::invalid("Unknown task agent role"))?;
+        let agent =
+            TaskAgentRole::from_id(role).ok_or_else(|| Self::invalid("Unknown task agent role"))?;
         let response: AgentResponse = serde_json::from_str(assistant_message)
             .map_err(|_| Self::invalid("Invalid task response"))?;
         let text = response.to_display_text();

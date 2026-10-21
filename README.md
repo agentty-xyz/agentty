@@ -31,6 +31,10 @@ Codex, Claude, Gemini, and Antigravity sessions show compact tool status and com
 previews, with output previews for failed calls. Explicit Claude skill invocations
 appear alongside them, and answers retain saved usage counts.
 
+The `/plan` workflow uses bundled Markdown agent definitions. Repository overrides live
+in `.agents/agents/<id>/agent.md`; see the
+[workflow guide](https://agentty.xyz/docs/usage/workflow/) for the supported format.
+
 ## Installation
 
 ### npm (recommended)

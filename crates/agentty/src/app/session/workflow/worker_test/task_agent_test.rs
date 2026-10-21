@@ -7,9 +7,9 @@ use ag_contracts::{AgentError, AgentRequestKind, MockAgentChannel, PermissionMod
 use ag_git::MockGitClient;
 use ag_protocol::{AgentResponse, QuestionItem};
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SessionDiffState, SessionId, SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment,
-    TaskAgentInput, TaskAttemptStatus,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionDiffState, SessionId,
+    SessionStatus, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
+    TaskAttemptStatus,
 };
 use ag_worker::{MockRunClient, SessionRunClient};
 use sqlx::SqlitePool;
@@ -30,7 +30,6 @@ use crate::app::{App, AppEvent};
 use crate::domain::session::{SessionDiffStats, SessionSize};
 use crate::domain::session_message::SessionTranscript;
 use crate::infra::db::{AppRepositories, TaskAgentTurnMetadata};
-use crate::infra::personality::MockPersonalityCatalogClient;
 use crate::test_support::{
     SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, session_manager_with_handles,
     set_session_status_for_test,
@@ -190,10 +189,14 @@ fn assert_planner_request(turn: &TurnRequest, attempt: &str, expected_kind: &Age
     assert_eq!(turn.model, AgentModel::Gpt61Sol.provider_model_str());
     assert_eq!(turn.permission_mode, PermissionMode::ReadOnly);
     assert_eq!(&turn.request_kind, expected_kind);
-    assert!(
-        turn.prompt
-            .agent_text()
-            .starts_with(BuiltinAgentDefinition::Planner.instructions())
+    assert_eq!(
+        turn.agent_profile.current(),
+        Some(
+            ag_session::AgentDefinition::bundled("planner")
+                .expect("bundled planner")
+                .prompt
+                .as_str()
+        )
     );
     assert!(
         turn.prompt
@@ -263,15 +266,13 @@ async fn assert_task_admission_rejections(
         .await
         .is_err()
     );
-    let mut conflicting = request("first");
-    conflicting.objective = "A different outcome".to_string();
-    assert!(
-        app.drive_session_request(service.submit_agent_task(session_id, conflicting))
-            .await
-            .is_err()
-    );
+
+    assert_task_redelivery_rejections(app, service, session_id).await;
+
     let mut unaccepted = request("unaccepted");
-    unaccepted.assignment.definition = BuiltinAgentDefinition::Implementer;
+    unaccepted.assignment.role = TaskAgentRole::Implementer;
+    unaccepted.assignment.definition =
+        ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     unaccepted.task_id = "unaccepted-implementation".to_string();
     unaccepted.input.accepted_plan = Some(ag_session::AcceptedTaskPlan {
         task_id: "planner".to_string(),
@@ -300,6 +301,43 @@ async fn assert_task_admission_rejections(
             .await
             .is_err()
     );
+}
+
+async fn assert_task_redelivery_rejections(
+    app: &mut App,
+    service: &ag_session::SessionService,
+    session_id: &SessionId,
+) {
+    // Arrange: redelivery cannot replace an existing task's captured inputs.
+    let before = app
+        .services
+        .db()
+        .tasks()
+        .load_agent_history("planner")
+        .await
+        .expect("history");
+    let mut changed_objective = request("first");
+    changed_objective.objective = "A different outcome".to_string();
+    let mut changed_definition = request("first");
+    changed_definition.assignment.definition.id = "other-planner".into();
+    for conflicting in [changed_objective, changed_definition] {
+        // Act
+        let result = app
+            .drive_session_request(service.submit_agent_task(session_id, conflicting))
+            .await;
+
+        // Assert
+        assert!(result.is_err());
+        assert_eq!(
+            app.services
+                .db()
+                .tasks()
+                .load_agent_history("planner")
+                .await
+                .expect("unchanged history"),
+            before
+        );
+    }
 }
 
 async fn assert_unloaded_claim_fails(
@@ -466,7 +504,9 @@ async fn assert_implementation_reserves_stack(
         .await
         .expect("accepted version");
     let mut implementation = request("implementation");
-    implementation.assignment.definition = BuiltinAgentDefinition::Implementer;
+    implementation.assignment.role = TaskAgentRole::Implementer;
+    implementation.assignment.definition =
+        ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     implementation.task_id = "implementation".to_string();
     implementation.input.accepted_plan = Some(plan);
     app.sessions.push_session(
@@ -555,7 +595,7 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
     // Act
     let result = app
         .sessions
-        .validate_agent_task_admission("parent", BuiltinAgentDefinition::Implementer);
+        .validate_agent_task_admission("parent", TaskAgentRole::Implementer);
 
     // Assert
     assert!(
@@ -574,7 +614,7 @@ async fn implementation_admission_preserves_stack_branch_exclusivity() {
     );
     let deferred_child = app
         .sessions
-        .validate_agent_task_admission("deferred-child", BuiltinAgentDefinition::Planner)
+        .validate_agent_task_admission("deferred-child", TaskAgentRole::Planner)
         .expect_err("active stack blocks workspace preparation");
     assert!(deferred_child.to_string().contains("idle stack"));
     // Act / Assert: deferred workspaces fail before admitting model work.
@@ -621,7 +661,7 @@ fn deferred_planner_requires_a_review_ready_parent_even_when_stack_is_idle() {
     let mut manager = session_manager_with_handles(vec![parent, child], HashMap::new());
 
     // Act
-    let result = manager.validate_agent_task_admission("child", BuiltinAgentDefinition::Planner);
+    let result = manager.validate_agent_task_admission("child", TaskAgentRole::Planner);
 
     // Assert
     assert!(
@@ -988,8 +1028,6 @@ async fn implementer_enforces_accepted_plan_permissions_and_isolated_effect_cont
         "persist-failure",
         "stale-plan",
         "invalid-permission",
-        "personality",
-        "missing-personality",
         "stateless",
         "commit-failure",
         "canceled",
@@ -1252,7 +1290,9 @@ async fn prepare_implementation_scenario(
         .expect("trigger");
     } else if scenario == "stale-plan" {
         let mut revision = request.clone();
-        revision.assignment.definition = BuiltinAgentDefinition::Planner;
+        revision.assignment.role = TaskAgentRole::Planner;
+        revision.assignment.definition =
+            ag_session::AgentDefinition::bundled("planner").expect("bundled planner");
         revision.input.accepted_plan = None;
         revision.attempt_id = "revision".to_string();
         revision.task_id = "planner".to_string();
@@ -1263,30 +1303,6 @@ async fn prepare_implementation_scenario(
             .claim_agent_attempt("sess", &revision, "agent_task")
             .await
             .expect("new plan version");
-    }
-    if ["personality", "missing-personality"].contains(&scenario) {
-        context
-            .db
-            .sessions()
-            .update_session_personality_id("sess", Some("presentation".to_string()))
-            .await
-            .expect("selected personality");
-        let mut catalog = MockPersonalityCatalogClient::new();
-        catalog
-            .expect_resolve()
-            .withf(|_, id| id == "presentation")
-            .once()
-            .returning(move |_, _| {
-                Box::pin(async move {
-                    (scenario == "personality").then(|| ag_session::Personality {
-                        description: String::new(),
-                        id: "presentation".to_string(),
-                        name: "Presentation".to_string(),
-                        prompt: "Use concise prose".to_string(),
-                    })
-                })
-            });
-        context.personality_catalog_client = Arc::new(catalog);
     }
 }
 
@@ -1300,12 +1316,13 @@ fn assert_implementation_request(turn: &TurnRequest, scenario: &str) {
         }
     );
     assert_eq!(
-        turn.personality.current(),
-        if scenario == "personality" {
-            Some("Use concise prose")
-        } else {
-            None
-        }
+        turn.agent_profile.current(),
+        Some(
+            ag_session::AgentDefinition::bundled("implementer")
+                .expect("bundled implementer")
+                .prompt
+                .as_str()
+        )
     );
     assert!(turn.prompt.agent_text().contains("Accepted plan"));
     assert_eq!(turn.continuation.provider_conversation_id(), None);
@@ -1363,7 +1380,9 @@ async fn accepted_implementation(
         .await
         .expect("accept plan");
     let mut request = planner;
-    request.assignment.definition = BuiltinAgentDefinition::Implementer;
+    request.assignment.role = TaskAgentRole::Implementer;
+    request.assignment.definition =
+        ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     request.attempt_id = "execute".to_string();
     request.task_id = "implementation".to_string();
     request.input.accepted_plan = Some(accepted);
@@ -1436,7 +1455,8 @@ fn request(attempt: &str) -> SubmitAgentTaskRequest {
     SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: attempt.to_string(),
         input: TaskAgentInput {

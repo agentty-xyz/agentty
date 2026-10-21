@@ -14,7 +14,7 @@ pub(super) fn make_turn_request() -> TurnRequest {
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
         model: model_fixture::CODEX_MODEL_ID.to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: "Do something".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,

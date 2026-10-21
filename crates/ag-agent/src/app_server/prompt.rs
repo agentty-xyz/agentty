@@ -44,7 +44,7 @@ pub(crate) fn turn_prompt_for_runtime(
     request_kind: &AgentRequestKind,
     replay_transcript: Option<&str>,
     instruction_delivery_mode: InstructionDeliveryMode,
-    personality: &ag_contracts::PersonalityPrompt,
+    agent_profile: &ag_contracts::AgentDefinitionPrompt,
     schema_instruction_mode: ProtocolSchemaInstructionMode,
     workspace_root: &Path,
 ) -> Result<TurnPrompt, AppServerError> {
@@ -52,8 +52,8 @@ pub(crate) fn turn_prompt_for_runtime(
     let agent_prompt = prompt.agent_text();
     let turn_prompt = agent::prepare_prompt_text(agent::PromptPreparationRequest {
         instruction_delivery_mode,
-        personality_prompt: personality.current(),
-        personality_update: personality.update(),
+        agent_profile_prompt: agent_profile.current(),
+        agent_profile_update: agent_profile.update(),
         prompt: &agent_prompt,
         protocol_profile: request_kind.protocol_profile(),
         replay_transcript,

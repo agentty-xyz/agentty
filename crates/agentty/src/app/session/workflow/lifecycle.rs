@@ -724,7 +724,6 @@ impl SessionManager {
                 model: session_model.as_str(),
                 parent_session_id,
                 permission_mode: creation_settings.permission_mode,
-                personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
@@ -957,7 +956,6 @@ impl SessionManager {
                 model: creation_settings.agent.model().as_str(),
                 parent_session_id: None,
                 permission_mode: creation_settings.permission_mode,
-                personality_id: creation_settings.personality_id.as_deref(),
                 project_id,
                 reasoning_level: creation_settings.reasoning_level,
                 response_style: creation_settings.response_style,
@@ -2130,32 +2128,6 @@ impl SessionManager {
         services.emit_app_event(AppEvent::SessionSpeedModeUpdated {
             session_id: SessionId::from(session_id),
             speed_mode,
-        });
-
-        Ok(())
-    }
-
-    /// Updates and persists the personality selected for a single session.
-    ///
-    /// # Errors
-    /// Returns an error if the session is missing or persistence fails.
-    pub async fn set_session_personality(
-        &mut self,
-        services: &AppServices,
-        session_id: &str,
-        personality_id: Option<String>,
-    ) -> Result<(), SessionError> {
-        self.session_index_or_err(session_id)?;
-
-        services
-            .db()
-            .sessions()
-            .update_session_personality_id(session_id, personality_id.clone())
-            .await?;
-
-        services.emit_app_event(AppEvent::SessionPersonalityUpdated {
-            personality_id,
-            session_id: SessionId::from(session_id),
         });
 
         Ok(())
@@ -3626,7 +3598,6 @@ impl SessionManager {
         Ok(SessionCreationSettings {
             agent,
             permission_mode: PermissionMode::AutoEdit,
-            personality_id: None,
             reasoning_level,
             response_style,
             speed_mode,

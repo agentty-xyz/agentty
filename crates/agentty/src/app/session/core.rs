@@ -55,8 +55,6 @@ pub(crate) struct SessionCreationSettings {
     pub(crate) agent: AgentSelection,
     /// Provider permission mode assigned to future turns.
     pub(crate) permission_mode: crate::domain::permission::PermissionMode,
-    /// Workspace personality selected for future turns.
-    pub(crate) personality_id: Option<String>,
     /// Session-scoped reasoning level.
     pub(crate) reasoning_level: ReasoningLevel,
     /// Session-scoped response style.
@@ -522,23 +520,6 @@ impl SessionManager {
             .find(|session| session.id == session_id)
         {
             session.speed_mode = speed_mode;
-        }
-    }
-
-    /// Applies one persisted personality update to the matching in-memory
-    /// session snapshot.
-    pub(crate) fn apply_session_personality_updated(
-        &mut self,
-        session_id: &str,
-        personality_id: Option<String>,
-    ) {
-        if let Some(session) = self
-            .state
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.personality_id = personality_id;
         }
     }
 

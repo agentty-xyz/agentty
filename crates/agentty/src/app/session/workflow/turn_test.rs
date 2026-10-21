@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use ag_contracts::{AgentRequestKind, MockAgentChannel, PersonalityPrompt};
-use ag_session::{EnvId, ResolvedEnv, test_support as model_fixture};
+use ag_contracts::{AgentDefinitionPrompt, AgentRequestKind, MockAgentChannel};
+use ag_session::{EnvId, ResolvedEnv, SessionStats, test_support as model_fixture};
 use ag_worker::SessionRunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -17,12 +17,103 @@ use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
 use crate::domain::permission::PermissionMode;
-use crate::domain::personality::Personality;
 use crate::domain::session::Status;
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{AppRepositories, DbError, PersistedSessionCreation};
-use crate::infra::personality::MockPersonalityCatalogClient;
+use crate::infra::db::{
+    AppRepositories, DbError, LEGACY_SESSION_AGENT_CLEAR_MARKER, PersistedSessionCreation,
+    SessionTurnMetadata,
+};
+
+#[tokio::test]
+async fn resumed_upgrade_clears_legacy_instructions_until_successful_persistence() {
+    // Arrange
+    let (context, _) = persisted_turn_test_context().await;
+    context
+        .db
+        .sessions()
+        .update_session_provider_conversation_id("worker", Some("old-context".into()))
+        .await
+        .expect("conversation");
+    context
+        .db
+        .sessions()
+        .update_session_instruction_conversation_id(
+            "worker",
+            Some(LEGACY_SESSION_AGENT_CLEAR_MARKER.into()),
+        )
+        .await
+        .expect("upgrade marker");
+    let metadata = TurnMetadata {
+        published_upstream_ref: None,
+        review_comment_thread_ids: Vec::new(),
+        session_agent: context.session_agent,
+    };
+    let prompt = TurnPrompt::from_text("Continue the work".into());
+
+    for _ in 0..2 {
+        // Act: preparing or failing a turn must not consume the marker.
+        let prepared = prepare_turn_request(
+            &context,
+            &metadata,
+            AgentRequestKind::SessionResume,
+            Some("Ordinary chat history".into()),
+            &prompt,
+            &resolved_turn_test_env(),
+        )
+        .await
+        .expect("resumed turn");
+
+        // Assert
+        assert_eq!(
+            prepared.request.agent_profile,
+            AgentDefinitionPrompt::cleared(true)
+        );
+        assert_eq!(
+            prepared.request.continuation.provider_conversation_id(),
+            Some("old-context")
+        );
+        assert_eq!(
+            prepared.request.continuation.replay_transcript(),
+            Some("Ordinary chat history")
+        );
+    }
+
+    // Act: use the ordinary successful-turn persistence boundary.
+    context
+        .db
+        .sessions()
+        .persist_session_turn_metadata(
+            "worker",
+            &SessionTurnMetadata {
+                harness_turn_report: None,
+                instruction_conversation_id: Some("current-bootstrap".into()),
+                model: model_fixture::CODEX_MODEL_ID.into(),
+                provider_conversation_id: Some("old-context".into()),
+                questions_json: "[]".into(),
+                review_comment_resolutions: Vec::new(),
+                token_usage_delta: SessionStats::default(),
+            },
+        )
+        .await
+        .expect("successful turn metadata");
+    let prepared = prepare_turn_request(
+        &context,
+        &metadata,
+        AgentRequestKind::SessionResume,
+        None,
+        &prompt,
+        &resolved_turn_test_env(),
+    )
+    .await
+    .expect("following turn");
+
+    // Assert
+    assert_eq!(
+        prepared.request.agent_profile,
+        AgentDefinitionPrompt::default()
+    );
+}
 
 #[tokio::test]
 async fn prepared_turn_preserves_default_settings() {
@@ -53,7 +144,10 @@ async fn prepared_turn_preserves_default_settings() {
     assert_eq!(prepared.request.reasoning_level, ReasoningLevel::default());
     assert_eq!(prepared.request.response_style, ResponseStyle::default());
     assert_eq!(prepared.request.speed_mode, SpeedMode::default());
-    assert_eq!(prepared.request.personality, PersonalityPrompt::default());
+    assert_eq!(
+        prepared.request.agent_profile,
+        AgentDefinitionPrompt::default()
+    );
     assert_eq!(prepared.request.prompt, prompt);
     assert_eq!(prepared.request.folder, env.folder);
     assert_eq!(prepared.request.main_checkout_root, env.main_checkout);
@@ -62,30 +156,13 @@ async fn prepared_turn_preserves_default_settings() {
 #[tokio::test]
 async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
     // Arrange
-    let (mut context, project_id) = persisted_turn_test_context().await;
+    let (context, project_id) = persisted_turn_test_context().await;
     let metadata = TurnMetadata {
         published_upstream_ref: None,
         review_comment_thread_ids: Vec::new(),
         session_agent: context.session_agent,
     };
     let prompt = TurnPrompt::from_text("Explain this code".to_string());
-    let personality = Personality {
-        description: "Reviews code".to_string(),
-        id: "reviewer".to_string(),
-        name: "Reviewer".to_string(),
-        prompt: "Review carefully.".to_string(),
-    };
-    let fingerprint = personality.fingerprint();
-    let mut catalog = MockPersonalityCatalogClient::new();
-    catalog
-        .expect_resolve()
-        .withf(|folder, id| folder == &PathBuf::from("/project/worktree") && id == "reviewer")
-        .times(1)
-        .returning(move |_, _| {
-            let personality = personality.clone();
-            Box::pin(async move { Some(personality) })
-        });
-    context.personality_catalog_client = Arc::new(catalog);
 
     // Act: change persisted settings after the turn's model was captured.
     update_turn_test_settings(&context.db).await;
@@ -99,13 +176,6 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
     )
     .await
     .expect("current settings");
-    let state = context
-        .db
-        .sessions()
-        .load_session_personality_state("worker")
-        .await
-        .expect("personality state")
-        .expect("session");
 
     // Assert
     assert_eq!(prepared.session_project_id, Some(project_id));
@@ -118,8 +188,8 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
     assert_eq!(prepared.request.response_style, ResponseStyle::Concise);
     assert_eq!(prepared.request.speed_mode, SpeedMode::Fast);
     assert_eq!(
-        prepared.request.personality,
-        PersonalityPrompt::active("Review carefully.".to_string(), true)
+        prepared.request.agent_profile,
+        AgentDefinitionPrompt::default()
     );
     assert!(
         prepared
@@ -143,21 +213,6 @@ async fn prepared_turn_resolves_current_settings_but_keeps_the_queued_model() {
             .persisted_instruction_conversation_id(),
         Some("instructions")
     );
-    assert_eq!(
-        prepared
-            .personality_persistence
-            .applied_personality_id
-            .as_deref(),
-        Some("reviewer")
-    );
-    assert_eq!(
-        prepared
-            .personality_persistence
-            .applied_personality_prompt_hash,
-        Some(fingerprint)
-    );
-    assert_eq!(state.applied_personality_id, None);
-    assert_eq!(state.applied_personality_prompt_hash, None);
 }
 
 #[test]
@@ -216,7 +271,6 @@ async fn persisted_permission_mode_controls_read_only_execution() {
             model: model_fixture::CODEX_MODEL_ID,
             parent_session_id: None,
             permission_mode: PermissionMode::ReadOnly,
-            personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_contracts::ResponseStyle::default(),
@@ -421,10 +475,6 @@ async fn update_turn_test_settings(db: &AppRepositories) {
         .await
         .expect("speed");
     db.sessions()
-        .update_session_personality_id("worker", Some("reviewer".to_string()))
-        .await
-        .expect("personality");
-    db.sessions()
         .update_session_provider_conversation_id("worker", Some("conversation".to_string()))
         .await
         .expect("conversation");
@@ -448,7 +498,6 @@ fn turn_test_context(db: AppRepositories) -> SessionWorkerContext {
         folder: PathBuf::from("/project/worktree"),
         fs_client: Arc::new(crate::infra::fs::MockFsClient::new()),
         git_client: Arc::new(ag_git::MockGitClient::new()),
-        personality_catalog_client: Arc::new(MockPersonalityCatalogClient::new()),
         queued_messages: Arc::default(),
         review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
         session_agent: AgentSelection::new(AgentKind::Antigravity, AgentModel::Gemini38Flash),

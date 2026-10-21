@@ -2,15 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ag_contracts::{AgentChannel, AgentRequestKind, ReasoningLevel, TurnEvent, TurnRequest};
+use ag_contracts::{
+    AgentChannel, AgentDefinitionPrompt, AgentRequestKind, ReasoningLevel, TurnContinuation,
+    TurnEvent, TurnRequest,
+};
 use ag_protocol::{TurnPrompt, TurnPromptAttachment, TurnPromptTextSource};
 use ag_session::AgentKind;
-use tempfile::tempdir;
+use tempfile::{tempdir, tempdir_in};
 use tokio::sync::mpsc;
 
 use super::support::{make_turn_request, stdin_capture_command};
-use crate::agent::MockAgentBackend;
 use crate::agent::cli::execution::{CliExecutionError, CliExecutionObserver};
+use crate::agent::{MockAgentBackend, create_backend};
 use crate::channel::cli::{
     CliAgentChannel, CliTurnObserver, build_command_request, map_cli_turn_execution_error,
 };
@@ -70,7 +73,7 @@ fn test_build_command_request_uses_agent_facing_prompt_text() {
         main_checkout_root: Some(PathBuf::from("/tmp/main")),
         model: "claude-sonnet-5-5".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("Review @src/main.rs"),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
@@ -281,6 +284,46 @@ async fn test_run_turn_writes_prompt_to_stdin_for_claude() {
     assert!(captured_prompt.contains("Structured response protocol:"));
     assert!(captured_prompt.contains(image_path.to_string_lossy().as_ref()));
     assert!(!captured_prompt.contains("[Image #1]"));
+}
+
+#[tokio::test]
+async fn resumed_claude_turn_delivers_legacy_instruction_withdrawal_over_stdin() {
+    // Arrange
+    let directory = tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("capture directory");
+    let capture_path = directory.path().join("stdin.txt");
+    let mut backend = MockAgentBackend::new();
+    backend.expect_build_command().times(1).returning({
+        let capture_path = capture_path.clone();
+        move |request| {
+            let command = create_backend(AgentKind::Claude).build_command(request)?;
+            assert!(command.get_args().any(|argument| argument == "-c"));
+
+            Ok(stdin_capture_command(&capture_path))
+        }
+    });
+    let channel = CliAgentChannel {
+        active: Arc::default(),
+        backend: Arc::new(backend),
+        kind: AgentKind::Claude,
+    };
+    let mut request = make_turn_request(directory.path().to_path_buf());
+    request.request_kind = AgentRequestKind::SessionResume;
+    request.continuation = TurnContinuation::replaying("Earlier ordinary conversation".into());
+    request.agent_profile = AgentDefinitionPrompt::cleared(true);
+    let (events_tx, _events_rx) = mpsc::unbounded_channel();
+
+    // Act
+    let result = channel
+        .run_turn("session".into(), request, events_tx)
+        .await
+        .expect("resumed turn");
+    let stdin = std::fs::read_to_string(capture_path).expect("captured stdin");
+
+    // Assert
+    assert_eq!(result.assistant_message.to_display_text(), "ok");
+    assert!(stdin.contains("Disregard previous personality and agent-profile instructions."));
+    assert!(stdin.contains("Earlier ordinary conversation"));
+    assert!(stdin.contains("Write a test"));
 }
 
 #[tokio::test]

@@ -1,75 +1,98 @@
-//! Workspace personality definitions parsed from `.agents/agents/*/agent.md`.
+//! Portable agent definitions shared by bundled and repository catalogs.
 
-/// Maximum UTF-8 byte length retained for one personality prompt.
-pub const PERSONALITY_PROMPT_MAX_BYTES: usize = 16 * 1024;
+use serde::{Deserialize, Serialize};
 
-/// One enabled personality loaded from a workspace agent definition.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Personality {
-    /// Short explanation shown beside the personality name.
+use crate::PermissionMode;
+
+/// Maximum UTF-8 byte length retained for one agent prompt.
+pub const AGENT_PROFILE_PROMPT_MAX_BYTES: usize = 16 * 1024;
+
+/// One enabled agent loaded from a workspace agent definition.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentDefinition {
+    /// Short explanation shown beside the agent name.
     pub description: String,
-    /// Stable identifier persisted on the owning session.
+    /// Stable identifier used to resolve the definition.
     pub id: String,
     /// Human-readable picker label.
     pub name: String,
     /// Behavioral preamble injected into agent turns.
     pub prompt: String,
+    /// Additional access restriction, never a grant of session permissions.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
-impl Personality {
-    /// Returns lightweight picker metadata without retaining the prompt body.
+impl AgentDefinition {
+    /// Resolves a bundled definition using the same parser as repository files.
     #[must_use]
-    pub fn summary(&self) -> PersonalitySummary {
-        PersonalitySummary {
+    pub fn bundled(id: &str) -> Option<Self> {
+        bundled_agent_definitions()
+            .into_iter()
+            .find(|agent| agent.id == id)
+    }
+
+    /// Intersects the definition's restriction with the host permission mode.
+    #[must_use]
+    pub fn permission_mode(&self, session_mode: PermissionMode) -> PermissionMode {
+        if self.read_only {
+            PermissionMode::ReadOnly
+        } else {
+            session_mode
+        }
+    }
+
+    /// Returns catalog metadata without retaining the prompt body.
+    #[must_use]
+    pub fn summary(&self) -> AgentDefinitionSummary {
+        AgentDefinitionSummary {
             description: self.description.clone(),
             id: self.id.clone(),
             name: self.name.clone(),
+            source: AgentDefinitionSource::Repository,
         }
-    }
-
-    /// Returns a deterministic fingerprint for the selected ID and prompt.
-    ///
-    /// Fingerprints only detect changes; they are not used for cryptographic
-    /// verification. The versioned FNV-1a encoding is stable across processes,
-    /// platforms, and Rust toolchain upgrades.
-    #[must_use]
-    pub fn fingerprint(&self) -> String {
-        let mut fingerprint =
-            Self::update_fnv_1a_fingerprint(FNV_1A_OFFSET_BASIS, PERSONALITY_FINGERPRINT_DOMAIN);
-        for component in [&self.id, &self.prompt] {
-            let byte_length = (component.len() as u128).to_le_bytes();
-            fingerprint = Self::update_fnv_1a_fingerprint(fingerprint, &byte_length);
-            fingerprint = Self::update_fnv_1a_fingerprint(fingerprint, component.as_bytes());
-        }
-
-        format!("{fingerprint:016x}")
-    }
-
-    /// Updates one FNV-1a fingerprint with the supplied bytes.
-    fn update_fnv_1a_fingerprint(mut fingerprint: u64, bytes: &[u8]) -> u64 {
-        for byte in bytes {
-            fingerprint ^= u64::from(*byte);
-            fingerprint = fingerprint.wrapping_mul(FNV_1A_PRIME);
-        }
-
-        fingerprint
     }
 }
 
-/// Lightweight personality metadata stored in prompt-composer state.
+/// Lightweight agent metadata returned by the definition catalog.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PersonalitySummary {
-    /// Short explanation shown beside the personality name.
+pub struct AgentDefinitionSummary {
+    /// Short explanation shown beside the agent name.
     pub description: String,
     /// Stable identifier persisted on the owning session.
     pub id: String,
     /// Human-readable picker label.
     pub name: String,
+    /// Origin shown in the agent picker, including repository overrides.
+    pub source: AgentDefinitionSource,
+}
+
+/// Location from which a catalog resolved a definition.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentDefinitionSource {
+    /// Default distributed with Agentty.
+    Bundled,
+    /// Definition in the session repository.
+    Repository,
+}
+
+/// Reads an identity even for a disabled definition, which masks a bundled ID.
+///
+/// # Errors
+/// Returns an error for malformed frontmatter or an empty identity.
+pub fn agent_definition_identity(
+    directory_id: &str,
+    source: &str,
+) -> Result<String, AgentDefinitionParseError> {
+    let (frontmatter, _) = split_agent_definition(source)?;
+    let parsed = AgentFrontmatter::parse(frontmatter)?;
+
+    Ok(required_value(parsed.id.as_deref().unwrap_or(directory_id), "id")?.to_string())
 }
 
 /// Error returned when one agent definition cannot be parsed safely.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum PersonalityParseError {
+pub enum AgentDefinitionParseError {
     /// The definition does not contain a complete frontmatter block.
     #[error("missing or incomplete frontmatter")]
     MissingFrontmatter,
@@ -88,25 +111,41 @@ pub enum PersonalityParseError {
 /// treating intentional configuration as a parse failure.
 ///
 /// # Errors
-/// Returns [`PersonalityParseError`] when frontmatter is malformed or a
+/// Returns [`AgentDefinitionParseError`] when frontmatter is malformed or a
 /// required name, description, directory fallback ID, or prompt is missing.
 pub fn parse_agent_definition(
     directory_id: &str,
     contents: &str,
-) -> Result<Option<Personality>, PersonalityParseError> {
+) -> Result<Option<AgentDefinition>, AgentDefinitionParseError> {
     let (frontmatter, body) = split_agent_definition(contents)?;
     let Some(summary) = parse_agent_summary_parts(directory_id, frontmatter)? else {
         return Ok(None);
     };
+    let options = AgentFrontmatter::parse(frontmatter)?;
+    let read_only = options.permission_mode.as_deref() == Some("read-only");
 
     let prompt = required_value(body, "prompt")?;
 
-    Ok(Some(Personality {
+    Ok(Some(AgentDefinition {
         description: summary.description,
         id: summary.id,
         name: summary.name,
-        prompt: truncate_personality_prompt(prompt),
+        prompt: truncate_agent_profile_prompt(prompt),
+        read_only,
     }))
+}
+
+/// Bundled agents are available even when a repository has no `.agents`
+/// directory.
+#[must_use]
+pub fn bundled_agent_definitions() -> Vec<AgentDefinition> {
+    [
+        ("planner", include_str!("agents/planner/agent.md")),
+        ("implementer", include_str!("agents/implementer/agent.md")),
+    ]
+    .into_iter()
+    .filter_map(|(id, source)| parse_agent_definition(id, source).ok().flatten())
+    .collect()
 }
 
 /// Parses lightweight picker metadata from one `.agents` agent definition.
@@ -116,12 +155,12 @@ pub fn parse_agent_definition(
 /// `Ok(None)`.
 ///
 /// # Errors
-/// Returns [`PersonalityParseError`] under the same validation rules as
+/// Returns [`AgentDefinitionParseError`] under the same validation rules as
 /// [`parse_agent_definition`].
 pub fn parse_agent_summary(
     directory_id: &str,
     contents: &str,
-) -> Result<Option<PersonalitySummary>, PersonalityParseError> {
+) -> Result<Option<AgentDefinitionSummary>, AgentDefinitionParseError> {
     let (frontmatter, body) = split_agent_definition(contents)?;
     let Some(summary) = parse_agent_summary_parts(directory_id, frontmatter)? else {
         return Ok(None);
@@ -131,17 +170,9 @@ pub fn parse_agent_summary(
     Ok(Some(summary))
 }
 
-/// FNV-1a domain separator for the stable personality fingerprint encoding.
-const PERSONALITY_FINGERPRINT_DOMAIN: &[u8] = b"agentty-personality-v1";
-
-/// FNV-1a 64-bit offset basis.
-const FNV_1A_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-
-/// FNV-1a 64-bit prime.
-const FNV_1A_PRIME: u64 = 0x0000_0100_0000_01b3;
-
-/// Marker appended when a personality prompt exceeds the supported budget.
-const PERSONALITY_PROMPT_TRUNCATION_MARKER: &str = "\n\n[Personality prompt truncated at 16 KiB.]";
+/// Marker appended when an agent prompt exceeds the supported budget.
+const AGENT_PROFILE_PROMPT_TRUNCATION_MARKER: &str =
+    "\n\n[AgentDefinition prompt truncated at 16 KiB.]";
 
 /// Supported fields decoded from one `.agents` frontmatter block.
 #[derive(Default)]
@@ -149,12 +180,38 @@ struct AgentFrontmatter {
     description: Option<String>,
     enabled: Option<bool>,
     id: Option<String>,
+    model: Option<String>,
     name: Option<String>,
+    permission_mode: Option<String>,
 }
 
 impl AgentFrontmatter {
+    /// Validates executable options identically for summaries and full bodies.
+    fn validate_options(&self) -> Result<(), AgentDefinitionParseError> {
+        if self
+            .model
+            .as_deref()
+            .is_some_and(|model| model != "inherit")
+        {
+            return Err(AgentDefinitionParseError::InvalidFrontmatter(
+                "only model: inherit is supported".to_string(),
+            ));
+        }
+        if self
+            .permission_mode
+            .as_deref()
+            .is_some_and(|mode| !matches!(mode, "inherit" | "read-only"))
+        {
+            return Err(AgentDefinitionParseError::InvalidFrontmatter(
+                "permission-mode must be inherit or read-only".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Parses the protocol's simple line-oriented `key: value` frontmatter.
-    fn parse(frontmatter: &str) -> Result<Self, PersonalityParseError> {
+    fn parse(frontmatter: &str) -> Result<Self, AgentDefinitionParseError> {
         let mut parsed = Self::default();
 
         for (line_index, line) in frontmatter.lines().enumerate() {
@@ -205,23 +262,43 @@ impl AgentFrontmatter {
                 "name" => {
                     Self::set_frontmatter_string(&mut parsed.name, key, value, line_number)?;
                 }
-                _ => {}
+                "model" => {
+                    Self::set_frontmatter_string(&mut parsed.model, key, value, line_number)?;
+                }
+                "permission-mode" => {
+                    Self::set_frontmatter_string(
+                        &mut parsed.permission_mode,
+                        key,
+                        value,
+                        line_number,
+                    )?;
+                }
+                "role" | "tags" => {}
+                "connection-type" if value == "internal" => {}
+                _ => {
+                    return Err(Self::invalid_frontmatter_line(
+                        line_number,
+                        &format!("unsupported execution field `{key}`"),
+                    ));
+                }
             }
         }
+
+        parsed.validate_options()?;
 
         Ok(parsed)
     }
 
     /// Builds one line-numbered frontmatter parsing error.
-    fn invalid_frontmatter_line(line_number: usize, message: &str) -> PersonalityParseError {
-        PersonalityParseError::InvalidFrontmatter(format!("line {line_number}: {message}"))
+    fn invalid_frontmatter_line(line_number: usize, message: &str) -> AgentDefinitionParseError {
+        AgentDefinitionParseError::InvalidFrontmatter(format!("line {line_number}: {message}"))
     }
 
     /// Removes matching single or double quotes from one frontmatter value.
     fn parse_frontmatter_value(
         value: &str,
         line_number: usize,
-    ) -> Result<&str, PersonalityParseError> {
+    ) -> Result<&str, AgentDefinitionParseError> {
         let Some(quote) = value
             .chars()
             .next()
@@ -245,7 +322,7 @@ impl AgentFrontmatter {
         key: &str,
         value: &str,
         line_number: usize,
-    ) -> Result<(), PersonalityParseError> {
+    ) -> Result<(), AgentDefinitionParseError> {
         if target.is_some() {
             return Err(Self::invalid_frontmatter_line(
                 line_number,
@@ -260,13 +337,13 @@ impl AgentFrontmatter {
 }
 
 /// Splits an agent definition into simple frontmatter and Markdown body.
-fn split_agent_definition(contents: &str) -> Result<(&str, &str), PersonalityParseError> {
+fn split_agent_definition(contents: &str) -> Result<(&str, &str), AgentDefinitionParseError> {
     let mut lines = contents.split_inclusive('\n');
     let first_line = lines
         .next()
-        .ok_or(PersonalityParseError::MissingFrontmatter)?;
+        .ok_or(AgentDefinitionParseError::MissingFrontmatter)?;
     if first_line.trim() != "---" {
-        return Err(PersonalityParseError::MissingFrontmatter);
+        return Err(AgentDefinitionParseError::MissingFrontmatter);
     }
 
     let frontmatter_start = first_line.len();
@@ -285,14 +362,14 @@ fn split_agent_definition(contents: &str) -> Result<(&str, &str), PersonalityPar
         line_start = line_start.saturating_add(line.len());
     }
 
-    Err(PersonalityParseError::MissingFrontmatter)
+    Err(AgentDefinitionParseError::MissingFrontmatter)
 }
 
 /// Validates frontmatter and builds lightweight picker metadata.
 fn parse_agent_summary_parts(
     directory_id: &str,
     frontmatter: &str,
-) -> Result<Option<PersonalitySummary>, PersonalityParseError> {
+) -> Result<Option<AgentDefinitionSummary>, AgentDefinitionParseError> {
     let frontmatter = AgentFrontmatter::parse(frontmatter)?;
     if frontmatter.enabled == Some(false) {
         return Ok(None);
@@ -305,10 +382,11 @@ fn parse_agent_summary_parts(
         "description",
     )?;
 
-    Ok(Some(PersonalitySummary {
+    Ok(Some(AgentDefinitionSummary {
         description: description.to_string(),
         id: id.to_string(),
         name: name.to_string(),
+        source: AgentDefinitionSource::Repository,
     }))
 }
 
@@ -316,23 +394,23 @@ fn parse_agent_summary_parts(
 fn required_value<'a>(
     value: &'a str,
     field: &'static str,
-) -> Result<&'a str, PersonalityParseError> {
+) -> Result<&'a str, AgentDefinitionParseError> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(PersonalityParseError::MissingField(field));
+        return Err(AgentDefinitionParseError::MissingField(field));
     }
 
     Ok(value)
 }
 
 /// Truncates a prompt at a UTF-8 boundary while retaining the marker budget.
-fn truncate_personality_prompt(prompt: &str) -> String {
-    if prompt.len() <= PERSONALITY_PROMPT_MAX_BYTES {
+fn truncate_agent_profile_prompt(prompt: &str) -> String {
+    if prompt.len() <= AGENT_PROFILE_PROMPT_MAX_BYTES {
         return prompt.to_string();
     }
 
     let content_budget =
-        PERSONALITY_PROMPT_MAX_BYTES.saturating_sub(PERSONALITY_PROMPT_TRUNCATION_MARKER.len());
+        AGENT_PROFILE_PROMPT_MAX_BYTES.saturating_sub(AGENT_PROFILE_PROMPT_TRUNCATION_MARKER.len());
     let mut boundary = content_budget.min(prompt.len());
     while !prompt.is_char_boundary(boundary) {
         boundary = boundary.saturating_sub(1);
@@ -341,10 +419,10 @@ fn truncate_personality_prompt(prompt: &str) -> String {
     format!(
         "{}{}",
         prompt[..boundary].trim_end(),
-        PERSONALITY_PROMPT_TRUNCATION_MARKER
+        AGENT_PROFILE_PROMPT_TRUNCATION_MARKER
     )
 }
 
 #[cfg(test)]
-#[path = "personality_test.rs"]
+#[path = "agent_profile_test.rs"]
 mod tests;

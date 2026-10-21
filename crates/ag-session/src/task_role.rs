@@ -1,4 +1,4 @@
-//! Built-in task roles, independent of provider selection and personalities.
+//! Host-enforced stages of the plan-and-implement workflow.
 
 use crate::PermissionMode;
 
@@ -10,15 +10,15 @@ use crate::PermissionMode;
 /// conversations, and result handoff must be supplied by the workflow before
 /// these contracts can govern execution.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum BuiltinAgentDefinition {
+pub enum TaskAgentRole {
     /// Inspects the workspace and proposes a plan without making changes.
     Planner,
     /// Implements an explicitly accepted plan within session permissions.
     Implementer,
 }
 
-impl BuiltinAgentDefinition {
-    /// Stable role identity, separate from provider kind or personality ID.
+impl TaskAgentRole {
+    /// Stable role identity, separate from provider kind or agent ID.
     pub fn id(self) -> &'static str {
         match self {
             Self::Planner => "planner",
@@ -40,18 +40,6 @@ impl BuiltinAgentDefinition {
         match self {
             Self::Planner => "Planner",
             Self::Implementer => "Implementer",
-        }
-    }
-
-    /// Static application instructions, without interpolated user or model
-    /// data.
-    ///
-    /// A caller must preserve the protocol's policy and response schema when
-    /// delivering these instructions. Prompt text does not enforce permissions.
-    pub fn instructions(self) -> &'static str {
-        match self {
-            Self::Planner => include_str!("template/planner_instructions.md"),
-            Self::Implementer => include_str!("template/implementer_instructions.md"),
         }
     }
 
@@ -116,5 +104,5 @@ pub enum AgentOutputKind {
 }
 
 #[cfg(test)]
-#[path = "agent_definition_test.rs"]
+#[path = "task_role_test.rs"]
 mod tests;

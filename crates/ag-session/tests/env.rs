@@ -52,7 +52,6 @@ fn session() -> Session {
             is_draft: true,
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
-            personality_id: None,
             project_id: 1,
             reasoning_level: ReasoningLevel::default(),
             response_style: ResponseStyle::default(),

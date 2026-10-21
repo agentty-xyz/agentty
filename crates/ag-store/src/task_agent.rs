@@ -1,8 +1,8 @@
 //! Immutable role assignment and task-owned conversation identity.
 
 use ag_session::{
-    AgentKind, AgentSelection, BuiltinAgentDefinition, SessionId, SubmitAgentTaskRequest,
-    SubmitTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
+    AgentKind, AgentSelection, SessionId, SubmitAgentTaskRequest, SubmitTaskRequest,
+    TaskAgentAssignment, TaskAgentContext, TaskAgentInput, TaskAgentRole,
 };
 use sqlx::SqliteConnection;
 
@@ -32,7 +32,7 @@ impl TaskAgentStore {
     pub(crate) fn attempt(request: &SubmitAgentTaskRequest) -> Result<SubmitTaskRequest, DbError> {
         request
             .input
-            .validate(request.assignment.definition)
+            .validate(request.assignment.role)
             .map_err(|error| Self::invalid(&error.to_string()))?;
 
         Ok(SubmitTaskRequest {
@@ -49,7 +49,7 @@ impl TaskAgentStore {
         task_id: &str,
     ) -> Result<Option<TaskAgentContextRow>, DbError> {
         let row = sqlx::query!(
-            r#"SELECT c.id, c.role, c.agent, c.model, c.input, t.session_id
+            r#"SELECT c.id, c.role, c.agent, c.model, c.input, c.definition, t.session_id
                FROM task_agent_context c JOIN task t ON t.id = c.task_id
                WHERE c.task_id = ?"#,
             task_id
@@ -59,8 +59,14 @@ impl TaskAgentStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        let definition = BuiltinAgentDefinition::from_id(&row.role)
+        let role = TaskAgentRole::from_id(&row.role)
             .ok_or_else(|| Self::invalid("Unknown task agent role"))?;
+        let definition = match row.definition {
+            Some(json) => serde_json::from_str::<ag_session::AgentDefinition>(&json)
+                .map_err(|_| Self::invalid("Invalid task agent definition"))?,
+            None => ag_session::AgentDefinition::bundled(role.id())
+                .ok_or(Self::invalid("Missing legacy task agent definition"))?,
+        };
         let kind = row
             .agent
             .parse::<AgentKind>()
@@ -71,7 +77,7 @@ impl TaskAgentStore {
         let input: TaskAgentInput = serde_json::from_str(&row.input)
             .map_err(|_| Self::invalid("Invalid task agent input"))?;
         input
-            .validate(definition)
+            .validate(role)
             .map_err(|error| Self::invalid(&error.to_string()))?;
 
         Ok(Some(TaskAgentContextRow {
@@ -79,6 +85,7 @@ impl TaskAgentStore {
                 assignment: TaskAgentAssignment {
                     agent: AgentSelection::new(kind, model),
                     definition,
+                    role,
                 },
                 id: row.id,
                 session_id: SessionId::from(row.session_id),
@@ -131,17 +138,19 @@ impl TaskAgentStore {
         let mut original = request.input.clone();
         original.clarification = None;
         let input = serde_json::json!(original).to_string();
-        let role = request.assignment.definition.id();
+        let role = request.assignment.role.id();
         let agent = request.assignment.agent.kind().to_string();
         let model = request.assignment.agent.model().as_str();
+        let definition = serde_json::json!(request.assignment.definition).to_string();
         sqlx::query!(
-            "INSERT INTO task_agent_context (task_id, role, agent, model, input) VALUES (?, ?, ?, \
-             ?, ?)",
+            "INSERT INTO task_agent_context (task_id, role, agent, model, input, definition) \
+             VALUES (?, ?, ?, ?, ?, ?)",
             request.task_id,
             role,
             agent,
             model,
-            input
+            input,
+            definition
         )
         .execute(connection)
         .await?;

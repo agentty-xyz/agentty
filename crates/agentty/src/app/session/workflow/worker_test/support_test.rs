@@ -18,9 +18,7 @@ use tempfile::tempdir;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::super::super::post_turn::{
-    PostTurnContext, TurnPersonalityPersistence, apply_turn_result,
-};
+use super::super::super::post_turn::{PostTurnContext, apply_turn_result};
 use super::super::super::published_branch;
 use super::super::{ScheduledSessionCommand, SessionCommand, SessionWorkerContext, TurnMetadata};
 use crate::app::AppEvent;
@@ -29,14 +27,12 @@ use crate::app::session::SessionError;
 use crate::app::test_support::TestSessionRunFactory;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, SpeedMode};
 use crate::domain::session::{
-    PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState, SessionStats,
-    Status,
+    PublishedBranchSyncStatus, QueuedMessage, ReviewRequest, ReviewRequestState, Status,
 };
 use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::TurnPrompt;
-use crate::infra::db::{AppRepositories, PersistedSessionCreation, SessionTurnMetadata};
+use crate::infra::db::{AppRepositories, PersistedSessionCreation};
 use crate::infra::fs;
-use crate::infra::personality::RealPersonalityCatalogClient;
 
 /// Builds one filesystem mock that treats every probed path as an
 /// existing directory.
@@ -109,7 +105,6 @@ pub(super) async fn insert_in_progress_read_only_session(db: &AppRepositories) {
             model: "gemini-3.8-flash",
             parent_session_id: None,
             permission_mode: ag_contracts::PermissionMode::ReadOnly,
-            personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_contracts::ResponseStyle::default(),
@@ -291,7 +286,6 @@ pub(super) async fn apply_worker_turn_result(
     apply_turn_result(
         &post_turn_context,
         turn_metadata,
-        TurnPersonalityPersistence::default(),
         turn_result,
         &crate::app::session::workflow::activity::TurnActivity::default(),
     )
@@ -323,7 +317,6 @@ pub(super) fn preparation_test_worker_context(
         folder: runtime.folder,
         fs_client: app.services.fs_client(),
         git_client: app.services.git_client(),
-        personality_catalog_client: runtime.personality_catalog_client,
         queued_messages: runtime.queued_messages,
         review_request_client: runtime.review_request_client,
         session_update_versions: runtime.session_update_versions,
@@ -748,30 +741,6 @@ pub(super) fn default_turn_metadata() -> TurnMetadata {
             AgentModel::Gemini38Flash,
         ),
     }
-}
-
-/// Persists one successful personality-delivery marker for resolver tests.
-pub(super) async fn persist_test_personality_state(
-    db: &AppRepositories,
-    personality: TurnPersonalityPersistence,
-) {
-    db.sessions()
-        .persist_session_turn_metadata(
-            "sess1",
-            &SessionTurnMetadata {
-                applied_personality_id: personality.applied_personality_id,
-                applied_personality_prompt_hash: personality.applied_personality_prompt_hash,
-                harness_turn_report: None,
-                instruction_conversation_id: None,
-                model: AgentModel::Gemini38Flash.as_str().to_string(),
-                provider_conversation_id: None,
-                questions_json: "[]".to_string(),
-                review_comment_resolutions: Vec::new(),
-                token_usage_delta: SessionStats::default(),
-            },
-        )
-        .await
-        .expect("personality application should persist");
 }
 
 /// Inserts an in-progress session linked to an open GitHub review request.
@@ -1519,7 +1488,6 @@ pub(super) fn rebase_assist_worker_harness(
         fs_client: Arc::new(fs::RealFsClient),
         git_client: Arc::new(build_git_client(main_checkout_root)),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -1621,7 +1589,6 @@ pub(super) async fn queue_test_context(
         fs_client: Arc::new(mock_fs_client_with_existing_directories()),
         git_client: Arc::new(mock_git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::clone(&queue_handle),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -1658,7 +1625,6 @@ pub(super) async fn queue_helper_context(
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(MockGitClient::new()),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: queue,
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),

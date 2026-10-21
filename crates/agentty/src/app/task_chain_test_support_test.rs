@@ -6,9 +6,9 @@ use std::time::Duration;
 use ag_contracts::{MockAgentChannel, TurnResult};
 use ag_protocol::AgentResponse;
 use ag_session::{
-    AgentAnswerContent, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    PermissionMode, SessionId, SessionMessageKind, SessionService, SessionStatus,
-    StartPlanThenImplementRequest, TaskChain,
+    AgentAnswerContent, AgentKind, AgentModel, AgentSelection, PermissionMode, SessionId,
+    SessionMessageKind, SessionService, SessionStatus, StartPlanThenImplementRequest,
+    TaskAgentRole, TaskChain,
 };
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -21,6 +21,7 @@ use crate::test_support::{new_git_test_app_with_pool, set_session_status_for_tes
 /// Launch input for the fixture workflow `workflow`.
 pub(in crate::app) fn launch_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
@@ -31,7 +32,7 @@ pub(in crate::app) fn launch_request() -> StartPlanThenImplementRequest {
 
 /// Builds the persisted transcript entry for one role-attributed answer.
 pub(in crate::app) fn agent_answer(
-    agent: BuiltinAgentDefinition,
+    agent: TaskAgentRole,
     text: &str,
 ) -> (SessionMessageKind, String) {
     (

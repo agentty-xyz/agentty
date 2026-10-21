@@ -1,4 +1,4 @@
-use crate::BuiltinAgentDefinition;
+use crate::TaskAgentRole;
 use crate::message::{
     AgentAnswerContent, SessionMessage, SessionMessageKind, SessionTranscript,
     normalized_message_content, stored_message_content,
@@ -354,7 +354,7 @@ fn activity_summary_is_durable_but_excluded_from_replay() {
 fn task_chain_messages_render_only_in_chat_and_never_replay() {
     // Arrange
     let answer = AgentAnswerContent {
-        agent: BuiltinAgentDefinition::Planner,
+        agent: TaskAgentRole::Planner,
         text: "  Plan:\n- \"quoted\" step\n".to_string(),
     };
     let mut transcript = SessionTranscript::default();
@@ -379,7 +379,7 @@ fn task_chain_messages_render_only_in_chat_and_never_replay() {
     assert_eq!(
         messages[2].agent_answer(),
         Some(AgentAnswerContent {
-            agent: BuiltinAgentDefinition::Planner,
+            agent: TaskAgentRole::Planner,
             text: "Plan:\n- \"quoted\" step".to_string(),
         })
     );
@@ -411,7 +411,7 @@ fn agent_answer_content_rejects_malformed_payloads() {
     assert_eq!(
         AgentAnswerContent::decode(r#"{"agent":"implementer","text":"Done"}"#),
         Some(AgentAnswerContent {
-            agent: BuiltinAgentDefinition::Implementer,
+            agent: TaskAgentRole::Implementer,
             text: "Done".to_string(),
         })
     );

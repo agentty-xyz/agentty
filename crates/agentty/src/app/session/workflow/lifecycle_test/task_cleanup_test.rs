@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use ag_forge::MockReviewRequestClient;
 use ag_git::MockGitClient;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, CreateTaskRequest,
-    DurableMessageVisibility, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, CreateTaskRequest, DurableMessageVisibility,
+    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 
 use super::support::{
@@ -172,7 +172,9 @@ async fn seed_task(repositories: &AppRepositories) {
             &SubmitAgentTaskRequest {
                 assignment: TaskAgentAssignment {
                     agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-                    definition: BuiltinAgentDefinition::Planner,
+                    role: TaskAgentRole::Planner,
+                    definition: ag_session::AgentDefinition::bundled("planner")
+                        .expect("bundled agent"),
                 },
                 attempt_id: "plan".to_string(),
                 input: TaskAgentInput {

@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use ag_session::{BuiltinAgentDefinition, TaskChain, TaskChainPhase};
+use ag_session::{TaskAgentRole, TaskChain, TaskChainPhase};
 
 use crate::domain::session::SessionId;
 
@@ -54,7 +54,7 @@ impl TaskChainNodeStatus {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct TaskChainGraphNode {
     /// Role represented by this node.
-    pub(crate) agent: BuiltinAgentDefinition,
+    pub(crate) agent: TaskAgentRole,
     /// Current node status.
     pub(crate) status: TaskChainNodeStatus,
 }
@@ -123,11 +123,11 @@ impl TaskChainGraph {
             }],
             nodes: vec![
                 TaskChainGraphNode {
-                    agent: BuiltinAgentDefinition::Planner,
+                    agent: TaskAgentRole::Planner,
                     status: planner,
                 },
                 TaskChainGraphNode {
-                    agent: BuiltinAgentDefinition::Implementer,
+                    agent: TaskAgentRole::Implementer,
                     status: implementer,
                 },
             ],
@@ -152,9 +152,9 @@ impl TaskChainGraph {
         chain: &TaskChain,
         status: TaskChainNodeStatus,
     ) -> (TaskChainNodeStatus, TaskChainNodeStatus) {
-        match chain.current_request.assignment.definition {
-            BuiltinAgentDefinition::Planner => (status, TaskChainNodeStatus::Waiting),
-            BuiltinAgentDefinition::Implementer => (TaskChainNodeStatus::Done, status),
+        match chain.current_request.assignment.role {
+            TaskAgentRole::Planner => (status, TaskChainNodeStatus::Waiting),
+            TaskAgentRole::Implementer => (TaskChainNodeStatus::Done, status),
         }
     }
 }

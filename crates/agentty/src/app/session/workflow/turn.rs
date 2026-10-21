@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnEvent,
-    TurnRequest, TurnResult,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, LiveTranscript, TurnContinuation,
+    TurnEvent, TurnRequest, TurnResult,
 };
 use ag_session::ResolvedEnv;
 use ag_telemetry::{FutureExt as _, Outcome, Span};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use super::lifecycle::SessionTitleGenerationTaskInput;
 use super::post_turn::PostTurnContext;
@@ -27,7 +27,7 @@ use crate::domain::session_message::SessionTranscript;
 use crate::domain::setting::SettingName;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
-use crate::infra::db::AppRepositories;
+use crate::infra::db::{AppRepositories, LEGACY_SESSION_AGENT_CLEAR_MARKER};
 
 /// Maximum ready turn events folded into one progress app-event emission.
 ///
@@ -276,13 +276,7 @@ pub(super) async fn run_channel_turn(
     let finalizer = post_turn::TurnFinalizerContext::from_worker(context);
     let result = Span::child("postprocess")
         .run(
-            post_turn::apply_turn_result(
-                &post_turn_context,
-                turn_metadata,
-                prepared.personality_persistence,
-                turn_result,
-                &activity,
-            ),
+            post_turn::apply_turn_result(&post_turn_context, turn_metadata, turn_result, &activity),
             |error| match error {
                 SessionError::StoppedByUser(_) => Outcome::Canceled,
                 _ => Outcome::Failed,
@@ -341,12 +335,10 @@ async fn prepare_turn_workspace(
 /// Settings resolved at execution time, after workspace preparation.
 ///
 /// The queued model selection and worker-owned execution policy have different
-/// lifetimes and deliberately remain outside this value. Personality
-/// application state travels with its prompt but is persisted only after a
-/// successful turn.
+/// lifetimes and deliberately remain outside this value.
 struct ResolvedTurnSettings {
+    agent_profile: AgentDefinitionPrompt,
     permission_mode: PermissionMode,
-    personality: ResolvedTurnPersonality,
     reasoning_level: ReasoningLevel,
     response_style: ResponseStyle,
     speed_mode: SpeedMode,
@@ -362,8 +354,7 @@ struct ResolvedTurnContext {
 impl ResolvedTurnContext {
     /// Reads the existing sources in order without persisting a configuration
     /// snapshot. Permission failures stop preparation; other loaders retain
-    /// their existing defaults. Continuation is read before personality lookup
-    /// so personality notices and failures keep their original ordering.
+    /// their existing defaults.
     async fn load(
         context: &SessionWorkerContext,
         replay_transcript: Option<String>,
@@ -375,14 +366,17 @@ impl ResolvedTurnContext {
         let response_style = load_session_response_style(&context.db, &context.session_id).await;
         let speed_mode = load_session_speed_mode(&context.db, &context.session_id).await;
         let continuation = load_turn_continuation(context, replay_transcript).await;
-        let personality = resolve_turn_personality(context).await;
+        let agent_profile = AgentDefinitionPrompt::cleared(
+            continuation.persisted_instruction_conversation_id()
+                == Some(LEGACY_SESSION_AGENT_CLEAR_MARKER),
+        );
 
         Ok(Self {
             continuation,
             session_project_id,
             settings: ResolvedTurnSettings {
+                agent_profile,
                 permission_mode,
-                personality,
                 reasoning_level,
                 response_style,
                 speed_mode,
@@ -393,7 +387,6 @@ impl ResolvedTurnContext {
 
 /// Request and host bookkeeping resolved together during context preparation.
 struct PreparedTurnRequest {
-    personality_persistence: post_turn::TurnPersonalityPersistence,
     request: TurnRequest,
     session_project_id: Option<i64>,
 }
@@ -420,7 +413,6 @@ async fn prepare_turn_request(
                 let model = turn_metadata.session_agent.model().provider_model_str();
 
                 Ok(PreparedTurnRequest {
-                    personality_persistence: settings.personality.persistence,
                     request: TurnRequest {
                         execution_policy: ag_contracts::ExecutionPolicy::default(),
                         continuation,
@@ -428,7 +420,7 @@ async fn prepare_turn_request(
                         main_checkout_root: env.main_checkout.clone(),
                         model: model.to_string(),
                         permission_mode: settings.permission_mode,
-                        personality: settings.personality.prompt,
+                        agent_profile: settings.agent_profile,
                         prompt: agent_prompt,
                         reasoning_level: settings.reasoning_level,
                         request_kind,
@@ -476,7 +468,6 @@ async fn finalize_turn_setup_failure(
     let result = post_turn::apply_turn_result(
         post_turn_context,
         turn_metadata,
-        post_turn::TurnPersonalityPersistence::default(),
         Err(match error {
             SessionError::StoppedByUser(message) => AgentError::InterruptedByUser(message.clone()),
             _ => AgentError::Backend(error.to_string()),
@@ -538,94 +529,6 @@ pub(super) async fn load_session_permission_mode(
             reason,
         })
         .map_err(SessionError::from)
-}
-
-/// Personality prompt plus the state persisted after a successful turn.
-pub(super) struct ResolvedTurnPersonality {
-    pub(super) persistence: post_turn::TurnPersonalityPersistence,
-    pub(super) prompt: PersonalityPrompt,
-}
-
-/// Resolves the selected personality from the session worktree immediately
-/// before one provider request is built.
-pub(super) async fn resolve_turn_personality(
-    context: &SessionWorkerContext,
-) -> ResolvedTurnPersonality {
-    let state = match context
-        .db
-        .sessions()
-        .load_session_personality_state(&context.session_id)
-        .await
-    {
-        Ok(Some(state)) => state,
-        Ok(None) => {
-            return ResolvedTurnPersonality {
-                persistence: post_turn::TurnPersonalityPersistence::default(),
-                prompt: PersonalityPrompt::default(),
-            };
-        }
-        Err(error) => {
-            warn!(
-                session_id = %context.session_id,
-                %error,
-                "failed to load session personality state"
-            );
-
-            return ResolvedTurnPersonality {
-                persistence: post_turn::TurnPersonalityPersistence::default(),
-                prompt: PersonalityPrompt::default(),
-            };
-        }
-    };
-    let Some(selected_id) = state.personality_id else {
-        return ResolvedTurnPersonality {
-            persistence: post_turn::TurnPersonalityPersistence::default(),
-            prompt: PersonalityPrompt::cleared(state.applied_personality_prompt_hash.is_some()),
-        };
-    };
-    let personality = context
-        .personality_catalog_client
-        .resolve(context.folder.clone(), selected_id.clone())
-        .await;
-    let Some(personality) = personality else {
-        let should_report_fallback = state.applied_personality_id.as_deref()
-            != Some(selected_id.as_str())
-            || state.applied_personality_prompt_hash.is_some();
-        if should_report_fallback {
-            let notice = TranscriptNotice::Personality.format(format!(
-                "Selected personality `{selected_id}` is unavailable in this session worktree; \
-                 continuing without it."
-            ));
-            SessionTaskService::append_workflow_notice(
-                &context.transcript,
-                &context.db,
-                &context.app_event_tx,
-                &context.session_update_versions,
-                &context.session_id,
-                &notice,
-            )
-            .await;
-        }
-
-        return ResolvedTurnPersonality {
-            persistence: post_turn::TurnPersonalityPersistence {
-                applied_personality_id: Some(selected_id),
-                applied_personality_prompt_hash: None,
-            },
-            prompt: PersonalityPrompt::cleared(state.applied_personality_prompt_hash.is_some()),
-        };
-    };
-    let fingerprint = personality.fingerprint();
-    let changed = state.applied_personality_id.as_deref() != Some(personality.id.as_str())
-        || state.applied_personality_prompt_hash.as_deref() != Some(fingerprint.as_str());
-
-    ResolvedTurnPersonality {
-        persistence: post_turn::TurnPersonalityPersistence {
-            applied_personality_id: Some(personality.id),
-            applied_personality_prompt_hash: Some(fingerprint),
-        },
-        prompt: PersonalityPrompt::active(personality.prompt, changed),
-    }
 }
 
 /// Marks an executing session turn in progress and clears resumed questions.

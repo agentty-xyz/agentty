@@ -191,7 +191,7 @@ async fn test_status_transition_from_services_updates_handle_and_persistence() {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(MockGitClient::new()),
             run_client_override: None,
-            personality_catalog_client_override: None,
+            agent_profile_catalog_client_override: None,
             repositories: database.clone(),
             review_request_client: Arc::new(ag_forge::MockReviewRequestClient::new()),
         },

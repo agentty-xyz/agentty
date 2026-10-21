@@ -2,13 +2,11 @@ use std::collections::VecDeque;
 
 use ag_contracts::{AgentRequestKind, MockAgentChannel};
 
-use super::super::super::post_turn::TurnPersonalityPersistence;
-use super::super::super::turn::resolve_turn_personality;
 use super::super::{SessionCommand, SessionWorkerService, TurnMetadata};
 use super::support::{
     assert_fork_history_replayed, auto_commit_run_client, capture_prepared_fork_reply,
-    inject_handoff_failure, persist_test_personality_state, preparation_test_worker_context,
-    prepare_fork_with_saved_reply, queue_test_context,
+    inject_handoff_failure, preparation_test_worker_context, prepare_fork_with_saved_reply,
+    queue_test_context,
 };
 use crate::app::SessionManager;
 use crate::domain::session::Status;
@@ -299,32 +297,4 @@ async fn test_fork_retry_replays_history_after_worker_acceptance_failure_only_on
             ..
         }
     ));
-}
-
-#[tokio::test]
-async fn test_resolve_turn_personality_clears_removed_selection() {
-    // Arrange
-    let (context, db, _queue, _base_dir) =
-        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
-    persist_test_personality_state(
-        &db,
-        TurnPersonalityPersistence {
-            applied_personality_id: Some("reviewer".to_string()),
-            applied_personality_prompt_hash: Some("prior-hash".to_string()),
-        },
-    )
-    .await;
-
-    // Act
-    let resolution = resolve_turn_personality(&context).await;
-
-    // Assert
-    assert_eq!(
-        resolution.prompt,
-        ag_contracts::PersonalityPrompt::cleared(true)
-    );
-    assert_eq!(
-        resolution.persistence,
-        TurnPersonalityPersistence::default()
-    );
 }

@@ -1,8 +1,8 @@
 //! Foreground admission for static, explicitly accepted task workflows.
 
 use ag_session::{
-    AcceptTaskChainPlanRequest, BuiltinAgentDefinition, ContinueTaskChainRequest, SessionError,
-    SessionId, SessionMessageKind, StartPlanThenImplementRequest, TaskChain,
+    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, SessionError, SessionId,
+    SessionMessageKind, StartPlanThenImplementRequest, TaskAgentRole, TaskChain,
 };
 use tracing::warn;
 
@@ -21,18 +21,29 @@ impl App {
     pub(super) async fn start_api_task_chain(
         &mut self,
         session_id: &SessionId,
-        request: StartPlanThenImplementRequest,
+        mut request: StartPlanThenImplementRequest,
     ) -> Result<(), SessionError> {
-        if self
+        let existing = self
             .services
             .db()
             .tasks()
             .load_task_chain(&request.chain_id)
             .await
-            .map_err(|error| api_error(&error))?
-            .is_none()
-        {
-            self.require_task_chain_session_ready(session_id, BuiltinAgentDefinition::Planner)?;
+            .map_err(|error| api_error(&error))?;
+        if let Some(existing) = existing {
+            if request.agents.planner.id == existing.agents.planner.id
+                && request.agents.implementer.id == existing.agents.implementer.id
+            {
+                *request.agents = existing.agents;
+            }
+        } else {
+            self.require_task_chain_session_ready(session_id, TaskAgentRole::Planner)?;
+            request.agents.planner = self
+                .resolve_task_agent_definition(session_id, &request.agents.planner.id)
+                .await?;
+            request.agents.implementer = self
+                .resolve_task_agent_definition(session_id, &request.agents.implementer.id)
+                .await?;
         }
         let admitted = self
             .services
@@ -60,6 +71,32 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Resolves a definition through the injected catalog before task
+    /// admission.
+    pub(super) async fn resolve_task_agent_definition(
+        &self,
+        session_id: &SessionId,
+        id: &str,
+    ) -> Result<ag_session::AgentDefinition, SessionError> {
+        let folder = self
+            .sessions
+            .sessions()
+            .iter()
+            .find(|session| session.id == *session_id)
+            .map(|session| session.folder.clone())
+            .ok_or(SessionError::NotFound)?;
+
+        self.services
+            .agent_profile_catalog_client()
+            .resolve(folder, id.to_string())
+            .await
+            .ok_or_else(|| {
+                SessionError::Operation(format!(
+                    "Agent definition `{id}` is unavailable or invalid"
+                ))
+            })
     }
 
     /// Mirrors a newly committed chain message into the owning live session.
@@ -96,10 +133,7 @@ impl App {
             .task_chain_has_receipt(&chain, &request.attempt_id)
             .await?
         {
-            self.require_task_chain_session_ready(
-                &chain.session_id,
-                BuiltinAgentDefinition::Implementer,
-            )?;
+            self.require_task_chain_session_ready(&chain.session_id, TaskAgentRole::Implementer)?;
         }
         let admitted = self
             .services
@@ -129,7 +163,7 @@ impl App {
         {
             self.require_task_chain_session_ready(
                 &chain.session_id,
-                chain.current_request.assignment.definition,
+                chain.current_request.assignment.role,
             )?;
         }
         let admitted = self
@@ -174,7 +208,7 @@ impl App {
     pub(super) fn require_task_chain_session_ready(
         &mut self,
         session_id: &SessionId,
-        definition: BuiltinAgentDefinition,
+        definition: TaskAgentRole,
     ) -> Result<(), SessionError> {
         self.sessions
             .validate_agent_task_admission(session_id, definition)

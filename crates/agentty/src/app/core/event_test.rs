@@ -1289,9 +1289,10 @@ impl App {
     /// Applies only the supplied event so event-waiting tests can inspect
     /// every queued completion before reducing it.
     pub(crate) async fn apply_single_app_event(&mut self, event: AppEvent) {
+        // Match production's indirection around the asynchronous reducer.
         let mut event_batch = AppEventBatch::default();
         event_batch.collect_event(event);
-        self.apply_app_event_batch(event_batch).await;
+        Box::pin(self.apply_app_event_batch(event_batch)).await;
         self.reconcile_terminal_session_input_mode().await;
     }
 

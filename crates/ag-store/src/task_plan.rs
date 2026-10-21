@@ -1,9 +1,7 @@
 //! Trusted acceptance ledger and exact transactional implementation handoff.
 
 use ag_protocol::AgentResponse;
-use ag_session::{
-    AcceptTaskPlanRequest, AcceptedTaskPlan, BuiltinAgentDefinition, SubmitAgentTaskRequest,
-};
+use ag_session::{AcceptTaskPlanRequest, AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentRole};
 use sqlx::SqliteConnection;
 
 use crate::DbError;
@@ -56,7 +54,7 @@ impl TaskPlanStore {
         session_id: &str,
         request: &SubmitAgentTaskRequest,
     ) -> Result<(), DbError> {
-        if request.assignment.definition == BuiltinAgentDefinition::Planner {
+        if request.assignment.role == TaskAgentRole::Planner {
             return Ok(());
         }
         let supplied = request
@@ -106,7 +104,7 @@ impl TaskPlanStore {
             .await?
             .ok_or_else(|| Self::invalid("Plan source has no isolated context"))?;
         if context.context.session_id.as_str() != session_id
-            || context.context.assignment.definition != BuiltinAgentDefinition::Planner
+            || context.context.assignment.role != TaskAgentRole::Planner
         {
             return Err(Self::invalid(
                 "Plan source must be a Planner in the same session",

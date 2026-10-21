@@ -36,7 +36,7 @@ fn build_api_session_returns_complete_settings_and_messages() {
     assert_eq!(session.settings.project_id, 7);
     assert_eq!(session.settings.parent_session_id, Some("parent-1".into()));
     assert_eq!(session.settings.permission_mode, PermissionMode::ReadOnly);
-    assert_eq!(session.settings.personality_id.as_deref(), Some("reviewer"));
+
     assert_eq!(session.settings.agent, model_fixture::codex_selection());
     assert_eq!(session.settings.reasoning_level, ReasoningLevel::XHigh);
     assert_eq!(session.settings.speed_mode, SpeedMode::Normal);

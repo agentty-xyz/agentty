@@ -3,10 +3,9 @@ use std::sync::Arc;
 use super::support::FakeBackend;
 use crate::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
-    BuiltinAgentDefinition, ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
-    ReplyToTaskChainRequest, SessionError, SessionId, SessionService,
-    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment,
-    TaskAgentInput,
+    ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility, ReplyToTaskChainRequest,
+    SessionError, SessionId, SessionService, StartPlanThenImplementRequest, SubmitAgentTaskRequest,
+    SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 
 #[tokio::test]
@@ -43,7 +42,8 @@ async fn existing_hosts_report_unsupported_task_capability() {
             SubmitAgentTaskRequest {
                 assignment: TaskAgentAssignment {
                     agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-                    definition: BuiltinAgentDefinition::Planner,
+                    role: TaskAgentRole::Planner,
+                    definition: crate::AgentDefinition::bundled("planner").expect("bundled agent"),
                 },
                 attempt_id: "role-attempt".to_string(),
                 input: TaskAgentInput {
@@ -78,6 +78,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
     let service = SessionService::new(Arc::new(FakeBackend::default()));
     let session_id = SessionId::from("session");
     let start = StartPlanThenImplementRequest {
+        agents: Box::new(crate::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: crate::test_support::codex_selection(),
         chain_id: "chain".into(),

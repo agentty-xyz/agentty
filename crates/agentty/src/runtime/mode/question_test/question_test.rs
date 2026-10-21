@@ -138,7 +138,6 @@ async fn test_d_key_in_chat_focus_opens_diff_with_question_snapshot() {
         ),
         parent_session_id: None,
         permission_mode: crate::domain::permission::PermissionMode::AutoEdit,
-        personality_id: None,
         project_name: String::new(),
         prompt: String::new(),
         queued_messages: Vec::new(),

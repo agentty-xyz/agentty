@@ -401,7 +401,7 @@ where
         &request.request_kind,
         replay.text.as_deref(),
         instruction_delivery_mode,
-        &request.personality,
+        &request.agent_profile,
         schema_instruction_mode,
         &request.folder,
     );

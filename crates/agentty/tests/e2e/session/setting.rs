@@ -11,8 +11,8 @@ use super::fixture::{
     E2eResult, seed_auto_address_review_mode, seed_project_settings, seed_review_ready_session,
     seed_review_ready_session_on_sessions_tab,
 };
+use crate::common;
 use crate::common::{BuilderEnv, FeatureTest};
-use crate::{common, test_support};
 
 /// Visible confirmation emitted only when Codex receives unrestricted Auto
 /// Edit policies at both app-server request boundaries.
@@ -104,32 +104,6 @@ async fn seed_detailed_response_style_session(
             .await
     })
     .await?;
-
-    Ok(())
-}
-
-/// Seeds one review-ready session with its worktree-local personality selected
-/// so semantic execution and GIF replay select the same entry.
-async fn seed_session_personality(env: &BuilderEnv) -> Result<(), Box<dyn std::error::Error>> {
-    seed_review_ready_session_on_sessions_tab(env).await?;
-    common::open_database(env)
-        .await?
-        .sessions()
-        .update_session_personality_id("review-shortcut-0001", Some("reviewer".to_string()))
-        .await?;
-
-    let session_folder =
-        test_support::session_folder(&env.agentty_root.join("wt"), "review-shortcut-0001");
-    let personality_directory = session_folder
-        .join(".agents")
-        .join("agents")
-        .join("reviewer");
-    std::fs::create_dir_all(&personality_directory)?;
-    std::fs::write(
-        personality_directory.join("agent.md"),
-        "---\nid: reviewer\nname: Code Reviewer\ndescription: Reviews code carefully\nrole: \
-         delegation-target\nenabled: true\n---\nReview every change for correctness.",
-    )?;
 
     Ok(())
 }
@@ -607,84 +581,6 @@ async fn test_narrow_session_preserves_style_totals_and_permission() -> E2eResul
                         assert!(timing_rows[0].trim_end().ends_with("╯"));
                         assertion::assert_not_visible(captured_frame, "Started");
                     }
-                })
-            },
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Verify `/personality` lists worktree-local agent definitions and persists
-/// the selected profile with visible transcript feedback.
-#[tokio::test]
-async fn test_session_personality() -> E2eResult {
-    // Arrange, Act, Assert
-    FeatureTest::new("session_personality")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_session_personality(env).await }))
-        .zola(
-            "Session personality",
-            "Choose a worktree-local agent personality for a session.",
-            41,
-        )
-        .run(
-            |scenario| {
-                scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::open_selected_session_view())
-                    .press_key("Enter")
-                    .wait_for_text("Type your message", 5000)
-                    .press_key("/")
-                    .write_text("personality")
-                    .wait_for_text("Slash Command", 3000)
-                    .wait_for_text("List: .agents/agents/.", 3000)
-                    .capture_labeled(
-                        "personality_slash_command",
-                        "Personality source directory appears in the slash-command menu",
-                    )
-                    .press_key("Enter")
-                    .wait_for_text("None (default)", 3000)
-                    .wait_for_text("Code Reviewer", 3000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "personality_picker",
-                        "Worktree personalities appear in the session picker",
-                    )
-                    .press_key("Enter")
-                    .wait_for_text("Personality set to", 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "personality_selected",
-                        "Selected personality is confirmed in the transcript",
-                    )
-            },
-            |frame, report| {
-                Box::pin(async move {
-                    let command_frame = common::frame_from_capture(&report.captures[0]);
-                    let command_full = Region::full(command_frame.cols(), command_frame.rows());
-                    assertion::assert_text_in_region(
-                        &command_frame,
-                        "List: .agents/agents/.",
-                        &command_full,
-                    );
-
-                    let picker_frame = common::frame_from_capture(&report.captures[1]);
-                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                    assertion::assert_text_in_region(&picker_frame, "None (default)", &picker_full);
-                    assertion::assert_text_in_region(&picker_frame, "Code Reviewer", &picker_full);
-                    assertion::assert_text_in_region(
-                        &picker_frame,
-                        "Reviews code carefully",
-                        &picker_full,
-                    );
-
-                    let full = Region::full(frame.cols(), frame.rows());
-                    assertion::assert_text_in_region(
-                        frame,
-                        "Personality set to Code Reviewer.",
-                        &full,
-                    );
                 })
             },
         )

@@ -3,8 +3,8 @@ use std::num::NonZeroUsize;
 use std::process::Command;
 
 use ag_contracts::{
-    AgentRequestKind, ExecutionPolicy, McpPolicy, OneShotRequest, PermissionMode,
-    PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
+    AgentDefinitionPrompt, AgentRequestKind, ExecutionPolicy, McpPolicy, OneShotRequest,
+    PermissionMode, ReasoningLevel, ResponseStyle, SpeedMode, ToolPolicy, TurnContinuation,
     TurnRequest,
 };
 use ag_session::{AgentAvailabilityProbe, AgentCliInfo, AgentKind, AgentModel};
@@ -131,7 +131,7 @@ async fn native_harness_configuration_runs_harness_work_in_process() {
         main_checkout_root: None,
         model: "unlisted-model".to_string(),
         permission_mode: PermissionMode::ReadOnly,
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: ag_protocol::TurnPrompt::from_text("Hi".to_string()),
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,

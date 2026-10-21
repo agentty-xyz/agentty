@@ -38,7 +38,6 @@ use crate::infra::db::{
     AppRepositories, NewSessionReviewCommentResolution, SessionMessageRow, SessionOperationRow,
 };
 use crate::infra::fs;
-use crate::infra::personality::RealPersonalityCatalogClient;
 
 #[tokio::test]
 /// Verifies the last queued follow-up turn reloads the persisted
@@ -200,7 +199,6 @@ async fn test_apply_turn_result_starts_background_push_for_published_branch() {
             fs_client: Arc::new(fs::MockFsClient::new()),
             git_client: Arc::new(mock_git_client),
             transcript: empty_transcript(),
-            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
             queued_messages: Arc::new(Mutex::new(VecDeque::new())),
             review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -297,7 +295,6 @@ async fn test_apply_turn_result_resolves_fixed_review_threads_after_push() {
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::from([queued_message(
             0,
             "Make another change",
@@ -403,7 +400,6 @@ async fn test_apply_turn_result_rejects_incomplete_review_comment_outcome_batch(
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -484,7 +480,6 @@ async fn test_failed_push_retains_but_does_not_resolve_review_fix_undone_by_desc
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -763,7 +758,6 @@ async fn test_commit_failure_discards_review_operations_before_later_push() {
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(review_request_client),
         session_update_versions: Arc::default(),
@@ -852,7 +846,6 @@ async fn test_commit_binding_failure_retains_review_operation_for_fresh_retry() 
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),

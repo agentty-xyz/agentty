@@ -28,6 +28,13 @@ through the correct modules without crossing layer boundaries.
 1. Update docs when lifecycle/status behavior changes:
    `docs/site/content/docs/usage/workflow.md`.
 
+## Add an Agent Definition
+
+Add a repository definition under `.agents/agents/<id>/agent.md`, or a bundled
+definition under `crates/ag-session/src/agents/` and register it in the bundled catalog.
+Both use the same parser. Keep host workflow contracts separate from definition identity
+and preserve task snapshots when changing admission or continuation.
+
 ## Add a New Agent Backend or Model
 
 1. Declare model ids, descriptions, provider order, speed support, and known context

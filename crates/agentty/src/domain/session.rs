@@ -270,8 +270,7 @@ pub struct Session {
     pub parent_session_id: Option<SessionId>,
     /// Provider permission mode selected through the prompt shortcut.
     pub permission_mode: crate::domain::permission::PermissionMode,
-    /// Workspace personality selected for future turns, when present.
-    pub personality_id: Option<String>,
+    /// Workspace agent selected for future turns, when present.
     /// Human-readable project name associated with the session.
     pub project_name: String,
     /// Initial user prompt used to create the session.

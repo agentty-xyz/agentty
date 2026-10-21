@@ -6,7 +6,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use ag_contracts::{
-    AgentRequestKind, LiveTranscript, PermissionMode, PersonalityPrompt, ReasoningLevel, SpeedMode,
+    AgentDefinitionPrompt, AgentRequestKind, LiveTranscript, PermissionMode, ReasoningLevel,
+    SpeedMode,
 };
 use ag_protocol::TurnPrompt;
 use tokio::sync::mpsc;
@@ -72,8 +73,8 @@ pub struct AppServerTurnRequest {
     /// Persisted provider-native conversation id that already received the
     /// full instruction bootstrap, when available.
     pub persisted_instruction_conversation_id: Option<String>,
-    /// Personality prompt state resolved for this turn.
-    pub personality: PersonalityPrompt,
+    /// Agent prompt state resolved for this turn.
+    pub agent_profile: AgentDefinitionPrompt,
     /// Structured prompt payload for this turn.
     pub prompt: TurnPrompt,
     /// Optional shared limit, charged for every underlying attempt and retry.

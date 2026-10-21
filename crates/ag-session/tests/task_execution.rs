@@ -2,8 +2,8 @@
 
 use ag_protocol::TurnPromptAttachment;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, EnvId,
-    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, EnvId, SubmitAgentTaskRequest,
+    TaskAgentAssignment, TaskAgentContext, TaskAgentInput, TaskAgentRole,
 };
 
 #[test]
@@ -32,7 +32,8 @@ fn role_assignment_retains_the_callers_captured_selection() {
     let request = SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: captured,
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "plan-first-attempt".to_string(),
         input: TaskAgentInput {
@@ -48,7 +49,7 @@ fn role_assignment_retains_the_callers_captured_selection() {
     let later_session_selection = AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55);
 
     // Act
-    let validation = request.input.validate(request.assignment.definition);
+    let validation = request.input.validate(request.assignment.role);
 
     // Assert
     assert!(validation.is_ok());
@@ -62,7 +63,8 @@ fn independent_task_contexts_share_the_sessions_environment() {
     let planner = TaskAgentContext {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         id: "host-context-a".to_string(),
         session_id: "session".into(),
@@ -70,7 +72,8 @@ fn independent_task_contexts_share_the_sessions_environment() {
     };
     let implementer = TaskAgentContext {
         assignment: TaskAgentAssignment {
-            definition: BuiltinAgentDefinition::Implementer,
+            role: TaskAgentRole::Implementer,
+            definition: ag_session::AgentDefinition::bundled("implementer").expect("bundled agent"),
             ..planner.assignment
         },
         id: "host-context-b".to_string(),

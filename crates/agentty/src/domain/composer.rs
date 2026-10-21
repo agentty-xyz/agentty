@@ -10,7 +10,6 @@ use crate::domain::agent::{
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
-use crate::domain::personality::PersonalitySummary;
 
 /// One selectable row in the prompt slash-command menu.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,8 +46,6 @@ pub enum PromptSuggestionSelection {
     Model(AgentSelection),
     /// Session mode selected during `/mode` selection.
     Mode(PermissionMode),
-    /// Workspace personality selected or cleared during `/personality`.
-    Personality(Option<PersonalitySummary>),
     /// Session-scoped reasoning selection chosen during `/reasoning`.
     Reasoning(ReasoningLevel),
     /// Session-scoped response style chosen during `/style`.
@@ -433,8 +430,6 @@ pub enum PromptSlashStage {
     Model,
     /// Selecting a session permission and automation mode.
     Mode,
-    /// Selecting or clearing a workspace personality.
-    Personality,
     /// Selecting a session-specific reasoning level override.
     Reasoning,
     /// Selecting a session-specific response style.
@@ -453,8 +448,6 @@ pub struct PromptSlashState {
     /// Whether `/plan` armed the composer, so the next submit starts the
     /// Planner with the typed task. Menu resets keep it; `Esc` disarms it.
     pub is_plan_armed: bool,
-    /// Workspace personalities loaded when `/personality` was accepted.
-    pub personalities: Vec<PersonalitySummary>,
     /// Agent selected for the current slash workflow, when applicable.
     pub selected_agent: Option<AgentKind>,
     /// Highlighted option inside the active slash menu.
@@ -472,7 +465,6 @@ impl PromptSlashState {
             allow_plan_command: false,
             available_agent_kinds,
             is_plan_armed: false,
-            personalities: Vec::new(),
             selected_agent: None,
             selected_index: 0,
             stage: PromptSlashStage::Command,
@@ -500,7 +492,6 @@ impl PromptSlashState {
     /// Resets slash state back to command selection.
     pub fn reset(&mut self) {
         self.selected_agent = None;
-        self.personalities.clear();
         self.selected_index = 0;
         self.stage = PromptSlashStage::Command;
     }
@@ -987,10 +978,6 @@ fn build_slash_suggestion_list(
             "/mode (j/k move, Enter select)",
             permission_mode_suggestion_items(),
         ),
-        PromptSlashStage::Personality => (
-            "/personality (j/k move, Enter select)",
-            personality_suggestion_items(&slash_state.personalities),
-        ),
         PromptSlashStage::Reasoning => (
             "/reasoning Level (j/k move, Enter select)",
             reasoning_suggestion_items(),
@@ -1079,24 +1066,6 @@ fn selected_slash_action(
 
             Some(PromptSuggestionSelection::Mode(selected_permission_mode))
         }
-        PromptSlashStage::Personality => {
-            if slash_state.personalities.is_empty() {
-                return None;
-            }
-
-            if slash_state.selected_index == 0 {
-                return Some(PromptSuggestionSelection::Personality(None));
-            }
-
-            slash_state
-                .personalities
-                .get(clamp_selected_index(
-                    slash_state.selected_index.saturating_sub(1),
-                    slash_state.personalities.len(),
-                ))
-                .cloned()
-                .map(|personality| PromptSuggestionSelection::Personality(Some(personality)))
-        }
         PromptSlashStage::Reasoning => {
             let options = reasoning_options();
             let selected_reasoning = options
@@ -1158,7 +1127,6 @@ fn command_description(command: &str) -> &'static str {
         "/mode" => "Choose editing permissions and focused-review automation.",
         "/model" => "Choose an agent and model for this session.",
         "/plan" => "Plan then implement: chat with the orchestrated Planner and Implementer.",
-        "/personality" => "List: .agents/agents/. Choose a personality for this session.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",
         "/speed" => "Choose normal or fast responses for this session.",
@@ -1179,7 +1147,6 @@ fn prompt_slash_commands(
         "/mode",
         "/model",
         "/plan",
-        "/personality",
         "/reasoning",
         "/style",
         "/speed",
@@ -1305,36 +1272,6 @@ fn permission_mode_suggestion_items() -> Vec<PromptSuggestionItem> {
             metadata: None,
         })
         .collect()
-}
-
-/// Returns render-ready rows for `/personality`.
-fn personality_suggestion_items(personalities: &[PersonalitySummary]) -> Vec<PromptSuggestionItem> {
-    if personalities.is_empty() {
-        return vec![PromptSuggestionItem {
-            badge: None,
-            detail: None,
-            label: "No personalities found in `.agents/agents`.".to_string(),
-            metadata: None,
-        }];
-    }
-
-    std::iter::once(PromptSuggestionItem {
-        badge: None,
-        detail: Some("Use the agent's default behavior.".to_string()),
-        label: "None (default)".to_string(),
-        metadata: None,
-    })
-    .chain(
-        personalities
-            .iter()
-            .map(|personality| PromptSuggestionItem {
-                badge: None,
-                detail: Some(personality.description.clone()),
-                label: personality.name.clone(),
-                metadata: None,
-            }),
-    )
-    .collect()
 }
 
 /// Returns the exclusive end index for an `[Image #n]` placeholder token that

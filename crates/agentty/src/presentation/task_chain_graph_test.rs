@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use ag_session::{
-    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
+    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, StartPlanThenImplementRequest,
+    TaskAgentRole, TaskChain, TaskChainPhase,
 };
 
 use crate::domain::session::SessionId;
@@ -17,61 +17,61 @@ fn projection_maps_every_chain_phase_to_node_statuses_and_edge() {
     let cases = [
         (
             TaskChainPhase::Planning,
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             TaskChainNodeStatus::Working,
             TaskChainNodeStatus::Waiting,
         ),
         (
             TaskChainPhase::AwaitingPlanAcceptance,
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             TaskChainNodeStatus::AwaitingApproval,
             TaskChainNodeStatus::Waiting,
         ),
         (
             TaskChainPhase::PlannerQuestion,
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             TaskChainNodeStatus::NeedsInput,
             TaskChainNodeStatus::Waiting,
         ),
         (
             TaskChainPhase::Implementing,
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             TaskChainNodeStatus::Done,
             TaskChainNodeStatus::Working,
         ),
         (
             TaskChainPhase::ImplementerQuestion,
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             TaskChainNodeStatus::Done,
             TaskChainNodeStatus::NeedsInput,
         ),
         (
             TaskChainPhase::Failed,
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             TaskChainNodeStatus::Failed,
             TaskChainNodeStatus::Waiting,
         ),
         (
             TaskChainPhase::Failed,
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             TaskChainNodeStatus::Done,
             TaskChainNodeStatus::Failed,
         ),
         (
             TaskChainPhase::Canceled,
-            BuiltinAgentDefinition::Planner,
+            TaskAgentRole::Planner,
             TaskChainNodeStatus::Canceled,
             TaskChainNodeStatus::Waiting,
         ),
         (
             TaskChainPhase::Canceled,
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             TaskChainNodeStatus::Done,
             TaskChainNodeStatus::Canceled,
         ),
         (
             TaskChainPhase::Succeeded,
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             TaskChainNodeStatus::Done,
             TaskChainNodeStatus::Done,
         ),
@@ -92,8 +92,8 @@ fn projection_maps_every_chain_phase_to_node_statuses_and_edge() {
                 .map(|node| (node.agent, node.status))
                 .collect::<Vec<_>>(),
             [
-                (BuiltinAgentDefinition::Planner, planner),
-                (BuiltinAgentDefinition::Implementer, implementer),
+                (TaskAgentRole::Planner, planner),
+                (TaskAgentRole::Implementer, implementer),
             ],
             "{phase:?} with current role {current_role:?}"
         );
@@ -101,7 +101,7 @@ fn projection_maps_every_chain_phase_to_node_statuses_and_edge() {
         assert_eq!(graph.edges[0].label, ACCEPTED_PLAN_EDGE_LABEL);
         assert_eq!(
             graph.edges[0].is_satisfied,
-            current_role == BuiltinAgentDefinition::Implementer
+            current_role == TaskAgentRole::Implementer
         );
     }
 }
@@ -142,10 +142,8 @@ fn cache_reloads_on_version_change_and_ignores_stale_completions() {
     // Arrange
     let now = Instant::now();
     let session_id = SessionId::from("session");
-    let graph = TaskChainGraph::from_chain(&chain(
-        TaskChainPhase::Planning,
-        BuiltinAgentDefinition::Planner,
-    ));
+    let graph =
+        TaskChainGraph::from_chain(&chain(TaskChainPhase::Planning, TaskAgentRole::Planner));
     let mut cache = TaskChainGraphCache::default();
 
     // Act / Assert: the first version loads once while in flight, ignoring
@@ -202,8 +200,9 @@ fn cache_retains_only_the_most_recent_sessions() {
     assert!(!cache.needs_load("session-1", 1, now));
 }
 
-fn chain(phase: TaskChainPhase, current_role: BuiltinAgentDefinition) -> TaskChain {
+fn chain(phase: TaskChainPhase, current_role: TaskAgentRole) -> TaskChain {
     let start = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
@@ -211,15 +210,15 @@ fn chain(phase: TaskChainPhase, current_role: BuiltinAgentDefinition) -> TaskCha
         user_request: "Add search".into(),
     };
     let mut current_request = start.planner_request();
-    current_request.assignment.definition = current_role;
-    let accepted_plan =
-        (current_role == BuiltinAgentDefinition::Implementer).then(|| AcceptedTaskPlan {
-            attempt_id: "plan".into(),
-            task_id: current_request.task_id.clone(),
-            text: "Plan".into(),
-        });
+    current_request.assignment.role = current_role;
+    let accepted_plan = (current_role == TaskAgentRole::Implementer).then(|| AcceptedTaskPlan {
+        attempt_id: "plan".into(),
+        task_id: current_request.task_id.clone(),
+        text: "Plan".into(),
+    });
 
     TaskChain {
+        agents: ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
         accepted_plan,
         agent: start.agent,
         current_request: current_request.clone(),

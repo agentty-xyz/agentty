@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt, ReasoningLevel,
+    AgentDefinitionPrompt, AgentRequestKind, MockAgentChannel, PermissionMode, ReasoningLevel,
     ResponseStyle, SpeedMode, TurnContinuation, TurnRequest,
 };
 use ag_worker::test_support::MockAppServerClient;
@@ -30,7 +30,8 @@ async fn real_task_factory_validates_context_before_composing_runtime() {
                 AgentKind::Codex,
                 ag_session::AgentModel::Gpt61Sol,
             ),
-            definition: ag_session::BuiltinAgentDefinition::Planner,
+            role: ag_session::TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         id: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
         session_id: "session".into(),
@@ -212,7 +213,7 @@ fn unexpected_turn_request() -> TurnRequest {
         main_checkout_root: None,
         model: "unused".to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: "unexpected turn".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,

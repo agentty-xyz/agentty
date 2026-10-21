@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO task_chain (id, session_id, agent, model, user_request, planner_task_id, implementer_task_id, planner_task_attempt_id, created_at, agent_definitions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "d303e21fc16e9214215eded67e2ef2fcbd420b57c73c426cb42d8b89cb930fb5"
+}

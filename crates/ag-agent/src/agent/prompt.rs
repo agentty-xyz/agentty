@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ag_contracts::{PersonalityPromptUpdate, ResponseStyle};
+use ag_contracts::{AgentDefinitionPromptUpdate, ResponseStyle};
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode, TurnPrompt, TurnPromptAttachment,
     TurnPromptContentPart, prepend_protocol_instructions as protocol_prepend_instructions,
@@ -25,14 +25,14 @@ struct ResumeWithTranscriptPromptTemplate<'a> {
     transcript: &'a str,
 }
 
-/// Askama view model for placing personality instructions before a turn.
+/// Askama view model for placing agent instructions before a turn.
 #[derive(Template)]
-#[template(path = "personality_prompt.md", escape = "none")]
-struct PersonalityPromptTemplate<'a> {
+#[template(path = "agent_profile_prompt.md", escape = "none")]
+struct AgentDefinitionPromptTemplate<'a> {
     /// Markdown heading describing a bootstrap or delta update.
     heading: &'a str,
-    /// Personality instructions or clearing guidance.
-    personality: &'a str,
+    /// Agent instructions or clearing guidance.
+    agent_profile: &'a str,
     /// Remaining turn prompt content.
     prompt: &'a str,
 }
@@ -52,10 +52,10 @@ struct ResponseStylePromptTemplate<'a> {
 pub(crate) struct PromptPreparationRequest<'a> {
     /// Delivery mode selected for the current provider attempt.
     pub instruction_delivery_mode: InstructionDeliveryMode,
-    /// Current personality body used for full instruction bootstraps.
-    pub personality_prompt: Option<&'a str>,
-    /// Personality change used only for delta delivery.
-    pub personality_update: &'a PersonalityPromptUpdate,
+    /// Current agent body used for full instruction bootstraps.
+    pub agent_profile_prompt: Option<&'a str>,
+    /// Agent change, including clearing guidance during full bootstraps.
+    pub agent_profile_update: &'a AgentDefinitionPromptUpdate,
     /// Base user prompt before replay wrapping and protocol instructions.
     pub prompt: &'a str,
     /// Protocol family that determines the rendered instruction envelope.
@@ -87,9 +87,19 @@ pub(crate) enum CliPromptAccessRootMode {
 pub(crate) fn prepare_prompt_text(
     request: PromptPreparationRequest<'_>,
 ) -> Result<String, AgentBackendError> {
+    // A full bootstrap can refresh policy inside retained provider/native
+    // history. Clearing must survive that refresh as well as delta delivery.
+    let agent_profile_prompt = if matches!(
+        request.agent_profile_update,
+        AgentDefinitionPromptUpdate::Clear
+    ) {
+        Some(CLEARED_AGENT_INSTRUCTIONS)
+    } else {
+        request.agent_profile_prompt
+    };
     match request.instruction_delivery_mode {
         InstructionDeliveryMode::BootstrapFull => {
-            let prompt = prepend_personality_prompt(request.prompt, request.personality_prompt)?;
+            let prompt = prepend_agent_profile_prompt(request.prompt, agent_profile_prompt)?;
 
             Ok(protocol_prepend_instructions(
                 &prompt,
@@ -99,7 +109,8 @@ pub(crate) fn prepare_prompt_text(
             ))
         }
         InstructionDeliveryMode::DeltaOnly => {
-            let prompt = prepend_personality_update(request.prompt, request.personality_update)?;
+            let prompt =
+                prepend_agent_profile_update(request.prompt, request.agent_profile_update)?;
 
             Ok(protocol_prepend_refresh_reminder(
                 &prompt,
@@ -109,7 +120,7 @@ pub(crate) fn prepare_prompt_text(
         }
         InstructionDeliveryMode::BootstrapWithReplay => {
             let prompt = build_resume_prompt(request.prompt, request.replay_transcript)?;
-            let prompt = prepend_personality_prompt(&prompt, request.personality_prompt)?;
+            let prompt = prepend_agent_profile_prompt(&prompt, agent_profile_prompt)?;
 
             Ok(protocol_prepend_instructions(
                 &prompt,
@@ -168,8 +179,8 @@ pub(crate) fn build_cli_prompt_text(
         } else {
             InstructionDeliveryMode::BootstrapFull
         },
-        personality_prompt: request.personality_prompt,
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: request.agent_profile_prompt,
+        agent_profile_update: request.agent_profile_update,
         prompt: &prompt,
         protocol_profile: request.request_kind.protocol_profile(),
         replay_transcript: request.replay_transcript,
@@ -209,46 +220,50 @@ pub(crate) fn build_prompt_stdin_payload(
         .map(String::into_bytes)
 }
 
-/// Prepends current personality instructions to one full bootstrap prompt.
-fn prepend_personality_prompt(
+/// Prepends current agent instructions to one full bootstrap prompt.
+fn prepend_agent_profile_prompt(
     prompt: &str,
-    personality_prompt: Option<&str>,
+    agent_profile_prompt: Option<&str>,
 ) -> Result<String, AgentBackendError> {
-    let Some(personality) = personality_prompt
+    let Some(agent_profile) = agent_profile_prompt
         .map(str::trim)
-        .filter(|personality| !personality.is_empty())
+        .filter(|agent_profile| !agent_profile.is_empty())
     else {
         return Ok(prompt.to_string());
     };
-    let template = PersonalityPromptTemplate {
-        heading: "# Personality",
-        personality,
+    let template = AgentDefinitionPromptTemplate {
+        heading: "# Agent",
+        agent_profile,
         prompt,
     };
 
-    render_template("personality_prompt.md", &template)
+    render_template("agent_profile_prompt.md", &template)
 }
 
-/// Prepends one changed or cleared personality instruction for delta mode.
-fn prepend_personality_update(
+/// Explicitly withdraws removed session instructions while preserving user
+/// input.
+const CLEARED_AGENT_INSTRUCTIONS: &str =
+    "The session personality and agent instructions have been cleared. Disregard previous \
+     personality and agent-profile instructions. Continue following the user's messages, \
+     application policy, permissions, and response contract.";
+
+/// Prepends one changed or cleared agent instruction for delta mode.
+fn prepend_agent_profile_update(
     prompt: &str,
-    personality_update: &PersonalityPromptUpdate,
+    agent_profile_update: &AgentDefinitionPromptUpdate,
 ) -> Result<String, AgentBackendError> {
-    let personality = match personality_update {
-        PersonalityPromptUpdate::Clear => {
-            "The session personality has been cleared. Continue without the previous personality \
-             instructions."
-        }
-        PersonalityPromptUpdate::Set(personality) => personality.trim(),
-        PersonalityPromptUpdate::Unchanged => return Ok(prompt.to_string()),
+    let agent_profile = match agent_profile_update {
+        AgentDefinitionPromptUpdate::Clear => CLEARED_AGENT_INSTRUCTIONS,
+        AgentDefinitionPromptUpdate::Set(agent_profile) => agent_profile.trim(),
+        AgentDefinitionPromptUpdate::Unchanged => return Ok(prompt.to_string()),
     };
-    let template = PersonalityPromptTemplate {
-        heading: "# Personality Update",
-        personality,
+    let template = AgentDefinitionPromptTemplate {
+        heading: "# Agent Update",
+        agent_profile,
         prompt,
     };
 
-    render_template("personality_prompt.md", &template)
+    render_template("agent_profile_prompt.md", &template)
 }
 
 /// Appends CLI prompt filesystem access roots as `--add-dir` arguments.

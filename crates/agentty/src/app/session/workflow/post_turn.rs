@@ -30,16 +30,6 @@ use crate::domain::transcript_notice::TranscriptNotice;
 use crate::infra::db::{AppRepositories, NewSessionReviewCommentResolution, SessionTurnMetadata};
 use crate::infra::fs::FsClient;
 
-/// Personality state persisted after one successful main session turn.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct TurnPersonalityPersistence {
-    /// Selected personality processed by the turn, including an unavailable
-    /// selection whose prompt hash is `None`.
-    pub(super) applied_personality_id: Option<String>,
-    /// Fingerprint of the personality body delivered to the provider.
-    pub(super) applied_personality_prompt_hash: Option<String>,
-}
-
 /// Completion requirements for ordered effects after a persisted response.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum TurnEffectPolicy {
@@ -192,7 +182,6 @@ impl TurnFinalizerContext {
 /// corresponding reducer projection.
 struct TurnPersistence<'a> {
     context: &'a PostTurnContext,
-    personality: TurnPersonalityPersistence,
     review_comment_resolutions: &'a [NewSessionReviewCommentResolution],
     session_agent: AgentSelection,
 }
@@ -239,11 +228,6 @@ impl TurnPersistence<'_> {
             .persist_session_turn_metadata(
                 &self.context.session_id,
                 &SessionTurnMetadata {
-                    applied_personality_id: self.personality.applied_personality_id.clone(),
-                    applied_personality_prompt_hash: self
-                        .personality
-                        .applied_personality_prompt_hash
-                        .clone(),
                     harness_turn_report: harness_report,
                     instruction_conversation_id,
                     model: session_model.as_str().to_string(),
@@ -278,15 +262,11 @@ impl TurnPersistence<'_> {
 pub(super) async fn apply_turn_result(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
-    personality: TurnPersonalityPersistence,
     turn_result: Result<TurnResult, AgentError>,
     activity: &super::activity::TurnActivity,
 ) -> Result<Status, SessionError> {
     match turn_result {
-        Ok(result) => {
-            apply_successful_turn_result(context, turn_metadata, personality, result, activity)
-                .await
-        }
+        Ok(result) => apply_successful_turn_result(context, turn_metadata, result, activity).await,
         Err(AgentError::InterruptedByUser(message)) => {
             append_turn_error(context, &message).await;
             append_turn_activity(context, activity).await;
@@ -426,7 +406,6 @@ async fn append_turn_activity(context: &PostTurnContext, activity: &super::activ
 async fn apply_successful_turn_result(
     context: &PostTurnContext,
     turn_metadata: TurnMetadata,
-    personality: TurnPersonalityPersistence,
     result: TurnResult,
     activity: &super::activity::TurnActivity,
 ) -> Result<Status, SessionError> {
@@ -467,7 +446,6 @@ async fn apply_successful_turn_result(
     let persistence = Span::child("turn.persist");
     let turn_applied_state = match (TurnPersistence {
         context,
-        personality,
         review_comment_resolutions: &review_comment_resolutions,
         session_agent: turn_metadata.session_agent,
     }

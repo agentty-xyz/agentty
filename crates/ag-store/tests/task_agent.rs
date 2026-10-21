@@ -1,8 +1,8 @@
 //! Durable task context contract through the public SQLite adapter.
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SubmitAgentTaskRequest,
+    TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 use ag_store::Database;
 use tempfile::tempdir;
@@ -26,7 +26,8 @@ async fn reopening_preserves_task_assignment_context_and_delivery_identity() {
     let request = SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "first".to_string(),
         input: TaskAgentInput {

@@ -41,7 +41,6 @@ fn test_session_join_row_maps_review_request_columns() {
     assert_eq!(session_row.added_lines, 14);
     assert_eq!(session_row.deleted_lines, 6);
     assert_eq!(session_row.project_id, Some(7));
-    assert_eq!(session_row.personality_id.as_deref(), Some("reviewer"));
     assert_eq!(
         session_row.parent_session_id.as_deref(),
         Some("parent-session")
@@ -85,7 +84,7 @@ fn list_and_detail_mappings_preserve_all_shared_columns() {
         assert_eq!(row.output_tokens, 29);
         assert_eq!(row.parent_session_id.as_deref(), Some("parent-session"));
         assert_eq!(row.permission_mode, "read_only");
-        assert_eq!(row.personality_id.as_deref(), Some("reviewer"));
+
         assert_eq!(row.project_id, Some(7));
         assert_eq!(
             row.published_upstream_ref.as_deref(),
@@ -136,7 +135,6 @@ impl SessionJoinRow {
             output_tokens: 29,
             parent_session_id: Some("parent-session".to_string()),
             permission_mode: "read_only".to_string(),
-            personality_id: Some("reviewer".to_string()),
             project_id: Some(7),
             prompt: "Implement feature".to_string(),
             published_upstream_ref: Some("origin/session-a".to_string()),

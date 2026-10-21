@@ -1,4 +1,4 @@
-use crate::{AcceptedTaskPlan, BuiltinAgentDefinition, TaskAgentInput};
+use crate::{AcceptedTaskPlan, TaskAgentInput, TaskAgentRole};
 
 #[test]
 fn validates_role_inputs_without_modifying_user_content() {
@@ -9,20 +9,12 @@ fn validates_role_inputs_without_modifying_user_content() {
         text: "  Implement the accepted scope.\n".to_string(),
     };
     let cases = [
-        (BuiltinAgentDefinition::Planner, None, true),
+        (TaskAgentRole::Planner, None, true),
+        (TaskAgentRole::Planner, Some(valid_plan.clone()), false),
+        (TaskAgentRole::Implementer, None, false),
+        (TaskAgentRole::Implementer, Some(valid_plan.clone()), true),
         (
-            BuiltinAgentDefinition::Planner,
-            Some(valid_plan.clone()),
-            false,
-        ),
-        (BuiltinAgentDefinition::Implementer, None, false),
-        (
-            BuiltinAgentDefinition::Implementer,
-            Some(valid_plan.clone()),
-            true,
-        ),
-        (
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             Some(AcceptedTaskPlan {
                 task_id: " \n".to_string(),
                 ..valid_plan.clone()
@@ -30,7 +22,7 @@ fn validates_role_inputs_without_modifying_user_content() {
             false,
         ),
         (
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             Some(AcceptedTaskPlan {
                 attempt_id: "\t".to_string(),
                 ..valid_plan.clone()
@@ -38,7 +30,7 @@ fn validates_role_inputs_without_modifying_user_content() {
             false,
         ),
         (
-            BuiltinAgentDefinition::Implementer,
+            TaskAgentRole::Implementer,
             Some(AcceptedTaskPlan {
                 text: " \n".to_string(),
                 ..valid_plan
@@ -77,7 +69,7 @@ fn rejects_empty_requests_before_role_validation() {
 
     // Act
     let error = input
-        .validate(BuiltinAgentDefinition::Planner)
+        .validate(TaskAgentRole::Planner)
         .expect_err("An empty original request must be rejected");
 
     // Assert

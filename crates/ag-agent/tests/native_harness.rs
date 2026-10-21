@@ -10,8 +10,8 @@ use ag_agent::{
     NativeHarnessConfig, RealOneShotClient, create_agent_channel, instruction_bootstrap_key,
 };
 use ag_contracts::{
-    ActivityKind, ActivityStatus, AgentChannel, AgentRequestKind, ExecutionPolicy, LiveTranscript,
-    McpPolicy, OneShotClient, OneShotRequest, PermissionMode, PersonalityPrompt,
+    ActivityKind, ActivityStatus, AgentChannel, AgentDefinitionPrompt, AgentRequestKind,
+    ExecutionPolicy, LiveTranscript, McpPolicy, OneShotClient, OneShotRequest, PermissionMode,
     ProviderCallBudget, ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnEvent,
     TurnRequest,
 };
@@ -65,7 +65,7 @@ fn turn_request(folder: &Path, model: &str, prompt: &str) -> TurnRequest {
         main_checkout_root: None,
         model: model.to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from_text(prompt.to_string()),
         reasoning_level: ReasoningLevel::Low,
         request_kind: AgentRequestKind::SessionStart,

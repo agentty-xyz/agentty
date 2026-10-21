@@ -22,10 +22,10 @@ use crate::db::AppRepositories;
 use crate::domain::agent::{AgentCliInfo, AgentKind, AgentSelection};
 use crate::domain::harness::HarnessAvailability;
 use crate::domain::session::SessionId;
+use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::clipboard_image::{ClipboardImageClient, RealClipboardImageClient};
 use crate::infra::clock::Clock;
 use crate::infra::fs::FsClient;
-use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 
 /// Shared app dependencies used by managers and background workflows.
 #[derive(Clone)]
@@ -42,7 +42,7 @@ pub struct AppServices {
     fs_client: Arc<dyn FsClient>,
     git_client: Arc<dyn GitClient>,
     harness_availability: HarnessAvailability,
-    personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
+    agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     repositories: AppRepositories,
     review_request_client: Arc<dyn ReviewRequestClient>,
     run_client: Arc<dyn RunClient>,
@@ -70,7 +70,7 @@ impl AppServices {
             fs_client,
             git_client,
             run_client_override,
-            personality_catalog_client_override,
+            agent_profile_catalog_client_override,
             repositories,
             review_request_client,
             session_run_factory,
@@ -88,8 +88,8 @@ impl AppServices {
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
         ));
         let run_client = run_client_override.unwrap_or_else(|| run_worker.clone());
-        let personality_catalog_client = personality_catalog_client_override
-            .unwrap_or_else(|| Arc::new(RealPersonalityCatalogClient));
+        let agent_profile_catalog_client = agent_profile_catalog_client_override
+            .unwrap_or_else(|| Arc::new(RealAgentCatalogClient));
 
         Self {
             analytics: None,
@@ -107,7 +107,7 @@ impl AppServices {
             run_client,
             run_worker,
             session_run_factory,
-            personality_catalog_client,
+            agent_profile_catalog_client,
             repositories,
             review_request_client,
             session_update_versions: Arc::default(),
@@ -262,9 +262,9 @@ impl AppServices {
         )
     }
 
-    /// Returns the workspace personality discovery client.
-    pub(crate) fn personality_catalog_client(&self) -> Arc<dyn PersonalityCatalogClient> {
-        Arc::clone(&self.personality_catalog_client)
+    /// Returns the workspace agent discovery client.
+    pub(crate) fn agent_profile_catalog_client(&self) -> Arc<dyn AgentCatalogClient> {
+        Arc::clone(&self.agent_profile_catalog_client)
     }
 
     /// Enqueues an app event onto the internal event bus with debug
@@ -470,7 +470,6 @@ impl AppServices {
             AppEvent::AgentCliVersionsUpdated { .. } => "AgentCliVersionsUpdated",
             AppEvent::UpdateStatusChanged { .. } => "UpdateStatusChanged",
             AppEvent::SessionModelUpdated { .. } => "SessionModelUpdated",
-            AppEvent::SessionPersonalityUpdated { .. } => "SessionPersonalityUpdated",
             AppEvent::SessionPermissionModeUpdated { .. } => "SessionPermissionModeUpdated",
             AppEvent::SessionReasoningLevelUpdated { .. } => "SessionReasoningLevelUpdated",
             AppEvent::SessionResponseStyleUpdated { .. } => "SessionResponseStyleUpdated",
@@ -580,8 +579,8 @@ pub(crate) struct AppServiceDeps {
     pub(crate) fs_client: Arc<dyn FsClient>,
     /// Shared git client for async git operations.
     pub(crate) git_client: Arc<dyn GitClient>,
-    /// Optional workspace personality catalog override used by tests.
-    pub(crate) personality_catalog_client_override: Option<Arc<dyn PersonalityCatalogClient>>,
+    /// Optional workspace agent catalog override used by tests.
+    pub(crate) agent_profile_catalog_client_override: Option<Arc<dyn AgentCatalogClient>>,
     /// Shared repository bundle used by app workflows.
     pub(crate) repositories: AppRepositories,
     /// Shared forge review-request client.

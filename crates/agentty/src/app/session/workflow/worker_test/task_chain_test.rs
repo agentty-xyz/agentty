@@ -21,6 +21,7 @@ async fn queued_cancellation_followed_by_retry_never_replays_the_old_attempt() {
     let factory = TestSessionRunFactory::install(&mut app.services);
     let service = app.session_service();
     let launch = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),

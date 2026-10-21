@@ -48,7 +48,7 @@ explicit expectations so fixture reuse does not hide changes to those contracts.
 | Wall and monotonic time          | `Clock`                         |
 | Worktree launch commands         | `TmuxClient`                    |
 | Clipboard capture                | `ClipboardImageClient`          |
-| Workspace personalities          | `PersonalityCatalogClient`      |
+| Workspace agents                 | `AgentCatalogClient`            |
 | Process and temperature sampling | `ResourceClient`                |
 | Persistence                      | Repository traits in `ag-store` |
 | Storage timestamps               | `TimestampSource`               |
@@ -67,7 +67,11 @@ decisions are tested with a mock `RunClient`.
 Role-aware task admission also binds immutable role/model selections and task-owned
 conversation identities in the same transaction. Cached SQLite boundary tests cover
 isolation from ordinary task delivery, immutable inputs, and rollback. A public on-disk
-contract test verifies identity and delivery checks after reopening.
+contract test verifies identity and delivery checks after reopening. The injected agent
+catalog combines bundled defaults with repository definitions. Parser tests cover
+supported fields and rejected execution settings; filesystem tests cover override
+precedence, disabled entries, and containment. Task storage retains definition snapshots
+independently of subsequent catalog changes.
 
 Task-turn persistence commits response history, provider continuation, and usage in one
 transaction without replacing ordinary conversation state. Boundary tests cover

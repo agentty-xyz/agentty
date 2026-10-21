@@ -1,20 +1,15 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 
-use ag_contracts::{AgentRequestKind, MockAgentChannel};
+use ag_contracts::AgentRequestKind;
 use tokio::sync::mpsc;
 
-use super::super::super::post_turn::TurnPersonalityPersistence;
-use super::super::super::turn::resolve_turn_personality;
 use super::super::{SessionCommand, SessionWorkerService};
 use super::support::{
     assert_first_prompt_remains_retryable, assert_first_prompt_was_accepted,
     assert_preparation_publication_failure_is_retryable, inject_handoff_failure,
-    managed_first_prompt, persist_test_personality_state, queue_test_context, resume_command,
+    managed_first_prompt, resume_command,
 };
-use crate::domain::personality::Personality;
 use crate::domain::session::Status;
-use crate::infra::personality::MockPersonalityCatalogClient;
 
 #[tokio::test]
 async fn test_preparation_marker_failure_preserves_prompt_and_never_runs_the_agent() {
@@ -262,54 +257,5 @@ async fn test_restart_retains_unreleased_first_prompt_and_reclaims_its_operation
             .await
             .expect("operation")
             .is_none()
-    );
-}
-
-#[tokio::test]
-async fn test_resolve_turn_personality_marks_new_and_unchanged_prompts() {
-    // Arrange
-    let (mut context, db, _queue, _base_dir) =
-        queue_test_context(MockAgentChannel::new(), VecDeque::new(), Status::InProgress).await;
-    db.sessions()
-        .update_session_personality_id("sess1", Some("reviewer".to_string()))
-        .await
-        .expect("personality selection should persist");
-    let personality = Personality {
-        description: "Reviews code".to_string(),
-        id: "reviewer".to_string(),
-        name: "Code Reviewer".to_string(),
-        prompt: "Review carefully.".to_string(),
-    };
-    let fingerprint = personality.fingerprint();
-    let mut personality_catalog_client = MockPersonalityCatalogClient::new();
-    personality_catalog_client
-        .expect_resolve()
-        .times(2)
-        .returning(move |_, _| {
-            let personality = personality.clone();
-            Box::pin(async move { Some(personality) })
-        });
-    context.personality_catalog_client = Arc::new(personality_catalog_client);
-
-    // Act
-    let changed = resolve_turn_personality(&context).await;
-    persist_test_personality_state(&db, changed.persistence.clone()).await;
-    let unchanged = resolve_turn_personality(&context).await;
-
-    // Assert
-    assert_eq!(
-        changed.prompt,
-        ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true)
-    );
-    assert_eq!(
-        unchanged.prompt,
-        ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), false)
-    );
-    assert_eq!(
-        unchanged.persistence,
-        TurnPersonalityPersistence {
-            applied_personality_id: Some("reviewer".to_string()),
-            applied_personality_prompt_hash: Some(fingerprint),
-        }
     );
 }

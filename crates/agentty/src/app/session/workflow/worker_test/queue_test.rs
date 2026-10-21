@@ -30,7 +30,6 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::infra::personality::RealPersonalityCatalogClient;
 use crate::test_support::telemetry::TRACER_PROVIDER_LOCK;
 
 #[tokio::test]
@@ -128,7 +127,6 @@ async fn test_apply_turn_result_skips_background_push_while_messages_are_queued(
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::from([queued_message(
             0,
             "queued follow-up",

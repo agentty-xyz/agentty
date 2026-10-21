@@ -316,8 +316,6 @@ async fn test_persist_session_turn_metadata_and_review_operation_are_restart_ato
         .await
         .expect("failed to insert session");
     let turn_metadata = |resolution: &str| SessionTurnMetadata {
-        applied_personality_id: None,
-        applied_personality_prompt_hash: None,
         harness_turn_report: None,
         instruction_conversation_id: None,
         model: model_fixture::CODEX_MODEL.as_str().to_string(),

@@ -57,7 +57,6 @@ async fn workers_reuse_channels_and_recompose_after_model_switch_and_shutdown() 
         cancel_token: context.cancel_token,
         child_pid: context.child_pid,
         folder: context.folder,
-        personality_catalog_client: context.personality_catalog_client,
         queued_messages: context.queued_messages,
         queued_work_sequence: Arc::default(),
         review_request_client: context.review_request_client,

@@ -3,13 +3,12 @@
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentRequestKind, PermissionMode, PersonalityPrompt, ReasoningLevel, ResponseStyle, SpeedMode,
-    TurnContinuation, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, PermissionMode, ReasoningLevel, ResponseStyle,
+    SpeedMode, TurnContinuation, TurnRequest,
 };
 use ag_protocol::TurnPrompt;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, TaskAgentAssignment,
-    TaskAgentContext,
+    AgentKind, AgentModel, AgentSelection, TaskAgentAssignment, TaskAgentContext, TaskAgentRole,
 };
 use ag_worker::test_support::{AppServerTurnResponse, MockAppServerClient};
 use ag_worker::{RuntimeConfig, SessionRunClient};
@@ -51,7 +50,8 @@ async fn task_runtime_keys_are_stable_and_separate_from_ordinary_chat() {
     let context = TaskAgentContext {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         id: "aaaaaaaa-0000-0000-0000-000000000001".to_string(),
         session_id: "owning-session".into(),
@@ -117,7 +117,7 @@ fn request() -> TurnRequest {
         main_checkout_root: None,
         model: "gpt-6.1-sol".to_string(),
         permission_mode: PermissionMode::ReadOnly,
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("inspect the workspace"),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,
