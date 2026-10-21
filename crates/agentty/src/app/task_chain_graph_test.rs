@@ -61,7 +61,10 @@ async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
             ),
         ]
     );
-    assert!(!app.task_chain_graphs.needs_load(&session_id, 0));
+    assert!(
+        !app.task_chain_graphs
+            .needs_load(&session_id, 0, app.services.clock().now_instant())
+    );
 }
 
 #[tokio::test]
@@ -81,15 +84,23 @@ async fn failed_graph_load_settles_without_a_graph() {
     let session_id = visible_session(&mut app, Some("workflow")).await;
     let previous = session_output_assembly::tests::task_chain_graph("workflow");
     app.task_chain_graphs.begin_load(&session_id, u64::MAX);
-    app.task_chain_graphs
-        .complete_load(&session_id, u64::MAX, Ok(Some(previous.clone())));
+    app.task_chain_graphs.complete_load(
+        &session_id,
+        u64::MAX,
+        Ok(Some(previous.clone())),
+        app.services.clock().now_instant(),
+    );
     database.pool().close().await;
 
     // Act: the reducer may drain the completion inside another event batch,
     // so wait on the settled cache state rather than one event.
     app.refresh_task_chain_graph_if_needed();
     tokio::time::timeout(Duration::from_secs(10), async {
-        while !app.task_chain_graphs.needs_load(&session_id, u64::MAX) {
+        while !app.task_chain_graphs.needs_load(
+            &session_id,
+            u64::MAX,
+            app.services.clock().now_instant(),
+        ) {
             let event = app.next_app_event().await.expect("graph load event");
             app.apply_app_events(event).await;
         }
@@ -112,7 +123,10 @@ async fn ordinary_visible_session_resolves_without_loading_task_chains() {
 
     // Assert
     assert_eq!(app.task_chain_graphs.graph(&session_id), None);
-    assert!(!app.task_chain_graphs.needs_load(&session_id, 0));
+    assert!(
+        !app.task_chain_graphs
+            .needs_load(&session_id, 0, app.services.clock().now_instant())
+    );
 }
 
 #[tokio::test]
@@ -126,7 +140,10 @@ async fn hidden_sessions_never_start_graph_loads() {
     app.refresh_task_chain_graph_if_needed();
 
     // Assert
-    assert!(app.task_chain_graphs.needs_load(&session_id, 0));
+    assert!(
+        app.task_chain_graphs
+            .needs_load(&session_id, 0, app.services.clock().now_instant())
+    );
 }
 
 async fn visible_session(app: &mut App, graph_chain_id: Option<&str>) -> SessionId {
