@@ -1221,6 +1221,42 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
 }
 
 #[test]
+fn slash_leading_drafts_keep_active_file_mentions_visible() {
+    for (status, armed, input, active_mention) in [
+        (Status::Draft, true, "/src/main.rs @session", true),
+        (Status::InProgress, false, "/src/main.rs @session", true),
+        (Status::Draft, false, "/src/main.rs @session", true),
+        (Status::Draft, false, "/", false),
+    ] {
+        // Arrange
+        let mut session = session_fixture();
+        session.status = status;
+        let mut mode = prompt_mode(input);
+        if let AppMode::Prompt {
+            at_mention_state,
+            slash_state,
+            ..
+        } = &mut mode
+        {
+            slash_state.is_plan_armed = armed;
+            *at_mention_state = Some(PromptAtMentionState::new(vec![
+                crate::domain::file_entry::FileEntry {
+                    is_dir: false,
+                    path: "src/session_chat.rs".to_string(),
+                },
+            ]));
+        }
+
+        // Act
+        let text = rendered_text(&session, &mode, None);
+
+        // Assert
+        assert_eq!(text.contains("src/session_chat.rs"), active_mention);
+        assert_eq!(text.contains("/mode"), !active_mention);
+    }
+}
+
+#[test]
 fn prompt_composer_keeps_its_border_when_only_one_row_is_available() {
     // Arrange
     let session = session_fixture();

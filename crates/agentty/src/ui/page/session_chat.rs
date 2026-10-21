@@ -632,18 +632,20 @@ fn prepare_prompt_panel(
     // armed plan composer also treats its task as literal text.
     let suppress_slash_dropdown =
         slash_state.is_plan_armed || session.status == crate::domain::session::Status::InProgress;
+    let has_active_mention = at_mention_state.is_some() && input.at_mention_query().is_some();
     let allow_apply_command = review::has_actionable_review_suggestions(review_text);
-    let suggestion_list = if suppress_slash_dropdown && input.text().starts_with('/') {
-        None
-    } else {
-        prompt_format::prompt_suggestion_list(
-            input,
-            slash_state,
-            at_mention_state.as_ref(),
-            session.agent.kind(),
-            allow_apply_command,
-        )
-    };
+    let suggestion_list =
+        if suppress_slash_dropdown && input.text().starts_with('/') && !has_active_mention {
+            None
+        } else {
+            prompt_format::prompt_suggestion_list(
+                input,
+                slash_state,
+                at_mention_state.as_ref(),
+                session.agent.kind(),
+                allow_apply_command,
+            )
+        };
     let dropdown_row_count =
         prompt_format::prompt_suggestion_dropdown_rows(suggestion_list.as_ref());
     let input_height = calculate_input_height(area.width.saturating_sub(2), input.text())

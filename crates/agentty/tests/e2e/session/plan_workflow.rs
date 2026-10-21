@@ -13,7 +13,7 @@ use testty::region::Region;
 use testty::scenario::Scenario;
 
 use crate::common::{self, BuilderEnv, FeatureTest};
-use crate::session::fixture::{E2eResult, seed_project_settings};
+use crate::session::fixture::{E2eResult, run_git, seed_project_settings};
 
 const WORKFLOW_MODEL_ID: &str = "claude-haiku-4-5-20251001";
 
@@ -27,6 +27,12 @@ const CLEAN_REVIEW_TEXT: &str = "No suggestions remain after implementation revi
 /// revision. The decision approves only "start implementing". The first
 /// Implementer run blocks until canceled; later runs finish immediately.
 async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
+    std::fs::write(
+        env.workdir.join("plan_lookup_target.rs"),
+        "// lookup target\n",
+    )?;
+    run_git(&env.workdir, &["add", "plan_lookup_target.rs"])?;
+    run_git(&env.workdir, &["commit", "-m", "Add plan lookup target"])?;
     seed_project_settings(
         env,
         &[
@@ -220,7 +226,18 @@ async fn plan_then_implement_runs_as_an_orchestrated_chat() -> E2eResult {
                     .press_key("Enter")
                     .wait_for_text("Plan · describe the task for the Planner", 5000)
                     .capture_labeled("armed", "/plan arms the regular composer")
+                    .write_text("/src/search.rs @plan_lookup")
+                    .wait_for_text("plan_lookup_target.rs", 5000)
+                    .press_key("Tab")
+                    .wait_for_text("/src/search.rs @plan_lookup_target.rs", 5000)
                     .press_key("Esc")
+                    .eventually(Duration::from_secs(5), Duration::from_millis(20), |frame| {
+                        assertion::match_not_visible(
+                            frame,
+                            "Plan · describe the task for the Planner",
+                        )
+                    })
+                    .press_key("ctrl+u")
                     .wait_for_text("Type your message", 5000)
                     .write_text("/plan /src/search.rs needs indexed search")
                     .press_key("Enter")
