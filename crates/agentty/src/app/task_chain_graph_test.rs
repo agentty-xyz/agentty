@@ -6,12 +6,13 @@ use ag_session::{
 };
 use tempfile::TempDir;
 
-use crate::app::{App, AppEvent};
+use crate::app::App;
 use crate::domain::session::SessionId;
 use crate::infra::db::Database;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::task_chain_graph::TaskChainNodeStatus;
 use crate::test_support::{SessionFixtureBuilder, new_test_app, test_app_clients};
+use crate::ui::session_output_assembly;
 
 #[tokio::test]
 async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
@@ -78,29 +79,26 @@ async fn failed_graph_load_settles_without_a_graph() {
     .await
     .expect("app");
     let session_id = visible_session(&mut app, Some("workflow")).await;
+    let previous = session_output_assembly::tests::task_chain_graph("workflow");
+    app.task_chain_graphs.begin_load(&session_id, u64::MAX);
+    app.task_chain_graphs
+        .complete_load(&session_id, u64::MAX, Ok(Some(previous.clone())));
     database.pool().close().await;
 
-    // Act
+    // Act: the reducer may drain the completion inside another event batch,
+    // so wait on the settled cache state rather than one event.
     app.refresh_task_chain_graph_if_needed();
-    let completion = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !app.task_chain_graphs.needs_load(&session_id, u64::MAX) {
             let event = app.next_app_event().await.expect("graph load event");
-            if let AppEvent::TaskChainGraphLoaded { completion } = &event {
-                let completion = completion.clone();
-                app.apply_app_events(event).await;
-
-                return completion;
-            }
             app.apply_app_events(event).await;
         }
     })
     .await
     .expect("graph load guard");
 
-    // Assert
-    assert!(completion.result.is_err());
-    assert_eq!(app.task_chain_graphs.graph(&session_id), None);
-    assert!(app.task_chain_graphs.needs_load(&session_id, 1));
+    // Assert: the failed load kept the previous snapshot.
+    assert_eq!(app.task_chain_graphs.graph(&session_id), Some(&previous));
 }
 
 #[tokio::test]
