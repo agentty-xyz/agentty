@@ -29,6 +29,7 @@ pub(crate) fn rendered_output_line_count_with_cache(
                 active_prompt_output,
                 active_progress,
                 session_update_version: app.session_update_version(session_id),
+                task_chain_graph: app.task_chain_graphs.graph(session_id),
             },
             render_cache_store.markdown_render_cache(),
             render_cache_store.session_output_layout_cache(),

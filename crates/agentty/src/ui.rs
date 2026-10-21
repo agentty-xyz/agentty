@@ -30,6 +30,8 @@ pub mod session_format;
 pub(crate) mod session_output_assembly;
 /// Shared theme-aware UI styling helpers and status-display helpers.
 pub mod style;
+/// Role headers and execution-graph cards for task-chain transcript rows.
+pub(crate) mod task_chain_format;
 
 pub(crate) use app_render::render_app;
 /// A trait for UI components that enforces a standard rendering interface.

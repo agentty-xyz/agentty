@@ -3,7 +3,7 @@
 
 use std::future::Future;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ag_forge as forge;
 use ag_git::{self as git, GitClient};
@@ -1399,6 +1399,25 @@ impl SessionTaskService {
                 "failed to persist workflow notice"
             );
         }
+    }
+
+    /// Mirrors a message committed by its owning transaction into live chat.
+    ///
+    /// Persistence already succeeded; this operation only updates the live
+    /// transcript and notifies the reducer.
+    pub(crate) fn mirror_session_transcript_message(
+        transcript: &Arc<Mutex<SessionTranscript>>,
+        app_event_tx: &mpsc::UnboundedSender<AppEvent>,
+        session_update_versions: &SessionUpdateVersionMap,
+        id: &str,
+        kind: SessionMessageKind,
+        content: &str,
+    ) {
+        transcript
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .append_message(kind, content);
+        Self::emit_session_updated(app_event_tx, session_update_versions, id);
     }
 
     /// Appends one raw user/assistant message to the in-memory transcript and

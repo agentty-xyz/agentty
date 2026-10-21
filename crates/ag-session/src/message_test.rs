@@ -1,6 +1,7 @@
+use crate::BuiltinAgentDefinition;
 use crate::message::{
-    SessionMessage, SessionMessageKind, SessionTranscript, normalized_message_content,
-    stored_message_content,
+    AgentAnswerContent, SessionMessage, SessionMessageKind, SessionTranscript,
+    normalized_message_content, stored_message_content,
 };
 
 #[test]
@@ -346,5 +347,72 @@ fn activity_summary_is_durable_but_excluded_from_replay() {
     assert_eq!(
         transcript.conversation_replay_text(),
         transcript.replay_text()
+    );
+}
+
+#[test]
+fn task_chain_messages_render_only_in_chat_and_never_replay() {
+    // Arrange
+    let answer = AgentAnswerContent {
+        agent: BuiltinAgentDefinition::Planner,
+        text: "  Plan:\n- \"quoted\" step\n".to_string(),
+    };
+    let mut transcript = SessionTranscript::default();
+
+    // Act
+    transcript.append_message(SessionMessageKind::UserPrompt, "Add search");
+    transcript.append_message(SessionMessageKind::AgentGraph, " chain-1\n");
+    transcript.append_message(SessionMessageKind::AgentAnswer, &answer.encode());
+    let messages = transcript.messages();
+
+    // Assert
+    for kind in [
+        SessionMessageKind::AgentAnswer,
+        SessionMessageKind::AgentGraph,
+    ] {
+        assert_eq!(kind.as_str().parse::<SessionMessageKind>(), Ok(kind));
+        assert!(!kind.is_conversation_message());
+        assert!(!kind.is_prompt());
+    }
+    assert_eq!(messages[1].agent_graph_chain_id(), Some(" chain-1\n"));
+    assert_eq!(messages[0].agent_graph_chain_id(), None);
+    assert_eq!(
+        messages[2].agent_answer(),
+        Some(AgentAnswerContent {
+            agent: BuiltinAgentDefinition::Planner,
+            text: "Plan:\n- \"quoted\" step".to_string(),
+        })
+    );
+    assert_eq!(messages[0].agent_answer(), None);
+    assert_eq!(
+        transcript.replay_text().as_deref(),
+        Some(" › Add search\n\n")
+    );
+    assert_eq!(
+        transcript.conversation_replay_text(),
+        transcript.replay_text()
+    );
+}
+
+#[test]
+fn agent_answer_content_rejects_malformed_payloads() {
+    // Arrange
+    let payloads = [
+        "plain text",
+        r#"{"agent":"reviewer","text":"Unknown role"}"#,
+        r#"{"agent":"implementer"}"#,
+    ];
+
+    // Act
+    let decoded = payloads.map(AgentAnswerContent::decode);
+
+    // Assert
+    assert_eq!(decoded, [None, None, None]);
+    assert_eq!(
+        AgentAnswerContent::decode(r#"{"agent":"implementer","text":"Done"}"#),
+        Some(AgentAnswerContent {
+            agent: BuiltinAgentDefinition::Implementer,
+            text: "Done".to_string(),
+        })
     );
 }

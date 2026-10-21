@@ -9,7 +9,7 @@ use crate::PermissionMode;
 /// [`crate::AgentSelection`] for both roles. Assignments, isolated
 /// conversations, and result handoff must be supplied by the workflow before
 /// these contracts can govern execution.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BuiltinAgentDefinition {
     /// Inspects the workspace and proposes a plan without making changes.
     Planner,
@@ -23,6 +23,23 @@ impl BuiltinAgentDefinition {
         match self {
             Self::Planner => "planner",
             Self::Implementer => "implementer",
+        }
+    }
+
+    /// Resolves a stable role identity produced by [`Self::id`].
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "planner" => Some(Self::Planner),
+            "implementer" => Some(Self::Implementer),
+            _ => None,
+        }
+    }
+
+    /// Human-readable role name for transcripts and status displays.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Planner => "Planner",
+            Self::Implementer => "Implementer",
         }
     }
 

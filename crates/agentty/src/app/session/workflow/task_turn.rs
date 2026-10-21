@@ -5,12 +5,13 @@ use std::sync::{Arc, Mutex};
 use ag_contracts::{
     AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnRequest,
 };
-use ag_session::{BuiltinAgentDefinition, SubmitAgentTaskRequest};
+use ag_session::{AgentAnswerContent, BuiltinAgentDefinition, SubmitAgentTaskRequest};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
+use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
 use crate::app::AppEvent;
@@ -109,7 +110,8 @@ async fn execute(
     } else {
         None
     };
-    context
+    let chain_owned = is_chain_owned(context, request).await?;
+    let is_recorded = context
         .db
         .tasks()
         .persist_agent_turn(
@@ -124,6 +126,12 @@ async fn execute(
             },
         )
         .await?;
+    mirror_chain_answer(
+        context,
+        request,
+        &result.assistant_message,
+        is_recorded && chain_owned,
+    );
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
@@ -171,6 +179,52 @@ async fn execute(
     }
 
     Ok(())
+}
+
+/// Mirrors an atomically persisted chain-owned role answer into live chat.
+///
+/// Only the first save of a chain-owned attempt appends, so redelivered
+/// or duplicate saves never append twice. Standalone role tasks keep their
+/// output out of the ordinary transcript.
+fn mirror_chain_answer(
+    context: &SessionWorkerContext,
+    request: &SubmitAgentTaskRequest,
+    response: &ag_protocol::AgentResponse,
+    newly_recorded_chain_answer: bool,
+) {
+    let text = response.to_display_text();
+    if !newly_recorded_chain_answer || text.trim().is_empty() {
+        return;
+    }
+    let encoded_answer = AgentAnswerContent {
+        agent: request.assignment.definition,
+        text,
+    }
+    .encode();
+    SessionTaskService::mirror_session_transcript_message(
+        &context.transcript,
+        &context.app_event_tx,
+        &context.session_update_versions,
+        &context.session_id,
+        SessionMessageKind::AgentAnswer,
+        &encoded_answer,
+    );
+}
+
+/// Returns whether the request's task is one of a session task chain's roles.
+async fn is_chain_owned(
+    context: &SessionWorkerContext,
+    request: &SubmitAgentTaskRequest,
+) -> Result<bool, SessionError> {
+    let chains = context
+        .db
+        .tasks()
+        .list_task_chains(&context.session_id)
+        .await?;
+
+    Ok(chains.iter().any(|chain| {
+        chain.planner_task_id == request.task_id || chain.implementer_task_id == request.task_id
+    }))
 }
 
 async fn prepare(

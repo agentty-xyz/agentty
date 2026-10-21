@@ -1,9 +1,15 @@
 //! Task-only replay history, continuation, and idempotent usage accounting.
 
-use ag_session::TaskAgentInput;
+use ag_protocol::AgentResponse;
+use ag_session::{
+    AgentAnswerContent, BuiltinAgentDefinition, SessionMessageKind, TaskAgentInput,
+    stored_message_content,
+};
 use sqlx::SqliteConnection;
 
+use crate::session_message::SessionMessageStore;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
+use crate::task_chain::TaskChainStore;
 use crate::{DbError, session};
 
 /// One observed model response, separate from operation completion.
@@ -104,12 +110,15 @@ impl TaskAgentTurnStore {
         }))
     }
 
+    /// Returns `true` only when this call recorded the response; an identical
+    /// repeat returns `false` without side effects.
     pub(crate) async fn save(
-        connection: &mut SqliteConnection,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
         now: i64,
-    ) -> Result<(), DbError> {
+    ) -> Result<bool, DbError> {
+        let connection = &mut **transaction;
         if metadata.assistant_message.trim().is_empty() {
             return Err(Self::invalid("Task response must be nonempty"));
         }
@@ -164,10 +173,10 @@ impl TaskAgentTurnStore {
             }
 
             // An old response must never rewind a newer task continuation.
-            return Ok(());
+            return Ok(false);
         }
         let owner = sqlx::query!(
-            r#"SELECT t.session_id, c.model, a.task_id FROM task_attempt a
+            r#"SELECT t.session_id, c.model, c.role, a.task_id FROM task_attempt a
                JOIN task t ON t.id = a.task_id
                JOIN task_agent_context c ON c.task_id = a.task_id WHERE a.id = ?"#,
             attempt_id
@@ -193,8 +202,49 @@ impl TaskAgentTurnStore {
             metadata.harness_turn_report.as_deref(),
         )
         .await?;
+        Self::append_chain_answer(
+            transaction,
+            &owner.session_id,
+            &owner.task_id,
+            &owner.role,
+            &metadata.assistant_message,
+            now,
+        )
+        .await?;
 
-        Ok(())
+        Ok(true)
+    }
+
+    /// Commits a workflow role's display projection with its response receipt.
+    async fn append_chain_answer(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        session_id: &str,
+        task_id: &str,
+        role: &str,
+        assistant_message: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        if !TaskChainStore::owns_task(transaction, task_id).await? {
+            return Ok(());
+        }
+        let agent = BuiltinAgentDefinition::from_id(role)
+            .ok_or_else(|| Self::invalid("Unknown task agent role"))?;
+        let response: AgentResponse = serde_json::from_str(assistant_message)
+            .map_err(|_| Self::invalid("Invalid task response"))?;
+        let text = response.to_display_text();
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let answer = AgentAnswerContent { agent, text }.encode();
+        let content = stored_message_content(SessionMessageKind::AgentAnswer, &answer);
+        SessionMessageStore::append_normalized_in_transaction(
+            transaction,
+            session_id,
+            SessionMessageKind::AgentAnswer,
+            &content,
+            now,
+        )
+        .await
     }
 
     fn write_count(value: u64) -> Result<i64, DbError> {

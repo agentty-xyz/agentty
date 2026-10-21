@@ -1,7 +1,97 @@
-use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
+use ag_session::{
+    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus,
+};
 
 use crate::test_support::{agent_task_request, task_database_fixture};
 use crate::{Database, TaskAgentTurnMetadata};
+
+#[tokio::test]
+async fn chain_projection_rejects_invalid_responses_or_roles_and_omits_empty_display_text() {
+    for (assistant_message, role, succeeds) in [
+        ("not a structured response", "planner", false),
+        (r#"{"answer":"A plan","questions":[]}"#, "unknown", false),
+        (r#"{"answer":"  ","questions":[]}"#, "planner", true),
+    ] {
+        // Arrange
+        let database = task_database_fixture().await;
+        let base = agent_task_request("first");
+        let launch = StartPlanThenImplementRequest {
+            agent: base.assignment.agent,
+            chain_id: "chain".into(),
+            planner_attempt_id: "first".into(),
+            user_request: base.input.user_request,
+        };
+        database
+            .tasks()
+            .start_task_chain("session", &launch, "agent_task")
+            .await
+            .expect("launch");
+        database
+            .operations()
+            .mark_session_operation_running("task-attempt:first")
+            .await
+            .expect("running");
+        let task_id = launch.planner_request().task_id;
+        sqlx::query("PRAGMA ignore_check_constraints = ON")
+            .execute(database.pool())
+            .await
+            .expect("corruption fixture");
+        sqlx::query("UPDATE task_agent_context SET role = ? WHERE task_id = ?")
+            .bind(role)
+            .bind(&task_id)
+            .execute(database.pool())
+            .await
+            .expect("stored role");
+        let metadata = TaskAgentTurnMetadata {
+            assistant_message: assistant_message.into(),
+            ..metadata("first")
+        };
+
+        // Act
+        let result = database
+            .tasks()
+            .persist_agent_turn("first", &metadata)
+            .await;
+
+        // Assert
+        assert_eq!(result.is_ok(), succeeds, "{assistant_message}");
+        sqlx::query("UPDATE task_agent_context SET role = 'planner' WHERE task_id = ?")
+            .bind(&task_id)
+            .execute(database.pool())
+            .await
+            .expect("restore role");
+        let history = database
+            .tasks()
+            .load_agent_history(&task_id)
+            .await
+            .expect("history")
+            .expect("context");
+        assert_eq!(history.turns.len(), usize::from(succeeds));
+        assert_eq!(
+            history.provider_conversation_id,
+            if succeeds {
+                metadata.provider_conversation_id.clone()
+            } else {
+                None
+            }
+        );
+        let invocation_count: i64 =
+            sqlx::query_scalar("SELECT COALESCE(SUM(invocation_count), 0) FROM session_usage")
+                .fetch_one(database.pool())
+                .await
+                .expect("usage count");
+        assert_eq!(invocation_count, i64::from(succeeds));
+        assert_eq!(
+            database
+                .sessions()
+                .load_session_messages("session")
+                .await
+                .expect("messages")
+                .len(),
+            2
+        );
+    }
+}
 
 #[tokio::test]
 async fn task_response_preserves_ordinary_conversation_and_uses_captured_model() {
@@ -87,7 +177,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
     let database = task_database_fixture().await;
     running_attempt(&database, "first").await;
     let first = metadata("first");
-    database
+    let first_recorded = database
         .tasks()
         .persist_agent_turn("first", &first)
         .await
@@ -112,7 +202,7 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
         .expect("second response");
 
     // Act
-    database
+    let duplicate_recorded = database
         .tasks()
         .persist_agent_turn("first", &first)
         .await
@@ -125,6 +215,8 @@ async fn late_identical_response_never_rewinds_continuation_or_duplicates_usage(
         .expect("context");
 
     // Assert
+    assert!(first_recorded);
+    assert!(!duplicate_recorded);
     assert_eq!(
         history.provider_conversation_id,
         second.provider_conversation_id

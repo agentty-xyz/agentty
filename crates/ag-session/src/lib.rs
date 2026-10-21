@@ -43,8 +43,8 @@ pub use discovery::{
 pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
 pub use message::{
-    SessionMessage, SessionMessageKind, SessionMessageKindParseError, SessionTranscript,
-    normalized_message_content, stored_message_content,
+    AgentAnswerContent, SessionMessage, SessionMessageKind, SessionMessageKindParseError,
+    SessionTranscript, normalized_message_content, stored_message_content,
 };
 pub use model::{
     ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
