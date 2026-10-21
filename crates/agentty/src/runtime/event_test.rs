@@ -27,43 +27,9 @@ use crate::presentation::app_mode::{
     AppMode, ChatFocus, DiffFocus, DiffLineCommentAnchor, DiffLineCommentTarget, DiffLineComments,
     DiffLineSide, DiffPreview,
 };
-use crate::presentation::plan_workflow::{PlanEditorKind, PlanWorkflowState};
 use crate::presentation::prompt::{PromptAttachmentState, PromptHistoryState, PromptSlashState};
 use crate::presentation::setting::SettingsAction;
 use crate::runtime::{EventResult, FRAME_INTERVAL, PresentationState};
-
-#[tokio::test]
-async fn workflow_paste_routes_to_its_isolated_composer_only_when_editable() {
-    // Arrange
-    let (mut app, _root) = crate::test_support::new_test_app().await;
-    for (is_loading, is_submitting, has_editor) in [
-        (false, false, true),
-        (true, false, true),
-        (true, true, true),
-        (false, false, false),
-    ] {
-        let mut state = PlanWorkflowState {
-            is_loading,
-            is_submitting,
-            ..PlanWorkflowState::default()
-        };
-        if has_editor {
-            state.begin_editing(PlanEditorKind::New);
-        }
-        app.mode = AppMode::PlanWorkflow {
-            session_id: "session".into(),
-            state: Box::new(state),
-        };
-
-        // Act
-        process_paste_event(&mut app, "first\r\nsecond").await;
-
-        // Assert
-        assert!(matches!(&app.mode, AppMode::PlanWorkflow { state, .. }
-            if state.editor.as_ref().map(|editor| editor.input.text())
-                == if !has_editor { None } else if is_submitting { Some("") } else { Some("first\nsecond") }));
-    }
-}
 
 /// Continues a test cycle while asserting no terminal event was produced.
 fn continue_without_terminal_event<'handler>(

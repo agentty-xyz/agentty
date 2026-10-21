@@ -35,8 +35,8 @@ that session's worker; submitting a new attempt while the session is busy is rej
 not added to the ordinary chat queue. Tasks in different eligible sessions can execute
 concurrently within existing capacity and workspace limits. Each task stays with its
 owning session. Generic task management is programmatic. The
-[Plan then implement workflow](@/docs/usage/workflow.md#plan-then-implement) provides a
-terminal panel for its two role tasks; arbitrary dependency scheduling is not provided.
+[Plan then implement workflow](@/docs/usage/workflow.md#plan-then-implement) drives its
+two role tasks from the session chat; arbitrary dependency scheduling is not provided.
 
 ## Built-in Agent Definitions
 

@@ -385,16 +385,6 @@ fn is_press_key_event(key: KeyEvent) -> bool {
 
 /// Applies one pasted-text event to the active editable input.
 async fn process_paste_event(app: &mut App, pasted_text: &str) {
-    if let AppMode::PlanWorkflow { state, .. } = &mut app.mode
-        && !state.is_submitting
-        && let Some(editor) = &mut state.editor
-    {
-        editor
-            .input
-            .insert_text(&mode::input_key::normalize_pasted_text(pasted_text));
-        state.error = None;
-        app.mark_dirty();
-    }
     if matches!(&app.mode, AppMode::Prompt { .. }) {
         mode::prompt::handle_paste(app, pasted_text).await;
     }

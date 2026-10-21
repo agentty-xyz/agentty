@@ -69,6 +69,10 @@ contracts.
   requirements, expected output, and permission limits. They are independent of model
   selection and personalities; workflow execution and runtime permission enforcement
   remain with their existing owners.
+- Task-chain chat routing belongs to `app/`: composer messages, `/apply` instructions,
+  and stop requests reach the orchestrator through the gateway. `presentation/` and
+  `ui/` only project the chain graph and composer labels; session chat has no separate
+  planning page.
 - Runtime converts presentation state into typed app requests and applies returned
   navigation effects. `app/` does not import runtime handlers or mutate `AppMode`.
 - `App::view_snapshot()` supplies an immutable frontend view. UI projection cannot

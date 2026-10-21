@@ -21,8 +21,8 @@ use super::support::{
     new_test_draft_prompt_app, new_test_prompt_app, new_test_prompt_mode, press_prompt_key,
     prompt_focus, session_replay_text, test_terminal,
 };
-use crate::app::AppEvent;
 use crate::app::prompt_intent::{PromptApplyOutcome, PromptImagePasteUpdate};
+use crate::app::{App, AppEvent};
 use crate::domain::agent::{
     AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
 };
@@ -30,7 +30,8 @@ use crate::domain::composer::PromptAttachment;
 use crate::domain::file_entry::FileEntry;
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputCommand, InputState};
 use crate::domain::permission::PermissionMode;
-use crate::domain::session::SessionId;
+use crate::domain::session::{SessionId, Status};
+use crate::domain::session_message::{SessionMessageKind, SessionTranscript};
 use crate::presentation::app_mode::{AppMode, ChatFocus, DiffRestoreTarget};
 use crate::presentation::prompt::{
     PendingImagePaste, PromptAtMentionState, PromptAttachmentState, PromptHistoryState,
@@ -2243,7 +2244,7 @@ async fn test_handle_prompt_submit_key_routes_slash_command() {
 }
 
 #[tokio::test]
-async fn plan_slash_command_opens_task_panel_without_submitting_an_ordinary_turn() {
+async fn plan_slash_command_arms_the_composer_without_submitting_an_ordinary_turn() {
     // Arrange
     let (mut app, _root) = crate::test_support::new_test_app().await;
     app.sessions.push_session(
@@ -2254,30 +2255,97 @@ async fn plan_slash_command_opens_task_panel_without_submitting_an_ordinary_turn
     for enabled in [false, true] {
         // Arrange
         app.experimental_multi_agent = enabled;
-        let slash_state = app.prompt_slash_state("prompt-test-session");
-        app.mode = new_test_prompt_mode("/plan");
-        if let AppMode::Prompt {
-            slash_state: current,
-            ..
-        } = &mut app.mode
-        {
-            *current = slash_state;
-        }
+        app.mode = plan_prompt_mode(&app, "/plan");
         let context = prompt_context(&mut app).expect("prompt context");
 
         // Act
         handle_prompt_slash_submit(&mut app, &context).await;
 
         // Assert
-        assert_eq!(
-            matches!(&app.mode, AppMode::PlanWorkflow { session_id, state } if session_id == "prompt-test-session" && state.is_loading),
-            enabled
-        );
-        if !enabled {
-            assert!(matches!(&app.mode, AppMode::Prompt { input, .. } if input.text() == "/plan"));
-        }
+        let expected_text = if enabled { "" } else { "/plan" };
+        assert!(matches!(
+            &app.mode,
+            AppMode::Prompt { input, slash_state, .. }
+                if input.text() == expected_text && slash_state.is_plan_armed == enabled
+        ));
         assert_eq!(app.sessions.sessions()[0].prompt, "");
     }
+
+    // Arrange
+    let context = prompt_context(&mut app).expect("prompt context");
+
+    // Act
+    handle_prompt_cancel_key(&mut app, &context).await;
+
+    // Assert: `Esc` disarms the composer and keeps it open.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { slash_state, .. } if !slash_state.is_plan_armed
+    ));
+}
+
+#[tokio::test]
+async fn plan_command_with_task_submits_it_and_keeps_a_rejected_draft_armed() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    app.sessions.push_session(
+        crate::test_support::SessionFixtureBuilder::new()
+            .id("prompt-test-session")
+            .status(Status::InProgress)
+            .build(),
+    );
+    app.experimental_multi_agent = true;
+    app.mode = plan_prompt_mode(&app, "/plan   Add search  ");
+    let context = prompt_context(&mut app).expect("prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &context).await;
+
+    // Assert: the running session rejects the start and the task stays armed.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { input, slash_state, .. }
+            if input.text() == "Add search" && slash_state.is_plan_armed
+    ));
+    assert_eq!(app.sessions.sessions()[0].prompt, "");
+}
+
+#[tokio::test]
+async fn plan_command_is_hidden_once_the_session_shows_a_task_chain() {
+    // Arrange
+    let (mut app, _root) = crate::test_support::new_test_app().await;
+    let mut session = crate::test_support::SessionFixtureBuilder::new()
+        .id("prompt-test-session")
+        .build();
+    let mut transcript = SessionTranscript::default();
+    transcript.append_message(SessionMessageKind::AgentGraph, "chain");
+    session.transcript = Some(transcript);
+    app.sessions.push_session(session);
+    app.experimental_multi_agent = true;
+    app.mode = plan_prompt_mode(&app, "/plan Add search");
+    let context = prompt_context(&mut app).expect("prompt context");
+
+    // Act
+    handle_prompt_slash_submit(&mut app, &context).await;
+
+    // Assert: the inline task stays text in the unarmed composer.
+    assert!(matches!(
+        &app.mode,
+        AppMode::Prompt { input, slash_state, .. }
+            if input.text() == "/plan Add search"
+                && !slash_state.allow_plan_command
+                && !slash_state.is_plan_armed
+    ));
+}
+
+/// Builds a composer whose slash menu follows the app's `/plan` policy.
+fn plan_prompt_mode(app: &App, text: &str) -> AppMode {
+    let mut mode = new_test_prompt_mode(text);
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
+        *slash_state = app.prompt_slash_state("prompt-test-session");
+    }
+
+    mode
 }
 
 #[tokio::test]

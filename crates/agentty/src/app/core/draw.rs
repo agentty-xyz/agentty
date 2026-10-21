@@ -36,7 +36,8 @@ impl App {
     /// Builds prompt slash-menu state for one session.
     ///
     /// Harness sessions offer only Harness models; other sessions use the
-    /// cached machine-scoped agent availability snapshot.
+    /// cached machine-scoped agent availability snapshot. `/plan` needs the
+    /// experimental flag and is hidden once the session shows a task chain.
     pub(crate) fn prompt_slash_state(
         &self,
         session_id: &str,
@@ -55,7 +56,8 @@ impl App {
             crate::presentation::prompt::PromptSlashState::with_available_agent_kinds(
                 available_agent_kinds,
             );
-        slash_state.allow_plan_command = self.experimental_multi_agent;
+        slash_state.allow_plan_command =
+            self.experimental_multi_agent && !self.session_shows_task_chain(session_id);
 
         slash_state
     }
@@ -111,9 +113,7 @@ impl App {
                 restore_view,
                 ..
             } => *is_loading || self.session_has_tick_driven_ui(&restore_view.session_id),
-            AppMode::PlanWorkflow { .. } | AppMode::DiffLoading { .. } | AppMode::Diff { .. } => {
-                false
-            }
+            AppMode::DiffLoading { .. } | AppMode::Diff { .. } => false,
             AppMode::Help { context, .. } => self.help_overlay_has_tick_driven_ui(context),
         }
     }

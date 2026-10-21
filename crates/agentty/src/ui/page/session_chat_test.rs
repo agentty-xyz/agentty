@@ -1,4 +1,4 @@
-use ag_session::test_support as model_fixture;
+use ag_session::{BuiltinAgentDefinition, test_support as model_fixture};
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
@@ -18,6 +18,9 @@ use crate::presentation::help_action;
 use crate::presentation::prompt::{
     PromptAtMentionState, PromptAttachmentState, PromptHistoryState, PromptSlashState,
 };
+use crate::presentation::task_chain_graph::{
+    TaskChainGraph, TaskChainGraphNode, TaskChainNodeStatus,
+};
 use crate::ui::component::session_output::{SessionOutputLayoutCache, SessionOutputLineContext};
 use crate::ui::{Page, layout, markdown, prompt_format, style};
 
@@ -30,7 +33,12 @@ fn session_fixture() -> Session {
 
 /// Builds a default test page for one session and mode.
 fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPage<'a> {
-    SessionChatPage::new(SessionChatPageInput {
+    SessionChatPage::new(test_page_input(session, mode))
+}
+
+/// Builds default page inputs for one session and mode.
+fn test_page_input<'a>(session: &'a Session, mode: &'a AppMode) -> SessionChatPageInput<'a> {
+    SessionChatPageInput {
         active_prompt_output: None,
         active_progress: None,
         resources: None,
@@ -46,7 +54,7 @@ fn test_session_chat_page<'a>(session: &'a Session, mode: &'a AppMode) -> Sessio
         session_update_version: 0,
         sessions: std::slice::from_ref(session),
         task_chain_graph: None,
-    })
+    }
 }
 
 /// Builds prompt mode with `input_text` staged in the composer.
@@ -1157,4 +1165,68 @@ fn terminal_diff_help_requires_retained_archive() {
             );
         }
     }
+}
+
+#[test]
+fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
+    // Arrange
+    let mut session = session_fixture();
+    session.status = Status::Review;
+    let graph = TaskChainGraph {
+        chain_id: "chain".into(),
+        edges: Vec::new(),
+        nodes: vec![TaskChainGraphNode {
+            agent: BuiltinAgentDefinition::Planner,
+            status: TaskChainNodeStatus::AwaitingApproval,
+        }],
+    };
+    let mut armed = prompt_mode("");
+    if let AppMode::Prompt {
+        focus, slash_state, ..
+    } = &mut armed
+    {
+        *focus = ChatFocus::Input;
+        slash_state.is_plan_armed = true;
+    }
+    let mut replying = prompt_mode("");
+    if let AppMode::Prompt { focus, .. } = &mut replying {
+        *focus = ChatFocus::Input;
+    }
+    let viewing = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: None,
+    };
+
+    // Act
+    let armed_text = rendered_text(&session, &armed, None);
+    let replying_text = rendered_text(&session, &replying, Some(&graph));
+    let viewing_text = rendered_text(&session, &viewing, Some(&graph));
+    let ordinary_text = rendered_text(&session, &replying, None);
+
+    // Assert
+    assert!(armed_text.contains("Plan · describe the task for the Planner"));
+    assert!(armed_text.contains("Describe the task for the Planner"));
+    assert!(replying_text.contains("Orchestrator · Planner · Awaiting your approval"));
+    assert!(replying_text.contains("tell the orchestrator to start implementing"));
+    assert!(viewing_text.contains("Orchestrator · Planner · Awaiting your approval"));
+    assert!(ordinary_text.contains("Type your message"));
+}
+
+/// Renders one session page with an optional task-chain graph.
+fn rendered_text(session: &Session, mode: &AppMode, graph: Option<&TaskChainGraph>) -> String {
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        task_chain_graph: graph,
+        ..test_page_input(session, mode)
+    });
+    let backend = ratatui::backend::TestBackend::new(100, 14);
+    let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            Page::render(&mut page, frame, area);
+        })
+        .expect("failed to draw session page");
+
+    buffer_text(terminal.backend().buffer())
 }

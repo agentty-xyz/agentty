@@ -1,5 +1,9 @@
 use std::sync::Arc;
 
+use ag_session::{
+    AgentKind, AgentModel, AgentSelection, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
+};
+use ag_store::MockTaskRepository;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use mockall::predicate::eq;
 
@@ -73,41 +77,6 @@ fn test_view_context_returns_existing_session_details() {
     assert_eq!(context.session_id, session_id);
     assert_eq!(context.scroll_offset, Some(4));
     assert_eq!(context.session_index, 0);
-}
-
-#[tokio::test]
-async fn workflow_shortcut_opens_task_results_while_the_session_is_running() {
-    // Arrange
-    let (mut app, _root) = new_test_app().await;
-    app.experimental_multi_agent = true;
-    let session = session_fixture(Status::InProgress, false);
-    let session_id = session.id.clone();
-    app.sessions.push_session(session);
-    app.mode = AppMode::View {
-        session_id: session_id.clone(),
-        scroll_offset: None,
-    };
-    let context = view_context(&mut app).expect("view");
-    let snapshot = view_session_snapshot(&app, &context).expect("snapshot");
-    let mut pending = ViewPendingUpdate::from_context(&context);
-
-    // Act
-    let apply_view_updates = handle_view_key(
-        &mut app,
-        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::SHIFT),
-        ViewKeyContext {
-            context: &context,
-            session_snapshot: &snapshot,
-        },
-        &mut pending,
-    )
-    .await;
-
-    // Assert
-    assert!(!apply_view_updates);
-    assert!(
-        matches!(&app.mode, AppMode::PlanWorkflow { session_id: actual, state } if actual == &session_id && state.is_loading)
-    );
 }
 
 #[tokio::test]
@@ -223,7 +192,7 @@ fn test_open_view_help_overlay_preserves_view_context() {
     };
 
     // Act
-    open_view_help_overlay(&mut mode, &view_context, &view_session_snapshot, false);
+    open_view_help_overlay(&mut mode, &view_context, &view_session_snapshot);
 
     // Assert
     assert!(matches!(
@@ -782,6 +751,78 @@ async fn test_handle_ignores_key_when_mode_is_not_view() {
     // Assert
     assert!(matches!(result, EventResult::Continue));
     assert!(matches!(app.mode, AppMode::List));
+}
+
+#[tokio::test]
+async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator() {
+    for status in [Status::InProgress, Status::Review] {
+        // Arrange
+        let (mut app, _base_dir, session_id) = new_test_app_with_session().await;
+        app.sessions.sessions_mut()[0].status = status;
+        app.mode = AppMode::View {
+            session_id: SessionId::from(session_id.as_str()),
+            scroll_offset: None,
+        };
+        let mut chain = running_planner_chain(&session_id);
+        if status == Status::Review {
+            chain.phase = TaskChainPhase::AwaitingPlanAcceptance;
+            app.sessions
+                .deciding_task_chain_ids
+                .insert(chain.id.clone());
+        }
+        let mut tasks = MockTaskRepository::new();
+        let listed = chain.clone();
+        tasks
+            .expect_list_task_chains()
+            .returning(move |_| Ok(vec![listed.clone()]));
+        tasks
+            .expect_load_task_chain()
+            .returning(move |_| Ok(Some(chain.clone())));
+        tasks
+            .expect_cancel_task_chain()
+            .with(eq("chain"))
+            .times(1)
+            .returning(|_| Ok(()));
+        app.services.set_task_repository(Arc::new(tasks));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).expect("terminal");
+
+        // Act
+        handle(
+            &mut app,
+            &mut terminal,
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        )
+        .await
+        .expect("cancel key");
+
+        // Assert: the ordinary stop path, which settles the turn as review, did
+        // not run; the worker settles the canceled attempt instead.
+        assert_eq!(app.sessions.sessions()[0].status, status);
+    }
+}
+
+/// Builds a chain whose Planner attempt is running in `session_id`.
+fn running_planner_chain(session_id: &str) -> TaskChain {
+    let launch = StartPlanThenImplementRequest {
+        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+        chain_id: "chain".to_string(),
+        planner_attempt_id: "attempt".to_string(),
+        user_request: "Add search".to_string(),
+    };
+    let planner_request = launch.planner_request();
+
+    TaskChain {
+        accepted_plan: None,
+        agent: launch.agent,
+        id: launch.chain_id.clone(),
+        implementer_task_id: launch.implementer_task_id(),
+        phase: TaskChainPhase::Planning,
+        planner_task_id: planner_request.task_id.clone(),
+        current_request: planner_request,
+        session_id: SessionId::from(session_id),
+        user_request: launch.user_request,
+    }
 }
 
 #[tokio::test]

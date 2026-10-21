@@ -95,7 +95,6 @@ impl RouteSharedContext<'_> {
 /// UI-private base page selected for the active mode.
 #[derive(Clone, Copy)]
 enum Surface<'a> {
-    PlanWorkflow(&'a crate::presentation::plan_workflow::PlanWorkflowState),
     Diff {
         diff: &'a str,
         file_explorer_selected_index: usize,
@@ -127,7 +126,7 @@ impl Surface<'_> {
         match self {
             Self::Diff { .. } | Self::DiffLoading { .. } => SurfaceKind::Diff,
             Self::List => SurfaceKind::List,
-            Self::PlanWorkflow(_) | Self::Session { .. } => SurfaceKind::Session,
+            Self::Session { .. } => SurfaceKind::Session,
         }
     }
 }
@@ -312,7 +311,6 @@ pub(crate) fn surface_kind_for_mode(mode: &AppMode) -> SurfaceKind {
 /// Resolves the base page painted for every mode before any overlay.
 fn surface_for_mode(mode: &AppMode) -> Surface<'_> {
     match mode {
-        AppMode::PlanWorkflow { state, .. } => Surface::PlanWorkflow(state),
         AppMode::Confirmation {
             confirmation_intent:
                 ConfirmationIntent::ContinueSession
@@ -454,9 +452,6 @@ fn render_surface(
     resources: FrameResources<'_>,
 ) {
     match surface {
-        Surface::PlanWorkflow(state) => {
-            page::plan_workflow::render(f, area, state, resources.markdown_render_cache);
-        }
         Surface::List => render_list_background(f, area, shared, resources.frame_time),
         Surface::Session {
             mode,
@@ -542,7 +537,6 @@ fn render_mode_overlay(
 ) {
     match mode {
         AppMode::List
-        | AppMode::PlanWorkflow { .. }
         | AppMode::View { .. }
         | AppMode::Prompt { .. }
         | AppMode::Question { .. }

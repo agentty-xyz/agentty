@@ -125,24 +125,23 @@ Claude or Codex, speed. Launch commands use the shared text editor. See
 <a id="usage-session-view-actions"></a> Available actions depend on the session state.
 The full set in **Review** state, subject to session and forge availability:
 
-| Key                 | Action                                                 |
-| ------------------- | ------------------------------------------------------ |
-| `q`                 | Back to list                                           |
-| `Enter`             | Compose a reply                                        |
-| `/`                 | Open composer with `/` prefilled                       |
-| `T`                 | Open planning workflows (`--experimental-multi-agent`) |
-| `o`                 | Run a launch configuration in the worktree (`tmux`)    |
-| `p`                 | Publish branch and create or refresh review request    |
-| `c`                 | Show linked review-request comments                    |
-| `d`                 | Show diff when the session has changes                 |
-| `f`                 | Show, generate, or regenerate focused review           |
-| `F`                 | Fork session with copied transcript history            |
-| `m`                 | Add to merge queue after confirmation                  |
-| `r`                 | Sync session branch                                    |
-| `j` / `k`           | Scroll output                                          |
-| `g` / `G`           | Scroll to top / bottom                                 |
-| `Ctrl+d` / `Ctrl+u` | Half page down / up                                    |
-| `?`                 | Help                                                   |
+| Key                 | Action                                              |
+| ------------------- | --------------------------------------------------- |
+| `q`                 | Back to list                                        |
+| `Enter`             | Compose a reply                                     |
+| `/`                 | Open composer with `/` prefilled                    |
+| `o`                 | Run a launch configuration in the worktree (`tmux`) |
+| `p`                 | Publish branch and create or refresh review request |
+| `c`                 | Show linked review-request comments                 |
+| `d`                 | Show diff when the session has changes              |
+| `f`                 | Show, generate, or regenerate focused review        |
+| `F`                 | Fork session with copied transcript history         |
+| `m`                 | Add to merge queue after confirmation               |
+| `r`                 | Sync session branch                                 |
+| `j` / `k`           | Scroll output                                       |
+| `g` / `G`           | Scroll to top / bottom                              |
+| `Ctrl+d` / `Ctrl+u` | Half page down / up                                 |
+| `?`                 | Help                                                |
 
 State-specific differences:
 
@@ -267,23 +266,11 @@ navigation. Other file types keep showing diffs; unavailable files show a notice
 Use `/mode` to select `Auto Edit`, `Auto Edit + Auto Address Comments`, or `Read Only`.
 `Shift+Tab` cycles those modes in that order.
 
-With `agentty --experimental-multi-agent`, use `/plan` to open **Plan then implement**
-in a session with a prepared worktree. From session view, `T` also opens its workflows,
-including while an agent is running. In its panel:
-
-| Key                       | Action                                                                      |
-| ------------------------- | --------------------------------------------------------------------------- |
-| `n`                       | Compose a new planning request                                              |
-| `Enter`                   | Accept the displayed current plan and start implementation                  |
-| `r`                       | Revise a plan, answer role questions, or explicitly retry the labeled stage |
-| `x`                       | Cancel running workflow work                                                |
-| `Tab`                     | Select the next workflow                                                    |
-| `Up` / `Down` / `k` / `j` | Scroll role results                                                         |
-| `F5`                      | Reload persisted workflow state                                             |
-| `PgUp` / `PgDn`           | Scroll results, including while composing                                   |
-| `Esc`                     | Discard the active draft, or return to chat                                 |
-
-In its composer, `Enter` submits and `Alt+Enter` / `Shift+Enter` inserts a newline.
+With `agentty --experimental-multi-agent`, `/plan` arms the composer for a **Plan then
+implement** request; `Enter` sends the task to the Planner and `Esc` disarms the
+composer. Afterwards, every message in that session goes to the orchestrator, and
+`Ctrl+C` in session view cancels the running role. See
+[Plan Then Implement](@/docs/usage/workflow.md#plan-then-implement).
 
 With chat focused, scroll using `j` / `k` or arrows, jump with `g` / `G`, or move half a
 page with `Ctrl+D` / `Ctrl+U`. `d` previews available changes, `Tab` returns to input,

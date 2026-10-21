@@ -123,11 +123,6 @@ fn test_view_actions_in_progress_shows_stop_and_sync_and_hides_open_and_edit_act
 
     // Assert
     assert!(actions.iter().any(|action| action.key == "Ctrl+c"));
-    assert!(
-        actions
-            .iter()
-            .any(|action| action.key == "T" && action.popup_label.contains("Plan then implement"))
-    );
     assert!(actions.iter().any(|action| action.key == "r"));
     assert!(!actions.iter().any(|action| action.key == "Enter"));
     assert!(!actions.iter().any(|action| action.key == "o"));

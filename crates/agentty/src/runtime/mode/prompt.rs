@@ -770,6 +770,7 @@ fn move_prompt_slash_selection(app: &mut App, is_next: bool) {
 /// is `InProgress` or `Rebasing`, slash command mode is already demoted to
 /// text in [`prompt_context`], so any leading `/` falls through to the queue
 /// path instead of executing a slash command against the active operation.
+/// A composer armed by `/plan` starts the Planner with the typed task instead.
 ///
 /// Submission is ignored while a clipboard image capture runs, so the pasted
 /// image is never dropped from the sent turn or a cleared slash input.
@@ -787,22 +788,29 @@ async fn handle_prompt_submit_key(app: &mut App, prompt_context: &PromptContext)
         return;
     }
 
-    let composer = match &app.mode {
+    let (composer, is_plan_armed) = match &app.mode {
         AppMode::Prompt {
             input,
             attachment_state,
+            slash_state,
             ..
-        } => Some((input.clone(), attachment_state.clone())),
-        _ => None,
+        } => (
+            Some((input.clone(), attachment_state.clone())),
+            slash_state.is_plan_armed,
+        ),
+        _ => (None, false),
     };
     let (prompt, archived_attachments) = take_submitted_turn_prompt(&mut app.mode);
-    let outcome = app
-        .submit_prompt(PromptSubmission {
-            prompt,
-            session_id: prompt_context.session_id.clone(),
-            session_mode: prompt_context.session_mode,
-        })
-        .await;
+    let submission = PromptSubmission {
+        prompt,
+        session_id: prompt_context.session_id.clone(),
+        session_mode: prompt_context.session_mode,
+    };
+    let outcome = if is_plan_armed {
+        app.submit_plan_request(submission).await
+    } else {
+        app.submit_prompt(submission).await
+    };
 
     if matches!(outcome, PromptWorkflowOutcome::KeepPrompt) {
         if let (
@@ -843,11 +851,19 @@ fn handle_prompt_image_paste(app: &mut App, prompt_context: &PromptContext) {
 
 /// Cancels the active prompt and drops any composer-owned attachment files.
 ///
-/// Existing focused-review output is restored into session view because no new
-/// prompt was submitted.
+/// A composer armed by `/plan` is only disarmed, keeping its draft. Existing
+/// focused-review output is restored into session view because no new prompt
+/// was submitted.
 async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext) {
     if prompt_context.is_slash_command() {
         clear_prompt_slash_input(app).await;
+
+        return;
+    }
+    if let AppMode::Prompt { slash_state, .. } = &mut app.mode
+        && slash_state.is_plan_armed
+    {
+        slash_state.is_plan_armed = false;
 
         return;
     }
@@ -865,7 +881,16 @@ async fn handle_prompt_cancel_key(app: &mut App, prompt_context: &PromptContext)
 }
 
 /// Executes the selected slash-command action from presentation-owned state.
+///
+/// `/plan <task>` arms the composer and submits the task in one step.
 async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContext) {
+    if arm_inline_plan_request(&mut app.mode) {
+        if let Some(plan_context) = self::prompt_context(app) {
+            Box::pin(handle_prompt_submit_key(app, &plan_context)).await;
+        }
+
+        return;
+    }
     let session_id = &prompt_context.session_id;
     let session_agent_kind = app
         .session_at(prompt_context.session_index)
@@ -884,7 +909,9 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
     match selection {
         Some(PromptSuggestionSelection::Command("/plan")) => {
             clear_prompt_slash_input(app).await;
-            app.open_plan_workflow(session_id.clone());
+            if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
+                slash_state.is_plan_armed = true;
+            }
         }
         Some(PromptSuggestionSelection::Command("/apply")) => {
             let outcome = app
@@ -952,6 +979,34 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         }
         None => {}
     }
+}
+
+/// Rewrites an available `/plan <task>` to the task and arms the composer.
+///
+/// Returns whether the composer now holds an armed plan request.
+fn arm_inline_plan_request(mode: &mut AppMode) -> bool {
+    let AppMode::Prompt {
+        input, slash_state, ..
+    } = mode
+    else {
+        return false;
+    };
+    if !slash_state.allow_plan_command {
+        return false;
+    }
+    let Some(task) = input
+        .text()
+        .strip_prefix("/plan ")
+        .map(str::trim)
+        .filter(|task| !task.is_empty())
+    else {
+        return false;
+    };
+    *input = InputState::with_text(task.to_string());
+    slash_state.reset();
+    slash_state.is_plan_armed = true;
+
+    true
 }
 
 /// Loads the personality options and selects the session's current choice.
