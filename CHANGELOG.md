@@ -7,6 +7,54 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.18.0] - 2026-10-20
+
+### Added
+
+- `agentty`: add the experimental `/plan` workflow behind `--experimental-multi-agent`,
+  with Planner and Implementer conversations in session chat, versioned plan acceptance,
+  durable task attempts, and automatic focused review after implementation.
+- `agentty`: offer the native Harness agent with `--experimental-harness`, make startup
+  project discovery opt-in, and support automatic updates for global Bun and pnpm
+  installs.
+- `ag-harness`: add live tool activity previews, context benchmarks, and turn reports;
+  support Gemini 4 Argon through Gemini and Antigravity.
+- docs: add consent-gated PostHog session replay.
+
+### Changed
+
+- `agentty`: move session metadata to the chat footer, collapse the inactive composer,
+  hide it for archived sessions, and improve selection visibility across themes.
+- `ag-harness`: calibrate context budgets from provider usage, compact earlier tool
+  rounds, recover from context-window rejections, and stop repeated tool-call loops.
+- workspace: select changed packages and dependents for validation, streamline test
+  execution and build caches, and record test timing provenance.
+- workspace: update dependencies, GitHub Actions, and the Rust toolchain.
+- release: bump workspace crate metadata and lockfile package versions to `0.18.0`.
+
+### Fixed
+
+- `agentty`: persist review-comment outcomes and resolve addressed threads, push session
+  branches to the correct pull request, and propagate publication failures to task
+  workflows.
+- `agentty`: preserve macOS prompt editing shortcuts and keep session titles highlighted
+  across statuses.
+- `ag-harness`: replay stopped turns, correct monotonic deadlines, and recover cleanup
+  from macOS zombie process groups.
+- `testty`: answer terminal device-attribute queries in PTY sessions.
+- docs: respect hidden states and reduced-motion preferences.
+
+### Removed
+
+- workspace: remove the legacy orchestration crate and session behavior.
+- docs: remove Umami analytics.
+
+### Contributors
+
+- @andagaev
+- @dependabot
+- @minev-dev
+
 ## [v0.17.0] - 2026-10-07
 
 ### Added
