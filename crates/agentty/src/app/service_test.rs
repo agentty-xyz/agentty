@@ -782,6 +782,10 @@ fn session_event_labels_preserve_variant_identity() {
                 token_usage_delta: SessionStats::default(),
             },
         },
+        AppEvent::ImplementerAttemptSucceeded {
+            attempt_id: "implementer".to_string(),
+            session_id: session_id.clone(),
+        },
         AppEvent::StackedParentTurnCompleted {
             session_id: session_id.clone(),
         },

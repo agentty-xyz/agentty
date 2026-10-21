@@ -185,9 +185,10 @@ pub struct App {
     /// Retains automatic focused-review triggers for completed sessions whose
     /// owning project is not currently loaded.
     pub(crate) deferred_auto_review_session_ids: HashSet<SessionId>,
-    /// Keeps role-owned review suppression until a new ordinary turn or
-    /// explicit review is admitted, regardless of stale reducer events.
-    pub(crate) role_review_suppression: HashSet<SessionId>,
+    /// Keeps role-owned review suppression, keyed to the owning role attempt
+    /// identifier, until a new ordinary turn or explicit review is admitted or
+    /// that Implementer attempt succeeds, regardless of stale reducer events.
+    pub(crate) role_review_suppression: HashMap<SessionId, String>,
     /// Saves completed file and inline comments per session while Diff mode is
     /// closed. Entries are consumed when the diff reopens and cleared when a
     /// turn starts or the session is deleted.
@@ -1009,6 +1010,29 @@ impl App {
     pub(crate) fn clear_review_output_for_new_turn(&mut self, session_id: &str) {
         self.role_review_suppression.remove(session_id);
         self.clear_review_output(session_id);
+    }
+
+    /// Releases role ownership when the Implementer attempt that owns it
+    /// succeeds, returning whether the completion was current.
+    ///
+    /// Completions from an older, superseded, or already released attempt keep
+    /// the current ownership unchanged, so duplicate or stale events cannot
+    /// start review twice or on behalf of another attempt.
+    pub(crate) fn release_role_review_for_implementer(
+        &mut self,
+        session_id: &SessionId,
+        attempt_id: &str,
+    ) -> bool {
+        if self
+            .role_review_suppression
+            .get(session_id)
+            .is_none_or(|owner| owner != attempt_id)
+        {
+            return false;
+        }
+        self.clear_review_output_for_new_turn(session_id);
+
+        true
     }
 
     /// Clears cached focused-review state, invalidates pending `/apply`

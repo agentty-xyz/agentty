@@ -636,7 +636,10 @@ impl App {
             .await
             .map_err(|error| ApiSessionError::Operation(error.to_string()))?;
         if claimed {
-            if let Err(error) = self.suppress_agent_task_automation(session_id).await {
+            if let Err(error) = self
+                .suppress_agent_task_automation(session_id, &request.attempt_id)
+                .await
+            {
                 self.services
                     .db()
                     .operations()
@@ -656,16 +659,21 @@ impl App {
     }
 
     /// Invalidates prior ordinary review work and its durable startup trigger
-    /// before an admitted role attempt can run. Only a new ordinary admission
-    /// or explicit review can release this ownership barrier.
+    /// before an admitted role attempt can run. Only a new ordinary admission,
+    /// explicit review, or the successful completion of this same Implementer
+    /// attempt can release this ownership barrier. Like a submitted prompt,
+    /// the admission starts a new automatic remediation cycle.
     pub(in crate::app) async fn suppress_agent_task_automation(
         &mut self,
         session_id: &SessionId,
+        attempt_id: &str,
     ) -> Result<(), ApiSessionError> {
         self.supersede_review_diff_loads(&HashSet::from([session_id.clone()]));
         self.deferred_auto_review_session_ids.remove(session_id);
+        self.auto_address_review_iterations.remove(session_id);
         self.suppress_review_output(session_id);
-        self.role_review_suppression.insert(session_id.clone());
+        self.role_review_suppression
+            .insert(session_id.clone(), attempt_id.to_string());
         self.services
             .db()
             .sessions()
