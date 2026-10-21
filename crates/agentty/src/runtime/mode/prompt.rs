@@ -990,7 +990,11 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
 /// Returns whether the composer now holds an armed plan request.
 fn arm_inline_plan_request(mode: &mut AppMode) -> bool {
     let AppMode::Prompt {
-        input, slash_state, ..
+        input,
+        slash_state,
+        attachment_state,
+        history_state,
+        ..
     } = mode
     else {
         return false;
@@ -998,15 +1002,36 @@ fn arm_inline_plan_request(mode: &mut AppMode) -> bool {
     if !slash_state.allow_plan_command {
         return false;
     }
-    let Some(task) = input
-        .text()
-        .strip_prefix("/plan ")
-        .map(str::trim)
-        .filter(|task| !task.is_empty())
-    else {
+    let Some(remainder) = input.text().strip_prefix("/plan ") else {
         return false;
     };
-    *input = InputState::with_text(task.to_string());
+    let task = remainder.trim();
+    if task.is_empty() {
+        return false;
+    }
+    let task_start = "/plan ".chars().count()
+        + remainder
+            .chars()
+            .take_while(|character| character.is_whitespace())
+            .count();
+    let task_end = task_start + task.chars().count();
+    let input_end = input.text().chars().count();
+    apply_prompt_delete_range_components(
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        task_end,
+        input_end,
+    );
+    apply_prompt_delete_range_components(
+        attachment_state,
+        history_state,
+        input,
+        slash_state,
+        0,
+        task_start,
+    );
     slash_state.reset();
     slash_state.is_plan_armed = true;
 

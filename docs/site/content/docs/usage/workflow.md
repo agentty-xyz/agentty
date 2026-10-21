@@ -24,8 +24,8 @@ runs a fixed graph: a read-only **Planner**, then an **Implementer** that receiv
 accepted plan. Select `/plan` in a new **Regular** session, or in an idle session whose
 workspace is prepared, then describe the task in the composer, titled **Plan · describe
 the task for the Planner**. `/plan <task>` does the same in one line. `Esc` disarms the
-composer and keeps your text. Image attachments are not supported in plan or
-orchestrator messages; Agentty keeps the draft and asks you to remove them.
+composer and keeps your text. Paste images into the initial task or any later reply with
+the [image paste shortcuts](@/docs/usage/workflow.md#usage-prompt-extras).
 
 Once a session owns a plan workflow, every message you send goes to the orchestrator,
 and `/plan` is no longer offered. The chat shows your messages, each answer under a
@@ -39,7 +39,8 @@ says what to send next.
 - **Approval**: approve in your own words, such as "looks good, start implementing". A
   model decides whether the reply approves the plan as written. Anything that is not a
   clear approval without changes, including a failed decision, goes back to the Planner
-  as a revision.
+  as a revision. Replies with images also revise the plan; approve it with a separate
+  text reply after the Planner has considered the images.
 - **After implementation**: follow-up messages, `/apply`, and automatic review
   remediation go to the Implementer. The Planner is not used again.
 

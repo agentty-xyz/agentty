@@ -114,6 +114,7 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
             .drive_session_request(fixture.service.continue_task_chain(
                 "workflow",
                 ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "stale-planner-guidance".into(),
                     clarification: Some("Answering the old Planner".into()),
                     expected_attempt_id: "revision".into(),
@@ -161,6 +162,7 @@ async fn service_cancels_and_retries_only_the_current_workflow_attempt() {
         .drive_session_request(fixture.service.continue_task_chain(
             "workflow",
             ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "retry".to_string(),
                 clarification: None,
                 expected_attempt_id: "initial".into(),
@@ -240,6 +242,7 @@ async fn service_reports_missing_busy_and_invalid_workflows_without_dispatch() {
             .drive_session_request(fixture.service.continue_task_chain(
                 "missing",
                 ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "retry".into(),
                     clarification: None,
                     expected_attempt_id: "missing".into(),
@@ -348,6 +351,7 @@ async fn enqueue_failure_is_durable_and_requires_an_explicit_new_attempt() {
         app.drive_session_request(service.continue_task_chain(
             "workflow",
             ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "explicit-retry".into(),
                 clarification: None,
                 expected_attempt_id: "initial".into(),
@@ -402,6 +406,7 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         app.drive_session_request(service.reply_to_task_chain(
             &SessionId::from("missing"),
             ReplyToTaskChainRequest {
+                attachments: Vec::new(),
                 message: "Go ahead".into(),
                 reply_id: "reply".into(),
             },
@@ -466,6 +471,7 @@ async fn revised_plan(
     );
     fixture.settle(&first).await;
     let revision = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "revision".to_string(),
         clarification: Some("Revise the scope".to_string()),
         expected_attempt_id: "initial".into(),
@@ -525,6 +531,7 @@ async fn assert_repository_errors_surface(fixture: &mut ChainFixture) {
         .drive_session_request(fixture.service.continue_task_chain(
             "workflow",
             ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "unreadable-receipt".into(),
                 clarification: None,
                 expected_attempt_id: "implementation".into(),

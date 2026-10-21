@@ -30,6 +30,7 @@ async fn reopening_preserves_task_assignment_context_and_delivery_identity() {
         },
         attempt_id: "first".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan this change".to_string(),

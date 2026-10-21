@@ -100,9 +100,9 @@ pub trait TaskRepository: Send + Sync {
         &self,
         chain_id: &str,
         reply_id: &str,
-        message: &str,
+        prompt: &ag_protocol::TurnPrompt,
     ) -> Result<bool, DbError> {
-        let _ = (chain_id, reply_id, message);
+        let _ = (chain_id, reply_id, prompt);
         Err(TaskChainStore::unsupported())
     }
 
@@ -598,15 +598,15 @@ impl TaskRepository for SqliteTaskRepository {
         &self,
         chain_id: &str,
         reply_id: &str,
-        message: &str,
+        prompt: &ag_protocol::TurnPrompt,
     ) -> Result<bool, DbError> {
         let now = self.timestamp_source.now_timestamp_seconds();
         let mut transaction = self.pool.begin().await?;
         let session_id =
-            TaskChainStore::record_reply(&mut transaction, chain_id, reply_id, message, now)
-                .await?;
+            TaskChainStore::record_reply(&mut transaction, chain_id, reply_id, prompt, now).await?;
         if let Some(session_id) = &session_id {
-            let content = stored_message_content(SessionMessageKind::UserPrompt, message);
+            let content =
+                stored_message_content(SessionMessageKind::UserPrompt, &prompt.transcript_text());
             SessionMessageStore::append_normalized_in_transaction(
                 &mut transaction,
                 session_id,

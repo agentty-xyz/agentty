@@ -34,16 +34,12 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
         .app
         .submit_plan_request(submission(&fixture.session_id, "  "))
         .await;
-    let with_image = fixture
+    let started = fixture
         .app
         .submit_plan_request(PromptSubmission {
             prompt: image_prompt("Add search [Image #1]"),
             ..submission(&fixture.session_id, "")
         })
-        .await;
-    let started = fixture
-        .app
-        .submit_plan_request(submission(&fixture.session_id, "Add search"))
         .await;
     let repeated = fixture
         .app
@@ -53,7 +49,6 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
 
     // Assert
     assert_eq!(blank, PromptWorkflowOutcome::KeepPrompt);
-    assert_eq!(with_image, PromptWorkflowOutcome::KeepPrompt);
     assert_eq!(
         started,
         PromptWorkflowOutcome::ShowSession {
@@ -63,14 +58,17 @@ async fn plan_request_starts_one_planner_chain_with_the_session_agent() {
     assert_eq!(repeated, PromptWorkflowOutcome::KeepPrompt);
     assert_eq!(chains.len(), 1);
     assert_eq!(chains[0].agent, session_agent);
-    assert_eq!(chains[0].user_request, "Add search");
+    assert_eq!(chains[0].user_request, "Add search [Image #1]");
+    assert_eq!(
+        chains[0].current_request.input.attachments,
+        image_prompt("").attachments
+    );
     let transcript = fixture.persisted_transcript().await;
-    assert!(has_notice(
-        &transcript,
-        "Image attachments are not supported"
-    ));
     assert!(has_notice(&transcript, "already runs a plan workflow"));
-    assert!(transcript.contains(&(SessionMessageKind::UserPrompt, "Add search".to_string())));
+    assert!(transcript.contains(&(
+        SessionMessageKind::UserPrompt,
+        "Add search [Image #1]".to_string()
+    )));
     assert!(transcript.contains(&(SessionMessageKind::AgentGraph, chains[0].id.clone())));
 }
 
@@ -120,10 +118,6 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         fixture.register_result(&launch.implementer_task_id(), "Implemented", true);
 
     // Act
-    let with_image = fixture
-        .app
-        .submit_task_chain_prompt(&fixture.session_id, &image_prompt("Go [Image #1]"))
-        .await;
     let approval = fixture
         .app
         .submit_prompt(submission(
@@ -146,7 +140,7 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         .app
         .submit_task_chain_prompt(
             &fixture.session_id,
-            &TurnPrompt::from_text("Also add docs".into()),
+            &image_prompt("Also add docs [Image #1]"),
         )
         .await;
     fixture.settle(&follow_up).await;
@@ -157,7 +151,6 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
         session_id: fixture.session_id.clone(),
     });
     assert_eq!(ordinary, None);
-    assert_eq!(with_image, Some(PromptWorkflowOutcome::KeepPrompt));
     assert_eq!(Some(approval), show_session);
     assert_eq!(while_busy, Some(PromptWorkflowOutcome::KeepPrompt));
     assert_eq!(after_success, show_session);
@@ -168,14 +161,53 @@ async fn composer_messages_reach_the_orchestrator_and_never_the_planner_after_ac
     );
     assert_eq!(
         finished.current_request.input.clarification.as_deref(),
-        Some("Also add docs")
+        Some("Also add docs [Image #1]")
+    );
+    assert_eq!(
+        finished.current_request.input.attachments,
+        image_prompt("").attachments
     );
     let transcript = fixture.persisted_transcript().await;
-    assert!(has_notice(
-        &transcript,
-        "Image attachments are not supported"
-    ));
     assert!(has_notice(&transcript, "The Implementer is still working"));
+}
+
+#[tokio::test]
+async fn image_reply_revises_the_plan_before_text_only_approval() {
+    // Arrange
+    let mut fixture = ChainFixture::new().await;
+    let _terminal_consumer = fixture.app.sessions.foreground_consumer();
+    let launch = awaiting_plan(&mut fixture).await;
+    let revised = fixture.register_result(&launch.planner_request().task_id, "Updated plan", false);
+    let prompt = image_prompt("Use this layout [Image #1]");
+
+    // Act
+    let outcome = fixture
+        .app
+        .submit_task_chain_prompt(&fixture.session_id, &prompt)
+        .await;
+    fixture.settle(&revised).await;
+    let chain = fixture.snapshot().await;
+
+    // Assert
+    assert_eq!(
+        outcome,
+        Some(PromptWorkflowOutcome::ShowSession {
+            session_id: fixture.session_id.clone()
+        })
+    );
+    assert_eq!(chain.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(chain.current_request.input.attachments, prompt.attachments);
+    assert_eq!(
+        chain.current_request.input.clarification.as_deref(),
+        Some(prompt.text.as_str())
+    );
+    assert!(chain.current_request.attempt_id.ends_with(":revise"));
+    assert!(
+        fixture
+            .persisted_transcript()
+            .await
+            .contains(&(SessionMessageKind::UserPrompt, prompt.text))
+    );
 }
 
 #[tokio::test]

@@ -1,5 +1,7 @@
 //! A static Planner, explicit acceptance, and Implementer workflow.
 
+use ag_protocol::TurnPromptAttachment;
+
 use crate::{
     AcceptedTaskPlan, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, SessionId,
     SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
@@ -10,6 +12,8 @@ use crate::{
 pub struct StartPlanThenImplementRequest {
     /// Provider/model captured for both roles, independent of later settings.
     pub agent: AgentSelection,
+    /// Images accompanying the original request.
+    pub attachments: Vec<TurnPromptAttachment>,
     /// Globally unique workflow identity, retained for launch redelivery.
     pub chain_id: String,
     /// Globally unique initial Planner delivery identity.
@@ -29,6 +33,7 @@ impl StartPlanThenImplementRequest {
             attempt_id: self.planner_attempt_id.clone(),
             input: TaskAgentInput {
                 accepted_plan: None,
+                attachments: self.attachments.clone(),
                 clarification: None,
                 user_request: self.user_request.clone(),
             },
@@ -56,6 +61,8 @@ pub struct AcceptTaskChainPlanRequest {
 /// Explicit revision, clarification, or retry of the current workflow stage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContinueTaskChainRequest {
+    /// Images accompanying this clarification, retained by later attempts.
+    pub attachments: Vec<TurnPromptAttachment>,
     /// New delivery identity; old deliveries never restart or uncancel work.
     pub attempt_id: String,
     /// User guidance addressed only to the current role's own context.
@@ -72,6 +79,8 @@ pub struct ContinueTaskChainRequest {
 /// guidance for the current role. No words are reserved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReplyToTaskChainRequest {
+    /// Images accompanying the visible reply.
+    pub attachments: Vec<TurnPromptAttachment>,
     /// User-authored reply, recorded once as a visible session prompt.
     pub message: String,
     /// Globally unique delivery identity. Redelivery returns the original
@@ -138,6 +147,14 @@ impl TaskChain {
         SubmitAgentTaskRequest {
             attempt_id: request.attempt_id.clone(),
             input: TaskAgentInput {
+                attachments: self
+                    .current_request
+                    .input
+                    .attachments
+                    .iter()
+                    .chain(&request.attachments)
+                    .cloned()
+                    .collect(),
                 clarification: request.clarification.clone(),
                 ..self.current_request.input.clone()
             },

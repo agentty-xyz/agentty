@@ -42,6 +42,7 @@ async fn clear_approval_accepts_the_plan_once_and_later_replies_reach_the_implem
     let racing_decision = fixture
         .app
         .apply_task_chain_reply(TaskChainReplyAction {
+            attachments: Vec::new(),
             chain_id: launch.chain_id.clone(),
             expected_attempt_id: launch.planner_attempt_id.clone(),
             message: "Looks good, go ahead".to_string(),
@@ -369,6 +370,7 @@ async fn acceptance_without_live_session_handles_leaves_the_plan_unaccepted() {
     let result = fixture
         .app
         .apply_task_chain_reply(TaskChainReplyAction {
+            attachments: Vec::new(),
             chain_id: launch.chain_id,
             expected_attempt_id: launch.planner_attempt_id,
             message: "Go ahead".to_string(),
@@ -690,6 +692,7 @@ async fn send_reply(
         .reply_to_task_chain(
             session_id,
             ReplyToTaskChainRequest {
+                attachments: Vec::new(),
                 message: message.to_string(),
                 reply_id: reply_id.to_string(),
             },

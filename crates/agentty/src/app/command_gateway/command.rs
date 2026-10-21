@@ -144,6 +144,7 @@ impl TaskChainReplyCommand {
 /// reply was routed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaskChainReplyAction {
+    pub(crate) attachments: Vec<ag_protocol::TurnPromptAttachment>,
     pub(crate) chain_id: String,
     pub(crate) expected_attempt_id: String,
     pub(crate) message: String,

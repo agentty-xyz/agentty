@@ -49,6 +49,7 @@ fn validates_role_inputs_without_modifying_user_content() {
 
     for (definition, accepted_plan, expected) in cases {
         let input = TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan,
             clarification: Some("  Keep literal user guidance.\n".to_string()),
             user_request: "  Original request.\n".to_string(),
@@ -68,6 +69,7 @@ fn validates_role_inputs_without_modifying_user_content() {
 fn rejects_empty_requests_before_role_validation() {
     // Arrange
     let input = TaskAgentInput {
+        attachments: Vec::new(),
         accepted_plan: None,
         clarification: None,
         user_request: " \n\t".to_string(),

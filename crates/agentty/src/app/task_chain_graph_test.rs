@@ -188,6 +188,7 @@ async fn visible_session(app: &mut App, graph_chain_id: Option<&str>) -> Session
 
 fn launch_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
         planner_attempt_id: "initial".into(),

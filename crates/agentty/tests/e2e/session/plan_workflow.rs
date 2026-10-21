@@ -3,14 +3,19 @@
 //! follow-up.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
 use std::time::Duration;
 
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 use testty::assertion;
 use testty::frame::TerminalFrame;
 use testty::proof::report::ProofReport;
 use testty::region::Region;
 use testty::scenario::Scenario;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 use crate::common::{self, BuilderEnv, FeatureTest};
 use crate::session::fixture::{E2eResult, run_git, seed_project_settings};
@@ -267,6 +272,294 @@ async fn implementation_diff_is_available_during_post_processing() -> E2eResult 
         .await?;
 
     Ok(())
+}
+
+#[tokio::test]
+async fn plan_conversation_image_paste_reports_clipboard_errors() -> E2eResult {
+    // Arrange, Act, Assert: clipboard capture failures stay in the plan
+    // composer.
+    FeatureTest::new("plan_image_paste_unavailable")
+        .with_git()
+        .args(["--experimental-multi-agent".to_string()])
+        .env("AGENTTY_DISABLE_CLIPBOARD", "1")
+        .setup(|env| Box::pin(async move { seed_workflow_project(env).await }))
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 10000)
+                    .write_text("/plan Add search")
+                    .press_key("Enter")
+                    .wait_for_text("Which index should search use?", 20000)
+                    .wait_for_text("Enter: reply", 10000);
+                open_composer(scenario)
+                    .write_text("Use this layout ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Paste Image Error", 5000)
+                    .capture_labeled("paste_error", "Image paste in a Planner conversation")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    assert_visible(
+                        frame,
+                        &[
+                            "Orchestrator · Planner",
+                            "Use this layout",
+                            "Paste Image Error",
+                            "Clipboard is unavailable",
+                        ],
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+/// A scripted Wayland clipboard exercises real capture without a host
+/// clipboard.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn plan_conversation_pastes_images_into_initial_and_revision_messages() -> E2eResult {
+    // Arrange, Act, Assert: provider delivery is asserted by the scripted
+    // answer.
+    FeatureTest::new("plan_conversation_images")
+        .with_git()
+        .with_terminal_size(100, 40)
+        .args(["--experimental-multi-agent".to_string()])
+        .env("WAYLAND_DISPLAY", "agentty-test-wayland")
+        .setup(|env| Box::pin(async move { seed_image_plan_project(env).await }))
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 10000)
+                    .write_text("/plan")
+                    .press_key("Enter")
+                    .wait_for_text("Plan · describe the task for the Planner", 5000)
+                    .write_text("Design the screen ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Design the screen [Image #1]", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Initial image received by Planner", 20000)
+                    .wait_for_text("Enter: reply", 10000);
+                open_composer(scenario)
+                    .write_text("Revise the screen ")
+                    .press_key("ctrl+v")
+                    .wait_for_text("Revise the screen [Image #1]", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Revision image received by Planner", 20000)
+                    .capture_labeled("revised", "Pasted images reach the Planner")
+            },
+            |frame, _report| {
+                Box::pin(async move {
+                    assert_visible(
+                        frame,
+                        &[
+                            "Revision image received by Planner",
+                            "Planner      ● Awaiting your approval",
+                        ],
+                    );
+                })
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+async fn seed_image_plan_project(env: &BuilderEnv) -> E2eResult {
+    seed_workflow_project(env).await?;
+
+    install_image_plan_stubs(&env.stub_bin)
+}
+
+/// Installs the clipboard fixture and provider that checks rendered image
+/// access.
+fn install_image_plan_stubs(stub_bin: &Path) -> E2eResult {
+    let mut png = Vec::new();
+    PngEncoder::new(&mut png).write_image(&[255, 0, 0, 255], 1, 1, ExtendedColorType::Rgba8)?;
+    std::fs::write(stub_bin.join("clipboard.png"), png)?;
+    for (name, script) in [
+        (
+            "wl-paste",
+            r#"#!/bin/sh
+case "$1" in
+  --version) printf 'wl-paste test\n' ;;
+  --list-types) printf 'image/png\n' ;;
+  --no-newline) cat "$(dirname "$0")/clipboard.png" ;;
+  *) exit 1 ;;
+esac
+"#,
+        ),
+        (
+            "claude",
+            r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude test\n'; exit 0; fi
+prompt=$(cat)
+fixture="$(dirname "$0")/clipboard.png"
+verify_image() {
+  image_number=$1
+  shift
+  image_path=$(printf '%s\n' "$prompt" | sed -n "s/^Task input attachment $image_number: //p")
+  [ -f "$image_path" ] && [ -r "$image_path" ] || return 1
+  cmp -s "$image_path" "$fixture" || return 1
+  image_parent=$(dirname "$image_path")
+  previous_argument=''
+  for argument in "$@"; do
+    if [ "$previous_argument" = '--add-dir' ] && [ "$argument" = "$image_parent" ]; then
+      return 0
+    fi
+    previous_argument=$argument
+  done
+  return 1
+}
+case "$prompt" in
+  *'Task input attachment 2:'*) image_count=2; answer='Revision image received by Planner' ;;
+  *'Task input attachment 1:'*) image_count=1; answer='Initial image received by Planner' ;;
+  *) printf 'Missing image attachment\n' >&2; exit 1 ;;
+esac
+image_number=1
+while [ "$image_number" -le "$image_count" ]; do
+  verify_image "$image_number" "$@" || {
+    printf 'Image attachment %s was not delivered with readable PNG data and --add-dir access\n' "$image_number" >&2
+    exit 1
+  }
+  image_number=$((image_number + 1))
+done
+printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"},"usage":{"input_tokens":8,"output_tokens":6}}\n' "$answer"
+"#,
+        ),
+    ] {
+        let path = stub_bin.join(name);
+        std::fs::write(&path, script)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o750))?;
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_plan_provider_requires_rendered_readable_images_and_access_roots() -> E2eResult {
+    // Arrange: paths with spaces exercise shell argument and prompt parsing.
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR"))?;
+    let stub_bin = directory.path().join("provider fixtures");
+    let images = directory.path().join("initial images");
+    let revisions = directory.path().join("revision images");
+    for path in [&stub_bin, &images, &revisions] {
+        std::fs::create_dir(path)?;
+    }
+    install_image_plan_stubs(&stub_bin)?;
+    let first = images.join("first.png");
+    let second = revisions.join("second.png");
+    for path in [&first, &second] {
+        std::fs::copy(stub_bin.join("clipboard.png"), path)?;
+    }
+    let corrupt = revisions.join("corrupt.png");
+    std::fs::write(&corrupt, b"not the clipboard PNG")?;
+    let initial = format!("Task input attachment 1: {}", first.display());
+    let revision = format!("{initial}\nTask input attachment 2: {}", second.display());
+    let unrendered = "Task input attachment 1: [Task image #1]".to_string();
+    let missing = format!(
+        "Task input attachment 1: {}",
+        images.join("missing.png").display()
+    );
+    let mismatched = format!("{initial}\nTask input attachment 2: {}", corrupt.display());
+    let second_unrendered = format!("{initial}\nTask input attachment 2: [Task image #2]");
+    let both = &[&images, &revisions][..];
+    let first_only = &[&images][..];
+    let wrong_root = &[&revisions][..];
+    let cases = [
+        ("initial", initial.clone(), first_only, "--add-dir", true),
+        ("revision", revision.clone(), both, "--add-dir", true),
+        ("no images", "Design task".into(), both, "--add-dir", false),
+        ("unrendered", unrendered, first_only, "--add-dir", false),
+        (
+            "second unrendered",
+            second_unrendered,
+            both,
+            "--add-dir",
+            false,
+        ),
+        ("missing file", missing, first_only, "--add-dir", false),
+        ("wrong PNG", mismatched, both, "--add-dir", false),
+        (
+            "missing access",
+            initial.clone(),
+            &[][..],
+            "--add-dir",
+            false,
+        ),
+        (
+            "wrong root",
+            initial.clone(),
+            wrong_root,
+            "--add-dir",
+            false,
+        ),
+        ("unrelated argument", initial, first_only, "--model", false),
+        (
+            "missing second root",
+            revision,
+            first_only,
+            "--add-dir",
+            false,
+        ),
+    ];
+    for (name, prompt, roots, flag, succeeds) in cases {
+        // Act
+        let output =
+            run_image_plan_provider(&stub_bin.join("claude"), &prompt, roots, flag).await?;
+
+        // Assert
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).contains("image received by Planner"),
+            succeeds,
+            "{name}"
+        );
+    }
+
+    Ok(())
+}
+
+/// Exercises the exact provider executable installed for the PTY journey.
+async fn run_image_plan_provider(
+    provider: &Path,
+    prompt: &str,
+    roots: &[&PathBuf],
+    flag: &str,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut command = Command::new(provider);
+    for root in roots {
+        command.arg(flag).arg(root);
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().ok_or("provider stdin is missing")?;
+    stdin.write_all(prompt.as_bytes()).await?;
+    drop(stdin);
+
+    Ok(child.wait_with_output().await?)
 }
 
 #[tokio::test]

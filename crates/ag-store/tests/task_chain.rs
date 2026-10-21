@@ -199,6 +199,7 @@ async fn chain_database() -> Result<Database, DbError> {
 
 fn chain_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),
@@ -264,6 +265,7 @@ async fn reopening_never_replays_an_interrupted_implementation() {
         .await
         .expect("session");
     let start = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),
@@ -317,6 +319,7 @@ async fn reopening_never_replays_an_interrupted_implementation() {
         .continue_task_chain(
             "chain",
             &ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "explicit-retry".into(),
                 clarification: Some("Retry after inspection".into()),
                 expected_attempt_id: "implement".into(),
@@ -372,6 +375,7 @@ async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
         .start_task_chain(
             "session",
             &StartPlanThenImplementRequest {
+                attachments: Vec::new(),
                 agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
                 chain_id: "chain".into(),
                 planner_attempt_id: "plan".into(),
@@ -383,7 +387,7 @@ async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
         .expect("start");
     let recorded = database
         .tasks()
-        .record_task_chain_reply("chain", "reply-1", "Go ahead")
+        .record_task_chain_reply("chain", "reply-1", &"Go ahead".into())
         .await
         .expect("record reply");
     database.pool().close().await;
@@ -392,7 +396,7 @@ async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
     let reopened = Database::open(&path).await.expect("reopen");
     let redelivered = reopened
         .tasks()
-        .record_task_chain_reply("chain", "reply-1", "Go ahead")
+        .record_task_chain_reply("chain", "reply-1", &"Go ahead".into())
         .await
         .expect("reply receipt");
     let owner = reopened

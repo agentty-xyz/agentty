@@ -616,6 +616,7 @@ fn planner_request() -> SubmitAgentTaskRequest {
         },
         attempt_id: "automation-attempt".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan without ordinary follow-ups".to_string(),

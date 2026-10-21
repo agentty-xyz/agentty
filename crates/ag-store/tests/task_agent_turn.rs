@@ -139,6 +139,7 @@ fn planner_request() -> SubmitAgentTaskRequest {
         },
         attempt_id: "first".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan this change".to_string(),

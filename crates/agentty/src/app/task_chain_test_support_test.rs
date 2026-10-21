@@ -21,6 +21,7 @@ use crate::test_support::{new_git_test_app_with_pool, set_session_status_for_tes
 /// Launch input for the fixture workflow `workflow`.
 pub(in crate::app) fn launch_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
         planner_attempt_id: "initial".into(),

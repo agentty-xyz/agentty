@@ -37,6 +37,7 @@ pub(crate) fn agent_task_request(attempt_id: &str) -> SubmitAgentTaskRequest {
         },
         attempt_id: attempt_id.to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: Some("Initial guidance".to_string()),
             user_request: "  Add the requested feature.\n".to_string(),
