@@ -425,9 +425,10 @@ fn test_status_allows_review_actions_for_agent_review() {
 }
 
 #[test]
-fn test_status_allows_diff_view_for_review_ready_and_read_only_states() {
+fn test_status_allows_diff_view_for_working_review_ready_and_read_only_states() {
     // Arrange
     let expected_statuses = [
+        Status::InProgress,
         Status::Review,
         Status::AgentReview,
         Status::Merged,

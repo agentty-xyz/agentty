@@ -147,7 +147,8 @@ State-specific differences:
 
 - **AgentReview**: `r` cancels the pending review and starts sync.
 - **InProgress**: `Enter`, `r`, and `p` queue messages, sync, and publishing. `Ctrl+C`
-  retracts the newest queued message; with none left, it stops the turn.
+  retracts the newest queued message; with none left, it stops the turn. `d` opens an
+  available diff while work continues.
 - **Rebasing**: `Enter` and `p` queue work; cancellation and slash commands are
   unavailable.
 - **Draft**: `Enter` stages, `s` starts, and image-paste keys open the composer. Stacked

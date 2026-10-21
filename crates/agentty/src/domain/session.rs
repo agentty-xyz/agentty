@@ -316,6 +316,9 @@ impl Session {
         if matches!(self.status, Status::Done | Status::Canceled) {
             return self.has_archived_diff;
         }
+        if self.status == Status::InProgress {
+            return self.stats.diff_state == SessionDiffState::Present;
+        }
 
         self.status.allows_diff_view() && self.stats.should_show_diff()
     }

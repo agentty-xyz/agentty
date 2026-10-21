@@ -196,7 +196,10 @@ impl SessionStatus {
 
     /// Returns whether this status permits opening the session diff.
     pub fn allows_diff_view(self) -> bool {
-        self.allows_review_actions() || self.is_read_only() || self.allows_terminal_continuation()
+        self == Self::InProgress
+            || self.allows_review_actions()
+            || self.is_read_only()
+            || self.allows_terminal_continuation()
     }
 
     /// Returns whether this status permits starting or queueing session sync.

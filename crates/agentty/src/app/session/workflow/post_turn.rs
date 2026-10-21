@@ -308,6 +308,23 @@ pub(super) async fn finalize_channel_turn(
     context: &TurnFinalizerContext,
     result: &Result<Status, SessionError>,
 ) {
+    refresh_channel_diff_stats(context).await;
+    if let Some(target_status) = status_update_after_turn_result(result) {
+        // Best-effort: status transition failure is non-critical.
+        let status_transition = StatusTransition::from_parts(
+            context.app_event_tx.clone(),
+            Arc::clone(&context.clock),
+            context.db.clone(),
+            context.session_id.clone(),
+            Arc::clone(&context.session_update_versions),
+            Arc::clone(&context.status),
+        );
+        let _ = status_transition.apply(target_status).await;
+    }
+}
+
+/// Refreshes durable and visible diff stats without ending the active turn.
+pub(super) async fn refresh_channel_diff_stats(context: &TurnFinalizerContext) {
     if let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
         &context.db,
         context.fs_client.as_ref(),
@@ -324,18 +341,6 @@ pub(super) async fn finalize_channel_turn(
                 diff_stats,
                 session_id: context.session_id.clone(),
             });
-    }
-    if let Some(target_status) = status_update_after_turn_result(result) {
-        // Best-effort: status transition failure is non-critical.
-        let status_transition = StatusTransition::from_parts(
-            context.app_event_tx.clone(),
-            Arc::clone(&context.clock),
-            context.db.clone(),
-            context.session_id.clone(),
-            Arc::clone(&context.session_update_versions),
-            Arc::clone(&context.status),
-        );
-        let _ = status_transition.apply(target_status).await;
     }
 }
 

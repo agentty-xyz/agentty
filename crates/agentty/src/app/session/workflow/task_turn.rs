@@ -126,6 +126,12 @@ async fn execute(
             },
         )
         .await?;
+    if assignment.definition == BuiltinAgentDefinition::Implementer {
+        // The answer can be visible while commit hooks and publishing still
+        // run. Project its changes before exposing that answer, then refresh
+        // again during finalization to include any post-turn edits.
+        post_turn::refresh_channel_diff_stats(&TurnFinalizerContext::from_worker(context)).await;
+    }
     mirror_chain_answer(
         context,
         request,
@@ -138,30 +144,13 @@ async fn execute(
     let implementation_succeeded = assignment.definition == BuiltinAgentDefinition::Implementer
         && result.assistant_message.questions.is_empty();
     if implementation_succeeded && permission_mode != PermissionMode::ReadOnly {
-        let run_client = ag_worker::scoped_client(
+        apply_implementation_effects(
+            context,
             run_client,
-            ag_worker::RunScope {
-                cancellation: Some(cancellation.clone()),
-                ..ag_worker::RunScope::default()
-            },
-        );
-        let mut post = PostTurnContext::from_worker(context, run_client, cancellation.clone());
-        post.transcript = Arc::new(Mutex::new(effect_transcript(
             &history,
             request,
             &result.assistant_message,
-        )));
-        let upstream = context.load_published_upstream_ref().await;
-        post_turn::apply_successful_turn_effects(
-            &post,
-            TurnMetadata {
-                published_upstream_ref: upstream,
-                review_comment_thread_ids: Vec::new(),
-                session_agent: assignment.agent,
-            },
-            &[],
-            Status::Review,
-            post_turn::TurnEffectPolicy::Task,
+            cancellation.clone(),
         )
         .await?;
     }
@@ -179,6 +168,40 @@ async fn execute(
     }
 
     Ok(())
+}
+
+/// Runs commit and publishing effects with only the Implementer's transcript.
+async fn apply_implementation_effects(
+    context: &SessionWorkerContext,
+    run_client: Arc<dyn RunClient>,
+    history: &TaskAgentHistoryRow,
+    request: &SubmitAgentTaskRequest,
+    response: &ag_protocol::AgentResponse,
+    cancellation: CancellationToken,
+) -> Result<(), SessionError> {
+    let run_client = ag_worker::scoped_client(
+        run_client,
+        ag_worker::RunScope {
+            cancellation: Some(cancellation.clone()),
+            ..ag_worker::RunScope::default()
+        },
+    );
+    let mut post = PostTurnContext::from_worker(context, run_client, cancellation);
+    post.transcript = Arc::new(Mutex::new(effect_transcript(history, request, response)));
+    let upstream = context.load_published_upstream_ref().await;
+
+    post_turn::apply_successful_turn_effects(
+        &post,
+        TurnMetadata {
+            published_upstream_ref: upstream,
+            review_comment_thread_ids: Vec::new(),
+            session_agent: history.context.context.assignment.agent,
+        },
+        &[],
+        Status::Review,
+        post_turn::TurnEffectPolicy::Task,
+    )
+    .await
 }
 
 /// Mirrors an atomically persisted chain-owned role answer into live chat.

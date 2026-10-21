@@ -106,6 +106,8 @@ fn diff_action_requires_an_archive_for_terminal_sessions() {
                 // Assert
                 let expected = if matches!(status, Status::Done | Status::Canceled) {
                     has_archived_diff
+                } else if status == Status::InProgress {
+                    diff_state == SessionDiffState::Present
                 } else {
                     status.allows_diff_view() && diff_state != SessionDiffState::Empty
                 };
