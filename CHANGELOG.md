@@ -7,6 +7,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [v0.18.1] - 2026-10-20
+
+### Added
+
+- `agentty`: support image attachments throughout the `/plan` workflow, including
+  planning, implementation, continuations, and plan revisions.
+
+### Changed
+
+- `agentty`: generate refined titles for new `/plan` sessions from the original request.
+- `ag-agent`: allow network requests in read-only Codex turns, including the Planner.
+- release: bump workspace crate metadata and lockfile package versions to `0.18.1`.
+
+### Fixed
+
+- `agentty`: preserve plan sessions and task outcomes after implementation, and make
+  session diffs available while post-processing is still running.
+
+### Contributors
+
+- @minev-dev
+
 ## [v0.18.0] - 2026-10-20
 
 ### Added
