@@ -1,3 +1,5 @@
+use ag_protocol::TurnPromptAttachment;
+
 use crate::test_support::codex_selection;
 use crate::{
     ContinueTaskChainRequest, DurableMessageVisibility, SessionError, SessionId,
@@ -8,6 +10,10 @@ use crate::{
 fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     // Arrange
     let start = StartPlanThenImplementRequest {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: "original.png".into(),
+            placeholder: "[Image #1]".into(),
+        }],
         agent: codex_selection(),
         chain_id: "chain".into(),
         planner_attempt_id: "first".into(),
@@ -28,6 +34,10 @@ fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
         user_request: start.user_request.clone(),
     };
     let continuation = chain.continuation_request(&ContinueTaskChainRequest {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: "revision.png".into(),
+            placeholder: "[Image #1]".into(),
+        }],
         attempt_id: "second".into(),
         clarification: Some("  Answer.\n".into()),
         expected_attempt_id: "first".into(),
@@ -40,6 +50,13 @@ fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     assert_eq!(planner.assignment.agent, start.agent);
     assert_eq!(planner.objective, start.user_request);
     assert_eq!(planner.input.user_request, start.user_request);
+    assert_eq!(planner.input.attachments, start.attachments);
+    assert_eq!(continuation.input.attachments.len(), 2);
+    assert_eq!(continuation.input.attachments[0], start.attachments[0]);
+    assert_eq!(
+        continuation.input.attachments[1].local_image_path.to_str(),
+        Some("revision.png")
+    );
     assert_eq!(continuation.attempt_id, "second");
     assert_eq!(
         continuation.input.clarification.as_deref(),

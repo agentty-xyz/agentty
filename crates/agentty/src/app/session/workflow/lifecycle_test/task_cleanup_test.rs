@@ -176,6 +176,7 @@ async fn seed_task(repositories: &AppRepositories) {
                 },
                 attempt_id: "plan".to_string(),
                 input: TaskAgentInput {
+                    attachments: Vec::new(),
                     accepted_plan: None,
                     clarification: None,
                     user_request: "request".to_string(),

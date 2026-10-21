@@ -1,9 +1,29 @@
 //! Public role-aware task input and captured selection contracts.
 
+use ag_protocol::TurnPromptAttachment;
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, EnvId,
     SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
 };
+
+#[test]
+fn task_input_images_round_trip_and_old_text_only_inputs_still_load() {
+    // Arrange
+    let legacy = r#"{"accepted_plan":null,"clarification":null,"user_request":"Plan this"}"#;
+    let mut input: TaskAgentInput = serde_json::from_str(legacy).expect("old input");
+    assert_eq!(input.attachments, [] as [TurnPromptAttachment; 0]);
+    input.attachments.push(TurnPromptAttachment {
+        local_image_path: "reference.png".into(),
+        placeholder: "[Image #1]".into(),
+    });
+
+    // Act
+    let encoded = serde_json::to_string(&input).expect("encode input");
+    let restored: TaskAgentInput = serde_json::from_str(&encoded).expect("restore input");
+
+    // Assert
+    assert_eq!(restored, input);
+}
 
 #[test]
 fn role_assignment_retains_the_callers_captured_selection() {
@@ -16,6 +36,7 @@ fn role_assignment_retains_the_callers_captured_selection() {
         },
         attempt_id: "plan-first-attempt".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan the requested change".to_string(),

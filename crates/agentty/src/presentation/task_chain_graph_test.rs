@@ -204,6 +204,7 @@ fn cache_retains_only_the_most_recent_sessions() {
 
 fn chain(phase: TaskChainPhase, current_role: BuiltinAgentDefinition) -> TaskChain {
     let start = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),

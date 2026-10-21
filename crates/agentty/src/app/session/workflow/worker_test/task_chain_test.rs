@@ -21,6 +21,7 @@ async fn queued_cancellation_followed_by_retry_never_replays_the_old_attempt() {
     let factory = TestSessionRunFactory::install(&mut app.services);
     let service = app.session_service();
     let launch = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),
         planner_attempt_id: "initial".into(),
@@ -47,6 +48,7 @@ async fn queued_cancellation_followed_by_retry_never_replays_the_old_attempt() {
     app.drive_session_request(service.continue_task_chain(
         "workflow",
         ContinueTaskChainRequest {
+            attachments: Vec::new(),
             attempt_id: "queued-old".into(),
             clarification: Some("old guidance".into()),
             expected_attempt_id: "initial".into(),
@@ -60,6 +62,7 @@ async fn queued_cancellation_followed_by_retry_never_replays_the_old_attempt() {
     app.drive_session_request(service.continue_task_chain(
         "workflow",
         ContinueTaskChainRequest {
+            attachments: Vec::new(),
             attempt_id: "queued-new".into(),
             clarification: None,
             expected_attempt_id: "queued-old".into(),

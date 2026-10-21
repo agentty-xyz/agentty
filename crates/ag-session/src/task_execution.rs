@@ -1,5 +1,6 @@
 //! Explicit role assignments and inputs for isolated task execution.
 
+use ag_protocol::TurnPromptAttachment;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -71,6 +72,9 @@ pub struct AcceptedTaskPlan {
 pub struct TaskAgentInput {
     /// Exact accepted plan required by an implementer; absent for a planner.
     pub accepted_plan: Option<AcceptedTaskPlan>,
+    /// Images retained across attempts and handed off with an accepted plan.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<TurnPromptAttachment>,
     /// Clarification or retry guidance explicitly addressed to this task.
     pub clarification: Option<String>,
     /// Original user request, retained across this task's attempts.
@@ -118,9 +122,9 @@ impl TaskAgentInput {
 ///
 /// Identical redelivery includes the assignment and structured input. Once
 /// admitted, the task's role, selection, original request, and accepted plan
-/// are immutable; only clarification may change in a new attempt. A host must
-/// reject conflicting assignments rather than changing an existing task's
-/// conversation or falling back to ordinary chat.
+/// are immutable; clarification and additional images may change in a new
+/// attempt. A host must reject conflicting assignments rather than changing an
+/// existing task's conversation or falling back to ordinary chat.
 ///
 /// These contracts alone do not enable submission or dispatch.
 #[derive(Clone, Debug, Eq, PartialEq)]

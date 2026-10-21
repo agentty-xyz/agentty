@@ -256,6 +256,9 @@ worker. Accepting a specific plan version and admitting implementation commit to
 before dispatch. Duplicate requests acknowledge their saved attempt; queries and
 reopening never start work. Cancellation targets the current attempt, and retries
 require an explicit new delivery. Failed delivery remains visible in operation state.
+Image attachments are durable task inputs: continuations retain earlier images, add new
+ones, and carry them through acceptance to the Implementer. The worker submits the
+images as structured turn attachments alongside the explicit task input.
 
 Natural-language workflow replies also enter through the gateway. Foreground admission
 returns earlier receipts, rejects busy workflows, and stores the reply with its
@@ -264,7 +267,8 @@ caller's response channel to a background task and treats the chain as busy unti
 decided action returns. That task runs the orchestrator decision through the
 session-scoped `RunClient`, then submits the decided acceptance or revision through the
 runtime mailbox for ordinary admission. Every other settled phase continues the current
-role immediately in the foreground.
+role immediately in the foreground. An image reply awaiting plan acceptance revises the
+Planner directly, keeping visual guidance out of the text-only approval decision.
 
 The host's opt-in tool-content capture policy travels with the execution trace context,
 including independent roots, queued work, and linked operations. Scoped utility clients

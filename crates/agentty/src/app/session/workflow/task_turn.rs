@@ -1,5 +1,6 @@
 //! Isolated task execution on the owning session's serialized worker.
 
+use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
@@ -20,7 +21,7 @@ use crate::app::session::SessionError;
 use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
-use crate::domain::turn_prompt::TurnPrompt;
+use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
 use crate::infra::db::{TaskAgentHistoryRow, TaskAgentTurnMetadata};
 
 /// Executes a role-bound attempt without reading or writing ordinary chat
@@ -286,7 +287,6 @@ async fn prepare(
         history.provider_conversation_id.clone(),
         if persistent { None } else { replay },
     );
-    let input = serde_json::json!(request.input).to_string();
     let prepared = TurnRequest {
         continuation,
         execution_policy: ag_contracts::ExecutionPolicy::default(),
@@ -295,10 +295,7 @@ async fn prepare(
         model: assignment.agent.model().provider_model_str().to_string(),
         permission_mode: assignment.definition.permission_mode(permission),
         personality,
-        prompt: TurnPrompt::from_agent_data(format!(
-            "{}\n\nExplicit task input (JSON data):\n{input}",
-            assignment.definition.instructions()
-        )),
+        prompt: task_prompt(request),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,
         request_kind: if history.turns.is_empty() {
             AgentRequestKind::SessionStart
@@ -310,6 +307,34 @@ async fn prepare(
     };
 
     Ok((history, prepared))
+}
+
+/// Places images after the JSON input with unique transport placeholders.
+/// Composer numbering can restart on each reply, so cumulative attachments
+/// must not reuse those markers or replace strings inside the JSON data.
+fn task_prompt(request: &SubmitAgentTaskRequest) -> TurnPrompt {
+    let input = serde_json::json!(request.input).to_string();
+    let mut prompt = TurnPrompt::from_agent_data(format!(
+        "{}\n\nExplicit task input (JSON data):\n{input}",
+        request.assignment.definition.instructions()
+    ));
+    for (index, attachment) in request.input.attachments.iter().enumerate() {
+        let mut placeholder = format!("[Task image #{}]", index + 1);
+        while prompt.text.contains(&placeholder) {
+            placeholder.insert(1, '#');
+        }
+        let _ = write!(
+            prompt.text,
+            "\n\nTask input attachment {}: {placeholder}",
+            index + 1
+        );
+        prompt.attachments.push(TurnPromptAttachment {
+            local_image_path: attachment.local_image_path.clone(),
+            placeholder,
+        });
+    }
+
+    prompt
 }
 
 fn replay(history: &TaskAgentHistoryRow) -> Option<String> {

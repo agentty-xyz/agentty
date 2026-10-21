@@ -28,10 +28,6 @@ use crate::domain::session::SessionId;
 use crate::domain::transcript_notice::TranscriptNotice;
 use crate::domain::turn_prompt::TurnPrompt;
 
-/// Rejection shown when a chain message carries image attachments.
-const ATTACHMENTS_UNSUPPORTED: &str = "Image attachments are not supported in orchestrator \
-                                       messages; remove them and send the message again.";
-
 /// Rejection shown when `/plan` targets a session that already owns a chain.
 const PLAN_ALREADY_STARTED: &str =
     "This session already runs a plan workflow; send your message without `/plan` to continue it.";
@@ -55,10 +51,7 @@ impl App {
         if prompt.text.trim().is_empty() {
             return PromptWorkflowOutcome::KeepPrompt;
         }
-        if let Some(rejection) = self
-            .task_chain_message_rejection(&session_id, &prompt)
-            .await
-        {
+        if let Some(rejection) = self.task_chain_message_rejection(&session_id).await {
             self.append_prompt_status_line(&session_id, TranscriptNotice::ReplyError, &rejection)
                 .await;
 
@@ -73,6 +66,7 @@ impl App {
         };
         let request = StartPlanThenImplementRequest {
             agent,
+            attachments: prompt.attachments,
             chain_id: Uuid::new_v4().to_string(),
             planner_attempt_id: Uuid::new_v4().to_string(),
             user_request: prompt.text,
@@ -121,18 +115,8 @@ impl App {
                 return Some(PromptWorkflowOutcome::KeepPrompt);
             }
         }
-        if !prompt.attachments.is_empty() {
-            self.append_prompt_status_line(
-                session_id,
-                TranscriptNotice::ReplyError,
-                ATTACHMENTS_UNSUPPORTED,
-            )
-            .await;
-
-            return Some(PromptWorkflowOutcome::KeepPrompt);
-        }
         if !self
-            .reply_to_owned_task_chain(session_id, prompt.text.clone())
+            .reply_to_owned_task_chain(session_id, prompt.clone())
             .await
         {
             return Some(PromptWorkflowOutcome::KeepPrompt);
@@ -159,9 +143,7 @@ impl App {
                 // remediation continues the current cycle instead.
                 let completed_iterations =
                     self.auto_address_review_iterations.get(session_id).copied();
-                let accepted = self
-                    .reply_to_owned_task_chain(session_id, prompt.text)
-                    .await;
+                let accepted = self.reply_to_owned_task_chain(session_id, prompt).await;
                 if let Some(completed_iterations) = completed_iterations {
                     self.auto_address_review_iterations
                         .insert(session_id.clone(), completed_iterations);
@@ -247,15 +229,7 @@ impl App {
     }
 
     /// Returns why a new chain or chain message cannot be sent, if anything.
-    async fn task_chain_message_rejection(
-        &self,
-        session_id: &SessionId,
-        prompt: &TurnPrompt,
-    ) -> Option<String> {
-        if !prompt.attachments.is_empty() {
-            return Some(ATTACHMENTS_UNSUPPORTED.to_string());
-        }
-
+    async fn task_chain_message_rejection(&self, session_id: &SessionId) -> Option<String> {
         match self.session_owns_task_chain(session_id).await {
             Ok(true) => Some(PLAN_ALREADY_STARTED.to_string()),
             Ok(false) => None,
@@ -282,14 +256,19 @@ impl App {
     ///
     /// A reply waiting for an orchestrator decision is accepted at once; a
     /// failure applying the decided action is reported when it arrives.
-    async fn reply_to_owned_task_chain(&mut self, session_id: &SessionId, message: String) -> bool {
+    async fn reply_to_owned_task_chain(
+        &mut self,
+        session_id: &SessionId,
+        prompt: TurnPrompt,
+    ) -> bool {
         let (response_tx, mut response_rx) = oneshot::channel();
         let command = SessionCommand::new(
             CommandInitiator::SessionView,
             CommandDelivery::TaskChainReply {
                 request: TaskChainReplyCommand::Reply {
                     request: ReplyToTaskChainRequest {
-                        message,
+                        attachments: prompt.attachments,
+                        message: prompt.text,
                         reply_id: Uuid::new_v4().to_string(),
                     },
                     session_id: session_id.clone(),

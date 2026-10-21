@@ -16,6 +16,7 @@ async fn chain_projection_rejects_invalid_responses_or_roles_and_omits_empty_dis
         let database = task_database_fixture().await;
         let base = agent_task_request("first");
         let launch = StartPlanThenImplementRequest {
+            attachments: Vec::new(),
             agent: base.assignment.agent,
             chain_id: "chain".into(),
             planner_attempt_id: "first".into(),

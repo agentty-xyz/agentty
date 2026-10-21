@@ -1440,6 +1440,7 @@ fn request(attempt: &str) -> SubmitAgentTaskRequest {
         },
         attempt_id: attempt.to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan this request".to_string(),

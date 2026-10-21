@@ -1,3 +1,4 @@
+use ag_protocol::{TurnPrompt, TurnPromptAttachment};
 use ag_session::{
     AcceptTaskChainPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
     ContinueTaskChainRequest, CreateTaskRequest, StartPlanThenImplementRequest, SubmitTaskRequest,
@@ -7,6 +8,204 @@ use ag_session::{
 use super::TaskChainStore;
 use crate::test_support::task_database_fixture;
 use crate::{Database, TaskAgentTurnMetadata};
+
+#[tokio::test]
+async fn workflow_images_survive_handoff_and_bind_delivery_identity() {
+    // Arrange
+    let database = task_database_fixture().await;
+    let original = TurnPromptAttachment {
+        local_image_path: "original.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let added = TurnPromptAttachment {
+        local_image_path: "revision.png".into(),
+        placeholder: "[Image #1]".into(),
+    };
+    let start = StartPlanThenImplementRequest {
+        attachments: vec![original.clone()],
+        ..start_request()
+    };
+    database
+        .tasks()
+        .start_task_chain("session", &start, "reply")
+        .await
+        .expect("start");
+    response(&database, "plan", r#"{"answer":"Initial plan"}"#, true).await;
+    let revision = ContinueTaskChainRequest {
+        attachments: vec![added.clone()],
+        attempt_id: "revision".into(),
+        clarification: Some("Use the new layout [Image #1]".into()),
+        expected_attempt_id: "plan".into(),
+    };
+
+    // Act
+    database
+        .tasks()
+        .continue_task_chain("chain", &revision, "reply")
+        .await
+        .expect("revise");
+    response(&database, "revision", r#"{"answer":"Revised plan"}"#, true).await;
+    let acceptance = AcceptTaskChainPlanRequest {
+        plan_attempt_id: "revision".into(),
+        ..accept_request()
+    };
+    database
+        .tasks()
+        .accept_task_chain_plan("chain", &acceptance, "reply")
+        .await
+        .expect("handoff");
+    let snapshot = chain(&database).await;
+
+    // Assert
+    assert_eq!(
+        snapshot.current_request.input.attachments,
+        vec![original, added]
+    );
+    assert!(
+        !database
+            .tasks()
+            .start_task_chain("session", &start, "reply")
+            .await
+            .expect("launch receipt")
+    );
+    assert!(
+        !database
+            .tasks()
+            .continue_task_chain("chain", &revision, "reply")
+            .await
+            .expect("revision receipt")
+    );
+    assert!(
+        !database
+            .tasks()
+            .accept_task_chain_plan("chain", &acceptance, "reply")
+            .await
+            .expect("handoff receipt")
+    );
+    assert!(
+        database
+            .tasks()
+            .start_task_chain(
+                "session",
+                &StartPlanThenImplementRequest {
+                    attachments: Vec::new(),
+                    ..start
+                },
+                "reply"
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        database
+            .tasks()
+            .continue_task_chain(
+                "chain",
+                &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
+                    ..revision.clone()
+                },
+                "reply"
+            )
+            .await
+            .is_err()
+    );
+
+    assert_invalid_image_source(&database, &revision).await;
+}
+
+async fn assert_invalid_image_source(database: &Database, revision: &ContinueTaskChainRequest) {
+    // Arrange / Act: corrupt the old source to reject unverifiable images.
+    sqlx::query("UPDATE task_attempt SET message = 'invalid' WHERE id = 'plan'")
+        .execute(database.pool())
+        .await
+        .expect("corrupt anchor");
+    let corrupted = database
+        .tasks()
+        .continue_task_chain("chain", revision, "reply")
+        .await;
+
+    // Assert
+    assert!(
+        corrupted
+            .expect_err("invalid source input")
+            .to_string()
+            .contains("Workflow source input is invalid")
+    );
+}
+
+#[tokio::test]
+async fn reply_identity_includes_images_and_keeps_plain_transcript_text() {
+    // Arrange
+    let database = task_database_fixture().await;
+    database
+        .tasks()
+        .start_task_chain("session", &start_request(), "reply")
+        .await
+        .expect("start");
+    let prompt = TurnPrompt {
+        attachments: vec![TurnPromptAttachment {
+            local_image_path: "reference.png".into(),
+            placeholder: "[Image #1]".into(),
+        }],
+        ..TurnPrompt::from_text("Use this design".into())
+    };
+
+    // Act
+    let recorded = database
+        .tasks()
+        .record_task_chain_reply("chain", "image-reply", &prompt)
+        .await
+        .expect("record");
+    let repeated = database
+        .tasks()
+        .record_task_chain_reply("chain", "image-reply", &prompt)
+        .await
+        .expect("repeat");
+    let conflict = database
+        .tasks()
+        .record_task_chain_reply(
+            "chain",
+            "image-reply",
+            &TurnPrompt::from_text(prompt.text.clone()),
+        )
+        .await;
+    let serialized_conflict = database
+        .tasks()
+        .record_task_chain_reply(
+            "chain",
+            "image-reply",
+            &TurnPrompt::from_text(serde_json::json!(prompt).to_string()),
+        )
+        .await;
+    let messages = database
+        .sessions()
+        .load_session_messages("session")
+        .await
+        .expect("messages");
+    sqlx::query(
+        "INSERT INTO task_chain_reply (id, task_chain_id, message, created_at) VALUES \
+         ('old-reply', 'chain', 'Old message', 0)",
+    )
+    .execute(database.pool())
+    .await
+    .expect("legacy reply");
+    let legacy = database
+        .tasks()
+        .record_task_chain_reply("chain", "old-reply", &"Old message".into())
+        .await
+        .expect("legacy receipt");
+
+    // Assert
+    assert!(recorded);
+    assert!(!repeated && !legacy);
+    assert!(conflict.is_err());
+    assert!(serialized_conflict.is_err());
+    assert_eq!(
+        messages.last().expect("image reply").content,
+        prompt.transcript_text()
+    );
+}
 
 #[tokio::test]
 async fn workflow_admits_two_isolated_roles_only_after_explicit_acceptance() {
@@ -164,6 +363,7 @@ async fn historical_receipts_are_idempotent_after_stage_changes_and_later_retrie
         TaskChainPhase::ImplementerQuestion
     );
     let retry = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "retry".into(),
         clarification: Some("Use file A".into()),
         expected_attempt_id: "implement".into(),
@@ -293,6 +493,7 @@ async fn cancellation_is_scoped_and_requires_a_new_explicit_delivery_to_resume()
             .continue_task_chain(
                 "chain",
                 &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "plan".into(),
                     clarification: None,
                     expected_attempt_id: "plan".into(),
@@ -330,6 +531,7 @@ async fn cancellation_is_scoped_and_requires_a_new_explicit_delivery_to_resume()
             .continue_task_chain(
                 "chain",
                 &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "explicit-retry".into(),
                     clarification: Some("Retry".into()),
                     expected_attempt_id: "plan".into(),
@@ -369,6 +571,7 @@ async fn running_cancellation_must_settle_before_a_new_attempt() {
             .continue_task_chain(
                 "chain",
                 &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "too-soon".into(),
                     clarification: None,
                     expected_attempt_id: "plan".into(),
@@ -570,6 +773,7 @@ async fn workflow_tasks_cannot_be_admitted_outside_the_chain() {
             .continue_task_chain(
                 "missing",
                 &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: "missing".into(),
                     clarification: None,
                     expected_attempt_id: "missing".into(),
@@ -749,6 +953,7 @@ async fn continuation_rejects_stale_sources_and_changed_receipt_anchors() {
     let database = task_database_fixture().await;
     let revision = revised_plan(&database).await;
     let stale = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "stale-planner-answer".into(),
         clarification: Some("Planner guidance".into()),
         expected_attempt_id: "revision".into(),
@@ -823,6 +1028,7 @@ async fn action_receipts_cannot_be_reused_as_different_workflow_actions() {
     )
     .await;
     let continuation = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "continuation".into(),
         clarification: None,
         expected_attempt_id: "implement".into(),
@@ -883,6 +1089,7 @@ async fn failed_continuation_receipt_write_rolls_back_its_attempt_and_cancellati
     .await
     .expect("failure injection");
     let continuation = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "retry".into(),
         clarification: None,
         expected_attempt_id: "implement".into(),
@@ -919,12 +1126,12 @@ async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
     // Act
     let recorded = database
         .tasks()
-        .record_task_chain_reply("chain", "reply-1", "  Looks good, go ahead\n")
+        .record_task_chain_reply("chain", "reply-1", &"  Looks good, go ahead\n".into())
         .await
         .expect("record reply");
     let redelivered = database
         .tasks()
-        .record_task_chain_reply("chain", "reply-1", "  Looks good, go ahead\n")
+        .record_task_chain_reply("chain", "reply-1", &"  Looks good, go ahead\n".into())
         .await
         .expect("redelivered reply");
     let owner = database
@@ -955,7 +1162,7 @@ async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
         errors.push(
             database
                 .tasks()
-                .record_task_chain_reply(chain_id, reply_id, message)
+                .record_task_chain_reply(chain_id, reply_id, &message.into())
                 .await
                 .expect_err("rejected reply")
                 .to_string(),
@@ -1037,6 +1244,7 @@ async fn chain(database: &Database) -> TaskChain {
 
 fn start_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),
@@ -1089,6 +1297,7 @@ async fn revised_plan(database: &Database) -> ContinueTaskChainRequest {
     .await;
     assert_eq!(chain(database).await.phase, TaskChainPhase::PlannerQuestion);
     let revision = ContinueTaskChainRequest {
+        attachments: Vec::new(),
         attempt_id: "revision".into(),
         clarification: Some("Use option one".into()),
         expected_attempt_id: "plan".into(),

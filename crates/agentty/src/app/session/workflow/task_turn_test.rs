@@ -1,11 +1,11 @@
 use ag_contracts::LiveTranscript;
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, TurnPromptAttachment, TurnPromptContentPart};
 use ag_session::{
     AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
     SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext, TaskAgentInput,
 };
 
-use super::{TaskReplay, effect_transcript, replay};
+use super::{TaskReplay, effect_transcript, replay, task_prompt};
 use crate::infra::db::{TaskAgentContextRow, TaskAgentHistoryRow, TaskAgentTurnRow};
 
 #[test]
@@ -65,6 +65,7 @@ fn request() -> SubmitAgentTaskRequest {
         },
         attempt_id: "attempt".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Task \"input\"\n".to_string(),
@@ -73,4 +74,50 @@ fn request() -> SubmitAgentTaskRequest {
         task_id: "planner".to_string(),
         visibility: DurableMessageVisibility::Visible,
     }
+}
+
+#[test]
+fn task_images_preserve_json_and_disambiguate_reused_composer_markers() {
+    // Arrange
+    let mut request = request();
+    request.input.user_request = "Original [Image #1] and literal [Task image #1]".into();
+    request.input.clarification = Some("Revision [Image #1]".into());
+    request.input.attachments = ["original.png", "revision.png"]
+        .into_iter()
+        .map(|path| TurnPromptAttachment {
+            local_image_path: path.into(),
+            placeholder: "[Image #1]".into(),
+        })
+        .collect();
+
+    // Act
+    let prompt = task_prompt(&request);
+    let image_paths = prompt
+        .content_parts()
+        .into_iter()
+        .filter_map(|part| match part {
+            TurnPromptContentPart::Attachment(attachment) => {
+                Some(attachment.local_image_path.clone())
+            }
+            TurnPromptContentPart::Text(_) | TurnPromptContentPart::OrphanAttachment(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    // Assert
+    assert!(
+        prompt
+            .text
+            .contains(&serde_json::json!(request.input).to_string())
+    );
+    assert_eq!(
+        image_paths,
+        request
+            .input
+            .attachments
+            .iter()
+            .map(|attachment| attachment.local_image_path.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(prompt.attachments[0].placeholder, "[#Task image #1]");
+    assert_eq!(prompt.attachments[1].placeholder, "[Task image #2]");
 }

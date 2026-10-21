@@ -47,6 +47,7 @@ async fn existing_hosts_report_unsupported_task_capability() {
                 },
                 attempt_id: "role-attempt".to_string(),
                 input: TaskAgentInput {
+                    attachments: Vec::new(),
                     accepted_plan: None,
                     clarification: None,
                     user_request: "Plan".to_string(),
@@ -77,6 +78,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
     let service = SessionService::new(Arc::new(FakeBackend::default()));
     let session_id = SessionId::from("session");
     let start = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: crate::test_support::codex_selection(),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),
@@ -100,6 +102,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         .continue_task_chain(
             "chain",
             ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "continued".into(),
                 clarification: None,
                 expected_attempt_id: "plan".into(),
@@ -111,6 +114,7 @@ async fn existing_hosts_report_unsupported_workflow_capability() {
         .reply_to_task_chain(
             &session_id,
             ReplyToTaskChainRequest {
+                attachments: Vec::new(),
                 message: "Go ahead".into(),
                 reply_id: "reply".into(),
             },

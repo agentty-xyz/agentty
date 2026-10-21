@@ -35,6 +35,7 @@ async fn task_history_migration_preserves_existing_assignments() {
         },
         attempt_id: "existing-attempt".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "Plan a change".to_string(),

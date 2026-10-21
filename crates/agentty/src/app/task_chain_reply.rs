@@ -20,6 +20,7 @@ use crate::app::command_gateway::{TaskChainReplyAction, TaskChainReplyCommand};
 use crate::app::session::SessionTaskService;
 use crate::app::task_chain::api_error;
 use crate::app::task_chain_decision::TaskChainReplyDecision;
+use crate::domain::turn_prompt::TurnPrompt;
 
 /// Workflow notice shown after a reply accepted the plan.
 const PLAN_ACCEPTED_NOTICE: &str = "Plan accepted · Implementer started";
@@ -31,7 +32,7 @@ const DECISION_RUN_PURPOSE: &str = "task chain reply decision";
 enum TaskChainReplyRoute {
     Admitted(TaskChainReplyOutcome),
     Decide {
-        action: TaskChainReplyAction,
+        action: Box<TaskChainReplyAction>,
         decision: TaskChainReplyDecision,
     },
 }
@@ -51,7 +52,7 @@ impl App {
             } => match self.route_task_chain_reply(&session_id, request).await {
                 Ok(TaskChainReplyRoute::Admitted(outcome)) => Ok(outcome),
                 Ok(TaskChainReplyRoute::Decide { action, decision }) => {
-                    self.spawn_task_chain_reply_decision(action, decision, response_tx);
+                    self.spawn_task_chain_reply_decision(*action, decision, response_tx);
 
                     return;
                 }
@@ -137,11 +138,18 @@ impl App {
             chain_id: chain.id,
             expected_attempt_id: chain.current_request.attempt_id,
             message: request.message,
-            outcome: TaskChainReplyOutcome::Continued,
+            outcome: if plan.is_some() && !request.attachments.is_empty() {
+                TaskChainReplyOutcome::PlanRevised
+            } else {
+                TaskChainReplyOutcome::Continued
+            },
             reply_id: request.reply_id,
             session_id: session_id.clone(),
+            attachments: request.attachments,
         };
-        let Some(plan) = plan else {
+        // A reply carrying new visual guidance must reach the Planner before
+        // acceptance; the text-only approval classifier cannot interpret it.
+        let Some(plan) = plan.filter(|_| action.attachments.is_empty()) else {
             return self
                 .apply_task_chain_reply(action)
                 .await
@@ -155,7 +163,7 @@ impl App {
                 plan,
                 reply: action.message.clone(),
             },
-            action,
+            action: Box::new(action),
         })
     }
 
@@ -209,6 +217,7 @@ impl App {
             self.continue_api_task_chain(
                 &action.chain_id,
                 ContinueTaskChainRequest {
+                    attachments: action.attachments,
                     attempt_id,
                     clarification: Some(action.message),
                     expected_attempt_id: action.expected_attempt_id,
@@ -299,11 +308,15 @@ impl App {
         chain: &TaskChain,
         request: &ReplyToTaskChainRequest,
     ) -> Result<(), SessionError> {
+        let prompt = TurnPrompt {
+            attachments: request.attachments.clone(),
+            ..TurnPrompt::from_text(request.message.clone())
+        };
         let recorded = self
             .services
             .db()
             .tasks()
-            .record_task_chain_reply(&chain.id, &request.reply_id, &request.message)
+            .record_task_chain_reply(&chain.id, &request.reply_id, &prompt)
             .await
             .map_err(|error| api_error(&error))?;
         if recorded && let Ok(handles) = self.sessions.session_handles_or_err(&chain.session_id) {
@@ -311,7 +324,7 @@ impl App {
                 .transcript
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .append_message(SessionMessageKind::UserPrompt, &request.message);
+                .append_message(SessionMessageKind::UserPrompt, &prompt.transcript_text());
             SessionTaskService::emit_session_updated(
                 &self.services.event_sender(),
                 &self.services.session_update_versions(),

@@ -2389,6 +2389,37 @@ fn inline_plan_ignores_unavailable_empty_and_non_prompt_input() {
     }
 }
 
+#[test]
+fn inline_plan_keeps_pasted_image_occurrences_aligned_with_the_task() {
+    // Arrange
+    let mut mode = new_test_prompt_mode("/plan   Design 🖼 ");
+    if let AppMode::Prompt { slash_state, .. } = &mut mode {
+        slash_state.allow_plan_command = true;
+    }
+    mode.insert_pasted_image_placeholder(PathBuf::from("reference.png"));
+
+    // Act
+    let armed = arm_inline_plan_request(&mut mode);
+    if let AppMode::Prompt {
+        input,
+        attachment_state,
+        ..
+    } = &mut mode
+    {
+        attachment_state.sync_after_history_restore(input);
+    }
+    let (prompt, _) = take_submitted_turn_prompt(&mut mode);
+
+    // Assert
+    assert!(armed);
+    assert_eq!(prompt.text, "Design 🖼 [Image #1]");
+    assert_eq!(prompt.attachments.len(), 1);
+    assert_eq!(
+        prompt.attachments[0].local_image_path,
+        PathBuf::from("reference.png")
+    );
+}
+
 #[tokio::test]
 async fn plan_command_is_hidden_once_the_session_shows_a_task_chain() {
     // Arrange

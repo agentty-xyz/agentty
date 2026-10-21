@@ -1,6 +1,6 @@
 //! Durable static workflow identities and operation-backed stage projection.
 
-use ag_protocol::AgentResponse;
+use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AcceptedTaskPlan, AgentKind, AgentSelection,
     BuiltinAgentDefinition, ContinueTaskChainRequest, DurableMessageVisibility, SessionId,
@@ -45,6 +45,9 @@ impl TaskChainStore {
                 || existing.model != model
                 || existing.user_request != request.user_request
                 || existing.planner_task_attempt_id != request.planner_attempt_id
+                || TaskAgentStore::load(connection, &request.planner_request().task_id)
+                    .await?
+                    .is_none_or(|context| context.input.attachments != request.attachments)
             {
                 return Err(Self::invalid(
                     "Workflow identity was already used with different inputs",
@@ -233,6 +236,7 @@ impl TaskChainStore {
                 connection,
                 &chain,
                 &ContinueTaskChainRequest {
+                    attachments: Vec::new(),
                     attempt_id: request.attempt_id.clone(),
                     clarification: None,
                     expected_attempt_id: request.plan_attempt_id.clone(),
@@ -396,12 +400,13 @@ impl TaskChainStore {
         connection: &mut SqliteConnection,
         chain_id: &str,
         reply_id: &str,
-        message: &str,
+        prompt: &TurnPrompt,
         now: i64,
     ) -> Result<Option<String>, DbError> {
-        if reply_id.trim().is_empty() || message.trim().is_empty() {
+        if reply_id.trim().is_empty() || prompt.text.trim().is_empty() {
             return Err(Self::invalid("Reply identity and message must be nonempty"));
         }
+        let message = serde_json::json!(prompt).to_string();
         let existing = sqlx::query!(
             "SELECT task_chain_id, message FROM task_chain_reply WHERE id = ?",
             reply_id
@@ -409,7 +414,11 @@ impl TaskChainStore {
         .fetch_optional(&mut *connection)
         .await?;
         if let Some(existing) = existing {
-            if existing.task_chain_id != chain_id || existing.message != message {
+            let same_message = match serde_json::from_str::<TurnPrompt>(&existing.message) {
+                Ok(stored_prompt) => stored_prompt == *prompt,
+                Err(_) => prompt.attachments.is_empty() && existing.message == prompt.text,
+            };
+            if existing.task_chain_id != chain_id || !same_message {
                 return Err(Self::invalid(
                     "Reply identity was already used with different inputs",
                 ));
@@ -483,7 +492,7 @@ impl TaskChainStore {
         request: &ContinueTaskChainRequest,
         expected_task: Option<&str>,
     ) -> Result<bool, DbError> {
-        let row = sqlx::query!(r#"SELECT a.task_id, a.message, a.is_visible AS "is_visible!: bool", t.session_id FROM task_attempt a JOIN task t ON t.id = a.task_id WHERE a.id = ?"#, request.attempt_id).fetch_optional(connection).await?;
+        let row = sqlx::query!(r#"SELECT a.task_id, a.message, a.is_visible AS "is_visible!: bool", t.session_id FROM task_attempt a JOIN task t ON t.id = a.task_id WHERE a.id = ?"#, request.attempt_id).fetch_optional(&mut *connection).await?;
         let Some(row) = row else {
             return Ok(false);
         };
@@ -494,12 +503,17 @@ impl TaskChainStore {
         } else {
             chain.accepted_plan.clone()
         };
+        let anchor = sqlx::query!(r#"SELECT a.task_id, a.message, a.is_visible AS "is_visible!: bool", t.session_id FROM task_attempt a JOIN task t ON t.id = a.task_id WHERE a.id = ?"#, request.expected_attempt_id).fetch_one(&mut *connection).await?;
+        let mut anchor_input: TaskAgentInput = serde_json::from_str(&anchor.message)
+            .map_err(|_| Self::invalid("Workflow source input is invalid"))?;
+        anchor_input.attachments.extend(request.attachments.clone());
         if (row.task_id != chain.planner_task_id && row.task_id != chain.implementer_task_id)
             || expected_task.is_some_and(|id| id != row.task_id)
             || row.session_id != chain.session_id.as_str()
             || input.user_request != chain.user_request
             || input.accepted_plan != expected_plan
             || input.clarification != request.clarification
+            || input.attachments != anchor_input.attachments
             || row.is_visible
         {
             return Err(Self::invalid(

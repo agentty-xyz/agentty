@@ -56,6 +56,7 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
     // Arrange
     let adapter = OrdinaryTaskAdapter;
     let start = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
         planner_attempt_id: "plan".into(),
@@ -94,6 +95,7 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
         .continue_task_chain(
             "chain",
             &ContinueTaskChainRequest {
+                attachments: Vec::new(),
                 attempt_id: "retry".into(),
                 clarification: None,
                 expected_attempt_id: "plan".into(),
@@ -107,7 +109,7 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
         .await
         .expect_err("unsupported");
     let reply = adapter
-        .record_task_chain_reply("chain", "reply", "Go ahead")
+        .record_task_chain_reply("chain", "reply", &"Go ahead".into())
         .await
         .expect_err("unsupported");
 
@@ -147,6 +149,7 @@ async fn ordinary_adapter_keeps_its_contract_and_explicitly_rejects_role_tasks()
         },
         attempt_id: "plan".to_string(),
         input: TaskAgentInput {
+            attachments: Vec::new(),
             accepted_plan: None,
             clarification: None,
             user_request: "plan the change".to_string(),

@@ -806,6 +806,7 @@ async fn ending_a_running_chain_turn_cancels_the_chain_through_the_orchestrator(
 /// Builds a chain whose Planner attempt is running in `session_id`.
 fn running_planner_chain(session_id: &str) -> TaskChain {
     let launch = StartPlanThenImplementRequest {
+        attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".to_string(),
         planner_attempt_id: "attempt".to_string(),
