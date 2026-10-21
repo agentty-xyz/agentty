@@ -6,14 +6,14 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use super::super::{
     PromptInputMode, apply_prompt_apply_outcome, apply_prompt_input_command,
-    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, handle_at_mention_key,
-    handle_at_mention_select, handle_chat_focus_key, handle_paste, handle_prompt_cancel_key,
-    handle_prompt_down_key, handle_prompt_image_paste, handle_prompt_slash_submit,
-    handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache, is_active_at_mention,
-    is_prompt_image_paste_key, move_prompt_slash_selection, navigate_prompt_history_down,
-    navigate_prompt_history_up, open_prompt_personality_stage, paste_image_into_active_prompt,
-    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
-    take_prompt_snapshot, take_submitted_turn_prompt,
+    apply_prompt_input_to_mode, apply_prompt_paste_to_mode, arm_inline_plan_request,
+    handle_at_mention_key, handle_at_mention_select, handle_chat_focus_key, handle_paste,
+    handle_prompt_cancel_key, handle_prompt_down_key, handle_prompt_image_paste,
+    handle_prompt_slash_submit, handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache,
+    is_active_at_mention, is_prompt_image_paste_key, move_prompt_slash_selection,
+    navigate_prompt_history_down, navigate_prompt_history_up, open_prompt_personality_stage,
+    paste_image_into_active_prompt, prompt_context, show_prompt_diff, submit_current_text_prompt,
+    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
@@ -2308,6 +2308,44 @@ async fn plan_command_with_task_submits_it_and_keeps_a_rejected_draft_armed() {
             if input.text() == "Add search" && slash_state.is_plan_armed
     ));
     assert_eq!(app.sessions.sessions()[0].prompt, "");
+}
+
+#[test]
+fn inline_plan_ignores_unavailable_empty_and_non_prompt_input() {
+    // Arrange
+    let mut modes = [
+        AppMode::List,
+        new_test_prompt_mode("/plan Add search"),
+        new_test_prompt_mode("/plan   "),
+        new_test_prompt_mode("/planning Add search"),
+    ];
+    for mode in &mut modes[2..] {
+        if let AppMode::Prompt { slash_state, .. } = mode {
+            slash_state.allow_plan_command = true;
+        }
+    }
+
+    for mode in &mut modes {
+        let original = match mode {
+            AppMode::Prompt { input, .. } => Some(input.text().to_string()),
+            _ => None,
+        };
+
+        // Act
+        let armed = arm_inline_plan_request(mode);
+
+        // Assert
+        assert!(!armed);
+        match mode {
+            AppMode::Prompt {
+                input, slash_state, ..
+            } => {
+                assert_eq!(Some(input.text()), original.as_deref());
+                assert!(!slash_state.is_plan_armed);
+            }
+            _ => assert!(original.is_none()),
+        }
+    }
 }
 
 #[tokio::test]
