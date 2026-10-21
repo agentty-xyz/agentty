@@ -126,6 +126,32 @@ the workflow. The continuation receipt retains that source identity, so exact re
 remain safe after later progress; changing the source under an existing delivery ID or
 reusing a launch or acceptance ID as a continuation is rejected.
 
+### Natural-Language Replies
+
+`SessionService::reply_to_task_chain` sends a user reply to the session's latest
+workflow. The host, not the caller, decides what the reply means; no words are reserved.
+The reply is stored once as a visible user prompt before any agent answer. The host then
+routes it by the phase observed at that moment:
+
+- While a plan awaits acceptance, an orchestrator decision runs as a read-only utility
+  [run](@/docs/core-components/durable-components/run.md) with the workflow's captured
+  model. Only a clear approval with no requested changes accepts that exact plan and
+  starts the Implementer, followed by a short workflow notice. Anything else, including
+  approval with changes or a failed or unparsable decision, becomes revision guidance
+  for the Planner.
+- After a question, failure, cancellation, or success, the reply continues the current
+  role. Once implementation starts, that role is always the Implementer.
+- While an agent is working or an earlier reply is still being decided, the reply is
+  rejected with `SessionError::TaskChainBusy`. A session without a workflow returns
+  `SessionError::TaskChainNotFound`.
+
+The result is `PlanAccepted`, `PlanRevised`, or `Continued`. Each action uses an attempt
+ID derived from the caller's globally unique `reply_id`. Redelivering a reply returns
+its original outcome without recording, deciding, or admitting work again, even after
+another workflow starts in the session. Reusing that identity with different text is
+rejected. Canceling the workflow interrupts its pending decision; a late decision cannot
+restart canceled work.
+
 ## Submission and Completion
 
 Programmatic callers use `SessionService::submit_task` with a `SubmitTaskRequest`.

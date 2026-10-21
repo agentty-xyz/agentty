@@ -59,6 +59,11 @@ operations. In-memory SQLite contract tests cover planning without execution, id
 conflicts, rollback, cancellation, and restart settlement. Scripted worker tests cover
 the task API's handoff and completion timing without live providers.
 
+Workflow replies are stored with their transcript prompt in one transaction, keyed by
+the caller's reply identity. Boundary tests cover identity conflicts and duplicate
+delivery, and an on-disk contract test keeps the receipt after reopening. Orchestrator
+decisions are tested with a mock `RunClient`.
+
 Role-aware task admission also binds immutable role/model selections and task-owned
 conversation identities in the same transaction. Cached SQLite boundary tests cover
 isolation from ordinary task delivery, immutable inputs, and rollback. A public on-disk

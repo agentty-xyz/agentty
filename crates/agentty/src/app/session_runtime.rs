@@ -7,6 +7,7 @@
 //! `Send + Sync` capability without sharing all of [`crate::app::App`] behind
 //! a mutex.
 
+use std::collections::HashMap;
 use std::future::poll_fn;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -18,10 +19,12 @@ use ag_session::{
     SessionError, SessionId,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
     CommandDelivery, CommandInitiator, ReviewRequestCommand, SessionCommand, SessionMutation,
+    TaskChainReplyAction, TaskChainReplyCommand,
 };
 
 /// Maximum number of accepted API commands waiting for foreground execution.
@@ -172,6 +175,35 @@ impl SessionRuntimeHandle {
     pub(crate) async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), SessionError> {
         self.request_admission(SessionMutation::CancelTaskChain {
             chain_id: chain_id.to_string(),
+        })
+        .await
+    }
+
+    /// Routes a natural-language reply; the response arrives after its
+    /// workflow action is admitted, including any background decision.
+    pub(crate) async fn reply_to_task_chain(
+        &self,
+        session_id: &SessionId,
+        request: ag_session::ReplyToTaskChainRequest,
+    ) -> Result<ag_session::TaskChainReplyOutcome, SessionError> {
+        self.request_mutation(|response_tx| CommandDelivery::TaskChainReply {
+            request: TaskChainReplyCommand::Reply {
+                request,
+                session_id: session_id.clone(),
+            },
+            response_tx,
+        })
+        .await
+    }
+
+    /// Admits an action decided in the background for a recorded reply.
+    pub(crate) async fn apply_task_chain_reply(
+        &self,
+        action: TaskChainReplyAction,
+    ) -> Result<ag_session::TaskChainReplyOutcome, SessionError> {
+        self.request_mutation(|response_tx| CommandDelivery::TaskChainReply {
+            request: TaskChainReplyCommand::Apply(action),
+            response_tx,
         })
         .await
     }
@@ -462,6 +494,10 @@ impl Drop for SessionRuntimeConsumerGuard {
 
 /// Session workflow owner and foreground-driven actor mailbox.
 pub(crate) struct SessionRuntime {
+    /// Task chains whose reply decision has deferred its admission to a
+    /// background task, with its independently cancelable run scope. Further
+    /// replies are busy until that action arrives.
+    pub(crate) deciding_task_chain_ids: HashMap<String, CancellationToken>,
     command_rx: mpsc::Receiver<SessionRuntimeCommand>,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
@@ -474,6 +510,7 @@ impl SessionRuntime {
         let (command_tx, command_rx) = mpsc::channel(SESSION_RUNTIME_COMMAND_CAPACITY);
 
         Self {
+            deciding_task_chain_ids: HashMap::new(),
             command_rx,
             command_tx,
             consumer_state: Arc::new(SessionRuntimeConsumerState::new()),

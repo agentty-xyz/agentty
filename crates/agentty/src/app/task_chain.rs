@@ -144,7 +144,8 @@ impl App {
         Ok(())
     }
 
-    /// Persists cancellation before interrupting the exact attempt token.
+    /// Persists cancellation before interrupting the exact attempt token and
+    /// any pending session-owned reply decision.
     pub(super) async fn cancel_api_task_chain(
         &mut self,
         chain_id: &str,
@@ -160,11 +161,14 @@ impl App {
             "task-attempt:{}",
             chain.current_request.attempt_id
         ));
+        if let Some(cancellation) = self.sessions.deciding_task_chain_ids.get(chain_id) {
+            cancellation.cancel();
+        }
 
         Ok(())
     }
 
-    fn require_task_chain_session_ready(
+    pub(super) fn require_task_chain_session_ready(
         &mut self,
         session_id: &SessionId,
         definition: BuiltinAgentDefinition,
@@ -177,7 +181,10 @@ impl App {
             })
     }
 
-    async fn require_task_chain(&self, chain_id: &str) -> Result<TaskChain, SessionError> {
+    pub(super) async fn require_task_chain(
+        &self,
+        chain_id: &str,
+    ) -> Result<TaskChain, SessionError> {
         self.services
             .db()
             .tasks()
@@ -187,7 +194,7 @@ impl App {
             .ok_or(SessionError::NotFound)
     }
 
-    async fn task_chain_has_receipt(
+    pub(super) async fn task_chain_has_receipt(
         &self,
         chain: &TaskChain,
         attempt_id: &str,
@@ -250,10 +257,15 @@ impl App {
     }
 }
 
-fn api_error(error: &DbError) -> SessionError {
+/// Converts a repository failure into a public operation error.
+pub(super) fn api_error(error: &DbError) -> SessionError {
     SessionError::Operation(error.to_string())
 }
 
 #[cfg(test)]
 #[path = "task_chain_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "task_chain_test_support_test.rs"]
+pub(super) mod test_support;

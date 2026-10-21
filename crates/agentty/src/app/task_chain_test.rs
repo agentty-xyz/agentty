@@ -1,31 +1,22 @@
-use std::sync::Arc;
-use std::time::Duration;
-
-use ag_contracts::{MockAgentChannel, TurnResult};
-use ag_protocol::AgentResponse;
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentAnswerContent, AgentKind, AgentModel,
-    AgentSelection, BuiltinAgentDefinition, ContinueTaskChainRequest, FocusedReviewStatus,
-    PermissionMode, SessionError, SessionId, SessionMessageKind, SessionService, SessionStatus,
-    StartPlanThenImplementRequest, TaskAgentTurn, TaskChain, TaskChainPhase,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, BuiltinAgentDefinition,
+    ContinueTaskChainRequest, FocusedReviewStatus, ReplyToTaskChainRequest, SessionError,
+    SessionId, SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn,
+    TaskChainPhase,
 };
-use sqlx::SqlitePool;
 use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 
+use super::test_support::{ChainFixture, agent_answer, launch_request};
 use crate::app::App;
 use crate::app::review::ReviewCacheEntry;
-use crate::app::test_support::TestSessionRunFactory;
 use crate::infra::db::Database;
-use crate::test_support::{
-    SessionFixtureBuilder, new_git_test_app_with_pool, new_test_app, set_session_status_for_test,
-};
+use crate::test_support::{SessionFixtureBuilder, new_test_app, set_session_status_for_test};
 
 #[tokio::test]
 async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_handoff() {
     // Arrange
     let mut fixture = ChainFixture::new().await;
-    let (launch, revision) = fixture.revised_plan().await;
+    let (launch, revision) = revised_plan(&mut fixture).await;
     let planner_id = launch.planner_request().task_id;
 
     // Act: standalone acceptance records intent without starting
@@ -128,7 +119,7 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
             .await
             .is_err()
     );
-    fixture.assert_repository_errors_surface().await;
+    assert_repository_errors_surface(&mut fixture).await;
 }
 
 #[tokio::test]
@@ -401,326 +392,186 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         .await
         .is_err()
     );
+    assert!(matches!(
+        app.drive_session_request(service.reply_to_task_chain(
+            &SessionId::from("missing"),
+            ReplyToTaskChainRequest {
+                message: "Go ahead".into(),
+                reply_id: "reply".into(),
+            },
+        ))
+        .await,
+        Err(SessionError::Operation(_))
+    ));
 }
 
-fn agent_answer(agent: BuiltinAgentDefinition, text: &str) -> (SessionMessageKind, String) {
-    (
-        SessionMessageKind::AgentAnswer,
-        AgentAnswerContent {
-            agent,
-            text: text.to_string(),
-        }
-        .encode(),
-    )
-}
-
-fn launch_request() -> StartPlanThenImplementRequest {
-    StartPlanThenImplementRequest {
-        agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-        chain_id: "workflow".into(),
-        planner_attempt_id: "initial".into(),
-        user_request: "Implement a scoped change".into(),
-    }
-}
-
-struct ChainFixture {
-    app: App,
-    factory: Arc<TestSessionRunFactory>,
-    pool: SqlitePool,
-    service: SessionService,
-    session_id: SessionId,
-    _directory: TempDir,
-}
-
-impl ChainFixture {
-    async fn new() -> Self {
-        let (mut app, directory, pool) = new_git_test_app_with_pool().await;
-        let session_id = SessionId::from(app.create_session().await.expect("session"));
-        set_session_status_for_test(&mut app, &session_id, SessionStatus::Review);
-        app.services
-            .db()
-            .sessions()
-            .update_session_permission_mode(&session_id, PermissionMode::ReadOnly)
-            .await
-            .expect("read-only workflow fixture");
-        let factory = TestSessionRunFactory::install(&mut app.services);
-        let service = app.session_service();
-
-        Self {
-            app,
-            factory,
-            pool,
-            service,
-            session_id,
-            _directory: directory,
-        }
-    }
-
-    async fn revised_plan(&mut self) -> (StartPlanThenImplementRequest, ContinueTaskChainRequest) {
-        let launch = launch_request();
-        let planner_id = launch.planner_request().task_id;
-        self.app
-            .services
-            .db()
-            .sessions()
-            .update_session_focused_review(
-                &self.session_id,
-                Some(FocusedReviewStatus::Pending),
-                Some("existing-diff".into()),
-                None,
-            )
-            .await
-            .expect("pending ordinary review");
-        self.app
+async fn revised_plan(
+    fixture: &mut ChainFixture,
+) -> (StartPlanThenImplementRequest, ContinueTaskChainRequest) {
+    let launch = launch_request();
+    let planner_id = launch.planner_request().task_id;
+    fixture
+        .app
+        .services
+        .db()
+        .sessions()
+        .update_session_focused_review(
+            &fixture.session_id,
+            Some(FocusedReviewStatus::Pending),
+            Some("existing-diff".into()),
+            None,
+        )
+        .await
+        .expect("pending ordinary review");
+    fixture
+        .app
+        .deferred_auto_review_session_ids
+        .insert(fixture.session_id.clone());
+    let first = fixture.register_result(&planner_id, "First plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch.clone()),
+        )
+        .await
+        .expect("launch");
+    assert!(matches!(
+        fixture.app.review_cache.get(&fixture.session_id),
+        Some(ReviewCacheEntry::Suppressed)
+    ));
+    assert!(
+        !fixture
+            .app
             .deferred_auto_review_session_ids
-            .insert(self.session_id.clone());
-        let first = self.register_result(&planner_id, "First plan", false);
-        self.app
-            .drive_session_request(
-                self.service
-                    .start_plan_then_implement(&self.session_id, launch.clone()),
-            )
-            .await
-            .expect("launch");
-        assert!(matches!(
-            self.app.review_cache.get(&self.session_id),
-            Some(ReviewCacheEntry::Suppressed)
-        ));
-        assert!(
-            !self
-                .app
-                .deferred_auto_review_session_ids
-                .contains(&self.session_id)
-        );
-        assert_eq!(
-            self.app
-                .services
-                .db()
-                .sessions()
-                .load_pending_focused_review_session_ids(self.app.active_project_id())
-                .await
-                .expect("startup review triggers"),
-            Vec::<String>::new()
-        );
-        self.settle(&first).await;
-        let revision = ContinueTaskChainRequest {
-            attempt_id: "revision".to_string(),
-            clarification: Some("Revise the scope".to_string()),
-            expected_attempt_id: "initial".into(),
-        };
-        let second = self.register_result(&planner_id, "Exact revised plan", false);
-        self.app
-            .drive_session_request(
-                self.service
-                    .continue_task_chain("workflow", revision.clone()),
-            )
-            .await
-            .expect("revise");
-        self.settle(&second).await;
-        let awaiting = self.snapshot().await;
-        assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
-        assert_eq!(awaiting.accepted_plan, None);
-
-        (launch, revision)
-    }
-
-    fn register_result(&self, task_id: &str, answer: &str, blocked: bool) -> Script {
-        let script = Script {
-            entered: CancellationToken::new(),
-            release: CancellationToken::new(),
-        };
-        if !blocked {
-            script.release.cancel();
-        }
-        let entered = script.entered.clone();
-        let release = script.release.clone();
-        let response = AgentResponse::plain(answer);
-        let mut channel = MockAgentChannel::new();
-        channel.expect_run_turn().once().returning(move |_, _, _| {
-            let entered = entered.clone();
-            let release = release.clone();
-            let response = response.clone();
-
-            Box::pin(async move {
-                entered.cancel();
-                release.cancelled().await;
-                Ok(TurnResult {
-                    assistant_message: response,
-                    context_reset: false,
-                    harness_report: None,
-                    input_tokens: 1,
-                    output_tokens: 1,
-                    provider_conversation_id: Some("task-thread".into()),
-                })
-            })
-        });
-        channel
-            .expect_shutdown_session()
-            .times(1..)
-            .returning(|_| Box::pin(async { Ok(()) }));
-        self.factory.register(task_id, Arc::new(channel));
-
-        script
-    }
-
-    async fn settle(&mut self, script: &Script) {
-        script.started().await;
-        let request = self.snapshot().await.current_request;
-        let operation_id = format!("task-attempt:{}", request.attempt_id);
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while self
-                .app
-                .services
-                .db()
-                .operations()
-                .is_session_operation_unfinished(&operation_id)
-                .await
-                .expect("operation state")
-            {
-                let event = self.app.next_app_event().await.expect("worker event");
-                self.app.apply_app_events(event).await;
-            }
-        })
-        .await
-        .expect("settle guard");
-        self.app.sessions.sync_session_from_handle(&self.session_id);
-    }
-
-    async fn persisted_transcript(&self) -> Vec<(SessionMessageKind, String)> {
-        self.app
+            .contains(&fixture.session_id)
+    );
+    assert_eq!(
+        fixture
+            .app
             .services
             .db()
             .sessions()
-            .load_session_messages(&self.session_id)
+            .load_pending_focused_review_session_ids(fixture.app.active_project_id())
             .await
-            .expect("session messages")
-            .into_iter()
-            .map(|row| (row.kind.parse().expect("message kind"), row.content))
-            .collect()
-    }
-
-    fn live_transcript(&self) -> Vec<(SessionMessageKind, String)> {
-        self.app
-            .sessions
-            .session_for_id(&self.session_id)
-            .and_then(|session| session.transcript.as_ref())
-            .expect("live transcript")
-            .messages()
-            .iter()
-            .map(|message| (message.kind, message.content.clone()))
-            .collect()
-    }
-
-    async fn snapshot(&mut self) -> TaskChain {
-        self.app
-            .drive_session_request(self.service.get_task_chain("workflow"))
-            .await
-            .expect("read workflow")
-            .expect("workflow exists")
-    }
-
-    async fn assert_repository_errors_surface(&mut self) {
-        // Arrange: snapshot reads succeed, but cancellation persistence fails.
-        sqlx::query(
-            "CREATE TRIGGER reject_workflow_cancel BEFORE UPDATE OF canceled_at ON task_chain \
-             BEGIN SELECT RAISE(ABORT, 'cancellation unavailable'); END",
+            .expect("startup review triggers"),
+        Vec::<String>::new()
+    );
+    fixture.settle(&first).await;
+    let revision = ContinueTaskChainRequest {
+        attempt_id: "revision".to_string(),
+        clarification: Some("Revise the scope".to_string()),
+        expected_attempt_id: "initial".into(),
+    };
+    let second = fixture.register_result(&planner_id, "Exact revised plan", false);
+    fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .continue_task_chain("workflow", revision.clone()),
         )
-        .execute(&self.pool)
         .await
-        .expect("reject cancellation persistence");
+        .expect("revise");
+    fixture.settle(&second).await;
+    let awaiting = fixture.snapshot().await;
+    assert_eq!(awaiting.phase, TaskChainPhase::AwaitingPlanAcceptance);
+    assert_eq!(awaiting.accepted_plan, None);
 
-        // Act / Assert
-        let error = self
-            .app
-            .drive_session_request(self.service.cancel_task_chain("workflow"))
-            .await
-            .expect_err("surface failed cancellation");
-        assert!(error.to_string().contains("cancellation unavailable"));
-        sqlx::query("DROP TRIGGER reject_workflow_cancel")
-            .execute(&self.pool)
-            .await
-            .expect("restore cancellation persistence");
-
-        // Arrange: the current Implementer snapshot remains readable while a
-        // historical Planner receipt cannot be decoded.
-        sqlx::query(
-            "UPDATE session_operation SET status = 'invalid' WHERE id = 'task-attempt:initial'",
-        )
-        .execute(&self.pool)
-        .await
-        .expect("corrupt historical receipt");
-
-        // Act / Assert
-        let error = self
-            .app
-            .drive_session_request(self.service.continue_task_chain(
-                "workflow",
-                ContinueTaskChainRequest {
-                    attempt_id: "unreadable-receipt".into(),
-                    clarification: None,
-                    expected_attempt_id: "implementation".into(),
-                },
-            ))
-            .await
-            .expect_err("surface failed receipt read");
-        assert!(error.to_string().contains("invalid"));
-
-        // Arrange: a newly admitted workflow cannot clear the durable ordinary
-        // review trigger. Its attempt must fail before worker dispatch.
-        sqlx::query(
-            "CREATE TRIGGER reject_review_suppression BEFORE UPDATE OF focused_review_status ON \
-             session BEGIN SELECT RAISE(ABORT, 'review suppression unavailable'); END",
-        )
-        .execute(&self.pool)
-        .await
-        .expect("reject review suppression");
-        let launch = StartPlanThenImplementRequest {
-            chain_id: "rejected-review".into(),
-            planner_attempt_id: "review-unavailable".into(),
-            ..launch_request()
-        };
-
-        // Act
-        let error = self
-            .app
-            .drive_session_request(
-                self.service
-                    .start_plan_then_implement(&self.session_id, launch.clone()),
-            )
-            .await
-            .expect_err("surface suppression failure");
-        let failed = self
-            .app
-            .drive_session_request(self.service.get_task_chain(&launch.chain_id))
-            .await
-            .expect("failed workflow read")
-            .expect("durable workflow");
-        let history = self
-            .app
-            .drive_session_request(
-                self.service
-                    .get_agent_task_history(&launch.planner_request().task_id),
-            )
-            .await
-            .expect("undispatched history")
-            .expect("task context");
-
-        // Assert
-        assert!(error.to_string().contains("review suppression unavailable"));
-        assert_eq!(failed.phase, TaskChainPhase::Failed);
-        assert_eq!(history.turns, Vec::<TaskAgentTurn>::new());
-    }
+    (launch, revision)
 }
 
-struct Script {
-    entered: CancellationToken,
-    release: CancellationToken,
-}
+async fn assert_repository_errors_surface(fixture: &mut ChainFixture) {
+    // Arrange: snapshot reads succeed, but cancellation persistence fails.
+    sqlx::query(
+        "CREATE TRIGGER reject_workflow_cancel BEFORE UPDATE OF canceled_at ON task_chain BEGIN \
+         SELECT RAISE(ABORT, 'cancellation unavailable'); END",
+    )
+    .execute(&fixture.pool)
+    .await
+    .expect("reject cancellation persistence");
 
-impl Script {
-    async fn started(&self) {
-        tokio::time::timeout(Duration::from_secs(10), self.entered.cancelled())
-            .await
-            .expect("execution start guard");
-    }
+    // Act / Assert
+    let error = fixture
+        .app
+        .drive_session_request(fixture.service.cancel_task_chain("workflow"))
+        .await
+        .expect_err("surface failed cancellation");
+    assert!(error.to_string().contains("cancellation unavailable"));
+    sqlx::query("DROP TRIGGER reject_workflow_cancel")
+        .execute(&fixture.pool)
+        .await
+        .expect("restore cancellation persistence");
+
+    // Arrange: the current Implementer snapshot remains readable while a
+    // historical Planner receipt cannot be decoded.
+    sqlx::query(
+        "UPDATE session_operation SET status = 'invalid' WHERE id = 'task-attempt:initial'",
+    )
+    .execute(&fixture.pool)
+    .await
+    .expect("corrupt historical receipt");
+
+    // Act / Assert
+    let error = fixture
+        .app
+        .drive_session_request(fixture.service.continue_task_chain(
+            "workflow",
+            ContinueTaskChainRequest {
+                attempt_id: "unreadable-receipt".into(),
+                clarification: None,
+                expected_attempt_id: "implementation".into(),
+            },
+        ))
+        .await
+        .expect_err("surface failed receipt read");
+    assert!(error.to_string().contains("invalid"));
+
+    // Arrange: a newly admitted workflow cannot clear the durable ordinary
+    // review trigger. Its attempt must fail before worker dispatch.
+    sqlx::query(
+        "CREATE TRIGGER reject_review_suppression BEFORE UPDATE OF focused_review_status ON \
+         session BEGIN SELECT RAISE(ABORT, 'review suppression unavailable'); END",
+    )
+    .execute(&fixture.pool)
+    .await
+    .expect("reject review suppression");
+    let launch = StartPlanThenImplementRequest {
+        chain_id: "rejected-review".into(),
+        planner_attempt_id: "review-unavailable".into(),
+        ..launch_request()
+    };
+
+    // Act
+    let error = fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .start_plan_then_implement(&fixture.session_id, launch.clone()),
+        )
+        .await
+        .expect_err("surface suppression failure");
+    let failed = fixture
+        .app
+        .drive_session_request(fixture.service.get_task_chain(&launch.chain_id))
+        .await
+        .expect("failed workflow read")
+        .expect("durable workflow");
+    let history = fixture
+        .app
+        .drive_session_request(
+            fixture
+                .service
+                .get_agent_task_history(&launch.planner_request().task_id),
+        )
+        .await
+        .expect("undispatched history")
+        .expect("task context");
+
+    // Assert
+    assert!(error.to_string().contains("review suppression unavailable"));
+    assert_eq!(failed.phase, TaskChainPhase::Failed);
+    assert_eq!(history.turns, Vec::<TaskAgentTurn>::new());
 }

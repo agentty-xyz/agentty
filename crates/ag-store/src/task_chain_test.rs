@@ -906,6 +906,95 @@ async fn failed_continuation_receipt_write_rolls_back_its_attempt_and_cancellati
     assert_eq!(implementation.attempts.len(), 1);
 }
 
+#[tokio::test]
+async fn replies_record_one_visible_prompt_and_reject_reused_identities() {
+    // Arrange
+    let database = task_database_fixture().await;
+    database
+        .tasks()
+        .start_task_chain("session", &start_request(), "reply")
+        .await
+        .expect("start");
+
+    // Act
+    let recorded = database
+        .tasks()
+        .record_task_chain_reply("chain", "reply-1", "  Looks good, go ahead\n")
+        .await
+        .expect("record reply");
+    let redelivered = database
+        .tasks()
+        .record_task_chain_reply("chain", "reply-1", "  Looks good, go ahead\n")
+        .await
+        .expect("redelivered reply");
+    let owner = database
+        .tasks()
+        .load_task_chain_for_reply("session", "reply-1")
+        .await
+        .expect("reply owner")
+        .expect("recorded reply");
+    let mut unbound = Vec::new();
+    for (session_id, reply_id) in [("other-session", "reply-1"), ("session", "missing")] {
+        unbound.push(
+            database
+                .tasks()
+                .load_task_chain_for_reply(session_id, reply_id)
+                .await
+                .expect("reply lookup"),
+        );
+    }
+    let rejected = [
+        ("chain", "reply-1", "Different text"),
+        ("other-chain", "reply-1", "  Looks good, go ahead\n"),
+        ("missing", "reply-2", "Unknown workflow"),
+        ("chain", " ", "Blank identity"),
+        ("chain", "reply-3", "\n"),
+    ];
+    let mut errors = Vec::new();
+    for (chain_id, reply_id, message) in rejected {
+        errors.push(
+            database
+                .tasks()
+                .record_task_chain_reply(chain_id, reply_id, message)
+                .await
+                .expect_err("rejected reply")
+                .to_string(),
+        );
+    }
+    let messages = database
+        .sessions()
+        .load_session_messages("session")
+        .await
+        .expect("transcript");
+
+    // Assert
+    assert!(recorded);
+    assert!(!redelivered);
+    assert_eq!(owner.id, "chain");
+    assert_eq!(unbound, [None, None]);
+    assert_eq!(
+        errors,
+        [
+            "Invalid task chain: Reply identity was already used with different inputs",
+            "Invalid task chain: Reply identity was already used with different inputs",
+            "Invalid task chain: Workflow does not exist",
+            "Invalid task chain: Reply identity and message must be nonempty",
+            "Invalid task chain: Reply identity and message must be nonempty",
+        ]
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .map(|message| (message.kind.as_str(), message.content.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            ("user_prompt", "  Original objective."),
+            ("agent_graph", "chain"),
+            ("user_prompt", "  Looks good, go ahead"),
+        ]
+    );
+}
+
 async fn response(database: &Database, attempt_id: &str, text: &str, settled: bool) {
     let operation_id = format!("task-attempt:{attempt_id}");
     database

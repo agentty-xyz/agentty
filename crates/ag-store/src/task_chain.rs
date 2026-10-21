@@ -361,6 +361,80 @@ impl TaskChainStore {
         Ok(())
     }
 
+    /// Loads a reply's bound workflow without exposing another session's
+    /// snapshot. New replies have no binding yet.
+    pub(crate) async fn load_for_reply(
+        connection: &mut SqliteConnection,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let reply = sqlx::query!(
+            "SELECT task_chain_id, message FROM task_chain_reply WHERE id = ?",
+            reply_id
+        )
+        .fetch_optional(&mut *connection)
+        .await?;
+        let Some(reply) = reply else {
+            return Ok(None);
+        };
+        let owner = sqlx::query!(
+            "SELECT session_id FROM task_chain WHERE id = ?",
+            reply.task_chain_id
+        )
+        .fetch_one(&mut *connection)
+        .await?;
+        if owner.session_id != session_id {
+            return Ok(None);
+        }
+
+        Self::load(connection, &reply.task_chain_id).await
+    }
+
+    /// Records one reply identity for an existing workflow. Returns the owning
+    /// session when newly recorded, or `None` for identical redelivery.
+    pub(crate) async fn record_reply(
+        connection: &mut SqliteConnection,
+        chain_id: &str,
+        reply_id: &str,
+        message: &str,
+        now: i64,
+    ) -> Result<Option<String>, DbError> {
+        if reply_id.trim().is_empty() || message.trim().is_empty() {
+            return Err(Self::invalid("Reply identity and message must be nonempty"));
+        }
+        let existing = sqlx::query!(
+            "SELECT task_chain_id, message FROM task_chain_reply WHERE id = ?",
+            reply_id
+        )
+        .fetch_optional(&mut *connection)
+        .await?;
+        if let Some(existing) = existing {
+            if existing.task_chain_id != chain_id || existing.message != message {
+                return Err(Self::invalid(
+                    "Reply identity was already used with different inputs",
+                ));
+            }
+
+            return Ok(None);
+        }
+        let chain = sqlx::query!("SELECT session_id FROM task_chain WHERE id = ?", chain_id)
+            .fetch_optional(&mut *connection)
+            .await?
+            .ok_or_else(|| Self::invalid("Workflow does not exist"))?;
+        sqlx::query!(
+            "INSERT INTO task_chain_reply (id, task_chain_id, message, created_at) VALUES (?, ?, \
+             ?, ?)",
+            reply_id,
+            chain_id,
+            message,
+            now
+        )
+        .execute(&mut *connection)
+        .await?;
+
+        Ok(Some(chain.session_id))
+    }
+
     pub(crate) async fn require_unowned(
         connection: &mut SqliteConnection,
         task_id: &str,

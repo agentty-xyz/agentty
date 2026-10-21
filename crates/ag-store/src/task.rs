@@ -50,6 +50,17 @@ pub trait TaskRepository: Send + Sync {
         Err(TaskChainStore::unsupported())
     }
 
+    /// Reads the workflow already bound to a reply in its owning session.
+    /// Returns `None` for a new reply or a reply owned by another session.
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let _ = (session_id, reply_id);
+        Err(TaskChainStore::unsupported())
+    }
+
     /// Atomically accepts a Planner version and admits its Implementer.
     /// Returns false for identical handoff redelivery.
     async fn accept_task_chain_plan(
@@ -78,6 +89,20 @@ pub trait TaskRepository: Send + Sync {
     /// settle immediately and active workers observe their cancellation flag.
     async fn cancel_task_chain(&self, chain_id: &str) -> Result<(), DbError> {
         let _ = chain_id;
+        Err(TaskChainStore::unsupported())
+    }
+
+    /// Atomically records a natural-language reply and appends it as a
+    /// visible user prompt in the owning session transcript. Returns false
+    /// for identical redelivery; reusing a reply identity with different
+    /// inputs is rejected. Recording never admits work.
+    async fn record_task_chain_reply(
+        &self,
+        chain_id: &str,
+        reply_id: &str,
+        message: &str,
+    ) -> Result<bool, DbError> {
+        let _ = (chain_id, reply_id, message);
         Err(TaskChainStore::unsupported())
     }
 
@@ -516,6 +541,18 @@ impl TaskRepository for SqliteTaskRepository {
         Ok(chains)
     }
 
+    async fn load_task_chain_for_reply(
+        &self,
+        session_id: &str,
+        reply_id: &str,
+    ) -> Result<Option<TaskChain>, DbError> {
+        let mut transaction = self.pool.begin().await?;
+        let chain = TaskChainStore::load_for_reply(&mut transaction, session_id, reply_id).await?;
+        transaction.commit().await?;
+
+        Ok(chain)
+    }
+
     async fn accept_task_chain_plan(
         &self,
         chain_id: &str,
@@ -555,6 +592,33 @@ impl TaskRepository for SqliteTaskRepository {
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn record_task_chain_reply(
+        &self,
+        chain_id: &str,
+        reply_id: &str,
+        message: &str,
+    ) -> Result<bool, DbError> {
+        let now = self.timestamp_source.now_timestamp_seconds();
+        let mut transaction = self.pool.begin().await?;
+        let session_id =
+            TaskChainStore::record_reply(&mut transaction, chain_id, reply_id, message, now)
+                .await?;
+        if let Some(session_id) = &session_id {
+            let content = stored_message_content(SessionMessageKind::UserPrompt, message);
+            SessionMessageStore::append_normalized_in_transaction(
+                &mut transaction,
+                session_id,
+                SessionMessageKind::UserPrompt,
+                &content,
+                now,
+            )
+            .await?;
+        }
+        transaction.commit().await?;
+
+        Ok(session_id.is_some())
     }
 
     async fn accept_agent_plan(
