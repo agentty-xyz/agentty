@@ -7,7 +7,7 @@
 //! `Send + Sync` capability without sharing all of [`crate::app::App`] behind
 //! a mutex.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::future::poll_fn;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -19,6 +19,7 @@ use ag_session::{
     SessionError, SessionId,
 };
 use tokio::sync::{mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
 
 use crate::app::SessionManager;
 use crate::app::command_gateway::{
@@ -494,8 +495,9 @@ impl Drop for SessionRuntimeConsumerGuard {
 /// Session workflow owner and foreground-driven actor mailbox.
 pub(crate) struct SessionRuntime {
     /// Task chains whose reply decision has deferred its admission to a
-    /// background task; further replies are busy until that action arrives.
-    pub(crate) deciding_task_chain_ids: HashSet<String>,
+    /// background task, with its independently cancelable run scope. Further
+    /// replies are busy until that action arrives.
+    pub(crate) deciding_task_chain_ids: HashMap<String, CancellationToken>,
     command_rx: mpsc::Receiver<SessionRuntimeCommand>,
     command_tx: mpsc::Sender<SessionRuntimeCommand>,
     consumer_state: Arc<SessionRuntimeConsumerState>,
@@ -508,7 +510,7 @@ impl SessionRuntime {
         let (command_tx, command_rx) = mpsc::channel(SESSION_RUNTIME_COMMAND_CAPACITY);
 
         Self {
-            deciding_task_chain_ids: HashSet::new(),
+            deciding_task_chain_ids: HashMap::new(),
             command_rx,
             command_tx,
             consumer_state: Arc::new(SessionRuntimeConsumerState::new()),
