@@ -365,12 +365,21 @@ impl TaskChainStore {
         connection: &mut SqliteConnection,
         task_id: &str,
     ) -> Result<(), DbError> {
-        let row = sqlx::query!(r#"SELECT EXISTS(SELECT 1 FROM task_chain WHERE planner_task_id = ? OR implementer_task_id = ?) AS "owned!: bool""#, task_id, task_id).fetch_one(connection).await?;
-        if row.owned {
+        if Self::owns_task(connection, task_id).await? {
             return Err(Self::invalid("Workflow tasks require workflow admission"));
         }
 
         Ok(())
+    }
+
+    /// Checks durable role ownership without loading workflow projections.
+    pub(crate) async fn owns_task(
+        connection: &mut SqliteConnection,
+        task_id: &str,
+    ) -> Result<bool, DbError> {
+        let row = sqlx::query!(r#"SELECT EXISTS(SELECT 1 FROM task_chain WHERE planner_task_id = ? OR implementer_task_id = ?) AS "owned!: bool""#, task_id, task_id).fetch_one(connection).await?;
+
+        Ok(row.owned)
     }
 
     pub(crate) fn unsupported() -> DbError {

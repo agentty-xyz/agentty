@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::post_turn::{PostTurnContext, TurnFinalizerContext};
-use super::task::{SessionTaskService, SessionTranscriptMessageAppend};
+use super::task::SessionTaskService;
 use super::worker::{SessionWorkerContext, TurnMetadata};
 use super::{StatusTransition, isolation, post_turn, turn};
 use crate::app::AppEvent;
@@ -110,6 +110,7 @@ async fn execute(
     } else {
         None
     };
+    let chain_owned = is_chain_owned(context, request).await?;
     let is_recorded = context
         .db
         .tasks()
@@ -125,7 +126,12 @@ async fn execute(
             },
         )
         .await?;
-    append_chain_answer(context, request, &result.assistant_message, is_recorded).await?;
+    mirror_chain_answer(
+        context,
+        request,
+        &result.assistant_message,
+        is_recorded && chain_owned,
+    );
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
@@ -175,40 +181,34 @@ async fn execute(
     Ok(())
 }
 
-/// Mirrors a newly recorded chain-owned role answer into the session chat.
+/// Mirrors an atomically persisted chain-owned role answer into live chat.
 ///
-/// Only the first save of an attempt (`is_recorded`) appends, so redelivered
+/// Only the first save of a chain-owned attempt appends, so redelivered
 /// or duplicate saves never append twice. Standalone role tasks keep their
 /// output out of the ordinary transcript.
-async fn append_chain_answer(
+fn mirror_chain_answer(
     context: &SessionWorkerContext,
     request: &SubmitAgentTaskRequest,
     response: &ag_protocol::AgentResponse,
-    is_recorded: bool,
-) -> Result<(), SessionError> {
+    newly_recorded_chain_answer: bool,
+) {
     let text = response.to_display_text();
-    if !is_recorded || text.trim().is_empty() || !is_chain_owned(context, request).await? {
-        return Ok(());
+    if !newly_recorded_chain_answer || text.trim().is_empty() {
+        return;
     }
     let encoded_answer = AgentAnswerContent {
         agent: request.assignment.definition,
         text,
     }
     .encode();
-    SessionTaskService::append_session_transcript_message(
+    SessionTaskService::mirror_session_transcript_message(
         &context.transcript,
-        &context.db,
         &context.app_event_tx,
         &context.session_update_versions,
         &context.session_id,
-        SessionTranscriptMessageAppend {
-            kind: SessionMessageKind::AgentAnswer,
-            raw_content: &encoded_answer,
-        },
-    )
-    .await;
-
-    Ok(())
+        SessionMessageKind::AgentAnswer,
+        &encoded_answer,
+    );
 }
 
 /// Returns whether the request's task is one of a session task chain's roles.

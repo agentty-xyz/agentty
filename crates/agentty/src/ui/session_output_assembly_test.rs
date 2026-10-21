@@ -339,6 +339,7 @@ fn test_output_lines_places_queued_messages_after_active_turn() {
 #[test]
 fn test_task_chain_rows_render_role_headers_and_live_graph_card() {
     // Arrange
+    let chain_id = " chain \n";
     let mut session = crate::test_support::SessionFixtureBuilder::new()
         .status(Status::Review)
         .build();
@@ -348,11 +349,11 @@ fn test_task_chain_rows_render_role_headers_and_live_graph_card() {
     };
     session.transcript = Some(SessionTranscript::new(vec![
         SessionMessage::conversation(0, SessionMessageKind::UserPrompt, "Add search"),
-        SessionMessage::new(1, SessionMessageKind::AgentGraph, "chain"),
+        SessionMessage::new(1, SessionMessageKind::AgentGraph, chain_id),
         SessionMessage::new(2, SessionMessageKind::AgentAnswer, answer.encode()),
         SessionMessage::new(3, SessionMessageKind::AgentAnswer, "legacy answer"),
     ]));
-    let live_graph = task_chain_graph("chain");
+    let live_graph = task_chain_graph(chain_id);
     let other_graph = task_chain_graph("other-chain");
 
     // Act

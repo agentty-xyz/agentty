@@ -426,9 +426,9 @@ impl SessionTranscript {
 ///
 /// User prompts preserve leading horizontal whitespace so pasted indentation
 /// survives persistence while outer line breaks and trailing whitespace are
-/// normalized. Assistant rows and task-chain payloads remove outer whitespace,
-/// while workflow notices preserve exact content so status blocks keep their
-/// spacing.
+/// normalized. Assistant rows and role answers remove outer whitespace.
+/// Workflow notices preserve spacing, and graph markers preserve exact chain
+/// identities.
 pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String {
     match kind {
         SessionMessageKind::UserPrompt | SessionMessageKind::AgentPrompt => {
@@ -436,9 +436,8 @@ pub fn stored_message_content(kind: SessionMessageKind, content: &str) -> String
         }
         SessionMessageKind::AssistantAnswer
         | SessionMessageKind::ActivitySummary
-        | SessionMessageKind::AgentAnswer
-        | SessionMessageKind::AgentGraph => normalized_message_content(content),
-        SessionMessageKind::WorkflowNotice => content.to_string(),
+        | SessionMessageKind::AgentAnswer => normalized_message_content(content),
+        SessionMessageKind::AgentGraph | SessionMessageKind::WorkflowNotice => content.to_string(),
     }
 }
 

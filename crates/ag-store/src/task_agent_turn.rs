@@ -1,9 +1,12 @@
 //! Task-only replay history, continuation, and idempotent usage accounting.
 
-use ag_session::TaskAgentInput;
+use ag_protocol::AgentResponse;
+use ag_session::{AgentAnswerContent, SessionMessageKind, TaskAgentInput, stored_message_content};
 use sqlx::SqliteConnection;
 
+use crate::session_message::SessionMessageStore;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
+use crate::task_chain::TaskChainStore;
 use crate::{DbError, session};
 
 /// One observed model response, separate from operation completion.
@@ -107,11 +110,12 @@ impl TaskAgentTurnStore {
     /// Returns `true` only when this call recorded the response; an identical
     /// repeat returns `false` without side effects.
     pub(crate) async fn save(
-        connection: &mut SqliteConnection,
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         attempt_id: &str,
         metadata: &TaskAgentTurnMetadata,
         now: i64,
     ) -> Result<bool, DbError> {
+        let connection = &mut **transaction;
         if metadata.assistant_message.trim().is_empty() {
             return Err(Self::invalid("Task response must be nonempty"));
         }
@@ -195,8 +199,52 @@ impl TaskAgentTurnStore {
             metadata.harness_turn_report.as_deref(),
         )
         .await?;
+        Self::append_chain_answer(
+            transaction,
+            &owner.session_id,
+            &owner.task_id,
+            &metadata.assistant_message,
+            now,
+        )
+        .await?;
 
         Ok(true)
+    }
+
+    /// Commits a workflow role's display projection with its response receipt.
+    async fn append_chain_answer(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        session_id: &str,
+        task_id: &str,
+        assistant_message: &str,
+        now: i64,
+    ) -> Result<(), DbError> {
+        if !TaskChainStore::owns_task(transaction, task_id).await? {
+            return Ok(());
+        }
+        let role = TaskAgentStore::load(transaction, task_id)
+            .await?
+            .ok_or_else(|| Self::invalid("Task context is missing"))?;
+        let response: AgentResponse = serde_json::from_str(assistant_message)
+            .map_err(|_| Self::invalid("Invalid task response"))?;
+        let text = response.to_display_text();
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        let answer = AgentAnswerContent {
+            agent: role.context.assignment.definition,
+            text,
+        }
+        .encode();
+        let content = stored_message_content(SessionMessageKind::AgentAnswer, &answer);
+        SessionMessageStore::append_normalized_in_transaction(
+            transaction,
+            session_id,
+            SessionMessageKind::AgentAnswer,
+            &content,
+            now,
+        )
+        .await
     }
 
     fn write_count(value: u64) -> Result<i64, DbError> {

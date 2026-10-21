@@ -4,12 +4,14 @@ use std::sync::Arc;
 
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AcceptedTaskPlan, ContinueTaskChainRequest,
-    CreateTaskRequest, DurableMessageVisibility, SessionId, StartPlanThenImplementRequest,
-    SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus, TaskChain,
+    CreateTaskRequest, DurableMessageVisibility, SessionId, SessionMessageKind,
+    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAttempt,
+    TaskAttemptStatus, TaskChain, stored_message_content,
 };
 use async_trait::async_trait;
 use sqlx::{SqliteConnection, SqlitePool};
 
+use crate::session_message::SessionMessageStore;
 use crate::task_agent::{TaskAgentContextRow, TaskAgentStore};
 use crate::task_agent_turn::{TaskAgentHistoryRow, TaskAgentTurnMetadata, TaskAgentTurnStore};
 use crate::task_chain::TaskChainStore;
@@ -24,6 +26,7 @@ use crate::{DbError, TimestampSource};
 #[async_trait]
 pub trait TaskRepository: Send + Sync {
     /// Atomically reserves both role tasks and admits the first Planner.
+    /// The launch prompt and graph marker commit with the workflow receipt.
     /// Returns false for identical launch redelivery, without replaying work.
     async fn start_task_chain(
         &self,
@@ -118,6 +121,8 @@ pub trait TaskRepository: Send + Sync {
     /// Commits a running, uncanceled attempt's observed response, continuation,
     /// and usage atomically. Identical repeats do not duplicate usage or rewind
     /// continuation. This does not settle the operation or accept the task.
+    /// Chain-owned role answers join the session transcript in that same
+    /// transaction; standalone role responses remain task-only.
     /// Returns `true` only when this call recorded the response, so callers
     /// can run once-only follow-up effects; identical repeats return `false`.
     async fn persist_agent_turn(
@@ -471,6 +476,25 @@ impl TaskRepository for SqliteTaskRepository {
         let claimed =
             TaskChainStore::start(&mut transaction, session_id, request, operation_kind, now)
                 .await?;
+        if claimed {
+            for (kind, raw_content) in [
+                (
+                    SessionMessageKind::UserPrompt,
+                    request.user_request.as_str(),
+                ),
+                (SessionMessageKind::AgentGraph, request.chain_id.as_str()),
+            ] {
+                let content = stored_message_content(kind, raw_content);
+                SessionMessageStore::append_normalized_in_transaction(
+                    &mut transaction,
+                    session_id,
+                    kind,
+                    &content,
+                    now,
+                )
+                .await?;
+            }
+        }
         transaction.commit().await?;
 
         Ok(claimed)

@@ -7,14 +7,15 @@ use ag_session::{
 use tracing::warn;
 
 use crate::app::App;
+use crate::app::session::SessionTaskService;
 use crate::infra::db::DbError;
 
 impl App {
     /// Starts only newly admitted work; matching launch redelivery is a
     /// receipt.
     ///
-    /// New admission records the original request and the live
-    /// execution-graph marker in the session transcript before dispatch, so
+    /// New admission atomically records the original request and graph
+    /// marker, then mirrors them into live chat before dispatch, so
     /// redelivery never duplicates them and a dispatch failure keeps the graph
     /// visible with its failed state.
     pub(super) async fn start_api_task_chain(
@@ -41,18 +42,16 @@ impl App {
             .await
             .map_err(|error| api_error(&error))?;
         if admitted {
-            self.append_task_chain_transcript_message(
+            self.mirror_task_chain_transcript_message(
                 session_id,
                 SessionMessageKind::UserPrompt,
                 &request.user_request,
-            )
-            .await;
-            self.append_task_chain_transcript_message(
+            );
+            self.mirror_task_chain_transcript_message(
                 session_id,
                 SessionMessageKind::AgentGraph,
                 &request.chain_id,
-            )
-            .await;
+            );
             self.dispatch_task_chain(&request.chain_id, &request.planner_attempt_id)
                 .await?;
         }
@@ -60,20 +59,27 @@ impl App {
         Ok(())
     }
 
-    /// Records one chain-owned transcript message for the owning session
-    /// through the ordinary persistence and live-mirror path.
+    /// Mirrors a newly committed chain message into the owning live session.
     ///
     /// Callers own idempotency: append only after a newly admitted transition
     /// so redelivered requests never duplicate transcript rows.
-    pub(crate) async fn append_task_chain_transcript_message(
+    fn mirror_task_chain_transcript_message(
         &self,
         session_id: &SessionId,
         kind: SessionMessageKind,
         content: &str,
     ) {
-        self.sessions
-            .append_transcript_message_for_session(&self.services, session_id, kind, content)
-            .await;
+        let Ok(handles) = self.sessions.session_handles_or_err(session_id) else {
+            return;
+        };
+        SessionTaskService::mirror_session_transcript_message(
+            &handles.transcript,
+            &self.services.event_sender(),
+            &self.services.session_update_versions(),
+            session_id,
+            kind,
+            content,
+        );
     }
 
     /// Accepts and dispatches the exact version recorded by the transaction.

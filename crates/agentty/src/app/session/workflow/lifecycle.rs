@@ -3703,37 +3703,6 @@ impl SessionManager {
         .await;
     }
 
-    /// Appends one typed message to a session transcript through the same
-    /// live-mirror, persistence, and update-event path as ordinary turns.
-    ///
-    /// Like [`Self::append_output_for_session`], sessions without live handles
-    /// are skipped. Task-chain workflows use this for messages they own, such
-    /// as the original request and execution-graph marker.
-    pub(crate) async fn append_transcript_message_for_session(
-        &self,
-        services: &AppServices,
-        session_id: &str,
-        kind: SessionMessageKind,
-        content: &str,
-    ) {
-        let Ok(handles) = self.session_handles_or_err(session_id) else {
-            return;
-        };
-
-        SessionTaskService::append_session_transcript_message(
-            &handles.transcript,
-            services.db(),
-            &services.event_sender(),
-            &services.session_update_versions(),
-            session_id,
-            SessionTranscriptMessageAppend {
-                kind,
-                raw_content: content,
-            },
-        )
-        .await;
-    }
-
     /// Removes prompt attachment files that are no longer owned by the
     /// composer or worker.
     ///

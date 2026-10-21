@@ -1,7 +1,66 @@
-use ag_session::{SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus};
+use ag_session::{
+    StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAttemptStatus,
+};
 
 use crate::test_support::{agent_task_request, task_database_fixture};
 use crate::{Database, TaskAgentTurnMetadata};
+
+#[tokio::test]
+async fn chain_projection_rejects_invalid_responses_and_omits_empty_display_text() {
+    for (assistant_message, succeeds) in [
+        ("not a structured response", false),
+        (r#"{"answer":"  ","questions":[]}"#, true),
+    ] {
+        // Arrange
+        let database = task_database_fixture().await;
+        let base = agent_task_request("first");
+        let launch = StartPlanThenImplementRequest {
+            agent: base.assignment.agent,
+            chain_id: "chain".into(),
+            planner_attempt_id: "first".into(),
+            user_request: base.input.user_request,
+        };
+        database
+            .tasks()
+            .start_task_chain("session", &launch, "agent_task")
+            .await
+            .expect("launch");
+        database
+            .operations()
+            .mark_session_operation_running("task-attempt:first")
+            .await
+            .expect("running");
+        let metadata = TaskAgentTurnMetadata {
+            assistant_message: assistant_message.into(),
+            ..metadata("first")
+        };
+
+        // Act
+        let result = database
+            .tasks()
+            .persist_agent_turn("first", &metadata)
+            .await;
+
+        // Assert
+        assert_eq!(result.is_ok(), succeeds, "{assistant_message}");
+        let history = database
+            .tasks()
+            .load_agent_history(&launch.planner_request().task_id)
+            .await
+            .expect("history")
+            .expect("context");
+        assert_eq!(history.turns.len(), usize::from(succeeds));
+        assert_eq!(
+            database
+                .sessions()
+                .load_session_messages("session")
+                .await
+                .expect("messages")
+                .len(),
+            2
+        );
+    }
+}
 
 #[tokio::test]
 async fn task_response_preserves_ordinary_conversation_and_uses_captured_model() {
