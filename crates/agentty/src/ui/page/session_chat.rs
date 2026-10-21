@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -177,80 +179,22 @@ pub struct SessionChatPageInput<'a> {
 }
 
 /// Chat page renderer for a single session.
+///
+/// Field access delegates to the stored inputs so callers can continue reading
+/// and updating render state directly.
 pub struct SessionChatPage<'a> {
-    /// Transient progress text for the active agent turn.
-    pub active_progress: Option<&'a str>,
-    /// Exact prompt transcript block for the active turn, when available.
-    pub active_prompt_output: Option<&'a str>,
     /// Whether the session worktree can be opened externally.
     pub can_open_worktree: bool,
-    /// Whether the session branch currently conflicts with its base branch.
-    pub has_merge_conflict: bool,
-    /// Shared markdown cache reused across transcript renders in this page.
-    pub markdown_render_cache: &'a markdown::MarkdownRenderCache,
-    /// Current UI mode that controls the bottom panel and focus.
-    pub mode: &'a AppMode,
-    /// Shared fully assembled output-layout cache for scroll metrics and
-    /// frame rendering.
-    pub output_layout_cache: &'a SessionOutputLayoutCache,
-    /// Most recent tracked agent process-tree totals.
-    pub resources: Option<SessionResources>,
-    /// Focused-review output for the rendered session.
-    pub review_text: Option<&'a str>,
-    /// Current vertical transcript scroll offset.
-    pub scroll_offset: Option<u16>,
-    /// Index of the session being rendered.
-    pub session_index: usize,
-    /// Observable update version for the rendered session snapshot.
-    pub session_update_version: u64,
-    /// Session rows available to the page.
-    pub sessions: &'a [Session],
-    /// One coherent render-time clock snapshot.
-    pub(crate) frame_time: FrameTime,
-    /// Host temperature supplied by the internal monitoring sidecar.
-    pub(crate) host_cpu_temperature_celsius: Option<f32>,
-    /// Latest live graph for the session's task chain, when loaded.
-    pub(crate) task_chain_graph: Option<&'a TaskChainGraph>,
+    /// Borrowed render state shared with page construction.
+    input: SessionChatPageInput<'a>,
 }
 
 impl<'a> SessionChatPage<'a> {
     /// Creates a session chat page renderer.
     pub fn new(input: SessionChatPageInput<'a>) -> Self {
-        let SessionChatPageInput {
-            active_prompt_output,
-            active_progress,
-            resources,
-            host_cpu_temperature_celsius,
-            frame_time,
-            has_merge_conflict,
-            markdown_render_cache,
-            mode,
-            output_layout_cache,
-            review_text,
-            scroll_offset,
-            session_index,
-            session_update_version,
-            sessions,
-            task_chain_graph,
-        } = input;
-
         Self {
-            active_prompt_output,
-            active_progress,
-            resources,
-            host_cpu_temperature_celsius,
             can_open_worktree: false,
-            frame_time,
-            has_merge_conflict,
-            markdown_render_cache,
-            mode,
-            output_layout_cache,
-            review_text,
-            scroll_offset,
-            session_index,
-            session_update_version,
-            sessions,
-            task_chain_graph,
+            input,
         }
     }
 
@@ -525,6 +469,20 @@ impl<'a> SessionChatPage<'a> {
             publish_pull_request_action: session.publish_pull_request_action(),
             session_state: help_action::session_view_state(session),
         }
+    }
+}
+
+impl<'a> Deref for SessionChatPage<'a> {
+    type Target = SessionChatPageInput<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.input
+    }
+}
+
+impl DerefMut for SessionChatPage<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.input
     }
 }
 

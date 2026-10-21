@@ -10,6 +10,7 @@ use super::{
 use crate::domain::agent::ReasoningLevel;
 use crate::domain::input::InputState;
 use crate::domain::question::QuestionItem;
+use crate::domain::resource::SessionResources;
 use crate::domain::session::{Session, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::presentation::app_mode::{AppMode, ChatFocus};
@@ -384,13 +385,18 @@ fn test_review_text_reads_snapshot_for_prompt_output() {
         input: InputState::default(),
         scroll_offset: None,
     };
-    let mut page = test_session_chat_page(&session, &mode);
-    page.review_text = Some("Focused review");
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        review_text: Some("Initial review"),
+        ..test_page_input(&session, &mode)
+    });
 
     // Act
+    let initial_review_text = page.review_text;
+    page.review_text = Some("Focused review");
     let review_text = page.review_text;
 
     // Assert
+    assert_eq!(initial_review_text, Some("Initial review"));
     assert_eq!(review_text, Some("Focused review"));
 }
 
@@ -497,8 +503,22 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
             session_id: session.id.clone(),
             scroll_offset: None,
         };
-        let mut page = test_session_chat_page(&session, &mode);
-        let width = 80;
+        let sessions = [session_fixture(), session];
+        let session = &sessions[1];
+        let mut page = SessionChatPage::new(SessionChatPageInput {
+            has_merge_conflict: true,
+            host_cpu_temperature_celsius: Some(62.5),
+            resources: Some(SessionResources {
+                cpu_percent: 12.5,
+                process_count: 3,
+                resident_memory_kib: 2048,
+            }),
+            session_index: 1,
+            session_update_version: 7,
+            sessions: &sessions,
+            ..test_page_input(session, &mode)
+        });
+        let width = 120;
         let height = 14;
         let backend = ratatui::backend::TestBackend::new(width, height);
         let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
@@ -528,6 +548,39 @@ fn test_render_session_view_keeps_settings_in_an_inactive_composer() {
         assert_eq!(buffer[(1, composer_row + 1)].symbol(), "╰");
         assert!(!buffer_text(buffer).contains("›"));
         assert!(buffer_row_text(buffer, height - 1, width).contains("q: back"));
+        let text = buffer_text(buffer);
+        assert!(text.contains("Merge conflict with main"));
+        assert!(text.contains("Processes: 3  CPU: 12.5%  Memory: 2.0 MiB"));
+        assert!(text.contains("Host CPU temp: 62.5°C"));
+    }
+}
+
+#[test]
+fn test_worktree_availability_preserves_default_and_builder_values() {
+    // Arrange
+    let session = session_fixture();
+    let mode = AppMode::View {
+        session_id: session.id.clone(),
+        scroll_offset: None,
+    };
+
+    for availability in [None, Some(false), Some(true)] {
+        let page = test_session_chat_page(&session, &mode);
+
+        // Act
+        let page = if let Some(available) = availability {
+            page.can_open_worktree(available)
+        } else {
+            page
+        };
+        let actions = help_action::view_actions(page.view_help_state(&session));
+
+        // Assert
+        assert_eq!(page.can_open_worktree, availability.unwrap_or(false));
+        assert_eq!(
+            actions.iter().any(|action| action.key == "o"),
+            availability.unwrap_or(false)
+        );
     }
 }
 
@@ -1053,8 +1106,10 @@ fn rendered_rows_with_started_session(mode: &AppMode, width: u16, height: u16) -
     let mut session = session_fixture();
     session.created_at = 1_782_864_000;
     session.in_progress_total_seconds = 3_660;
-    let mut page = test_session_chat_page(&session, mode);
-    page.frame_time = FrameTime::new(1_782_871_200, 0, 0);
+    let mut page = SessionChatPage::new(SessionChatPageInput {
+        frame_time: FrameTime::new(1_782_871_200, 0, 0),
+        ..test_page_input(&session, mode)
+    });
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = ratatui::Terminal::new(backend).expect("failed to create terminal");
     terminal
