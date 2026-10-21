@@ -147,7 +147,9 @@ routes it by the phase observed at that moment:
 
 The result is `PlanAccepted`, `PlanRevised`, or `Continued`. Each action uses an attempt
 ID derived from the caller's globally unique `reply_id`. Redelivering a reply returns
-its original outcome without recording, deciding, or admitting work again.
+its original outcome without recording, deciding, or admitting work again. Reusing that
+identity with different text is rejected. Canceling the workflow interrupts its pending
+decision; a late decision cannot restart canceled work.
 
 ## Submission and Completion
 

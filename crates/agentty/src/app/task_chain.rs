@@ -144,7 +144,8 @@ impl App {
         Ok(())
     }
 
-    /// Persists cancellation before interrupting the exact attempt token.
+    /// Persists cancellation before interrupting the exact attempt token and
+    /// any pending session-owned reply decision.
     pub(super) async fn cancel_api_task_chain(
         &mut self,
         chain_id: &str,
@@ -160,6 +161,9 @@ impl App {
             "task-attempt:{}",
             chain.current_request.attempt_id
         ));
+        if self.sessions.deciding_task_chain_ids.contains(chain_id) {
+            self.services.cancel_agent_runs(&chain.session_id);
+        }
 
         Ok(())
     }
