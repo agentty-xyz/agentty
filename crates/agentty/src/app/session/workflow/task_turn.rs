@@ -125,9 +125,7 @@ async fn execute(
             },
         )
         .await?;
-    if is_recorded {
-        append_chain_answer(context, request, &result.assistant_message).await?;
-    }
+    append_chain_answer(context, request, &result.assistant_message, is_recorded).await?;
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
@@ -179,25 +177,17 @@ async fn execute(
 
 /// Mirrors a newly recorded chain-owned role answer into the session chat.
 ///
-/// Only the first save of an attempt reaches this point, so redelivered or
-/// duplicate saves never append twice. Standalone role tasks keep their output
-/// out of the ordinary transcript.
+/// Only the first save of an attempt (`is_recorded`) appends, so redelivered
+/// or duplicate saves never append twice. Standalone role tasks keep their
+/// output out of the ordinary transcript.
 async fn append_chain_answer(
     context: &SessionWorkerContext,
     request: &SubmitAgentTaskRequest,
     response: &ag_protocol::AgentResponse,
+    is_recorded: bool,
 ) -> Result<(), SessionError> {
     let text = response.to_display_text();
-    let is_chain_owned = context
-        .db
-        .tasks()
-        .list_task_chains(&context.session_id)
-        .await?
-        .iter()
-        .any(|chain| {
-            chain.planner_task_id == request.task_id || chain.implementer_task_id == request.task_id
-        });
-    if !is_chain_owned || text.trim().is_empty() {
+    if !is_recorded || text.trim().is_empty() || !is_chain_owned(context, request).await? {
         return Ok(());
     }
     let encoded_answer = AgentAnswerContent {
@@ -219,6 +209,22 @@ async fn append_chain_answer(
     .await;
 
     Ok(())
+}
+
+/// Returns whether the request's task is one of a session task chain's roles.
+async fn is_chain_owned(
+    context: &SessionWorkerContext,
+    request: &SubmitAgentTaskRequest,
+) -> Result<bool, SessionError> {
+    let chains = context
+        .db
+        .tasks()
+        .list_task_chains(&context.session_id)
+        .await?;
+
+    Ok(chains.iter().any(|chain| {
+        chain.planner_task_id == request.task_id || chain.implementer_task_id == request.task_id
+    }))
 }
 
 async fn prepare(

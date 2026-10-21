@@ -4,12 +4,14 @@ use ag_session::{
     AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, SessionMessage,
     SessionMessageKind, SessionStatus, SessionTranscript, StartPlanThenImplementRequest,
 };
+use tempfile::TempDir;
 
-use crate::app::App;
+use crate::app::{App, AppEvent};
 use crate::domain::session::SessionId;
+use crate::infra::db::Database;
 use crate::presentation::app_mode::AppMode;
 use crate::presentation::task_chain_graph::TaskChainNodeStatus;
-use crate::test_support::{SessionFixtureBuilder, new_test_app};
+use crate::test_support::{SessionFixtureBuilder, new_test_app, test_app_clients};
 
 #[tokio::test]
 async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
@@ -59,6 +61,46 @@ async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
         ]
     );
     assert!(!app.task_chain_graphs.needs_load(&session_id, 0));
+}
+
+#[tokio::test]
+async fn failed_graph_load_settles_without_a_graph() {
+    // Arrange
+    let directory = TempDir::new().expect("app directory");
+    let database = Database::in_memory().await.expect("database");
+    let mut app = App::new_with_clients(
+        directory.path().into(),
+        directory.path().into(),
+        None,
+        database.clone(),
+        test_app_clients(),
+    )
+    .await
+    .expect("app");
+    let session_id = visible_session(&mut app, Some("workflow")).await;
+    database.pool().close().await;
+
+    // Act
+    app.refresh_task_chain_graph_if_needed();
+    let completion = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = app.next_app_event().await.expect("graph load event");
+            if let AppEvent::TaskChainGraphLoaded { completion } = &event {
+                let completion = completion.clone();
+                app.apply_app_events(event).await;
+
+                return completion;
+            }
+            app.apply_app_events(event).await;
+        }
+    })
+    .await
+    .expect("graph load guard");
+
+    // Assert
+    assert!(completion.result.is_err());
+    assert_eq!(app.task_chain_graphs.graph(&session_id), None);
+    assert!(app.task_chain_graphs.needs_load(&session_id, 1));
 }
 
 #[tokio::test]

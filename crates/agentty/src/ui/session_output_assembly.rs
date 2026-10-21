@@ -684,9 +684,12 @@ fn append_agent_answer(
         inner_width,
     ));
     let rendered_lines = rendered_markdown_lines(&answer.text, inner_width, markdown_render_cache);
-    if let Some(visible_lines) = visible_rendered_lines(&rendered_lines) {
-        lines.extend(visible_lines.iter().cloned());
-    }
+    lines.extend(
+        visible_rendered_lines(&rendered_lines)
+            .into_iter()
+            .flatten()
+            .cloned(),
+    );
 }
 
 fn append_queued_entries(
