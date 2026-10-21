@@ -29,9 +29,10 @@ impl App {
             return;
         };
         let update_version = self.session_update_version(&session_id);
+        let now = self.services.clock().now_instant();
         if !self
             .task_chain_graphs
-            .needs_load(&session_id, update_version)
+            .needs_load(&session_id, update_version, now)
         {
             return;
         }
@@ -39,7 +40,7 @@ impl App {
             .begin_load(&session_id, update_version);
         if !self.session_has_task_chain_graph_marker(&session_id) {
             self.task_chain_graphs
-                .complete_load(&session_id, update_version, Ok(None));
+                .complete_load(&session_id, update_version, Ok(None), now);
 
             return;
         }
@@ -68,6 +69,7 @@ impl App {
             &completion.session_id,
             completion.update_version,
             completion.result,
+            self.services.clock().now_instant(),
         );
     }
 

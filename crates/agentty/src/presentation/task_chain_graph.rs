@@ -1,6 +1,7 @@
 //! Live execution-graph view model for task chains shown in session chat.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use ag_session::{BuiltinAgentDefinition, TaskChain, TaskChainPhase};
 
@@ -8,6 +9,9 @@ use crate::domain::session::SessionId;
 
 /// Maximum number of sessions whose latest graph stays cached.
 pub(crate) const TASK_CHAIN_GRAPH_CACHE_LIMIT: usize = 8;
+
+/// Delay before retrying a failed graph read for an unchanged session.
+pub(crate) const TASK_CHAIN_GRAPH_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 /// Label of the handoff edge between Planner and Implementer.
 pub(crate) const ACCEPTED_PLAN_EDGE_LABEL: &str = "accepted plan";
@@ -159,7 +163,8 @@ impl TaskChainGraph {
 ///
 /// Key: session id. Invalidation: an entry reloads when the session's reduced
 /// update version differs from the version captured when its last load
-/// started; only one load per session is in flight. At most
+/// started; failed reads retry after a short delay while retaining the graph.
+/// Only one load per session is in flight. At most
 /// [`TASK_CHAIN_GRAPH_CACHE_LIMIT`] recently loaded sessions are retained,
 /// evicting the least recently started load.
 #[derive(Debug, Default)]
@@ -175,9 +180,12 @@ impl TaskChainGraphCache {
     }
 
     /// Returns whether a load for this update version should start.
-    pub(crate) fn needs_load(&self, session_id: &str, update_version: u64) -> bool {
-        self.entry(session_id)
-            .is_none_or(|entry| !entry.is_loading && entry.update_version != update_version)
+    pub(crate) fn needs_load(&self, session_id: &str, update_version: u64, now: Instant) -> bool {
+        self.entry(session_id).is_none_or(|entry| {
+            !entry.is_loading
+                && (entry.update_version != update_version
+                    || entry.retry_at.is_some_and(|retry_at| now >= retry_at))
+        })
     }
 
     /// Marks one session as loading the snapshot for `update_version`.
@@ -191,6 +199,7 @@ impl TaskChainGraphCache {
         self.entries.push_front(TaskChainGraphEntry {
             graph,
             is_loading: true,
+            retry_at: None,
             session_id: session_id.clone(),
             update_version,
         });
@@ -199,12 +208,14 @@ impl TaskChainGraphCache {
 
     /// Applies one finished load when it still matches the in-flight request.
     ///
-    /// A failed load keeps the previous graph; stale completions are ignored.
+    /// A failed load keeps the previous graph and schedules a retry; stale
+    /// completions are ignored.
     pub(crate) fn complete_load(
         &mut self,
         session_id: &str,
         update_version: u64,
         result: Result<Option<TaskChainGraph>, String>,
+        now: Instant,
     ) {
         let Some(entry) = self.entries.iter_mut().find(|entry| {
             entry.session_id == session_id
@@ -214,8 +225,9 @@ impl TaskChainGraphCache {
             return;
         };
         entry.is_loading = false;
-        if let Ok(graph) = result {
-            entry.graph = graph;
+        match result {
+            Ok(graph) => entry.graph = graph,
+            Err(_) => entry.retry_at = Some(now + TASK_CHAIN_GRAPH_RETRY_DELAY),
         }
     }
 
@@ -231,6 +243,7 @@ impl TaskChainGraphCache {
 struct TaskChainGraphEntry {
     graph: Option<TaskChainGraph>,
     is_loading: bool,
+    retry_at: Option<Instant>,
     session_id: SessionId,
     update_version: u64,
 }
