@@ -46,7 +46,8 @@ const AUTO_EDIT_POLICY: PermissionModePolicy = PermissionModePolicy {
 
 /// Codex app-server policy for temporary repository research.
 ///
-/// The read-only sandbox denies filesystem writes and command network access.
+/// The read-only sandbox denies filesystem writes while allowing command
+/// network access for external research.
 /// Any legacy or modern pre-action request is rejected rather than expanding
 /// the turn's permissions.
 const READ_ONLY_POLICY: PermissionModePolicy = PermissionModePolicy {
@@ -56,7 +57,7 @@ const READ_ONLY_POLICY: PermissionModePolicy = PermissionModePolicy {
     pre_action_decision: "reject",
     pre_action_rejection_decision: "reject",
     thread_sandbox_mode: "read-only",
-    turn_network_access: false,
+    turn_network_access: true,
     turn_sandbox_type: "readOnly",
     web_search_mode: "live",
 };

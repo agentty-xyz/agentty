@@ -36,6 +36,9 @@ and other tools that cannot run inside the provider sandbox remain available. Th
 means Codex commands are not confined to the session worktree; review the session diff
 and use `Read Only` for inspection-only work.
 
+Codex `Read Only` turns, including the `/plan` Planner, allow shell network requests for
+external research while keeping filesystem writes and permission escalation denied.
+
 Claude turns also allow Claude Code's `WebSearch` and `WebFetch` tools, so prompts that
 need current external information can use the web without an interactive permission
 grant. Claude `Auto Edit` retains Claude Code's unsandboxed command fallback for tools

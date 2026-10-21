@@ -145,13 +145,14 @@ fn build_turn_start_payload_uses_full_access_for_auto_edit() {
 }
 
 #[test]
-fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
+fn read_only_payloads_allow_network_and_deny_writes_and_pre_action_requests() {
     // Arrange
     let folder = PathBuf::from("/tmp/agentty-codex-research");
-    let approval_request = serde_json::json!({
-        "id": "approval-1",
-        "method": "item/commandExecution/requestApproval"
-    });
+    let approval_requests = [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+    ]
+    .map(|method| serde_json::json!({ "id": "approval-1", "method": method }));
 
     // Act
     let thread_payload = build_thread_start_payload(
@@ -173,9 +174,10 @@ fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
         thread_id: "thread-1",
         turn_start_id: "turn-start-1",
     });
-    let approval_response =
-        policy::build_server_request_response(&approval_request, PermissionMode::ReadOnly, &folder)
-            .expect("approval response should be generated");
+    let approval_responses = approval_requests.map(|request| {
+        policy::build_server_request_response(&request, PermissionMode::ReadOnly, &folder)
+            .expect("approval response should be generated")
+    });
 
     // Assert
     assert_eq!(
@@ -186,13 +188,19 @@ fn read_only_payloads_deny_writes_network_and_pre_action_requests() {
         turn_payload.pointer("/params/sandboxPolicy"),
         Some(&serde_json::json!({
             "type": "readOnly",
-            "networkAccess": false
+            "networkAccess": true
         }))
     );
     assert_eq!(
-        approval_response.pointer("/result/decision"),
-        Some(&Value::String("reject".to_string()))
+        turn_payload.pointer("/params/approvalPolicy"),
+        Some(&Value::String("never".to_string()))
     );
+    for response in approval_responses {
+        assert_eq!(
+            response.pointer("/result/decision"),
+            Some(&Value::String("reject".to_string()))
+        );
+    }
 }
 
 #[test]
