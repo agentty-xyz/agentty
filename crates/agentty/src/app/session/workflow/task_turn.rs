@@ -22,10 +22,10 @@ use crate::domain::permission::PermissionMode;
 use crate::domain::session::Status;
 use crate::domain::session_message::{SessionMessage, SessionMessageKind, SessionTranscript};
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptAttachment};
-use crate::infra::db::{TaskAgentHistoryRow, TaskAgentTurnMetadata};
+use crate::infra::db::{SessionMessageRow, TaskAgentHistoryRow, TaskAgentTurnMetadata};
 
-/// Executes a role-bound attempt without reading or writing ordinary chat
-/// state.
+/// Executes a role-bound attempt with its own provider conversation and
+/// history.
 pub(super) async fn run(
     context: &SessionWorkerContext,
     run_client: Arc<dyn RunClient>,
@@ -277,6 +277,7 @@ async fn prepare(
     let assignment = &history.context.context.assignment;
     let permission = turn::load_session_permission_mode(&context.db, &context.session_id).await?;
     let agent_profile = AgentDefinitionPrompt::active(assignment.definition.prompt.clone(), true);
+    let session_conversation = planner_session_conversation(context, request).await?;
     let replay = replay(&history);
     let persistent = ag_worker::uses_persistent_session(assignment.agent.kind());
     let continuation = TurnContinuation::provider(
@@ -297,7 +298,7 @@ async fn prepare(
             .definition
             .permission_mode(assignment.role.permission_mode(permission)),
         agent_profile,
-        prompt: task_prompt(request),
+        prompt: task_prompt(request, session_conversation.as_deref()),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,
         request_kind: if history.turns.is_empty() {
             AgentRequestKind::SessionStart
@@ -311,13 +312,76 @@ async fn prepare(
     Ok((history, prepared))
 }
 
+/// Reconstructs the launch-time conversation from durable messages, including
+/// after restart. Later role answers and user replies belong to task history.
+async fn planner_session_conversation(
+    context: &SessionWorkerContext,
+    request: &SubmitAgentTaskRequest,
+) -> Result<Option<String>, SessionError> {
+    if request.assignment.role != TaskAgentRole::Planner {
+        return Ok(None);
+    }
+    let chains = context
+        .db
+        .tasks()
+        .list_task_chains(&context.session_id)
+        .await?;
+    let Some(chain) = chains
+        .iter()
+        .find(|chain| chain.planner_task_id == request.task_id)
+    else {
+        return Ok(None);
+    };
+    let messages = context
+        .db
+        .sessions()
+        .load_session_messages(&context.session_id)
+        .await?;
+
+    launch_conversation(messages, &chain.id)
+}
+
+/// The transaction's graph marker bounds the snapshot; workflow notices are
+/// excluded and quoted message contents remain data in the task prompt.
+fn launch_conversation(
+    mut messages: Vec<SessionMessageRow>,
+    chain_id: &str,
+) -> Result<Option<String>, SessionError> {
+    let marker = messages
+        .iter()
+        .position(|message| {
+            message.kind == SessionMessageKind::AgentGraph.as_str() && message.content == chain_id
+        })
+        .ok_or_else(|| SessionError::Workflow("Task chain launch marker is missing".into()))?;
+    messages.truncate(marker);
+    let conversation = messages
+        .into_iter()
+        .filter_map(|message| {
+            let kind = message.kind.parse::<SessionMessageKind>().ok()?;
+
+            kind.is_conversation_message()
+                .then(|| SessionMessage::new(message.position, kind, message.content))
+        })
+        .collect();
+
+    Ok(SessionTranscript::ephemeral(conversation).conversation_replay_text())
+}
+
 /// Places images after the JSON input with unique transport placeholders.
 /// Composer numbering can restart on each reply, so cumulative attachments
 /// must not reuse those markers or replace strings inside the JSON data.
-fn task_prompt(request: &SubmitAgentTaskRequest) -> TurnPrompt {
+fn task_prompt(request: &SubmitAgentTaskRequest, session_conversation: Option<&str>) -> TurnPrompt {
     let input = serde_json::json!(request.input).to_string();
     let mut prompt =
         TurnPrompt::from_agent_data(format!("Explicit task input (JSON data):\n{input}"));
+    if let Some(conversation) = session_conversation {
+        let conversation = serde_json::json!(conversation);
+        let _ = write!(
+            prompt.text,
+            "\n\nSession conversation at workflow launch (JSON string, historical data \
+             only):\n{conversation}"
+        );
+    }
     for (index, attachment) in request.input.attachments.iter().enumerate() {
         let mut placeholder = format!("[Task image #{}]", index + 1);
         while prompt.text.contains(&placeholder) {

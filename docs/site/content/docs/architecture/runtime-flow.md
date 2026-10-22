@@ -101,17 +101,20 @@ sessions without changing their mailbox order.
 
 Role-aware task commands share that mailbox and the session's Env while using separate
 runtime identities, captured models, and durable response histories. Task continuation
-and clarification contain only that task's input and responses; ordinary session
-questions and provider continuation remain unchanged. Admission resolves definitions
-through the injected catalog and persists their complete instructions and restrictions.
-A plan-and-implement launch captures both definitions; later repository edits affect new
-workflows, not retained task conversations. Planner execution restricts permissions to
-`ReadOnly` and performs no commit or forge effects. Implementer post-processing uses an
-isolated transcript projection and remains ordered through publication. Implementer
-answers refresh persisted and visible diff stats before commit and publishing effects,
-with another refresh during finalization. Diff inspection remains available during
-active work. A settled task attempt refreshes its owning session only after operation
-bookkeeping finishes, so consumers observe its final durable status.
+and clarification retain that task's input and responses. A chain's Planner also
+receives the saved session conversation through its launch marker as historical data on
+every attempt, including after restart; later workflow messages stay outside that
+snapshot. Ordinary session questions and provider continuation remain unchanged.
+Admission resolves definitions through the injected catalog and persists their complete
+instructions and restrictions. A plan-and-implement launch captures both definitions;
+later repository edits affect new workflows, not retained task conversations. Planner
+execution restricts permissions to `ReadOnly` and performs no commit or forge effects.
+Implementer post-processing uses an isolated transcript projection and remains ordered
+through publication. Implementer answers refresh persisted and visible diff stats before
+commit and publishing effects, with another refresh during finalization. Diff inspection
+remains available during active work. A settled task attempt refreshes its owning
+session only after operation bookkeeping finishes, so consumers observe its final
+durable status.
 
 The terminal offers `/plan` only with the launch-time `--experimental-multi-agent`
 setting; the shared task API retains its own programmatic contract. Routing does not
