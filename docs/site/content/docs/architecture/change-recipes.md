@@ -35,6 +35,13 @@ definition under `crates/ag-session/src/agents/` and register it in the bundled 
 Both use the same parser. Keep host workflow contracts separate from definition identity
 and preserve task snapshots when changing admission or continuation.
 
+## Define a Generic Execution Graph
+
+Keep pure graph shapes, node requirements, and exact result bindings in `ag-session`.
+Follow the [execution graph contracts](@/docs/architecture/execution-graphs.md), and
+test structural rules without storage or workers. Existing `/plan` and review
+coordinators remain authoritative until persistence and dispatch are integrated.
+
 ## Add a New Agent Backend or Model
 
 1. Declare model ids, descriptions, provider order, speed support, and known context
