@@ -182,7 +182,7 @@ pub fn session_header_lines(
 /// Returns the display name of a session's response speed, or `None` when its
 /// provider has no speed control to report.
 ///
-/// Gemini and Antigravity expose no speed selection, so `/speed` is hidden for
+/// Gemini and Antigravity expose no speed control, so `/fast` is hidden for
 /// them; surfacing a speed indicator in the composer would advertise a
 /// setting those sessions cannot change.
 pub(crate) fn session_speed_display(session: &Session) -> Option<&'static str> {

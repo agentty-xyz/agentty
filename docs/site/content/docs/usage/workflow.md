@@ -521,7 +521,7 @@ a fresh composer, replacing any saved draft. The picker supports fuzzy matching.
 | `/model`     | Choose a locally available backend and model.        |
 | `/reasoning` | Set reasoning effort for this session.               |
 | `/style`     | Choose concise, balanced, or detailed answers.       |
-| `/speed`     | Choose normal or fast responses for Claude or Codex. |
+| `/fast`      | Toggle normal or fast responses for Claude or Codex. |
 
 `/apply` requires a completed focused review. `/mode` selects:
 

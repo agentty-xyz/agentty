@@ -76,32 +76,50 @@ fn test_prompt_edit_prunes_attachment_after_undo_revision_eviction() {
 }
 
 #[tokio::test]
-async fn test_speed_slash_submit_enables_fast_mode_and_compatible_model() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
-    app.sessions.sessions_mut()[0].agent =
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51);
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Speed;
-        slash_state.selected_index = 1;
+async fn test_fast_slash_submit_toggles_speed_and_preserves_compatible_model() {
+    for (initial_agent, fast_agent) in [
+        (
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeFable51),
+            AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55),
+        ),
+        (
+            AgentSelection::new(AgentKind::Codex, AgentModel::Gpt53CodexSpark),
+            model_fixture::codex_selection(),
+        ),
+    ] {
+        // Arrange
+        let (mut app, _base_dir) = new_test_prompt_app("/fast", None).await;
+        app.sessions.sessions_mut()[0].agent = initial_agent;
+        app.sessions.sessions_mut()[0].speed_mode = SpeedMode::Normal;
+        let context = prompt_context(&mut app).expect("expected prompt context");
+
+        for expected_speed in [SpeedMode::Fast, SpeedMode::Normal] {
+            if let AppMode::Prompt { input, .. } = &mut app.mode {
+                *input = InputState::with_text("/fast".to_string());
+            }
+
+            // Act
+            press_prompt_key(&mut app, KeyCode::Enter).await;
+            app.process_pending_app_events().await;
+            let persisted_speed_mode = app
+                .services
+                .db()
+                .sessions()
+                .load_session_speed_mode(&context.session_id)
+                .await
+                .expect("speed mode should load");
+
+            // Assert
+            assert!(matches!(
+                &app.mode,
+                AppMode::Prompt { input, slash_state, .. }
+                    if input.is_empty() && *slash_state == PromptSlashState::default()
+            ));
+            assert_eq!(app.sessions.sessions()[0].speed_mode, expected_speed);
+            assert_eq!(persisted_speed_mode, expected_speed);
+            assert_eq!(app.sessions.sessions()[0].agent, fast_agent);
+        }
     }
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-    app.process_pending_app_events().await;
-
-    // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, slash_state, .. }
-            if input.is_empty() && *slash_state == PromptSlashState::default()
-    ));
-    assert_eq!(app.sessions.sessions()[0].speed_mode, SpeedMode::Fast);
-    assert_eq!(
-        app.sessions.sessions()[0].agent,
-        AgentSelection::new(AgentKind::Claude, AgentModel::ClaudeOpus55)
-    );
 }
 
 #[tokio::test]
@@ -348,14 +366,7 @@ fn test_prompt_slash_commands_lists_all_commands() {
     // Assert
     assert_eq!(
         commands,
-        vec![
-            "/apply",
-            "/mode",
-            "/model",
-            "/reasoning",
-            "/style",
-            "/speed"
-        ]
+        vec!["/apply", "/mode", "/model", "/reasoning", "/style", "/fast"]
     );
 }
 
@@ -1949,25 +1960,6 @@ async fn test_handle_prompt_slash_submit_prefills_response_style_selection() {
         assert_eq!(slash_state.stage, PromptSlashStage::Style);
         assert_eq!(slash_state.selected_agent, None);
         assert_eq!(slash_state.selected_index, 2);
-    }
-}
-
-#[tokio::test]
-async fn test_handle_prompt_slash_submit_prefills_speed_selection() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/speed", None).await;
-    app.sessions.sessions_mut()[0].agent = model_fixture::codex_selection();
-    app.sessions.sessions_mut()[0].speed_mode = SpeedMode::Fast;
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    if let AppMode::Prompt { slash_state, .. } = &app.mode {
-        assert_eq!(slash_state.stage, PromptSlashStage::Speed);
-        assert_eq!(slash_state.selected_agent, None);
-        assert_eq!(slash_state.selected_index, 1);
     }
 }
 

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 pub use ag_protocol::render_prompt_text_for_agent;
 
 use crate::domain::agent::{
-    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle, SpeedMode,
+    AgentKind, AgentSelection, AgentSelectionMetadata, ReasoningLevel, ResponseStyle,
 };
 use crate::domain::input::InputState;
 use crate::domain::permission::PermissionMode;
@@ -50,8 +50,6 @@ pub enum PromptSuggestionSelection {
     Reasoning(ReasoningLevel),
     /// Session-scoped response style chosen during `/style`.
     Style(ResponseStyle),
-    /// Session-scoped response-speed selection chosen during `/speed`.
-    Speed(SpeedMode),
 }
 
 /// Concrete character location owned by an attachment in one input revision.
@@ -434,8 +432,6 @@ pub enum PromptSlashStage {
     Reasoning,
     /// Selecting a session-specific response style.
     Style,
-    /// Selecting a session-specific response-speed preference.
-    Speed,
 }
 
 /// UI state for prompt-only slash command selection.
@@ -986,10 +982,6 @@ fn build_slash_suggestion_list(
             "/style Response style (j/k move, Enter select)",
             response_style_suggestion_items(),
         ),
-        PromptSlashStage::Speed => (
-            "/speed Mode (j/k move, Enter select)",
-            speed_suggestion_items(),
-        ),
     };
 
     if items.is_empty() {
@@ -1085,17 +1077,6 @@ fn selected_slash_action(
 
             Some(PromptSuggestionSelection::Style(selected_style))
         }
-        PromptSlashStage::Speed => {
-            let options = SpeedMode::ALL;
-            let selected_speed_mode = options
-                .get(clamp_selected_index(
-                    slash_state.selected_index,
-                    options.len(),
-                ))
-                .copied()?;
-
-            Some(PromptSuggestionSelection::Speed(selected_speed_mode))
-        }
     }
 }
 
@@ -1129,7 +1110,7 @@ fn command_description(command: &str) -> &'static str {
         "/plan" => "Plan then implement: chat with the orchestrated Planner and Implementer.",
         "/reasoning" => "Override the reasoning level for this session.",
         "/style" => "Control how concise or detailed responses are.",
-        "/speed" => "Choose normal or fast responses for this session.",
+        "/fast" => "Toggle between normal and fast responses for this session.",
         _ => "Prompt slash command.",
     }
 }
@@ -1149,7 +1130,7 @@ fn prompt_slash_commands(
         "/plan",
         "/reasoning",
         "/style",
-        "/speed",
+        "/fast",
     ];
     if !allow_apply_command {
         commands.retain(|command| *command != "/apply");
@@ -1158,7 +1139,7 @@ fn prompt_slash_commands(
         commands.retain(|command| *command != "/plan");
     }
     if !session_agent_kind.supports_speed_mode() {
-        commands.retain(|command| *command != "/speed");
+        commands.retain(|command| *command != "/fast");
     }
     commands.retain(|command| slash_command_fuzzy_score(command, &lowered).is_some());
     commands.sort_by_key(|command| slash_command_fuzzy_score(command, &lowered).unwrap_or(0));
@@ -1243,19 +1224,6 @@ fn response_style_suggestion_items() -> Vec<PromptSuggestionItem> {
             badge: None,
             detail: Some(response_style.description().to_string()),
             label: response_style.name().to_string(),
-            metadata: None,
-        })
-        .collect()
-}
-
-/// Returns the render-ready dropdown rows for `/speed`.
-fn speed_suggestion_items() -> Vec<PromptSuggestionItem> {
-    SpeedMode::ALL
-        .into_iter()
-        .map(|speed_mode| PromptSuggestionItem {
-            badge: None,
-            detail: Some(speed_mode.description().to_string()),
-            label: speed_mode.name().to_string(),
             metadata: None,
         })
         .collect()
