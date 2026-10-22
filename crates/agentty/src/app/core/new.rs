@@ -413,8 +413,8 @@ impl App {
                 fs_client: Arc::clone(&clients.fs_client),
                 git_client: Arc::clone(&clients.git_client),
                 run_client_override: None,
-                personality_catalog_client_override: Some(Arc::clone(
-                    &clients.personality_catalog_client,
+                agent_profile_catalog_client_override: Some(Arc::clone(
+                    &clients.agent_profile_catalog_client,
                 )),
                 repositories,
                 review_request_client: Arc::clone(&clients.review_request_client),

@@ -2,7 +2,7 @@
 //! session turns and one-shot utility runs.
 
 use ag_contracts::{
-    OneShotRequest, OneShotSubmission, PersonalityPromptUpdate, SessionDiffState, SessionStats,
+    AgentDefinitionPromptUpdate, OneShotRequest, OneShotSubmission, SessionDiffState, SessionStats,
     TurnEvent,
 };
 use ag_harness::turn::TurnReport;
@@ -25,10 +25,10 @@ use crate::agent::{
 pub(crate) struct NativePrompt<'a> {
     /// Instruction delivery selected from the session state.
     pub(crate) delivery: InstructionDeliveryMode,
-    /// Current personality body for full bootstraps.
-    pub(crate) personality_prompt: Option<&'a str>,
-    /// Personality change for continued sessions.
-    pub(crate) personality_update: &'a PersonalityPromptUpdate,
+    /// Current agent body for full bootstraps.
+    pub(crate) agent_profile_prompt: Option<&'a str>,
+    /// Agent change for continued sessions.
+    pub(crate) agent_profile_update: &'a AgentDefinitionPromptUpdate,
     /// User or utility prompt text.
     pub(crate) prompt: &'a str,
     /// Protocol family of the turn.
@@ -47,8 +47,8 @@ impl NativePrompt<'_> {
     pub(crate) fn render(&self) -> Result<String, String> {
         prepare_prompt_text(PromptPreparationRequest {
             instruction_delivery_mode: self.delivery,
-            personality_prompt: self.personality_prompt,
-            personality_update: self.personality_update,
+            agent_profile_prompt: self.agent_profile_prompt,
+            agent_profile_update: self.agent_profile_update,
             prompt: self.prompt,
             protocol_profile: self.protocol_profile,
             replay_transcript: self.replay_transcript,
@@ -160,8 +160,8 @@ pub(crate) async fn run_one_shot(
     )?;
     let prompt = NativePrompt {
         delivery: InstructionDeliveryMode::BootstrapFull,
-        personality_prompt: None,
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: None,
+        agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
         prompt: &request.prompt,
         protocol_profile: profile,
         replay_transcript: None,

@@ -137,7 +137,6 @@ impl SessionFixtureBuilder {
                 is_draft: false,
                 parent_session_id: None,
                 permission_mode: crate::domain::permission::PermissionMode::default(),
-                personality_id: None,
                 project_name: "project".to_string(),
                 prompt: String::new(),
                 queued_messages: Vec::new(),

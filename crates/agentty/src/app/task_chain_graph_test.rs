@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, SessionMessage,
-    SessionMessageKind, SessionStatus, SessionTranscript, StartPlanThenImplementRequest,
+    AgentKind, AgentModel, AgentSelection, SessionMessage, SessionMessageKind, SessionStatus,
+    SessionTranscript, StartPlanThenImplementRequest, TaskAgentRole,
 };
 use tempfile::TempDir;
 
@@ -51,14 +51,8 @@ async fn visible_chain_session_loads_its_latest_graph_for_the_update_version() {
             .map(|node| (node.agent, node.status))
             .collect::<Vec<_>>(),
         [
-            (
-                BuiltinAgentDefinition::Planner,
-                TaskChainNodeStatus::Working
-            ),
-            (
-                BuiltinAgentDefinition::Implementer,
-                TaskChainNodeStatus::Waiting
-            ),
+            (TaskAgentRole::Planner, TaskChainNodeStatus::Working),
+            (TaskAgentRole::Implementer, TaskChainNodeStatus::Waiting),
         ]
     );
     assert!(
@@ -188,6 +182,7 @@ async fn visible_session(app: &mut App, graph_chain_id: Option<&str>) -> Session
 
 fn launch_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "workflow".into(),

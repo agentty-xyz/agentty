@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
@@ -16,12 +14,10 @@ use crate::app::message_admission::MessageIntent;
 use crate::app::test_support::diff_content_hash;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ResponseStyle, SpeedMode};
 use crate::domain::permission::PermissionMode;
-use crate::domain::personality::Personality;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::setting::SettingName;
 use crate::domain::transient_message::TransientMessageSlot;
 use crate::domain::turn_prompt::{TurnPrompt, TurnPromptTextSource};
-use crate::infra::personality::MockPersonalityCatalogClient;
 use crate::presentation::app_mode::ReviewCommentSelection;
 
 #[test]
@@ -484,92 +480,6 @@ async fn test_submit_prompt_reports_queue_failure_without_session_handles() {
         }
     );
     assert_eq!(app.sessions.sessions()[0].queued_messages, []);
-}
-
-#[tokio::test]
-async fn test_prompt_personality_catalog_and_selection_use_target_session() {
-    // Arrange
-    let personality = Personality {
-        description: "Reviews code changes".to_string(),
-        id: "reviewer".to_string(),
-        name: "Code Reviewer".to_string(),
-        prompt: "Review changes carefully.".to_string(),
-    };
-    let expected_summary = personality.summary();
-    let mut personality_catalog_client = MockPersonalityCatalogClient::new();
-    personality_catalog_client
-        .expect_list_summaries()
-        .once()
-        .return_once({
-            let expected_summary = expected_summary.clone();
-
-            move |_| Box::pin(async move { vec![expected_summary] })
-        });
-    let clients = crate::test_support::test_app_clients()
-        .with_personality_catalog_client(Arc::new(personality_catalog_client));
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app_with_clients(clients).await;
-    let session_id: SessionId = app
-        .create_session()
-        .await
-        .expect("session should be created")
-        .into();
-
-    // Act
-    let personalities = app.list_prompt_personalities(&session_id).await;
-    app.update_prompt_session_personality(&session_id, Some(expected_summary.clone()))
-        .await;
-    let persisted_state = app
-        .services
-        .db()
-        .sessions()
-        .load_session_personality_state(&session_id)
-        .await
-        .expect("personality state should load")
-        .expect("session personality state should exist");
-
-    // Assert
-    assert_eq!(personalities, vec![expected_summary]);
-    assert_eq!(
-        app.sessions.sessions()[0].personality_id.as_deref(),
-        Some("reviewer")
-    );
-    assert_eq!(persisted_state.personality_id.as_deref(), Some("reviewer"));
-
-    // Act
-    app.update_prompt_session_personality(&session_id, None)
-        .await;
-    let cleared_state = app
-        .services
-        .db()
-        .sessions()
-        .load_session_personality_state(&session_id)
-        .await
-        .expect("cleared personality state should load")
-        .expect("session personality state should exist");
-
-    // Assert
-    assert_eq!(app.sessions.sessions()[0].personality_id, None);
-    assert_eq!(cleared_state.personality_id, None);
-}
-
-#[tokio::test]
-async fn test_prompt_personality_ignores_missing_session() {
-    // Arrange
-    let (mut app, _base_dir) = crate::test_support::new_git_test_app().await;
-    let missing_session_id = SessionId::from("missing-session");
-
-    // Act
-    let personalities = app.list_prompt_personalities(&missing_session_id).await;
-    app.update_prompt_session_personality(&missing_session_id, None)
-        .with_subscriber(crate::test_support::TestSubscriber)
-        .await;
-
-    // Assert
-    assert_eq!(
-        personalities,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
-    );
-    assert!(app.sessions.sessions().is_empty());
 }
 
 #[tokio::test]

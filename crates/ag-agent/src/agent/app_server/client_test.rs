@@ -127,7 +127,7 @@ fn make_request() -> AppServerTurnRequest {
         model: "test-model".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from_text("Hello".to_string()),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,

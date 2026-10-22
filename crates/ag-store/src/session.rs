@@ -18,6 +18,10 @@ use crate::session_snapshot::SessionSnapshotStore;
 use crate::timestamp::TimestampSource;
 use crate::{DbError, status};
 
+/// Upgrade marker requiring an explicit clearing of obsolete session agent
+/// instructions. Successful ordinary-turn metadata persistence replaces it.
+pub const LEGACY_SESSION_AGENT_CLEAR_MARKER: &str = "agentty:clear-legacy-session-agent:v1";
+
 /// Transactional turn-metadata payload persisted after one completed agent
 /// turn.
 ///
@@ -28,12 +32,6 @@ use crate::{DbError, status};
 /// the data is allocation-cheap on this once-per-turn path and keeps the trait
 /// signature stable across toolchains.
 pub struct SessionTurnMetadata {
-    /// Personality id successfully delivered for this turn, or `None` when
-    /// the turn cleared or had no personality.
-    pub applied_personality_id: Option<String>,
-    /// Fingerprint of the personality prompt successfully delivered for this
-    /// turn.
-    pub applied_personality_prompt_hash: Option<String>,
     /// Content-free JSON report of an in-process harness turn, kept in
     /// `harness_turn_report` for later analysis; `None` for other agents.
     pub harness_turn_report: Option<String>,
@@ -68,8 +66,6 @@ pub struct PersistedSessionCreation<'a> {
     pub parent_session_id: Option<&'a str>,
     /// Provider permission mode captured for the session.
     pub permission_mode: PermissionMode,
-    /// Workspace personality selected for future turns, when present.
-    pub personality_id: Option<&'a str>,
     /// Owning project identifier.
     pub project_id: i64,
     /// Reasoning level captured from the project default at creation.
@@ -198,8 +194,6 @@ session_rows! {
         pub parent_session_id: Option<String>,
         /// Persisted provider permission mode for future turns.
         pub permission_mode: String,
-        /// Workspace personality selected for future turns, when present.
-        pub personality_id: Option<String>,
         /// Owning project identifier, when present.
         pub project_id: Option<i64>,
     }
@@ -268,17 +262,6 @@ pub struct SessionFocusedReviewRow {
     pub session_id: String,
     /// Generated focused-review markdown text.
     pub text: String,
-}
-
-/// Persisted selected and successfully applied personality state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionPersonalityState {
-    /// Personality id delivered during the latest successful turn.
-    pub applied_personality_id: Option<String>,
-    /// Fingerprint of the personality prompt delivered during that turn.
-    pub applied_personality_prompt_hash: Option<String>,
-    /// Personality id selected for the session's next turn.
-    pub personality_id: Option<String>,
 }
 
 /// Session-focused persistence boundary used by app orchestration and tests.
@@ -434,12 +417,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
     /// Loads the project identifier associated with one session.
     async fn load_session_project_id(&self, session_id: &str) -> Result<Option<i64>, DbError>;
 
-    /// Loads selected and last-applied personality state for one session.
-    async fn load_session_personality_state(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<SessionPersonalityState>, DbError>;
-
     /// Loads parentless review-ready sessions that still need their recorded
     /// stack-base commit replayed onto their current base branch.
     async fn load_pending_stack_restack_session_ids(
@@ -539,13 +516,6 @@ pub trait SessionRepository: crate::SessionPreparationRepository + Send + Sync {
 
     /// Updates the persisted model for a session.
     async fn update_session_model(&self, id: &str, model: &str) -> Result<(), DbError>;
-
-    /// Updates or clears the personality selected for future turns.
-    async fn update_session_personality_id(
-        &self,
-        id: &str,
-        personality_id: Option<String>,
-    ) -> Result<(), DbError>;
 
     /// Updates the persisted agent provider and model for a session.
     async fn update_session_agent_model(
@@ -829,7 +799,6 @@ impl SqliteSessionRepository {
             model,
             parent_session_id,
             permission_mode,
-            personality_id,
             project_id,
             reasoning_level,
             response_style,
@@ -850,7 +819,6 @@ impl SqliteSessionRepository {
         is_draft,
         parent_session_id,
         permission_mode,
-        personality_id,
         project_id,
         reasoning_level,
         response_style,
@@ -859,7 +827,7 @@ impl SqliteSessionRepository {
         created_at,
         updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ",
         )
         .bind(id)
@@ -872,7 +840,6 @@ impl SqliteSessionRepository {
         .bind(is_draft)
         .bind(parent_session_id)
         .bind(permission_mode.label())
-        .bind(personality_id)
         .bind(project_id)
         .bind(reasoning_level.as_str())
         .bind(response_style.as_str())
@@ -1131,7 +1098,6 @@ WHERE id = ?
                 model,
                 parent_session_id: None,
                 permission_mode: PermissionMode::AutoEdit,
-                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
@@ -1164,7 +1130,6 @@ WHERE id = ?
                 model,
                 parent_session_id: Some(parent_session_id),
                 permission_mode: PermissionMode::AutoEdit,
-                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
@@ -1196,7 +1161,6 @@ WHERE id = ?
                 model,
                 parent_session_id: None,
                 permission_mode: PermissionMode::AutoEdit,
-                personality_id: None,
                 project_id,
                 reasoning_level: ReasoningLevel::default(),
                 response_style: ResponseStyle::default(),
@@ -1219,7 +1183,6 @@ WHERE id = ?
             model,
             parent_session_id,
             permission_mode,
-            personality_id,
             project_id,
             reasoning_level,
             response_style,
@@ -1238,7 +1201,6 @@ WHERE id = ?
                 model,
                 parent_session_id,
                 permission_mode,
-                personality_id,
                 project_id,
                 reasoning_level,
                 response_style,
@@ -1283,7 +1245,6 @@ SELECT session.base_branch AS base_branch,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
        session.permission_mode AS permission_mode,
-       session.personality_id,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1360,7 +1321,6 @@ SELECT session.base_branch AS base_branch,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
        session.permission_mode AS permission_mode,
-       session.personality_id,
        session.project_id,
        session.prompt AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1422,7 +1382,6 @@ SELECT session.base_branch AS base_branch,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
        session.permission_mode AS permission_mode,
-       session.personality_id,
        session.project_id,
        '' AS "prompt!: String",
        session.reasoning_level AS reasoning_level_override,
@@ -1496,7 +1455,6 @@ SELECT session.base_branch AS base_branch,
        session.output_tokens AS output_tokens,
        session.parent_session_id,
        session.permission_mode AS permission_mode,
-       session.personality_id,
        session.project_id,
        '' AS prompt,
        session.reasoning_level AS reasoning_level_override,
@@ -1672,27 +1630,6 @@ WHERE id = ?
         .await?;
 
         Ok(row.and_then(|row| row.value))
-    }
-
-    async fn load_session_personality_state(
-        &self,
-        session_id: &str,
-    ) -> Result<Option<SessionPersonalityState>, DbError> {
-        let state = sqlx::query_as!(
-            SessionPersonalityState,
-            r"
-SELECT applied_personality_id,
-       applied_personality_prompt_hash,
-       personality_id
-FROM session
-WHERE id = ?
-",
-            session_id
-        )
-        .fetch_optional(&self.0)
-        .await?;
-
-        Ok(state)
     }
 
     async fn load_pending_stack_restack_session_ids(
@@ -1928,16 +1865,12 @@ UPDATE session
 SET questions = ?,
     provider_conversation_id = ?,
     app_server_instruction_provider_conversation_id = ?,
-    applied_personality_id = ?,
-    applied_personality_prompt_hash = ?,
     updated_at = ?
 WHERE id = ?
 ",
             turn_metadata.questions_json.as_str(),
             turn_metadata.provider_conversation_id.as_deref(),
             turn_metadata.instruction_conversation_id.as_deref(),
-            turn_metadata.applied_personality_id.as_deref(),
-            turn_metadata.applied_personality_prompt_hash.as_deref(),
             now,
             session_id
         )
@@ -2071,30 +2004,6 @@ WHERE id = ?
 ",
             agent,
             model,
-            now,
-            id
-        )
-        .execute(&self.0)
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update_session_personality_id(
-        &self,
-        id: &str,
-        personality_id: Option<String>,
-    ) -> Result<(), DbError> {
-        let now = self.now();
-
-        sqlx::query!(
-            r"
-UPDATE session
-SET personality_id = ?,
-    updated_at = ?
-WHERE id = ?
-",
-            personality_id.as_deref(),
             now,
             id
         )
@@ -3052,7 +2961,6 @@ struct SessionJoinRow {
     output_tokens: i64,
     parent_session_id: Option<String>,
     permission_mode: String,
-    personality_id: Option<String>,
     project_id: Option<i64>,
     prompt: String,
     published_upstream_ref: Option<String>,
@@ -3129,7 +3037,6 @@ impl SessionJoinRow {
             output_tokens,
             parent_session_id,
             permission_mode,
-            personality_id,
             project_id,
             prompt,
             published_upstream_ref,
@@ -3182,7 +3089,6 @@ impl SessionJoinRow {
             output_tokens,
             parent_session_id,
             permission_mode,
-            personality_id,
             project_id,
             published_upstream_ref,
             reasoning_level_override,

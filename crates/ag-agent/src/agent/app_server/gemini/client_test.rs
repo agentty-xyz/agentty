@@ -99,7 +99,7 @@ fn runtime_request(runtime: &GeminiSessionRuntime) -> AppServerTurnRequest {
         model: runtime.state.model.clone(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("Continue"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::default(),

@@ -31,7 +31,6 @@ use crate::domain::transient_message::{
 };
 use crate::infra::db;
 use crate::infra::db::AppRepositories;
-use crate::infra::personality::PersonalityCatalogClient;
 use crate::infra::project_discovery::ProjectDiscoveryClient;
 use crate::infra::tmux::{MockTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{AppMode, PromptModeSnapshot};
@@ -628,17 +627,6 @@ impl AppClients {
     #[must_use]
     pub(crate) fn with_git_client(mut self, git_client: Arc<dyn GitClient>) -> Self {
         self.git_client = git_client;
-
-        self
-    }
-
-    /// Replaces the personality catalog boundary for deterministic app tests.
-    #[must_use]
-    pub(crate) fn with_personality_catalog_client(
-        mut self,
-        personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
-    ) -> Self {
-        self.personality_catalog_client = personality_catalog_client;
 
         self
     }

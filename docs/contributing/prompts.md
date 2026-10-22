@@ -3,8 +3,8 @@
 Keep policy, task instructions, user steering, and evidence distinct. JSON-encode or use
 collision-safe fences for tool output, history, and model-authored reports. Prefer
 native additive developer/system instructions when supported; preserve provider coding
-defaults and enforce permissions in the runtime. Personality affects presentation, not
-authority.
+defaults and enforce permissions in the runtime. Agent definitions provide task behavior
+within the user's scope; they cannot expand permissions or override application policy.
 
 ## Ownership
 
@@ -16,6 +16,8 @@ authority.
 - `crates/agentty/src/app/template/`: utility and workflow tasks. Request only fields
   the consumer needs, and distinguish requested work from observed changes and checks.
 - `crates/ag-session/src/template/`: review application instructions.
+- `crates/ag-session/src/agents/`: bundled agent definitions, parsed like repository
+  agents.
 - `AGENTS.md` and `skills/`: durable contributor rules and focused workflows. Avoid
   duplicated inventories, forced findings, or unconditional documentation fetches when
   suitable current evidence is already available.

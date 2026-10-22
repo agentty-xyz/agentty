@@ -3,9 +3,8 @@
 use ag_protocol::{AgentResponse, TurnPrompt};
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AcceptedTaskPlan, AgentKind, AgentSelection,
-    BuiltinAgentDefinition, ContinueTaskChainRequest, DurableMessageVisibility, SessionId,
-    StartPlanThenImplementRequest, SubmitAgentTaskRequest, TaskAgentInput, TaskChain,
-    TaskChainPhase,
+    ContinueTaskChainRequest, DurableMessageVisibility, SessionId, StartPlanThenImplementRequest,
+    SubmitAgentTaskRequest, TaskAgentInput, TaskAgentRole, TaskChain, TaskChainPhase,
 };
 use sqlx::SqliteConnection;
 
@@ -32,9 +31,10 @@ impl TaskChainStore {
             .await?;
         let agent = request.agent.kind().to_string();
         let model = request.agent.model().as_str();
+        let agent_definitions = serde_json::json!(request.agents).to_string();
         let existing = sqlx::query!(
-            "SELECT session_id, agent, model, user_request, planner_task_attempt_id FROM \
-             task_chain WHERE id = ?",
+            "SELECT session_id, agent, model, user_request, planner_task_attempt_id, \
+             agent_definitions FROM task_chain WHERE id = ?",
             request.chain_id
         )
         .fetch_optional(&mut *connection)
@@ -45,6 +45,13 @@ impl TaskChainStore {
                 || existing.model != model
                 || existing.user_request != request.user_request
                 || existing.planner_task_attempt_id != request.planner_attempt_id
+                || existing.agent_definitions.as_deref().map_or_else(
+                    || {
+                        ag_session::PlanThenImplementAgents::bundled()
+                            .is_none_or(|agents| agents != *request.agents)
+                    },
+                    |stored| stored != agent_definitions,
+                )
                 || TaskAgentStore::load(connection, &request.planner_request().task_id)
                     .await?
                     .is_none_or(|context| context.input.attachments != request.attachments)
@@ -87,8 +94,8 @@ impl TaskChainStore {
         .await?;
         sqlx::query!(
             "INSERT INTO task_chain (id, session_id, agent, model, user_request, planner_task_id, \
-             implementer_task_id, planner_task_attempt_id, created_at) VALUES (?, ?, ?, ?, ?, ?, \
-             ?, ?, ?)",
+             implementer_task_id, planner_task_attempt_id, created_at, agent_definitions) VALUES \
+             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             request.chain_id,
             session_id,
             agent,
@@ -97,7 +104,8 @@ impl TaskChainStore {
             planner.task_id,
             implementer_task_id,
             request.planner_attempt_id,
-            now
+            now,
+            agent_definitions
         )
         .execute(&mut *connection)
         .await?;
@@ -109,7 +117,7 @@ impl TaskChainStore {
         connection: &mut SqliteConnection,
         chain_id: &str,
     ) -> Result<Option<TaskChain>, DbError> {
-        let row = sqlx::query!(r#"SELECT c.id AS "id!", c.session_id, c.agent, c.model, c.user_request, c.planner_task_id, c.implementer_task_id, c.accepted_task_attempt_id, c.canceled_at, p.plan FROM task_chain c LEFT JOIN task_plan_acceptance p ON p.task_attempt_id = c.accepted_task_attempt_id WHERE c.id = ?"#, chain_id).fetch_optional(&mut *connection).await?;
+        let row = sqlx::query!(r#"SELECT c.id AS "id!", c.session_id, c.agent, c.model, c.user_request, c.agent_definitions, c.planner_task_id, c.implementer_task_id, c.accepted_task_attempt_id, c.canceled_at, p.plan FROM task_chain c LEFT JOIN task_plan_acceptance p ON p.task_attempt_id = c.accepted_task_attempt_id WHERE c.id = ?"#, chain_id).fetch_optional(&mut *connection).await?;
         let Some(row) = row else {
             return Ok(None);
         };
@@ -121,6 +129,13 @@ impl TaskChainStore {
             .parse_model(&row.model)
             .ok_or_else(|| Self::invalid("Unknown captured workflow model"))?;
         let agent = AgentSelection::new(kind, model);
+        let agents = row
+            .agent_definitions
+            .map(|json| serde_json::from_str::<ag_session::PlanThenImplementAgents>(&json))
+            .transpose()
+            .map_err(|_| Self::invalid("Invalid captured agent definitions"))?
+            .or_else(ag_session::PlanThenImplementAgents::bundled)
+            .ok_or(Self::invalid("Bundled workflow agents are unavailable"))?;
         let accepted_plan = match (row.accepted_task_attempt_id, row.plan) {
             (Some(attempt_id), Some(text)) => Some(AcceptedTaskPlan {
                 attempt_id,
@@ -131,19 +146,21 @@ impl TaskChainStore {
             _ => return Err(Self::invalid("Workflow acceptance ledger is missing")),
         };
         let (task_id, definition) = if accepted_plan.is_some() {
-            (
-                &row.implementer_task_id,
-                BuiltinAgentDefinition::Implementer,
-            )
+            (&row.implementer_task_id, TaskAgentRole::Implementer)
         } else {
-            (&row.planner_task_id, BuiltinAgentDefinition::Planner)
+            (&row.planner_task_id, TaskAgentRole::Planner)
         };
         let context = TaskAgentStore::load(connection, task_id)
             .await?
             .ok_or_else(|| Self::invalid("Workflow task context is missing"))?;
         if context.context.session_id.as_str() != row.session_id
             || context.context.assignment.agent != agent
-            || context.context.assignment.definition != definition
+            || context.context.assignment.role != definition
+            || context.context.assignment.definition
+                != match definition {
+                    TaskAgentRole::Planner => agents.planner.clone(),
+                    TaskAgentRole::Implementer => agents.implementer.clone(),
+                }
             || context.input.user_request != row.user_request
             || context.input.accepted_plan != accepted_plan
         {
@@ -171,6 +188,7 @@ impl TaskChainStore {
         )?;
 
         Ok(Some(TaskChain {
+            agents,
             accepted_plan,
             agent,
             current_request: SubmitAgentTaskRequest {
@@ -268,7 +286,8 @@ impl TaskChainStore {
         )
         .await?;
         let mut implementation = chain.current_request;
-        implementation.assignment.definition = BuiltinAgentDefinition::Implementer;
+        implementation.assignment.role = TaskAgentRole::Implementer;
+        implementation.assignment.definition = chain.agents.implementer;
         implementation.task_id = chain.implementer_task_id;
         implementation.attempt_id = request.attempt_id.clone();
         implementation.input.accepted_plan = Some(plan);
@@ -552,7 +571,7 @@ impl TaskChainStore {
     }
 
     fn phase(
-        definition: BuiltinAgentDefinition,
+        definition: TaskAgentRole,
         status: &str,
         canceled: bool,
         response: Option<&str>,
@@ -560,7 +579,7 @@ impl TaskChainStore {
         if canceled {
             return Ok(TaskChainPhase::Canceled);
         }
-        let planner = definition == BuiltinAgentDefinition::Planner;
+        let planner = definition == TaskAgentRole::Planner;
         match status {
             "queued" | "running" => Ok(if planner {
                 TaskChainPhase::Planning

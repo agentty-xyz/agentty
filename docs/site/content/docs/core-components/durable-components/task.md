@@ -40,24 +40,26 @@ terminal panel for its two role tasks; arbitrary dependency scheduling is not pr
 
 ## Built-in Agent Definitions
 
-`ag_session::BuiltinAgentDefinition` provides two built-in task roles:
+`ag_session::TaskAgentRole` provides two built-in task roles:
 
 | Role          | Required context                               | Permissions                                     | Expected answer                        |
 | ------------- | ---------------------------------------------- | ----------------------------------------------- | -------------------------------------- |
 | `Planner`     | User request and clarification                 | Read only                                       | Proposed plan and validation steps     |
 | `Implementer` | User request, accepted plan, and clarification | Session permissions, including read-only limits | Observed changes, checks, and blockers |
 
-Each definition supplies role instructions and a permission resolver. Roles are separate
-from providers and personalities and do not select a model; a workflow can supply the
-same session Smart `AgentSelection` to both. Questions use the existing response
-protocol, and neither output automatically completes a task.
+These roles describe host workflow contracts. A separate `AgentDefinition` supplies
+instructions and optional read-only restrictions; bundled and repository agents share
+the same format and execution path. A workflow can supply the same session Smart
+`AgentSelection` to both. Questions use the existing response protocol, and neither
+output automatically completes a task.
 
 `SubmitAgentTaskRequest` describes an isolated role-aware attempt separately from
 ordinary `SubmitTaskRequest` execution. It carries a captured provider/model selection,
-role, original request, and explicit clarification. Implementer input also identifies
-the exact plan body and producing task/attempt; input validation does not establish
-acceptance. Hosts must verify acceptance before dispatch. Assignment and original inputs
-remain fixed across attempts, while new clarification may be supplied.
+role, resolved definition snapshot, original request, and explicit clarification.
+Implementer input also identifies the exact plan body and producing task/attempt; input
+validation does not establish acceptance. Hosts must verify acceptance before dispatch.
+Assignment and original inputs remain fixed across attempts, while new clarification may
+be supplied.
 
 Use `SessionService::submit_agent_task` to admit the request through the session's
 serial worker. Execution uses the prepared session-owned Env and enforces role

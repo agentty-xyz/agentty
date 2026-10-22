@@ -16,8 +16,8 @@ pub use activity::{ActivityEvent, ActivityKind, ActivityStatus};
 #[cfg(any(test, feature = "test-utils"))]
 pub use contract::MockAgentChannel;
 pub use contract::{
-    AgentChannel, AgentError, AgentFuture, AgentRequestKind, LiveTranscript, PersonalityPrompt,
-    PersonalityPromptUpdate, SessionRef, StartSessionRequest, TurnContinuation,
+    AgentChannel, AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentError, AgentFuture,
+    AgentRequestKind, LiveTranscript, SessionRef, StartSessionRequest, TurnContinuation,
     TurnContinuationParts, TurnEvent, TurnRequest, TurnResult,
     normalize_instruction_conversation_id,
 };

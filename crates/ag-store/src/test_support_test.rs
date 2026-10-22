@@ -1,9 +1,9 @@
 //! Fixtures shared by persistence unit suites.
 
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    ForgeKind, ReviewRequest, ReviewRequestState, ReviewRequestSummary, SubmitAgentTaskRequest,
-    TaskAgentAssignment, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, ForgeKind, ReviewRequest,
+    ReviewRequestState, ReviewRequestSummary, SubmitAgentTaskRequest, TaskAgentAssignment,
+    TaskAgentInput, TaskAgentRole,
 };
 
 use crate::Database;
@@ -33,7 +33,8 @@ pub(crate) fn agent_task_request(attempt_id: &str) -> SubmitAgentTaskRequest {
     SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: attempt_id.to_string(),
         input: TaskAgentInput {

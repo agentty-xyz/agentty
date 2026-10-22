@@ -102,14 +102,16 @@ sessions without changing their mailbox order.
 Role-aware task commands share that mailbox and the session's Env while using separate
 runtime identities, captured models, and durable response histories. Task continuation
 and clarification contain only that task's input and responses; ordinary session
-questions, personality application state, and provider continuation remain unchanged.
-Planner execution restricts permissions to `ReadOnly` and performs no commit or forge
-effects. Implementer post-processing uses an isolated transcript projection and remains
-ordered through publication. Implementer answers refresh persisted and visible diff
-stats before commit and publishing effects, with another refresh during finalization.
-Diff inspection remains available during active work. A settled task attempt refreshes
-its owning session only after operation bookkeeping finishes, so consumers observe its
-final durable status.
+questions and provider continuation remain unchanged. Admission resolves definitions
+through the injected catalog and persists their complete instructions and restrictions.
+A plan-and-implement launch captures both definitions; later repository edits affect new
+workflows, not retained task conversations. Planner execution restricts permissions to
+`ReadOnly` and performs no commit or forge effects. Implementer post-processing uses an
+isolated transcript projection and remains ordered through publication. Implementer
+answers refresh persisted and visible diff stats before commit and publishing effects,
+with another refresh during finalization. Diff inspection remains available during
+active work. A settled task attempt refreshes its owning session only after operation
+bookkeeping finishes, so consumers observe its final durable status.
 
 The terminal offers `/plan` only with the launch-time `--experimental-multi-agent`
 setting; the shared task API retains its own programmatic contract. Routing does not
@@ -303,9 +305,9 @@ flowchart TD
 1. The application persists an operation before sending it to the session worker.
 1. The worker checks cancellation, preparation, and isolation, then executes in shared
    submission order. Active branch actions reuse the existing worker.
-1. Turn preparation resolves current permission, reasoning, style, speed, and
-   personality settings and submits a `TurnRequest` through `SessionRunClient` after
-   acquiring shared session capacity.
+1. Turn preparation resolves current permission, reasoning, style, speed, and agent
+   settings and submits a `TurnRequest` through `SessionRunClient` after acquiring
+   shared session capacity.
 1. Progress remains transient. Post-turn handling persists the answer, questions, usage,
    and provider continuation state before projecting them into the UI.
 1. Ordered post-processing commits changes, coordinates publishing and stacked children,
@@ -341,7 +343,7 @@ contracts. Composition selects the adapter; workers own its execution and cleanu
 
 | Type               | Purpose                                     |
 | ------------------ | ------------------------------------------- |
-| `TurnRequest`      | Inputs, permissions, settings, personality  |
+| `TurnRequest`      | Inputs, permissions, settings, agent        |
 | `TurnContinuation` | Fresh, replay, or native-resume context     |
 | `TurnEvent`        | Progress, completion, failure, PID updates  |
 | `TurnResult`       | Answer, usage, provider identity            |
@@ -350,8 +352,12 @@ contracts. Composition selects the adapter; workers own its execution and cleanu
 <a id="architecture-provider-conversation-id-flow"></a> Successful turns persist
 provider conversation identity and the applied instruction fingerprint. Matching
 continuations can use compact reminders; changed policy or lost context requires
-bootstrap or replay. Personality changes follow the same successful-persistence
-boundary.
+bootstrap or replay. Agent changes follow the same successful-persistence boundary.
+Upgrading from session personalities marks existing sessions for one explicit clearing
+instruction, including full bootstraps into retained native history. Failed turns keep
+the marker for retry; successful ordinary-turn persistence replaces it without losing
+chat history or task definitions. CLI command construction preserves that update through
+stdin prompt rendering when resuming a provider conversation.
 
 Codex and Antigravity retain resident runtimes between turns. Gemini shuts down after
 each turn and replays stored history. Managed runtime cleanup owns provider subprocesses
@@ -497,11 +503,11 @@ includes post-processing, not just model completion. Heartbeat failures are repo
 without abandoning live work; startup recovery requires exclusive application ownership.
 
 Turn preparation groups the current permissions, reasoning level, response style, speed,
-and personality into resolved settings after workspace preparation. The model selection
-still travels with the queued turn; the worker applies its captured execution policy at
+and agent into resolved settings after workspace preparation. The model selection still
+travels with the queued turn; the worker applies its captured execution policy at
 submission. Resolution preserves existing reads and defaults rather than persisting an
-earlier configuration snapshot. Personality application state is saved only after a
-successful turn.
+earlier configuration snapshot. Agent application state is saved only after a successful
+turn.
 
 ## Utility run supervision
 

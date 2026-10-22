@@ -16,6 +16,9 @@ async fn chain_projection_rejects_invalid_responses_or_roles_and_omits_empty_dis
         let database = task_database_fixture().await;
         let base = agent_task_request("first");
         let launch = StartPlanThenImplementRequest {
+            agents: Box::new(
+                ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
+            ),
             attachments: Vec::new(),
             agent: base.assignment.agent,
             chain_id: "chain".into(),
@@ -101,9 +104,8 @@ async fn task_response_preserves_ordinary_conversation_and_uses_captured_model()
     running_attempt(&database, "first").await;
     sqlx::query(
         "UPDATE session SET model = 'gpt-6-astra', provider_conversation_id = 'chat-thread', \
-         app_server_instruction_provider_conversation_id = 'chat-bootstrap', \
-         applied_personality_id = 'chat-personality', applied_personality_prompt_hash = \
-         'chat-hash', questions = 'ordinary questions' WHERE id = 'session'",
+         app_server_instruction_provider_conversation_id = 'chat-bootstrap', questions = \
+         'ordinary questions' WHERE id = 'session'",
     )
     .execute(database.pool())
     .await
@@ -610,18 +612,10 @@ async fn usage(database: &Database) -> (i64, i64, i64, String) {
 
 async fn ordinary_conversation(
     database: &Database,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    String,
-    String,
-) {
+) -> (Option<String>, Option<String>, String, String) {
     sqlx::query_as(
         "SELECT provider_conversation_id, app_server_instruction_provider_conversation_id, \
-         applied_personality_id, applied_personality_prompt_hash, questions, model FROM session \
-         WHERE id = 'session'",
+         questions, model FROM session WHERE id = 'session'",
     )
     .fetch_one(database.pool())
     .await

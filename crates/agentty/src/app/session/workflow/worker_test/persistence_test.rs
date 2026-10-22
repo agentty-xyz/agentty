@@ -26,7 +26,6 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{SessionId, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::infra::personality::RealPersonalityCatalogClient;
 
 #[tokio::test]
 /// Verifies failed turn-metadata persistence forces a refresh and skips
@@ -71,7 +70,6 @@ async fn test_apply_turn_result_refreshes_when_turn_metadata_persistence_fails()
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(MockGitClient::new()),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 
@@ -178,7 +176,6 @@ async fn test_apply_turn_result_persists_only_assistant_answer() {
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -257,7 +254,6 @@ async fn test_apply_turn_result_persists_harness_turn_report() {
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -347,7 +343,6 @@ async fn test_apply_turn_result_persists_instruction_conversation_id_for_app_ser
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
 

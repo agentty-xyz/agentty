@@ -113,7 +113,6 @@ async fn successful_reservations_report_creation_types() {
     let settings = SessionCreationSettings {
         agent: source.agent,
         permission_mode: source.permission_mode,
-        personality_id: None,
         reasoning_level: source.reasoning_level_override.unwrap_or_default(),
         response_style: source.response_style,
         speed_mode: source.speed_mode,

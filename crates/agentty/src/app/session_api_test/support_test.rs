@@ -198,7 +198,6 @@ pub(super) fn session_row() -> SessionRow {
         output_tokens: 60,
         parent_session_id: Some("parent-1".to_string()),
         permission_mode: "read_only".to_string(),
-        personality_id: Some("reviewer".to_string()),
         project_id: Some(7),
         prompt: "staged prompt".to_string(),
         published_upstream_ref: Some("origin/wt/session-1".to_string()),
@@ -249,12 +248,6 @@ pub(super) async fn persist_inherited_launch_settings(app: &App, session_id: &Se
         .update_session_permission_mode(session_id, PermissionMode::ReadOnly)
         .await
         .expect("source permission mode should update");
-    app.services
-        .db()
-        .sessions()
-        .update_session_personality_id(session_id, Some("inherited-personality".to_string()))
-        .await
-        .expect("source personality should update");
 }
 
 /// Answers any utility prompt, such as title generation, during question flows.

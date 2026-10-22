@@ -59,8 +59,11 @@ pub struct BuildCommandRequest<'a> {
     pub model: &'a str,
     /// Filesystem and command permission policy for this turn.
     pub permission_mode: PermissionMode,
-    /// Current personality body included during a full prompt bootstrap.
-    pub personality_prompt: Option<&'a str>,
+    /// Current agent body included during a full prompt bootstrap.
+    pub agent_profile_prompt: Option<&'a str>,
+    /// Agent change that must reach prompt rendering, including withdrawal
+    /// guidance when continuing a previously configured session.
+    pub agent_profile_update: &'a ag_contracts::AgentDefinitionPromptUpdate,
     /// User prompt to send.
     pub prompt: &'a str,
     /// Reasoning effort preference for this turn.

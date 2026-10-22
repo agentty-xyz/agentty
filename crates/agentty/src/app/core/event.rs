@@ -130,11 +130,6 @@ pub(crate) enum AppEvent {
         session_id: SessionId,
         session_agent: crate::domain::agent::AgentSelection,
     },
-    /// Indicates a session personality selection has been persisted.
-    SessionPersonalityUpdated {
-        personality_id: Option<String>,
-        session_id: SessionId,
-    },
     /// Indicates a session provider permission mode has been persisted.
     SessionPermissionModeUpdated {
         permission_mode: crate::domain::permission::PermissionMode,
@@ -421,7 +416,6 @@ pub(super) struct AppEventBatch {
     pub(super) session_model_updates: HashMap<SessionId, crate::domain::agent::AgentSelection>,
     pub(super) session_permission_mode_updates:
         HashMap<SessionId, crate::domain::permission::PermissionMode>,
-    pub(super) session_personality_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_progress_updates: HashMap<SessionId, Option<String>>,
     pub(super) session_queued_sync_resolved_ids: HashSet<SessionId>,
     pub(super) session_rebase_review_invalidated_ids: HashSet<SessionId>,
@@ -503,7 +497,6 @@ impl AppEventBatch {
             || !self.review_updates.is_empty()
             || !self.review_progress_updates.is_empty()
             || !self.session_model_updates.is_empty()
-            || !self.session_personality_updates.is_empty()
             || !self.session_permission_mode_updates.is_empty()
             || !self.session_progress_updates.is_empty()
             || !self.session_activity_updates.is_empty()
@@ -603,13 +596,6 @@ impl AppEventBatch {
             }
             AppEvent::UpdateStatusChanged { update_status } => {
                 self.update_status = Some(update_status);
-            }
-            AppEvent::SessionPersonalityUpdated {
-                personality_id,
-                session_id,
-            } => {
-                self.session_personality_updates
-                    .insert(session_id, personality_id);
             }
             AppEvent::SessionPermissionModeUpdated {
                 permission_mode,
@@ -738,7 +724,6 @@ impl AppEventBatch {
             | AppEvent::VersionAvailabilityUpdated { .. }
             | AppEvent::AgentCliVersionsUpdated { .. }
             | AppEvent::UpdateStatusChanged { .. }
-            | AppEvent::SessionPersonalityUpdated { .. }
             | AppEvent::SessionPermissionModeUpdated { .. }
             | AppEvent::SessionReasoningLevelUpdated { .. }
             | AppEvent::SessionResponseStyleUpdated { .. }
@@ -1882,13 +1867,6 @@ impl App {
         for (session_id, session_agent) in std::mem::take(&mut event_batch.session_model_updates) {
             self.sessions
                 .apply_session_model_updated(&session_id, session_agent);
-        }
-
-        for (session_id, personality_id) in
-            std::mem::take(&mut event_batch.session_personality_updates)
-        {
-            self.sessions
-                .apply_session_personality_updated(&session_id, personality_id);
         }
 
         for (session_id, permission_mode) in

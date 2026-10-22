@@ -1,4 +1,4 @@
-use ag_contracts::PersonalityPromptUpdate;
+use ag_contracts::AgentDefinitionPromptUpdate;
 use ag_protocol::{
     ProtocolRequestProfile, ProtocolSchemaInstructionMode,
     prepend_protocol_instructions as protocol_prepend_instructions,
@@ -30,8 +30,8 @@ fn repair_bootstrap_applies_schema_once_for_each_provider_and_profile() {
             // Act
             let prompt = prepare_prompt_text(PromptPreparationRequest {
                 instruction_delivery_mode: InstructionDeliveryMode::BootstrapFull,
-                personality_prompt: None,
-                personality_update: &PersonalityPromptUpdate::Unchanged,
+                agent_profile_prompt: None,
+                agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
                 prompt: &repair,
                 protocol_profile: profile,
                 replay_transcript: None,
@@ -188,8 +188,8 @@ fn test_prepare_prompt_text_applies_replay_and_protocol_instructions() {
     // Arrange
     let request = PromptPreparationRequest {
         instruction_delivery_mode: InstructionDeliveryMode::BootstrapWithReplay,
-        personality_prompt: None,
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: None,
+        agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
         prompt: "Continue edits",
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         replay_transcript: Some("previous transcript"),
@@ -209,12 +209,12 @@ fn test_prepare_prompt_text_applies_replay_and_protocol_instructions() {
 }
 
 #[test]
-fn test_prepare_prompt_text_bootstraps_personality_before_user_prompt() {
+fn test_prepare_prompt_text_bootstraps_agent_profile_before_user_prompt() {
     // Arrange
     let request = PromptPreparationRequest {
         instruction_delivery_mode: InstructionDeliveryMode::BootstrapFull,
-        personality_prompt: Some("Review every change for correctness."),
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: Some("Review every change for correctness."),
+        agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
         prompt: "Inspect the patch.",
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         replay_transcript: None,
@@ -227,25 +227,25 @@ fn test_prepare_prompt_text_bootstraps_personality_before_user_prompt() {
     let protocol_position = prepared_prompt
         .find("Structured response protocol:")
         .expect("protocol preamble should be present");
-    let personality_position = prepared_prompt
+    let agent_profile_position = prepared_prompt
         .find("Review every change for correctness.")
-        .expect("personality should be present");
+        .expect("agent_profile should be present");
     let user_prompt_position = prepared_prompt
         .find("Inspect the patch.")
         .expect("user prompt should be present");
 
     // Assert
-    assert!(protocol_position < personality_position);
-    assert!(personality_position < user_prompt_position);
+    assert!(protocol_position < agent_profile_position);
+    assert!(agent_profile_position < user_prompt_position);
 }
 
 #[test]
-fn test_prepare_prompt_text_replays_with_current_personality() {
+fn test_prepare_prompt_text_replays_with_current_agent_profile() {
     // Arrange
     let request = PromptPreparationRequest {
         instruction_delivery_mode: InstructionDeliveryMode::BootstrapWithReplay,
-        personality_prompt: Some("Plan before editing."),
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: Some("Plan before editing."),
+        agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
         prompt: "Continue.",
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         replay_transcript: Some("assistant: prior work"),
@@ -255,15 +255,15 @@ fn test_prepare_prompt_text_replays_with_current_personality() {
 
     // Act
     let prepared_prompt = prepare_prompt_text(request).expect("prompt should render");
-    let personality_position = prepared_prompt
+    let agent_profile_position = prepared_prompt
         .find("Plan before editing.")
-        .expect("personality should be present");
+        .expect("agent_profile should be present");
     let transcript_position = prepared_prompt
         .find(r#""assistant: prior work""#)
         .expect("transcript should be present");
 
     // Assert
-    assert!(personality_position < transcript_position);
+    assert!(agent_profile_position < transcript_position);
     assert!(prepared_prompt.contains("User prompt:"));
 }
 
@@ -304,8 +304,8 @@ fn test_prepare_prompt_text_uses_delta_only_refresh_mode() {
     // Arrange
     let request = PromptPreparationRequest {
         instruction_delivery_mode: InstructionDeliveryMode::DeltaOnly,
-        personality_prompt: None,
-        personality_update: &PersonalityPromptUpdate::Unchanged,
+        agent_profile_prompt: None,
+        agent_profile_update: &AgentDefinitionPromptUpdate::Unchanged,
         prompt: "Continue edits",
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         replay_transcript: Some("previous transcript"),
@@ -324,12 +324,12 @@ fn test_prepare_prompt_text_uses_delta_only_refresh_mode() {
 }
 
 #[test]
-fn test_prepare_prompt_text_delta_mode_sends_personality_update_and_clear() {
+fn test_prepare_prompt_text_delta_mode_sends_agent_profile_update_and_clear() {
     // Arrange
     let updated = PromptPreparationRequest {
         instruction_delivery_mode: InstructionDeliveryMode::DeltaOnly,
-        personality_prompt: Some("Ignored current body."),
-        personality_update: &PersonalityPromptUpdate::Set("Be concise.".to_string()),
+        agent_profile_prompt: Some("Ignored current body."),
+        agent_profile_update: &AgentDefinitionPromptUpdate::Set("Be concise.".to_string()),
         prompt: "Continue edits",
         protocol_profile: ProtocolRequestProfile::SessionTurn,
         replay_transcript: None,
@@ -337,7 +337,7 @@ fn test_prepare_prompt_text_delta_mode_sends_personality_update_and_clear() {
         workspace_root: test_workspace_root(),
     };
     let cleared = PromptPreparationRequest {
-        personality_update: &PersonalityPromptUpdate::Clear,
+        agent_profile_update: &AgentDefinitionPromptUpdate::Clear,
         ..updated
     };
 
@@ -348,6 +348,43 @@ fn test_prepare_prompt_text_delta_mode_sends_personality_update_and_clear() {
     // Assert
     assert!(updated_prompt.contains("Be concise."));
     assert!(updated_prompt.ends_with("Continue edits"));
-    assert!(cleared_prompt.contains("The session personality has been cleared."));
+    assert!(
+        cleared_prompt
+            .contains("The session personality and agent instructions have been cleared.")
+    );
     assert!(cleared_prompt.ends_with("Continue edits"));
+}
+
+#[test]
+fn clearing_legacy_instructions_survives_bootstrap_and_replay() {
+    for mode in [
+        InstructionDeliveryMode::BootstrapFull,
+        InstructionDeliveryMode::BootstrapWithReplay,
+    ] {
+        // Arrange
+        let request = PromptPreparationRequest {
+            instruction_delivery_mode: mode,
+            agent_profile_prompt: None,
+            agent_profile_update: &AgentDefinitionPromptUpdate::Clear,
+            prompt: "Continue edits",
+            protocol_profile: ProtocolRequestProfile::SessionTurn,
+            replay_transcript: Some("Earlier ordinary user messages"),
+            schema_instruction_mode: ProtocolSchemaInstructionMode::PromptSchema,
+            workspace_root: test_workspace_root(),
+        };
+
+        // Act
+        let prepared = prepare_prompt_text(request).expect("clearing bootstrap");
+
+        // Assert
+        assert!(
+            prepared.contains("Disregard previous personality and agent-profile instructions.")
+        );
+        assert!(prepared.contains("application policy, permissions, and response contract."));
+        assert!(prepared.ends_with("Continue edits"));
+        assert_eq!(
+            prepared.contains("Earlier ordinary user messages"),
+            mode == InstructionDeliveryMode::BootstrapWithReplay
+        );
+    }
 }

@@ -13,9 +13,9 @@ use super::super::{
     handle_prompt_cancel_key, handle_prompt_down_key, handle_prompt_image_paste,
     handle_prompt_slash_submit, handle_prompt_submit_key, handle_prompt_up_key, handle_with_cache,
     is_active_at_mention, is_prompt_image_paste_key, move_prompt_slash_selection,
-    navigate_prompt_history_down, navigate_prompt_history_up, open_prompt_personality_stage,
-    paste_image_into_active_prompt, prompt_context, show_prompt_diff, submit_current_text_prompt,
-    take_prompt_attachment_cleanup, take_prompt_snapshot, take_submitted_turn_prompt,
+    navigate_prompt_history_down, navigate_prompt_history_up, paste_image_into_active_prompt,
+    prompt_context, show_prompt_diff, submit_current_text_prompt, take_prompt_attachment_cleanup,
+    take_prompt_snapshot, take_submitted_turn_prompt,
 };
 use super::support::{
     PromptTestAppExt, PromptTestModeExt, apply_next_prompt_image_paste, apply_next_session_diff,
@@ -233,54 +233,6 @@ async fn test_prompt_context_demotes_slash_command_to_text_when_session_is_rebas
 }
 
 #[tokio::test]
-async fn test_personality_slash_submit_loads_worktree_profile_and_selects_it() {
-    // Arrange
-    let (mut app, _base_dir) = new_test_prompt_app("/personality", None).await;
-    app.sessions.sessions_mut()[0].personality_id = Some("reviewer".to_string());
-    let session_folder = app.sessions.sessions()[0].folder.clone();
-    let agent_directory = session_folder
-        .join(".agents")
-        .join("agents")
-        .join("reviewer");
-    tokio::fs::create_dir_all(&agent_directory)
-        .await
-        .expect("personality directory should be created");
-    tokio::fs::write(
-        agent_directory.join("agent.md"),
-        "---\nid: reviewer\nname: Code Reviewer\ndescription: Reviews code\n---\nReview carefully.",
-    )
-    .await
-    .expect("personality definition should be written");
-    let prompt_context = prompt_context(&mut app).expect("expected prompt context");
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-
-    // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { slash_state, .. }
-            if slash_state.stage == PromptSlashStage::Personality
-                && slash_state.selected_index == 1
-    ));
-
-    // Act
-    handle_prompt_slash_submit(&mut app, &prompt_context).await;
-    app.process_pending_app_events().await;
-
-    // Assert
-    assert!(matches!(
-        &app.mode,
-        AppMode::Prompt { input, slash_state, .. }
-            if input.is_empty() && *slash_state == PromptSlashState::default()
-    ));
-    assert_eq!(
-        app.sessions.sessions()[0].personality_id.as_deref(),
-        Some("reviewer")
-    );
-}
-
-#[tokio::test]
 async fn test_ctrl_c_keeps_chat_focus_without_canceling_prompt() {
     // Arrange
     let (mut app, _base_dir) = new_test_prompt_app("draft text", None).await;
@@ -400,7 +352,6 @@ fn test_prompt_slash_commands_lists_all_commands() {
             "/apply",
             "/mode",
             "/model",
-            "/personality",
             "/reasoning",
             "/style",
             "/speed"
@@ -2456,27 +2407,6 @@ fn plan_prompt_mode(app: &App, text: &str) -> AppMode {
     }
 
     mode
-}
-
-#[tokio::test]
-async fn personality_stage_ignores_a_context_after_leaving_the_composer() {
-    // Arrange
-    let (mut app, root) = crate::test_support::new_test_app().await;
-    app.sessions.push_session(
-        crate::test_support::SessionFixtureBuilder::new()
-            .id("prompt-test-session")
-            .folder(root.path().to_path_buf())
-            .build(),
-    );
-    app.mode = new_test_prompt_mode("/personality");
-    let context = prompt_context(&mut app).expect("prompt context");
-    app.mode = AppMode::List;
-
-    // Act
-    open_prompt_personality_stage(&mut app, &context).await;
-
-    // Assert
-    assert!(matches!(app.mode, AppMode::List));
 }
 
 #[tokio::test]

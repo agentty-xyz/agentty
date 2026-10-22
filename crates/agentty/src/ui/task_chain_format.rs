@@ -1,6 +1,6 @@
 //! Pure formatting for task-chain transcript rows.
 
-use ag_session::BuiltinAgentDefinition;
+use ag_session::TaskAgentRole;
 use ag_tui_text::text_util;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -25,10 +25,7 @@ const DETAIL_INDENT: &str = "    ";
 const STATUS_GAP: &str = "  ";
 
 /// Returns the role header shown above one role-attributed answer.
-pub(crate) fn agent_answer_header_line(
-    agent: BuiltinAgentDefinition,
-    width: usize,
-) -> Line<'static> {
+pub(crate) fn agent_answer_header_line(agent: TaskAgentRole, width: usize) -> Line<'static> {
     let accent = Style::default()
         .fg(style::palette::accent())
         .add_modifier(Modifier::BOLD);

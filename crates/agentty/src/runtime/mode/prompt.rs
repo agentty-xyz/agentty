@@ -935,9 +935,6 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Command("/style")) => {
             open_prompt_response_style_stage(app, prompt_context.session_index);
         }
-        Some(PromptSuggestionSelection::Command("/personality")) => {
-            open_prompt_personality_stage(app, prompt_context).await;
-        }
         Some(PromptSuggestionSelection::Command(_)) => {
             if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
                 slash_state.stage = PromptSlashStage::Agent;
@@ -960,11 +957,6 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Mode(permission_mode)) => {
             clear_prompt_slash_input(app).await;
             persist_prompt_permission_mode(app, prompt_context, permission_mode).await;
-        }
-        Some(PromptSuggestionSelection::Personality(personality)) => {
-            clear_prompt_slash_input(app).await;
-            app.update_prompt_session_personality(session_id, personality)
-                .await;
         }
         Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
             clear_prompt_slash_input(app).await;
@@ -1036,30 +1028,6 @@ fn arm_inline_plan_request(mode: &mut AppMode) -> bool {
     slash_state.is_plan_armed = true;
 
     true
-}
-
-/// Loads the personality options and selects the session's current choice.
-async fn open_prompt_personality_stage(app: &mut App, prompt_context: &PromptContext) {
-    let personalities = app
-        .list_prompt_personalities(&prompt_context.session_id)
-        .await;
-    let selected_personality_id = app
-        .session_at(prompt_context.session_index)
-        .and_then(|session| session.personality_id.as_deref());
-    let selected_index = selected_personality_id
-        .and_then(|selected_id| {
-            personalities
-                .iter()
-                .position(|personality| personality.id == selected_id)
-        })
-        .map_or(0, |index| index.saturating_add(1));
-
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.personalities = personalities;
-        slash_state.stage = PromptSlashStage::Personality;
-        slash_state.selected_agent = None;
-        slash_state.selected_index = selected_index;
-    }
 }
 
 /// Cycles and persists the permission mode without changing the composer.

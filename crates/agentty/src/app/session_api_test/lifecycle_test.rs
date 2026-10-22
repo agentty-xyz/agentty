@@ -272,25 +272,12 @@ async fn runtime_backend_inherits_launch_settings_for_regular_and_draft_sessions
         inherited_session.settings.permission_mode,
         PermissionMode::ReadOnly
     );
+
+    let mut expected_regular_settings = inherited_session.settings.clone();
+    expected_regular_settings.is_draft = false;
     assert_eq!(
-        inherited_session.settings.personality_id.as_deref(),
-        Some("inherited-personality")
-    );
-    assert_eq!(
-        inherited_regular_session.settings.agent,
-        inherited_session.settings.agent
-    );
-    assert_eq!(
-        inherited_regular_session.settings.reasoning_level,
-        inherited_session.settings.reasoning_level
-    );
-    assert_eq!(
-        inherited_regular_session.settings.speed_mode,
-        inherited_session.settings.speed_mode
-    );
-    assert_eq!(
-        inherited_regular_session.settings.personality_id.as_deref(),
-        Some("inherited-personality")
+        inherited_regular_session.settings,
+        expected_regular_settings
     );
     assert_eq!(
         ordinary_session.settings.agent.model(),

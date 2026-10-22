@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use super::{AppServices, SessionRunFactory};
 use crate::domain::agent::AgentKind;
 use crate::domain::session::SessionId;
+use crate::infra::agent_profile::AgentCatalogClient;
 use crate::infra::clipboard_image::ClipboardImageClient;
 use crate::infra::fs::FsClient;
 
@@ -79,6 +80,11 @@ impl SessionRunFactory for TestSessionRunFactory {
 }
 
 impl AppServices {
+    /// Replaces workspace definition lookup independently of task persistence.
+    pub(crate) fn set_agent_profile_catalog_client(&mut self, client: Arc<dyn AgentCatalogClient>) {
+        self.agent_profile_catalog_client = client;
+    }
+
     /// Injects task receipts independently of the remaining database ports.
     pub(crate) fn set_task_repository(&mut self, repository: Arc<dyn ag_store::TaskRepository>) {
         self.repositories = self.repositories.with_task_repository(repository);

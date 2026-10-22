@@ -13,7 +13,6 @@ use crate::app::{App, AppError, ReviewCacheEntry};
 use crate::domain::agent::{AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode};
 use crate::domain::composer::PromptAttachment;
 use crate::domain::permission::PermissionMode;
-use crate::domain::personality::PersonalitySummary;
 use crate::domain::review;
 use crate::domain::session::{SessionId, Status};
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -470,57 +469,6 @@ impl App {
                 "failed to switch session model from prompt slash command"
             );
         }
-    }
-
-    /// Loads picker metadata from the targeted session worktree.
-    pub(crate) async fn list_prompt_personalities(
-        &self,
-        session_id: &SessionId,
-    ) -> Vec<PersonalitySummary> {
-        let Some(folder) = self
-            .sessions
-            .sessions()
-            .iter()
-            .find(|session| session.id == *session_id)
-            .map(|session| session.folder.clone())
-        else {
-            return Vec::new();
-        };
-
-        self.services
-            .personality_catalog_client()
-            .list_summaries(folder)
-            .await
-    }
-
-    /// Persists one slash-selected personality and appends visible feedback.
-    pub(crate) async fn update_prompt_session_personality(
-        &mut self,
-        session_id: &SessionId,
-        personality: Option<PersonalitySummary>,
-    ) {
-        let personality_id = personality
-            .as_ref()
-            .map(|personality| personality.id.clone());
-        if let Err(error) = self
-            .set_session_personality(session_id, personality_id)
-            .await
-        {
-            warn!(
-                session_id = %session_id,
-                error = %error,
-                "failed to update session personality from prompt slash command"
-            );
-
-            return;
-        }
-
-        let message = personality.map_or_else(
-            || "Personality cleared.".to_string(),
-            |personality| format!("Personality set to *{}*.", personality.name),
-        );
-        self.append_prompt_status_line(session_id, TranscriptNotice::Personality, &message)
-            .await;
     }
 
     /// Persists one slash-selected reasoning level and logs any failure with

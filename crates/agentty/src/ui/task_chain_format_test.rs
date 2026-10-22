@@ -1,4 +1,4 @@
-use ag_session::BuiltinAgentDefinition;
+use ag_session::TaskAgentRole;
 use ratatui::text::Line;
 
 use crate::presentation::task_chain_graph::{
@@ -13,7 +13,7 @@ use crate::ui::task_chain_format::{
 #[test]
 fn agent_answer_header_names_the_role_with_accent() {
     // Arrange
-    let agent = BuiltinAgentDefinition::Implementer;
+    let agent = TaskAgentRole::Implementer;
 
     // Act
     let header = agent_answer_header_line(agent, 40);
@@ -208,11 +208,11 @@ fn graph(
         }],
         nodes: vec![
             TaskChainGraphNode {
-                agent: BuiltinAgentDefinition::Planner,
+                agent: TaskAgentRole::Planner,
                 status: planner,
             },
             TaskChainGraphNode {
-                agent: BuiltinAgentDefinition::Implementer,
+                agent: TaskAgentRole::Implementer,
                 status: implementer,
             },
         ],

@@ -549,14 +549,7 @@ fn test_prompt_suggestion_list_for_command_stage_omits_disabled_apply() {
     // Assert
     assert_eq!(
         labels,
-        vec![
-            "/mode",
-            "/model",
-            "/personality",
-            "/reasoning",
-            "/style",
-            "/speed"
-        ]
+        vec!["/mode", "/model", "/reasoning", "/style", "/speed"]
     );
     assert_eq!(menu.selected_index, 0);
 }

@@ -161,8 +161,8 @@ async fn run_session_turn(
     );
     let input = NativePrompt {
         delivery,
-        personality_prompt: req.personality.current(),
-        personality_update: req.personality.update(),
+        agent_profile_prompt: req.agent_profile.current(),
+        agent_profile_update: req.agent_profile.update(),
         prompt: &prompt_text,
         protocol_profile: profile,
         replay_transcript: replay_transcript.as_deref(),

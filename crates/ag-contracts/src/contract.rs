@@ -71,22 +71,22 @@ impl AgentRequestKind {
     }
 }
 
-/// Personality prompt state prepared for one provider turn.
+/// Agent prompt state prepared for one provider turn.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct PersonalityPrompt {
+pub struct AgentDefinitionPrompt {
     current: Option<String>,
-    update: PersonalityPromptUpdate,
+    update: AgentDefinitionPromptUpdate,
 }
 
-impl PersonalityPrompt {
-    /// Creates one active personality, marking whether delta-mode providers
+impl AgentDefinitionPrompt {
+    /// Creates one active agent, marking whether delta-mode providers
     /// must receive its body as an update.
     #[must_use]
     pub fn active(prompt: String, changed: bool) -> Self {
         let update = if changed {
-            PersonalityPromptUpdate::Set(prompt.clone())
+            AgentDefinitionPromptUpdate::Set(prompt.clone())
         } else {
-            PersonalityPromptUpdate::Unchanged
+            AgentDefinitionPromptUpdate::Unchanged
         };
 
         Self {
@@ -95,42 +95,42 @@ impl PersonalityPrompt {
         }
     }
 
-    /// Creates a cleared personality state.
+    /// Creates a cleared agent state.
     ///
-    /// `changed` is true when a delta-mode provider previously held active
-    /// personality instructions and must be told to discard them.
+    /// `changed` is true when retained context previously held active agent
+    /// instructions and must be told to discard them, including on bootstrap.
     #[must_use]
     pub fn cleared(changed: bool) -> Self {
         Self {
             current: None,
             update: if changed {
-                PersonalityPromptUpdate::Clear
+                AgentDefinitionPromptUpdate::Clear
             } else {
-                PersonalityPromptUpdate::Unchanged
+                AgentDefinitionPromptUpdate::Unchanged
             },
         }
     }
 
-    /// Returns the current personality body for a full bootstrap.
+    /// Returns the current agent body for a full bootstrap.
     #[must_use]
     pub fn current(&self) -> Option<&str> {
         self.current.as_deref()
     }
 
     /// Returns the instruction update to apply when continuing context.
-    pub fn update(&self) -> &PersonalityPromptUpdate {
+    pub fn update(&self) -> &AgentDefinitionPromptUpdate {
         &self.update
     }
 }
 
-/// Delta-mode personality change for a provider-managed conversation.
+/// Agent change for a provider-managed conversation or retained native history.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub enum PersonalityPromptUpdate {
-    /// Clear personality behavior that was active on the previous turn.
+pub enum AgentDefinitionPromptUpdate {
+    /// Clear agent behavior that was active on the previous turn.
     Clear,
-    /// Apply a new or edited personality body.
+    /// Apply a new or edited agent body.
     Set(String),
-    /// Reuse the personality behavior already present in provider context.
+    /// Reuse the agent behavior already present in provider context.
     #[default]
     Unchanged,
 }
@@ -284,8 +284,8 @@ pub struct TurnRequest {
     pub model: String,
     /// Filesystem and command permission policy for this turn.
     pub permission_mode: PermissionMode,
-    /// Personality prompt state resolved from the session worktree.
-    pub personality: PersonalityPrompt,
+    /// Agent prompt state resolved from the session worktree.
+    pub agent_profile: AgentDefinitionPrompt,
     /// Structured prompt payload for the turn.
     pub prompt: TurnPrompt,
     /// Reasoning effort preference for the turn.

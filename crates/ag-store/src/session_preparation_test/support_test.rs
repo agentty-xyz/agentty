@@ -39,7 +39,6 @@ pub(super) fn reservation(id: &str, project_id: i64) -> PersistedSessionCreation
         model: "gpt-5.6-sol",
         parent_session_id: None,
         permission_mode: PermissionMode::AutoEdit,
-        personality_id: None,
         project_id,
         reasoning_level: ReasoningLevel::default(),
         response_style: ResponseStyle::default(),

@@ -1,17 +1,19 @@
 //! Public built-in role contracts for future task workflow consumers.
 
-use ag_session::{AgentContextRequirement, AgentOutputKind, BuiltinAgentDefinition};
+use ag_session::{AgentContextRequirement, AgentOutputKind, TaskAgentRole};
 
 #[test]
 fn planner_requires_user_input_and_returns_a_proposal() {
     // Arrange
-    let definition = BuiltinAgentDefinition::Planner;
+    let definition = TaskAgentRole::Planner;
 
     // Act
     let id = definition.id();
     let context = definition.context_requirement();
     let output = definition.output_kind();
-    let instructions = definition.instructions();
+    let instructions = ag_session::AgentDefinition::bundled(id)
+        .expect("bundled planner")
+        .prompt;
 
     // Assert
     assert_eq!(id, "planner");
@@ -25,13 +27,15 @@ fn planner_requires_user_input_and_returns_a_proposal() {
 #[test]
 fn implementer_requires_an_accepted_plan_and_reports_observed_work() {
     // Arrange
-    let definition = BuiltinAgentDefinition::Implementer;
+    let definition = TaskAgentRole::Implementer;
 
     // Act
     let id = definition.id();
     let context = definition.context_requirement();
     let output = definition.output_kind();
-    let instructions = definition.instructions();
+    let instructions = ag_session::AgentDefinition::bundled(id)
+        .expect("bundled implementer")
+        .prompt;
 
     // Assert
     assert_eq!(id, "implementer");

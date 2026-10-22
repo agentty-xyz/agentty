@@ -64,18 +64,25 @@ impl App {
         else {
             return PromptWorkflowOutcome::KeepPrompt;
         };
-        let request = StartPlanThenImplementRequest {
-            agent,
-            attachments: prompt.attachments,
-            chain_id: Uuid::new_v4().to_string(),
-            planner_attempt_id: Uuid::new_v4().to_string(),
-            user_request: prompt.text,
-        };
-        let service = self.session_view_service();
-        if let Err(error) = self
-            .drive_session_request(service.start_plan_then_implement(&session_id, request))
-            .await
-        {
+        let launch = async {
+            let agents = ag_session::PlanThenImplementAgents::bundled().ok_or(
+                SessionError::Operation("Bundled workflow agents are unavailable.".into()),
+            )?;
+            let request = StartPlanThenImplementRequest {
+                agent,
+                agents: Box::new(agents),
+                attachments: prompt.attachments,
+                chain_id: Uuid::new_v4().to_string(),
+                planner_attempt_id: Uuid::new_v4().to_string(),
+                user_request: prompt.text,
+            };
+            let service = self.session_view_service();
+
+            self.drive_session_request(service.start_plan_then_implement(&session_id, request))
+                .await
+        }
+        .await;
+        if let Err(error) = launch {
             self.append_prompt_status_line(
                 &session_id,
                 TranscriptNotice::ReplyError,

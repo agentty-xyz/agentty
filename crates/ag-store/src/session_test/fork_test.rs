@@ -57,7 +57,6 @@ async fn test_fork_session_snapshot_resets_source_specific_state() {
         .load_session_permission_mode("fork-session")
         .await
         .expect("failed to load fork permission mode");
-
     assert_source_reset_state(
         source_row,
         &source_reset_row,
@@ -70,8 +69,6 @@ async fn test_fork_session_snapshot_resets_source_specific_state() {
 
 /// Session columns that must be reset when snapshotting a fork.
 struct ForkResetRow {
-    applied_personality_id: Option<String>,
-    applied_personality_prompt_hash: Option<String>,
     app_server_instruction_provider_conversation_id: Option<String>,
     focused_review_diff_hash: Option<String>,
     focused_review_text: Option<String>,
@@ -93,8 +90,6 @@ async fn load_fork_reset_row(pool: &SqlitePool, session_id: &str) -> ForkResetRo
         ForkResetRow,
         r#"
 SELECT app_server_instruction_provider_conversation_id,
-       applied_personality_id,
-       applied_personality_prompt_hash,
        focused_review_diff_hash,
        focused_review_text,
        in_progress_started_at,
@@ -172,8 +167,6 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
         .persist_session_turn_metadata(
             "source-session",
             &SessionTurnMetadata {
-                applied_personality_id: Some("reviewer".to_string()),
-                applied_personality_prompt_hash: Some("personality-hash".to_string()),
                 harness_turn_report: None,
                 instruction_conversation_id: None,
                 model: "gpt-5.6-sol".to_string(),
@@ -184,7 +177,7 @@ async fn seed_fork_snapshot_source_linkage(database: &AppRepositories) {
             },
         )
         .await
-        .expect("failed to persist applied personality");
+        .expect("failed to persist applied agent_profile");
     database
         .sessions()
         .update_session_provider_conversation_id(
@@ -267,11 +260,6 @@ async fn seed_fork_snapshot_source_settings(database: &AppRepositories) {
         .update_session_permission_mode("source-session", PermissionMode::ReadOnly)
         .await
         .expect("failed to update permission mode");
-    database
-        .sessions()
-        .update_session_personality_id("source-session", Some("reviewer".to_string()))
-        .await
-        .expect("failed to update personality id");
 }
 
 /// Persists active-work timing fields on the fork source row.
@@ -312,15 +300,6 @@ fn assert_source_reset_state(
         Ok(PermissionMode::ReadOnly)
     );
     assert!(source_reset_row.is_draft);
-    assert_eq!(source_row.personality_id.as_deref(), Some("reviewer"));
-    assert_eq!(
-        source_reset_row.applied_personality_id.as_deref(),
-        Some("reviewer")
-    );
-    assert_eq!(
-        source_reset_row.applied_personality_prompt_hash.as_deref(),
-        Some("personality-hash")
-    );
     assert_eq!(
         source_reset_row.parent_session_id.as_deref(),
         Some("parent-session")
@@ -377,7 +356,6 @@ fn assert_fork_reset_state(
     assert_eq!(fork_row.status, "Review");
     assert!(!fork_row.is_draft);
     assert_eq!(fork_row.parent_session_id, None);
-    assert_eq!(fork_row.personality_id.as_deref(), Some("reviewer"));
     assert_eq!(fork_row.input_tokens, 0);
     assert_eq!(fork_row.output_tokens, 0);
     assert_eq!(fork_row.added_lines, 0);
@@ -389,8 +367,6 @@ fn assert_fork_reset_state(
     assert_eq!(fork_row.published_upstream_ref, None);
     assert_eq!(fork_row.review_request, None);
     assert_eq!(fork_reset_row.provider_conversation_id, None);
-    assert_eq!(fork_reset_row.applied_personality_id, None);
-    assert_eq!(fork_reset_row.applied_personality_prompt_hash, None);
     assert_eq!(
         fork_reset_row.app_server_instruction_provider_conversation_id,
         None

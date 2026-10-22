@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\nSELECT app_server_instruction_provider_conversation_id,\n       applied_personality_id,\n       applied_personality_prompt_hash,\n       focused_review_diff_hash,\n       focused_review_text,\n       in_progress_started_at,\n       in_progress_total_seconds,\n       is_draft AS \"is_draft: bool\",\n       merged_commit_hash,\n       parent_session_id,\n       provider_conversation_id,\n       published_upstream_ref,\n       questions,\n       stack_base_commit_hash\nFROM session\nWHERE id = ?\n",
+  "query": "\nSELECT app_server_instruction_provider_conversation_id,\n       focused_review_diff_hash,\n       focused_review_text,\n       in_progress_started_at,\n       in_progress_total_seconds,\n       is_draft AS \"is_draft: bool\",\n       merged_commit_hash,\n       parent_session_id,\n       provider_conversation_id,\n       published_upstream_ref,\n       questions,\n       stack_base_commit_hash\nFROM session\nWHERE id = ?\n",
   "describe": {
     "columns": [
       {
@@ -15,30 +15,8 @@
         }
       },
       {
-        "name": "applied_personality_id",
-        "ordinal": 1,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "session",
-            "name": "applied_personality_id"
-          }
-        }
-      },
-      {
-        "name": "applied_personality_prompt_hash",
-        "ordinal": 2,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "session",
-            "name": "applied_personality_prompt_hash"
-          }
-        }
-      },
-      {
         "name": "focused_review_diff_hash",
-        "ordinal": 3,
+        "ordinal": 1,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +27,7 @@
       },
       {
         "name": "focused_review_text",
-        "ordinal": 4,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +38,7 @@
       },
       {
         "name": "in_progress_started_at",
-        "ordinal": 5,
+        "ordinal": 3,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +49,7 @@
       },
       {
         "name": "in_progress_total_seconds",
-        "ordinal": 6,
+        "ordinal": 4,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -82,7 +60,7 @@
       },
       {
         "name": "is_draft: bool",
-        "ordinal": 7,
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -93,7 +71,7 @@
       },
       {
         "name": "merged_commit_hash",
-        "ordinal": 8,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -104,7 +82,7 @@
       },
       {
         "name": "parent_session_id",
-        "ordinal": 9,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -115,7 +93,7 @@
       },
       {
         "name": "provider_conversation_id",
-        "ordinal": 10,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -126,7 +104,7 @@
       },
       {
         "name": "published_upstream_ref",
-        "ordinal": 11,
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -137,7 +115,7 @@
       },
       {
         "name": "questions",
-        "ordinal": 12,
+        "ordinal": 10,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -148,7 +126,7 @@
       },
       {
         "name": "stack_base_commit_hash",
-        "ordinal": 13,
+        "ordinal": 11,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -166,8 +144,6 @@
       true,
       true,
       true,
-      true,
-      true,
       false,
       false,
       true,
@@ -178,5 +154,5 @@
       true
     ]
   },
-  "hash": "350891509a8007459f1fe94bcf3e04e4634347779fbad3fb60b469e4c13bf834"
+  "hash": "4c5e0fd31b83f4b11054460069d332ded11dffcdb10bf97f7ddc291df26e432a"
 }

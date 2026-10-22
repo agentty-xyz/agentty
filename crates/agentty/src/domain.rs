@@ -1,13 +1,13 @@
 //! Domain entities and pure business logic.
 
+/// Workspace agent definitions and frontmatter parsing.
+pub mod agent_profile;
 pub mod composer;
 pub mod file_entry;
 /// Launch-time availability of in-process harness sessions.
 pub mod harness;
 /// Editable text-input state and cursor operations.
 pub mod input;
-/// Workspace personality definitions and frontmatter parsing.
-pub mod personality;
 /// Persisted project entities and project-list ordering.
 pub mod project;
 pub mod question;

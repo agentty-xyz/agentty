@@ -5,13 +5,25 @@ use std::path::{Path, PathBuf};
 use tracing::instrument::WithSubscriber;
 
 use super::{
-    RealPersonalityCatalogClient, SUMMARY_BODY_BUFFER_BYTES, body_contains_non_whitespace,
-    contain_personality_definition, direct_agent_directory, is_personality_definition,
-    is_personality_directory, list_catalog_personality_summaries, next_agent_directory,
-    read_personality_summary_source,
+    RealAgentCatalogClient, SUMMARY_BODY_BUFFER_BYTES, body_contains_non_whitespace,
+    contain_agent_profile_definition, direct_agent_directory, is_agent_profile_definition,
+    is_agent_profile_directory, list_catalog_agent_profile_summaries, next_agent_directory,
+    read_agent_profile_summary_source,
 };
-use crate::domain::personality::PersonalitySummary;
-use crate::infra::personality::PersonalityCatalogClient;
+use crate::domain::agent_profile::AgentDefinitionSummary;
+use crate::infra::agent_profile::AgentCatalogClient;
+
+#[path = "agent_profile_warning_test.rs"]
+mod warnings;
+
+/// Selects repository entries when checking workspace discovery and
+/// containment.
+fn repository_entries(agents: Vec<AgentDefinitionSummary>) -> Vec<AgentDefinitionSummary> {
+    agents
+        .into_iter()
+        .filter(|agent| agent.source == ag_session::AgentDefinitionSource::Repository)
+        .collect()
+}
 
 /// Writes one agent definition below the test workspace.
 async fn write_definition(workspace: &Path, directory: &str, definition: &str) {
@@ -25,7 +37,61 @@ async fn write_definition(workspace: &Path, directory: &str, definition: &str) {
 }
 
 #[tokio::test]
-async fn test_real_catalog_lists_enabled_workspace_personalities_in_name_order() {
+async fn bundled_agents_are_available_and_repository_overrides_and_tombstones_win() {
+    // Arrange
+    let workspace = tempfile::tempdir().expect("workspace");
+    let catalog = RealAgentCatalogClient;
+
+    // Act
+    let defaults = catalog.list_summaries(workspace.path().to_path_buf()).await;
+    let planner = catalog
+        .resolve(workspace.path().to_path_buf(), "planner".into())
+        .await
+        .expect("bundled planner");
+    write_definition(
+        workspace.path(),
+        "custom-planner",
+        "---\nid: planner\nname: Repository Planner\ndescription: Project planning\n---\nUse the \
+         repository plan format.",
+    )
+    .await;
+    write_definition(
+        workspace.path(),
+        "implementer",
+        "---\nid: implementer\nenabled: false\n---\n",
+    )
+    .await;
+    let overridden = catalog.list_summaries(workspace.path().to_path_buf()).await;
+    let replacement = catalog
+        .resolve(workspace.path().to_path_buf(), "planner".into())
+        .await
+        .expect("repository planner");
+    let disabled = catalog
+        .resolve(workspace.path().to_path_buf(), "implementer".into())
+        .await;
+
+    // Assert
+    assert_eq!(defaults.len(), 2);
+    assert!(
+        defaults
+            .iter()
+            .all(|agent| agent.source == ag_session::AgentDefinitionSource::Bundled)
+    );
+    assert_eq!(
+        planner,
+        ag_session::AgentDefinition::bundled("planner").expect("bundled definition")
+    );
+    assert_eq!(overridden.len(), 1);
+    assert_eq!(
+        overridden[0].source,
+        ag_session::AgentDefinitionSource::Repository
+    );
+    assert_eq!(replacement.prompt, "Use the repository plan format.");
+    assert_eq!(disabled, None);
+}
+
+#[tokio::test]
+async fn test_real_catalog_lists_enabled_workspace_agent_profiles_in_name_order() {
     // Arrange
     let workspace = tempfile::tempdir().expect("create workspace");
     write_definition(
@@ -64,19 +130,19 @@ async fn test_real_catalog_lists_enabled_workspace_personalities_in_name_order()
         "---\nid: beta\nname: same\ndescription: Same lowercase name\n---\nBeta.",
     )
     .await;
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
-    let personalities = catalog
+    let agent_profiles = catalog
         .list_summaries(workspace.path().to_path_buf())
         .with_subscriber(crate::test_support::TestSubscriber)
         .await;
 
     // Assert
     assert_eq!(
-        personalities
+        repository_entries(agent_profiles)
             .iter()
-            .map(|personality| personality.id.as_str())
+            .map(|agent_profile| agent_profile.id.as_str())
             .collect::<Vec<_>>(),
         ["architect", "reviewer", "alpha", "beta"]
     );
@@ -129,22 +195,22 @@ async fn test_summary_source_retains_frontmatter_and_prompt_presence_only() {
     let definitions = workspace.path().join(".agents").join("agents");
 
     // Act
-    let large = read_personality_summary_source(&definitions.join("large").join("agent.md"))
+    let large = read_agent_profile_summary_source(&definitions.join("large").join("agent.md"))
         .await
         .expect("large summary source should load");
-    let empty = read_personality_summary_source(&definitions.join("empty").join("agent.md"))
+    let empty = read_agent_profile_summary_source(&definitions.join("empty").join("agent.md"))
         .await
         .expect("empty summary source should load");
     let invalid_start =
-        read_personality_summary_source(&definitions.join("invalid-start").join("agent.md"))
+        read_agent_profile_summary_source(&definitions.join("invalid-start").join("agent.md"))
             .await
             .expect("invalid summary source should load");
     let missing_end =
-        read_personality_summary_source(&definitions.join("missing-end").join("agent.md"))
+        read_agent_profile_summary_source(&definitions.join("missing-end").join("agent.md"))
             .await
             .expect("unterminated summary source should load");
     let missing_prompt =
-        read_personality_summary_source(&definitions.join("missing-prompt").join("agent.md"))
+        read_agent_profile_summary_source(&definitions.join("missing-prompt").join("agent.md"))
             .await
             .expect("promptless summary source should load");
 
@@ -209,7 +275,7 @@ async fn test_real_catalog_resolves_declared_id_and_directory_fallback() {
         "---\nname: Planner\ndescription: Plans work\n---\nPlan.",
     )
     .await;
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
     let declared = catalog
@@ -221,11 +287,11 @@ async fn test_real_catalog_resolves_declared_id_and_directory_fallback() {
 
     // Assert
     assert_eq!(
-        declared.map(|personality| personality.name),
+        declared.map(|agent_profile| agent_profile.name),
         Some("Reviewer".to_string())
     );
     assert_eq!(
-        fallback.map(|personality| personality.name),
+        fallback.map(|agent_profile| agent_profile.name),
         Some("Planner".to_string())
     );
 }
@@ -251,7 +317,7 @@ async fn test_real_catalog_skips_unavailable_entries_and_returns_none() {
     tokio::fs::write(invalid_directory.join("agent.md"), [0xff])
         .await
         .expect("write invalid UTF-8 definition");
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
     let mismatched = catalog
@@ -289,7 +355,7 @@ async fn test_duplicate_id_resolution_matches_picker_directory_winner() {
         "---\nid: reviewer\nname: Named Reviewer\ndescription: Named directory\n---\nNamed prompt.",
     )
     .await;
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
     let summaries = catalog
@@ -299,12 +365,13 @@ async fn test_duplicate_id_resolution_matches_picker_directory_winner() {
     let resolved = catalog
         .resolve(workspace.path().to_path_buf(), "reviewer".to_string())
         .await
-        .expect("picker personality should resolve");
+        .expect("picker agent_profile should resolve");
 
     // Assert
     assert_eq!(
-        summaries,
-        vec![PersonalitySummary {
+        repository_entries(summaries),
+        vec![AgentDefinitionSummary {
+            source: ag_session::AgentDefinitionSource::Repository,
             description: "First duplicate".to_string(),
             id: "reviewer".to_string(),
             name: "First Reviewer".to_string(),
@@ -318,7 +385,7 @@ async fn test_duplicate_id_resolution_matches_picker_directory_winner() {
 async fn test_real_catalog_returns_empty_for_missing_or_malformed_catalog() {
     // Arrange
     let workspace = tempfile::tempdir().expect("create workspace");
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
     let missing = catalog.list_summaries(workspace.path().to_path_buf()).await;
@@ -344,12 +411,12 @@ async fn test_real_catalog_returns_empty_for_missing_or_malformed_catalog() {
 
     // Assert
     assert_eq!(
-        missing,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(missing),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
     assert_eq!(
-        malformed,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(malformed),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
 }
 
@@ -369,7 +436,7 @@ async fn test_real_catalog_handles_missing_workspace_and_unreadable_definition()
     tokio::fs::write(invalid_directory.join("agent.md"), [0xff])
         .await
         .expect("write invalid UTF-8 definition");
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
     let missing = catalog
@@ -383,12 +450,12 @@ async fn test_real_catalog_handles_missing_workspace_and_unreadable_definition()
 
     // Assert
     assert_eq!(
-        missing,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(missing),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
     assert_eq!(
-        unreadable,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(unreadable),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
 }
 
@@ -401,7 +468,7 @@ async fn test_catalog_helpers_fail_closed_for_io_and_containment_errors() {
     let outside_definition = PathBuf::from("/outside/reviewer/agent.md");
 
     // Act
-    let entries = list_catalog_personality_summaries(
+    let entries = list_catalog_agent_profile_summaries(
         Err(io::Error::other("open failed")),
         workspace,
         &agents_directory,
@@ -422,27 +489,27 @@ async fn test_catalog_helpers_fail_closed_for_io_and_containment_errors() {
                 io::Result::Err(io::Error::other("enumeration failed")),
                 &agents_directory,
             ),
-            is_personality_directory(
+            is_agent_profile_directory(
                 io::Result::Err(io::Error::other("metadata failed")),
                 &agents_directory,
             ),
-            is_personality_directory(
+            is_agent_profile_directory(
                 io::Result::Err(io::Error::from(io::ErrorKind::NotFound)),
                 &agents_directory,
             ),
-            is_personality_definition(
+            is_agent_profile_definition(
                 io::Result::Err(io::Error::from(io::ErrorKind::NotFound)),
                 &definition_path,
             ),
-            is_personality_definition(
+            is_agent_profile_definition(
                 io::Result::Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "metadata failed",
                 )),
                 &definition_path,
             ),
-            contain_personality_definition(Ok(outside_definition), workspace, &definition_path),
-            contain_personality_definition(
+            contain_agent_profile_definition(Ok(outside_definition), workspace, &definition_path),
+            contain_agent_profile_definition(
                 Err(io::Error::other("canonicalize failed")),
                 workspace,
                 &definition_path,
@@ -453,7 +520,7 @@ async fn test_catalog_helpers_fail_closed_for_io_and_containment_errors() {
     // Assert
     assert_eq!(
         entries,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
     assert!(next_entry.is_none());
     assert!(!directory);
@@ -481,26 +548,26 @@ async fn test_real_catalog_rejects_catalog_links_outside_workspace() {
         .await
         .expect("create loop agents parent");
     symlink("agents", loop_agents_parent.join("agents")).expect("create catalog link loop");
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
-    let outside_personalities = catalog
+    let outside_agent_profiles = catalog
         .list_summaries(workspace.path().to_path_buf())
         .with_subscriber(crate::test_support::TestSubscriber)
         .await;
-    let loop_personalities = catalog
+    let loop_agent_profiles = catalog
         .list_summaries(loop_workspace.path().to_path_buf())
         .with_subscriber(crate::test_support::TestSubscriber)
         .await;
 
     // Assert
     assert_eq!(
-        outside_personalities,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(outside_agent_profiles),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
     assert_eq!(
-        loop_personalities,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(loop_agent_profiles),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
 }
 
@@ -529,14 +596,14 @@ async fn test_real_catalog_rejects_symlinked_definitions_outside_workspace() {
         agents_directory.join("external"),
     )
     .expect("create symlink");
-    let catalog = RealPersonalityCatalogClient;
+    let catalog = RealAgentCatalogClient;
 
     // Act
-    let personalities = catalog.list_summaries(workspace.path().to_path_buf()).await;
+    let agent_profiles = catalog.list_summaries(workspace.path().to_path_buf()).await;
 
     // Assert
     assert_eq!(
-        personalities,
-        [] as [crate::domain::personality::PersonalitySummary; 0]
+        repository_entries(agent_profiles),
+        [] as [crate::domain::agent_profile::AgentDefinitionSummary; 0]
     );
 }

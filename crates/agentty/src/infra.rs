@@ -1,5 +1,7 @@
 //! Infrastructure adapters for database, filesystem, and system boundaries.
 
+/// Workspace-only agent discovery boundary.
+pub mod agent_profile;
 /// Clipboard image capture and persistence boundary for prompt attachments.
 pub(crate) mod clipboard_image;
 /// Wall-clock boundary used by app, runtime, and session orchestration.
@@ -11,8 +13,6 @@ pub mod file_index;
 pub mod fs;
 /// Agentty data-directory path resolution.
 pub mod home;
-/// Workspace-only personality discovery boundary.
-pub mod personality;
 /// Process-management utilities for agent subprocess lifecycle.
 /// Native process creation identities for resource accounting.
 pub(crate) mod process_identity;

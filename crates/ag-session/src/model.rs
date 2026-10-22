@@ -348,8 +348,6 @@ pub struct SessionSettings {
     pub parent_session_id: Option<SessionId>,
     /// Provider permission mode used for future turns.
     pub permission_mode: PermissionMode,
-    /// Workspace personality selected for future turns, when present.
-    pub personality_id: Option<String>,
     /// Owning project identifier.
     pub project_id: i64,
     /// Session-scoped reasoning level.

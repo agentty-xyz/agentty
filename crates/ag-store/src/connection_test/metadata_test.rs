@@ -343,8 +343,6 @@ async fn test_persist_session_turn_metadata_rolls_back_on_failure() {
         .persist_session_turn_metadata(
             "session-a",
             &SessionTurnMetadata {
-                applied_personality_id: None,
-                applied_personality_prompt_hash: None,
                 harness_turn_report: None,
                 instruction_conversation_id: Some("instruction-thread".to_string()),
                 model: model_fixture::CODEX_MODEL.as_str().to_string(),
@@ -409,8 +407,6 @@ async fn test_persist_session_turn_metadata_keeps_harness_turn_report_after_sess
         .persist_session_turn_metadata(
             "session-a",
             &SessionTurnMetadata {
-                applied_personality_id: None,
-                applied_personality_prompt_hash: None,
                 harness_turn_report: Some(report.to_string()),
                 instruction_conversation_id: None,
                 model: "muse-spark-1.3".to_string(),

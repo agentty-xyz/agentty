@@ -26,7 +26,6 @@ use crate::app::session::SessionError;
 use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::Status;
 use crate::infra::db::AppRepositories;
-use crate::infra::personality::RealPersonalityCatalogClient;
 
 #[tokio::test]
 /// Verifies process-only events do not append transcript content.
@@ -197,7 +196,6 @@ async fn test_run_channel_turn_warns_when_main_checkout_status_changes() {
         fs_client: Arc::new(mock_fs_client_with_existing_directories()),
         git_client: Arc::new(mock_git_client),
         transcript: Arc::clone(&transcript),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),

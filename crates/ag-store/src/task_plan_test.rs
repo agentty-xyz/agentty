@@ -1,6 +1,6 @@
 use ag_session::{
-    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    SubmitAgentTaskRequest,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, SubmitAgentTaskRequest,
+    TaskAgentRole,
 };
 
 use crate::test_support::{agent_task_request, task_database_fixture};
@@ -387,7 +387,9 @@ fn acceptance(attempt_id: &str) -> AcceptTaskPlanRequest {
 
 fn implementation(plan: ag_session::AcceptedTaskPlan) -> SubmitAgentTaskRequest {
     let mut request = agent_task_request("implement");
-    request.assignment.definition = BuiltinAgentDefinition::Implementer;
+    request.assignment.role = TaskAgentRole::Implementer;
+    request.assignment.definition =
+        ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     request.input.accepted_plan = Some(plan);
     request.task_id = "implementation".into();
 

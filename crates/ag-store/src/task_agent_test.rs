@@ -1,6 +1,6 @@
 use ag_session::{
-    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    DurableMessageVisibility, SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput,
+    AcceptedTaskPlan, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility,
+    SubmitAgentTaskRequest, SubmitTaskRequest, Task, TaskAgentInput, TaskAgentRole,
 };
 
 use crate::SessionMessageRow;
@@ -89,6 +89,43 @@ async fn role_attempts_keep_one_context_and_preserve_explicit_input() {
 }
 
 #[tokio::test]
+async fn definition_snapshots_restore_legacy_contexts_and_reject_corrupt_snapshots() {
+    // Arrange
+    let database = database_fixture().await;
+    let first = request("first");
+    database
+        .tasks()
+        .claim_agent_attempt("session", &first, "reply")
+        .await
+        .expect("admit");
+
+    // Act
+    sqlx::query("UPDATE task_agent_context SET definition = NULL WHERE task_id = 'task'")
+        .execute(database.pool())
+        .await
+        .expect("legacy context");
+    let legacy = database
+        .tasks()
+        .load_agent_context("task")
+        .await
+        .expect("load legacy")
+        .expect("context");
+    sqlx::query("UPDATE task_agent_context SET definition = 'invalid' WHERE task_id = 'task'")
+        .execute(database.pool())
+        .await
+        .expect("corrupt snapshot");
+    let corrupt = database.tasks().load_agent_context("task").await;
+
+    // Assert
+    assert_eq!(
+        legacy.context.assignment.definition,
+        ag_session::AgentDefinition::bundled(first.assignment.role.id())
+            .expect("legacy bundled definition")
+    );
+    assert!(corrupt.is_err());
+}
+
+#[tokio::test]
 async fn conflicting_assignment_or_original_input_cannot_change_a_task() {
     // Arrange
     let database = database_fixture().await;
@@ -104,7 +141,9 @@ async fn conflicting_assignment_or_original_input_cannot_change_a_task() {
         .await
         .expect("context");
     let mut changed_role = original.clone();
-    changed_role.assignment.definition = BuiltinAgentDefinition::Implementer;
+    changed_role.assignment.role = TaskAgentRole::Implementer;
+    changed_role.assignment.definition =
+        ag_session::AgentDefinition::bundled("implementer").expect("bundled implementer");
     changed_role.input.accepted_plan = Some(AcceptedTaskPlan {
         attempt_id: "source".to_string(),
         task_id: "planner".to_string(),
@@ -120,6 +159,12 @@ async fn conflicting_assignment_or_original_input_cannot_change_a_task() {
     changed_objective.objective.push_str(" changed");
     let mut changed_visibility = original.clone();
     changed_visibility.visibility = DurableMessageVisibility::Hidden;
+    let mut changed_definition = original.clone();
+    changed_definition
+        .assignment
+        .definition
+        .prompt
+        .push_str(" changed");
 
     for candidate in [
         changed_role,
@@ -128,6 +173,7 @@ async fn conflicting_assignment_or_original_input_cannot_change_a_task() {
         changed_plan,
         changed_objective,
         changed_visibility,
+        changed_definition,
     ] {
         // Act
         let duplicate = database
@@ -402,7 +448,7 @@ async fn independent_planner_tasks_get_distinct_contexts_and_delete_with_the_ses
     // Arrange
     let database = database_fixture().await;
     let mut first = request("plan-first");
-    first.assignment.definition = BuiltinAgentDefinition::Planner;
+    first.assignment.role = TaskAgentRole::Planner;
     first.input.accepted_plan = None;
     let second = SubmitAgentTaskRequest {
         task_id: "other-task".to_string(),

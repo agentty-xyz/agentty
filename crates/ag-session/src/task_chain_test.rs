@@ -10,6 +10,7 @@ use crate::{
 fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     // Arrange
     let start = StartPlanThenImplementRequest {
+        agents: Box::new(crate::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: vec![TurnPromptAttachment {
             local_image_path: "original.png".into(),
             placeholder: "[Image #1]".into(),
@@ -23,6 +24,7 @@ fn workflow_requests_capture_selection_and_keep_continuations_task_local() {
     // Act
     let planner = start.planner_request();
     let chain = TaskChain {
+        agents: crate::PlanThenImplementAgents::bundled().expect("bundled agents"),
         accepted_plan: None,
         agent: start.agent,
         current_request: planner.clone(),

@@ -2,9 +2,9 @@
 
 use ag_session::{
     AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection,
-    BuiltinAgentDefinition, ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
+    ContinueTaskChainRequest, CreateTaskRequest, DurableMessageVisibility,
     StartPlanThenImplementRequest, SubmitAgentTaskRequest, SubmitTaskRequest, Task,
-    TaskAgentAssignment, TaskAgentInput,
+    TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 use ag_store::{DbError, TaskAgentTurnMetadata, TaskRepository};
 use async_trait::async_trait;
@@ -56,6 +56,7 @@ async fn ordinary_adapter_explicitly_rejects_optional_static_workflows() {
     // Arrange
     let adapter = OrdinaryTaskAdapter;
     let start = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
@@ -145,7 +146,8 @@ async fn ordinary_adapter_keeps_its_contract_and_explicitly_rejects_role_tasks()
     let agent = SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "plan".to_string(),
         input: TaskAgentInput {

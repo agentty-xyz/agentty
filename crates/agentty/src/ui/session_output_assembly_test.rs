@@ -1,4 +1,4 @@
-use ag_session::{AgentAnswerContent, BuiltinAgentDefinition};
+use ag_session::{AgentAnswerContent, TaskAgentRole};
 use ratatui::text::Line;
 
 use super::{
@@ -344,7 +344,7 @@ fn test_task_chain_rows_render_role_headers_and_live_graph_card() {
         .status(Status::Review)
         .build();
     let answer = AgentAnswerContent {
-        agent: BuiltinAgentDefinition::Planner,
+        agent: TaskAgentRole::Planner,
         text: "**Plan** v1".to_string(),
     };
     session.transcript = Some(SessionTranscript::new(vec![
@@ -426,11 +426,11 @@ pub(crate) fn task_chain_graph(chain_id: &str) -> TaskChainGraph {
         }],
         nodes: vec![
             TaskChainGraphNode {
-                agent: BuiltinAgentDefinition::Planner,
+                agent: TaskAgentRole::Planner,
                 status: TaskChainNodeStatus::AwaitingApproval,
             },
             TaskChainGraphNode {
-                agent: BuiltinAgentDefinition::Implementer,
+                agent: TaskAgentRole::Implementer,
                 status: TaskChainNodeStatus::Waiting,
             },
         ],

@@ -124,10 +124,7 @@ impl App {
             .session_for_id(session_id)
             .map(|session| session.folder.clone())
             .ok_or(SessionError::NotFound)?;
-        self.require_task_chain_session_ready(
-            session_id,
-            chain.current_request.assignment.definition,
-        )?;
+        self.require_task_chain_session_ready(session_id, chain.current_request.assignment.role)?;
         let plan = if chain.phase == TaskChainPhase::AwaitingPlanAcceptance {
             Some(self.task_chain_plan(&chain).await?)
         } else {

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ag_contracts::{
-    AgentError, AgentRequestKind, MockAgentChannel, PermissionMode, PersonalityPrompt,
+    AgentDefinitionPrompt, AgentError, AgentRequestKind, MockAgentChannel, PermissionMode,
     ReasoningLevel, ResponseStyle, SpeedMode, TurnContinuation, TurnRequest, TurnResult,
 };
 use ag_protocol::TurnPrompt;
@@ -87,7 +87,7 @@ fn request() -> TurnRequest {
         main_checkout_root: None,
         model: "test-model".into(),
         permission_mode: PermissionMode::default(),
-        personality: PersonalityPrompt::default(),
+        agent_profile: AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("test"),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,

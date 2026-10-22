@@ -5,9 +5,9 @@ use std::time::Duration;
 use ag_contracts::SessionDiffState;
 use ag_git::MockGitClient;
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageRequest,
-    DurableMessageVisibility, PermissionMode, SessionId, SubmitAgentTaskRequest, SubmitTaskRequest,
-    TaskAgentAssignment, TaskAgentInput, TaskAttemptStatus,
+    AgentKind, AgentModel, AgentSelection, DurableMessageRequest, DurableMessageVisibility,
+    PermissionMode, SessionId, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment,
+    TaskAgentInput, TaskAgentRole, TaskAttemptStatus,
 };
 use ag_worker::MockRunClient;
 use tokio::sync::Notify;
@@ -612,7 +612,8 @@ fn planner_request() -> SubmitAgentTaskRequest {
     SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "automation-attempt".to_string(),
         input: TaskAgentInput {

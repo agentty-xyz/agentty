@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
 use ag_session::{
-    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, BuiltinAgentDefinition,
-    ContinueTaskChainRequest, FocusedReviewStatus, ReplyToTaskChainRequest, SessionError,
-    SessionId, SessionMessageKind, SessionStatus, StartPlanThenImplementRequest, TaskAgentTurn,
-    TaskChainPhase,
+    AcceptTaskChainPlanRequest, AcceptTaskPlanRequest, ContinueTaskChainRequest,
+    FocusedReviewStatus, ReplyToTaskChainRequest, SessionError, SessionId, SessionMessageKind,
+    SessionStatus, StartPlanThenImplementRequest, TaskAgentRole, TaskAgentTurn, TaskChainPhase,
 };
 use ag_worker::MockRunClient;
+use mockall::predicate::eq;
 use tempfile::TempDir;
 
 use super::test_support::{ChainFixture, agent_answer, launch_request};
 use crate::app::App;
 use crate::app::review::ReviewCacheEntry;
+use crate::infra::agent_profile::MockAgentCatalogClient;
 use crate::infra::db::Database;
 use crate::test_support::{SessionFixtureBuilder, new_test_app, set_session_status_for_test};
 
@@ -102,9 +103,9 @@ async fn service_coordinates_revision_explicit_acceptance_and_exactly_once_hando
             "Implement a scoped change".to_string(),
         ),
         (SessionMessageKind::AgentGraph, "workflow".to_string()),
-        agent_answer(BuiltinAgentDefinition::Planner, "First plan"),
-        agent_answer(BuiltinAgentDefinition::Planner, "Exact revised plan"),
-        agent_answer(BuiltinAgentDefinition::Implementer, "Implemented"),
+        agent_answer(TaskAgentRole::Planner, "First plan"),
+        agent_answer(TaskAgentRole::Planner, "Exact revised plan"),
+        agent_answer(TaskAgentRole::Implementer, "Implemented"),
     ];
     assert_eq!(fixture.persisted_transcript().await, expected_transcript);
     assert_eq!(fixture.live_transcript(), expected_transcript);
@@ -315,8 +316,11 @@ async fn enqueue_failure_is_durable_and_requires_an_explicit_new_attempt() {
         .drive_session_request(service.start_plan_then_implement(
             &session_id,
             StartPlanThenImplementRequest {
+                agents: Box::new(
+                    ag_session::PlanThenImplementAgents::bundled().expect("bundled agents"),
+                ),
                 user_request: "Conflicting launch".into(),
-                ..launch
+                ..launch.clone()
             },
         ))
         .await;
@@ -326,6 +330,29 @@ async fn enqueue_failure_is_durable_and_requires_an_explicit_new_attempt() {
     assert!(receipt.is_ok());
     assert!(conflict.is_err());
     assert_eq!(failed.phase, TaskChainPhase::Failed);
+
+    // Act / Assert: changing either stage's definition ID is a conflict,
+    // rather than a request to replace captured definitions.
+    for role in [TaskAgentRole::Planner, TaskAgentRole::Implementer] {
+        let mut changed = launch.clone();
+        match role {
+            TaskAgentRole::Planner => changed.agents.planner.id = "other-planner".into(),
+            TaskAgentRole::Implementer => {
+                changed.agents.implementer.id = "other-implementer".into();
+            }
+        }
+        assert!(matches!(
+            app.drive_session_request(service.start_plan_then_implement(&session_id, changed))
+                .await,
+            Err(SessionError::Operation(_))
+        ));
+        assert_eq!(
+            app.drive_session_request(service.get_task_chain("workflow"))
+                .await
+                .expect("workflow query"),
+            Some(failed.clone())
+        );
+    }
     assert!(
         app.dispatch_task_chain("workflow", "different-delivery")
             .await
@@ -414,6 +441,45 @@ async fn workflow_queries_and_admission_surface_database_failures() {
         .await,
         Err(SessionError::Operation(_))
     ));
+}
+
+#[tokio::test]
+async fn task_agent_resolution_rejects_missing_sessions_and_unavailable_definitions() {
+    // Arrange
+    let (mut app, directory) = new_test_app().await;
+    let session_id = SessionId::from("owner");
+    let folder = directory.path().join("session-worktree");
+    app.sessions.push_session(
+        SessionFixtureBuilder::new()
+            .id(session_id.clone())
+            .folder(folder.clone())
+            .build(),
+    );
+    let mut catalog = MockAgentCatalogClient::new();
+    catalog
+        .expect_resolve()
+        .with(eq(folder), eq("disabled-agent".to_string()))
+        .times(1)
+        .return_once(|_, _| Box::pin(async { None }));
+    app.services
+        .set_agent_profile_catalog_client(Arc::new(catalog));
+
+    // Act
+    let missing = app
+        .resolve_task_agent_definition(&SessionId::from("missing"), "disabled-agent")
+        .await;
+    let unavailable = app
+        .resolve_task_agent_definition(&session_id, "disabled-agent")
+        .await;
+
+    // Assert
+    assert_eq!(missing, Err(SessionError::NotFound));
+    assert_eq!(
+        unavailable,
+        Err(SessionError::Operation(
+            "Agent definition `disabled-agent` is unavailable or invalid".into()
+        ))
+    );
 }
 
 async fn revised_plan(
@@ -551,6 +617,7 @@ async fn assert_repository_errors_surface(fixture: &mut ChainFixture) {
     .await
     .expect("reject review suppression");
     let launch = StartPlanThenImplementRequest {
+        agents: Box::new(ag_session::PlanThenImplementAgents::bundled().expect("bundled agents")),
         chain_id: "rejected-review".into(),
         planner_attempt_id: "review-unavailable".into(),
         ..launch_request()

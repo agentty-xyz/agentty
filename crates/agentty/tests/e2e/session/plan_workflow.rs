@@ -36,7 +36,11 @@ async fn seed_workflow_project(env: &BuilderEnv) -> E2eResult {
         env.workdir.join("plan_lookup_target.rs"),
         "// lookup target\n",
     )?;
-    run_git(&env.workdir, &["add", "plan_lookup_target.rs"])?;
+    seed_repository_workflow_agents(&env.workdir)?;
+    run_git(
+        &env.workdir,
+        &["add", "plan_lookup_target.rs", ".agents/agents"],
+    )?;
     run_git(&env.workdir, &["commit", "-m", "Add plan lookup target"])?;
     seed_project_settings(
         env,
@@ -86,7 +90,7 @@ case "$prompt" in
       *) answer='revise' ;;
     esac
     ;;
-  *'Act as the planner'*)
+  *'Repository planner definition'*)
     case "$prompt" in
       *'Include search tests'*) answer='Plan version 2: index titles and add search tests.' ;;
       *'Use the title index'*) answer='Plan version 1: index titles.' ;;
@@ -96,7 +100,7 @@ case "$prompt" in
         ;;
     esac
     ;;
-  *'Act as the implementer'*)
+  *'Repository implementer definition'*)
     if [ ! -f "$AGENTTY_TEST_IMPLEMENTER_STARTED" ]; then
       : > "$AGENTTY_TEST_IMPLEMENTER_STARTED"
       while [ -d "$stub_root" ]; do sleep 0.02; done
@@ -123,6 +127,29 @@ printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"%
 "#,
     )?;
     std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o750))?;
+
+    Ok(())
+}
+
+/// Installs repository definitions that the scripted provider requires.
+fn seed_repository_workflow_agents(workdir: &Path) -> E2eResult {
+    for (id, prompt) in [
+        (
+            "planner",
+            "Repository planner definition. Plan the requested change.",
+        ),
+        (
+            "implementer",
+            "Repository implementer definition. Implement the accepted plan.",
+        ),
+    ] {
+        let directory = workdir.join(".agents/agents").join(id);
+        std::fs::create_dir_all(&directory)?;
+        std::fs::write(
+            directory.join("agent.md"),
+            format!("---\nname: {id}\ndescription: Repository workflow agent\n---\n{prompt}\n"),
+        )?;
+    }
 
     Ok(())
 }

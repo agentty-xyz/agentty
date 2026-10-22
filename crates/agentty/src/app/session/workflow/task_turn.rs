@@ -4,9 +4,9 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 
 use ag_contracts::{
-    AgentRequestKind, LiveTranscript, PersonalityPrompt, TurnContinuation, TurnRequest,
+    AgentDefinitionPrompt, AgentRequestKind, LiveTranscript, TurnContinuation, TurnRequest,
 };
-use ag_session::{AgentAnswerContent, BuiltinAgentDefinition, SubmitAgentTaskRequest};
+use ag_session::{AgentAnswerContent, SubmitAgentTaskRequest, TaskAgentRole};
 use ag_worker::RunClient;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -102,7 +102,7 @@ async fn execute(
     let result = result.map_err(turn::session_error_from_agent_error)?;
     cleanup.map_err(turn::session_error_from_agent_error)?;
     check_cancellation(&cancellation)?;
-    let assignment = history.context.context.assignment;
+    let assignment = &history.context.context.assignment;
     let instruction_conversation_id = if ag_worker::uses_persistent_session(assignment.agent.kind())
     {
         ag_contracts::normalize_instruction_conversation_id(
@@ -127,7 +127,7 @@ async fn execute(
             },
         )
         .await?;
-    if assignment.definition == BuiltinAgentDefinition::Implementer {
+    if assignment.role == TaskAgentRole::Implementer {
         // The answer can be visible while commit hooks and publishing still
         // run. Project its changes before exposing that answer, then refresh
         // again during finalization to include any post-turn edits.
@@ -142,7 +142,7 @@ async fn execute(
     // Task questions are retained in task history; they never replace the
     // ordinary session's pending question set or trigger implementation
     // effects.
-    let implementation_succeeded = assignment.definition == BuiltinAgentDefinition::Implementer
+    let implementation_succeeded = assignment.role == TaskAgentRole::Implementer
         && result.assistant_message.questions.is_empty();
     if implementation_succeeded && permission_mode != PermissionMode::ReadOnly {
         apply_implementation_effects(
@@ -221,7 +221,7 @@ fn mirror_chain_answer(
         return;
     }
     let encoded_answer = AgentAnswerContent {
-        agent: request.assignment.definition,
+        agent: request.assignment.role,
         text,
     }
     .encode();
@@ -274,9 +274,9 @@ async fn prepare(
         .load_agent_history(&request.task_id)
         .await?
         .ok_or_else(|| SessionError::Workflow("Task context is missing".to_string()))?;
-    let assignment = history.context.context.assignment;
+    let assignment = &history.context.context.assignment;
     let permission = turn::load_session_permission_mode(&context.db, &context.session_id).await?;
-    let personality = task_personality(context).await?;
+    let agent_profile = AgentDefinitionPrompt::active(assignment.definition.prompt.clone(), true);
     let replay = replay(&history);
     let persistent = ag_worker::uses_persistent_session(assignment.agent.kind());
     let continuation = TurnContinuation::provider(
@@ -293,8 +293,10 @@ async fn prepare(
         folder: env.folder,
         main_checkout_root: env.main_checkout,
         model: assignment.agent.model().provider_model_str().to_string(),
-        permission_mode: assignment.definition.permission_mode(permission),
-        personality,
+        permission_mode: assignment
+            .definition
+            .permission_mode(assignment.role.permission_mode(permission)),
+        agent_profile,
         prompt: task_prompt(request),
         reasoning_level: turn::load_session_reasoning_level(&context.db, &context.session_id).await,
         request_kind: if history.turns.is_empty() {
@@ -314,10 +316,8 @@ async fn prepare(
 /// must not reuse those markers or replace strings inside the JSON data.
 fn task_prompt(request: &SubmitAgentTaskRequest) -> TurnPrompt {
     let input = serde_json::json!(request.input).to_string();
-    let mut prompt = TurnPrompt::from_agent_data(format!(
-        "{}\n\nExplicit task input (JSON data):\n{input}",
-        request.assignment.definition.instructions()
-    ));
+    let mut prompt =
+        TurnPrompt::from_agent_data(format!("Explicit task input (JSON data):\n{input}"));
     for (index, attachment) in request.input.attachments.iter().enumerate() {
         let mut placeholder = format!("[Task image #{}]", index + 1);
         while prompt.text.contains(&placeholder) {
@@ -375,28 +375,6 @@ fn effect_transcript(
     transcript.append_message(SessionMessageKind::AssistantAnswer, &response.answer);
 
     transcript
-}
-
-async fn task_personality(
-    context: &SessionWorkerContext,
-) -> Result<PersonalityPrompt, SessionError> {
-    let state = context
-        .db
-        .sessions()
-        .load_session_personality_state(&context.session_id)
-        .await?;
-    let Some(selected) = state.and_then(|state| state.personality_id) else {
-        return Ok(PersonalityPrompt::cleared(true));
-    };
-    let personality = context
-        .personality_catalog_client
-        .resolve(context.folder.clone(), selected)
-        .await;
-
-    Ok(personality.map_or_else(
-        || PersonalityPrompt::cleared(true),
-        |personality| PersonalityPrompt::active(personality.prompt, true),
-    ))
 }
 
 fn stopped() -> SessionError {

@@ -25,7 +25,6 @@ fn test_transcript_notice_prefixes_match_canonical_labels() {
             "[Main Checkout Warning]",
         ),
         (TranscriptNotice::PasteImageError, "[Paste Image Error]"),
-        (TranscriptNotice::Personality, "[Personality]"),
         (TranscriptNotice::QueueError, "[Queue Error]"),
         (TranscriptNotice::Rebase, "[Sync]"),
         (TranscriptNotice::RebaseAssist, "[Sync Assist]"),

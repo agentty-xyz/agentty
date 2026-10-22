@@ -1,27 +1,27 @@
 use ag_protocol::ProtocolRequestProfile;
 
 use crate::contract::{
-    AgentRequestKind, PersonalityPrompt, PersonalityPromptUpdate, TurnContinuation,
+    AgentDefinitionPrompt, AgentDefinitionPromptUpdate, AgentRequestKind, TurnContinuation,
 };
 
 #[test]
-fn test_personality_prompt_tracks_active_change_and_clear_state() {
+fn test_agent_profile_prompt_tracks_active_change_and_clear_state() {
     // Arrange / Act
-    let changed = PersonalityPrompt::active("Review carefully.".to_string(), true);
-    let unchanged = PersonalityPrompt::active("Review carefully.".to_string(), false);
-    let cleared = PersonalityPrompt::cleared(true);
-    let empty = PersonalityPrompt::cleared(false);
+    let changed = AgentDefinitionPrompt::active("Review carefully.".to_string(), true);
+    let unchanged = AgentDefinitionPrompt::active("Review carefully.".to_string(), false);
+    let cleared = AgentDefinitionPrompt::cleared(true);
+    let empty = AgentDefinitionPrompt::cleared(false);
 
     // Assert
     assert_eq!(changed.current(), Some("Review carefully."));
     assert_eq!(
         changed.update(),
-        &PersonalityPromptUpdate::Set("Review carefully.".to_string())
+        &AgentDefinitionPromptUpdate::Set("Review carefully.".to_string())
     );
-    assert_eq!(unchanged.update(), &PersonalityPromptUpdate::Unchanged);
+    assert_eq!(unchanged.update(), &AgentDefinitionPromptUpdate::Unchanged);
     assert_eq!(cleared.current(), None);
-    assert_eq!(cleared.update(), &PersonalityPromptUpdate::Clear);
-    assert_eq!(empty.update(), &PersonalityPromptUpdate::Unchanged);
+    assert_eq!(cleared.update(), &AgentDefinitionPromptUpdate::Clear);
+    assert_eq!(empty.update(), &AgentDefinitionPromptUpdate::Unchanged);
 }
 
 #[test]

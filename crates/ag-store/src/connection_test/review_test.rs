@@ -360,7 +360,6 @@ async fn test_defer_session_focused_review_requires_eligible_existing_session() 
             model: "gpt-5.6-sol",
             parent_session_id: None,
             permission_mode: ag_session::PermissionMode::AutoEdit,
-            personality_id: None,
             project_id,
             reasoning_level: ReasoningLevel::default(),
             response_style: ag_session::ResponseStyle::default(),

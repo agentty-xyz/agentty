@@ -5,7 +5,7 @@ use std::str::FromStr;
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 
-use crate::BuiltinAgentDefinition;
+use crate::TaskAgentRole;
 
 /// Durable category for one saved session transcript message.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -106,13 +106,13 @@ impl std::error::Error for SessionMessageKindParseError {}
 /// [`SessionMessageKind::AgentAnswer`] content.
 ///
 /// The durable encoding is one JSON object,
-/// `{"agent":"<BuiltinAgentDefinition::id>","text":"<answer>"}`, so arbitrary
+/// `{"agent":"<TaskAgentRole::id>","text":"<answer>"}`, so arbitrary
 /// Markdown round-trips unchanged and new graph roles need only a new role
 /// identity rather than a new message kind.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentAnswerContent {
     /// Role that produced the answer.
-    pub agent: BuiltinAgentDefinition,
+    pub agent: TaskAgentRole,
     /// User-visible answer text, including any clarification questions.
     pub text: String,
 }
@@ -133,7 +133,7 @@ impl AgentAnswerContent {
         let encoded = serde_json::from_str::<EncodedAgentAnswer>(content).ok()?;
 
         Some(Self {
-            agent: BuiltinAgentDefinition::from_id(&encoded.agent)?,
+            agent: TaskAgentRole::from_id(&encoded.agent)?,
             text: encoded.text,
         })
     }

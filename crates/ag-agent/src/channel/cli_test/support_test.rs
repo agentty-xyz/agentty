@@ -10,7 +10,7 @@ pub(super) fn make_turn_request(folder: PathBuf) -> TurnRequest {
         main_checkout_root: None,
         model: "claude-sonnet-5-5".to_string(),
         permission_mode: ag_contracts::PermissionMode::AutoEdit,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: "Write a test".into(),
         reasoning_level: ReasoningLevel::default(),
         request_kind: AgentRequestKind::SessionStart,

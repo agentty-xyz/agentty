@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use ag_contracts::{AgentError, MockAgentChannel};
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, TaskAgentAssignment,
-    TaskAgentContext,
+    AgentKind, AgentModel, AgentSelection, TaskAgentAssignment, TaskAgentContext, TaskAgentRole,
 };
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -58,7 +57,8 @@ fn context(id: &str) -> TaskAgentContext {
     TaskAgentContext {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         id: id.to_string(),
         session_id: "owner".into(),

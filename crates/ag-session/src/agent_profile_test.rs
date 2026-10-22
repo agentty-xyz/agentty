@@ -1,8 +1,99 @@
-use super::PERSONALITY_PROMPT_TRUNCATION_MARKER;
-use crate::personality::{
-    PERSONALITY_PROMPT_MAX_BYTES, Personality, PersonalityParseError, PersonalitySummary,
-    parse_agent_definition, parse_agent_summary,
+use super::AGENT_PROFILE_PROMPT_TRUNCATION_MARKER;
+use crate::agent_profile::{
+    AGENT_PROFILE_PROMPT_MAX_BYTES, AgentDefinition, AgentDefinitionParseError,
+    AgentDefinitionSummary, parse_agent_definition, parse_agent_summary,
 };
+
+#[test]
+fn bundled_and_custom_definitions_share_the_parser_and_restrict_permissions() {
+    // Arrange
+    let source = "---\nid: investigator\nname: Investigator\ndescription: Investigates \
+                  failures\nmodel: inherit\npermission-mode: read-only\n---\nInspect the supplied \
+                  evidence.";
+
+    // Act
+    let custom = parse_agent_definition("fallback", source)
+        .expect("valid definition")
+        .expect("enabled");
+    let bundled = crate::bundled_agent_definitions();
+
+    // Assert
+    assert_eq!(bundled.len(), 2);
+    assert_eq!(bundled[0].id, "planner");
+    assert_eq!(bundled[1].id, "implementer");
+    assert!(crate::AgentDefinition::bundled("unknown").is_none());
+    assert_eq!(
+        custom.permission_mode(crate::PermissionMode::AutoEdit),
+        crate::PermissionMode::ReadOnly
+    );
+    assert_eq!(
+        bundled[1].permission_mode(crate::PermissionMode::ReadOnly),
+        crate::PermissionMode::ReadOnly
+    );
+    assert_eq!(
+        bundled[1].permission_mode(crate::PermissionMode::AutoEdit),
+        crate::PermissionMode::AutoEdit
+    );
+    assert_eq!(
+        custom.summary().source,
+        crate::AgentDefinitionSource::Repository
+    );
+    let encoded = serde_json::to_string(&custom).expect("serialize definition");
+    assert_eq!(
+        serde_json::from_str::<AgentDefinition>(&encoded).expect("restore definition"),
+        custom
+    );
+}
+
+#[test]
+fn catalog_identity_survives_disabled_definitions_and_execution_options_are_validated() {
+    // Arrange
+    let disabled = "---\nid: planner\nenabled: false\n---\n";
+    let fields = [
+        "model: sonnet",
+        "permission-mode: bypass",
+        "tools: Read",
+        "disallowedTools: Write",
+        "permissionMode: plan",
+        "mcpServers: filesystem",
+        "hooks: run",
+        "skills: review",
+        "connection-type: stdio",
+        "isolation: worktree",
+        "background: true",
+        "maxTurns: 10",
+        "unknown-setting: value",
+        "model: inherit\nmodel: inherit",
+        "permission-mode: inherit\npermission-mode: inherit",
+    ];
+
+    // Act / Assert
+    assert_eq!(
+        crate::agent_definition_identity("fallback", disabled).expect("disabled identity"),
+        "planner"
+    );
+    assert_eq!(
+        crate::agent_definition_identity("fallback", "---\nname: Test\n---\n")
+            .expect("directory identity"),
+        "fallback"
+    );
+    assert!(crate::agent_definition_identity("", "---\n---\n").is_err());
+    assert!(crate::agent_definition_identity("test", "invalid").is_err());
+    for field in fields {
+        let source =
+            format!("---\nname: Test\ndescription: Test agent\n{field}\n---\nInstructions");
+        assert!(parse_agent_definition("test", &source).is_err(), "{field}");
+        assert!(parse_agent_summary("test", &source).is_err(), "{field}");
+    }
+    assert!(
+        parse_agent_definition(
+            "test",
+            "---\nname: Test\ndescription: Test agent\npermission-mode: inherit\n---\nInstructions"
+        )
+        .expect("inherited permissions")
+        .is_some()
+    );
+}
 
 #[test]
 fn test_parse_agent_definition_reads_enabled_profile() {
@@ -13,6 +104,7 @@ name: "Code Reviewer"
 description: 'Reviews code carefully'
 
 role: delegation-target
+connection-type: internal
 enabled: true
 ---
 
@@ -20,14 +112,15 @@ Focus on correctness and security.
 "#;
 
     // Act
-    let personality = parse_agent_definition("fallback", definition)
+    let agent_profile = parse_agent_definition("fallback", definition)
         .expect("definition should parse")
         .expect("definition should be enabled");
 
     // Assert
     assert_eq!(
-        personality,
-        Personality {
+        agent_profile,
+        AgentDefinition {
+            read_only: false,
             description: "Reviews code carefully".to_string(),
             id: "reviewer".to_string(),
             name: "Code Reviewer".to_string(),
@@ -50,7 +143,8 @@ fn test_parse_agent_summary_returns_metadata_without_prompt_body() {
     // Assert
     assert_eq!(
         summary,
-        PersonalitySummary {
+        AgentDefinitionSummary {
+            source: crate::AgentDefinitionSource::Repository,
             description: "Reviews code".to_string(),
             id: "reviewer".to_string(),
             name: "Reviewer".to_string(),
@@ -64,12 +158,12 @@ fn test_parse_agent_definition_uses_directory_id_when_id_is_missing() {
     let definition = "---\nname: Planner\ndescription: Plans work\nenabled: true\n---\nPlan first.";
 
     // Act
-    let personality = parse_agent_definition("planner", definition)
+    let agent_profile = parse_agent_definition("planner", definition)
         .expect("definition should parse")
         .expect("definition should be enabled");
 
     // Assert
-    assert_eq!(personality.id, "planner");
+    assert_eq!(agent_profile.id, "planner");
 }
 
 #[test]
@@ -78,11 +172,11 @@ fn test_parse_agent_definition_omits_disabled_profile() {
     let definition = "---\nname: Disabled\ndescription: Hidden\nenabled: false\n---\nDo not load.";
 
     // Act
-    let personality =
+    let agent_profile =
         parse_agent_definition("disabled", definition).expect("definition should parse");
 
     // Assert
-    assert_eq!(personality, None);
+    assert_eq!(agent_profile, None);
 }
 
 #[test]
@@ -97,7 +191,7 @@ fn test_parse_agent_definition_rejects_malformed_frontmatter() {
     // Assert
     assert!(matches!(
         error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
 }
 
@@ -114,7 +208,7 @@ fn test_parse_agent_definition_rejects_invalid_enabled_value() {
     // Assert
     assert!(matches!(
         error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
 }
 
@@ -125,14 +219,14 @@ fn test_parse_agent_definition_supports_quoted_values_and_crlf() {
                       carefully\"\r\nenabled: true\r\n---\r\nReview carefully.\r\n";
 
     // Act
-    let personality = parse_agent_definition("reviewer", definition)
+    let agent_profile = parse_agent_definition("reviewer", definition)
         .expect("frontmatter definition should parse")
         .expect("definition should be enabled");
 
     // Assert
-    assert_eq!(personality.name, "Strict Reviewer");
-    assert_eq!(personality.description, "Reviews code: carefully");
-    assert_eq!(personality.prompt, "Review carefully.");
+    assert_eq!(agent_profile.name, "Strict Reviewer");
+    assert_eq!(agent_profile.description, "Reviews code: carefully");
+    assert_eq!(agent_profile.prompt, "Review carefully.");
 }
 
 #[test]
@@ -157,19 +251,19 @@ fn test_parse_agent_definition_rejects_invalid_simple_frontmatter_fields() {
     // Assert
     assert!(matches!(
         duplicate_error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
     assert!(matches!(
         duplicate_enabled_error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
     assert!(matches!(
         empty_key_error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
     assert!(matches!(
         unterminated_error,
-        PersonalityParseError::InvalidFrontmatter(_)
+        AgentDefinitionParseError::InvalidFrontmatter(_)
     ));
 }
 
@@ -188,11 +282,11 @@ fn test_parse_agent_definition_rejects_missing_frontmatter_delimiter() {
     // Assert
     assert_eq!(
         missing_open_error,
-        PersonalityParseError::MissingFrontmatter
+        AgentDefinitionParseError::MissingFrontmatter
     );
     assert_eq!(
         missing_close_error,
-        PersonalityParseError::MissingFrontmatter
+        AgentDefinitionParseError::MissingFrontmatter
     );
 }
 
@@ -213,83 +307,39 @@ fn test_parse_agent_definition_requires_description_and_prompt() {
     // Assert
     assert_eq!(
         description_error,
-        PersonalityParseError::MissingField("description")
+        AgentDefinitionParseError::MissingField("description")
     );
-    assert_eq!(prompt_error, PersonalityParseError::MissingField("prompt"));
+    assert_eq!(
+        prompt_error,
+        AgentDefinitionParseError::MissingField("prompt")
+    );
     assert_eq!(
         summary_prompt_error,
-        PersonalityParseError::MissingField("prompt")
+        AgentDefinitionParseError::MissingField("prompt")
     );
 }
 
 #[test]
 fn test_parse_agent_definition_truncates_large_prompt_at_utf8_boundary() {
     // Arrange
-    let prompt = "é".repeat(PERSONALITY_PROMPT_MAX_BYTES);
+    let prompt = "é".repeat(AGENT_PROFILE_PROMPT_MAX_BYTES);
     let definition = format!("---\nname: Large\ndescription: Large prompt\n---\n{prompt}");
 
     // Act
-    let personality = parse_agent_definition("large", &definition)
+    let agent_profile = parse_agent_definition("large", &definition)
         .expect("definition should parse")
         .expect("definition should be enabled");
 
     // Assert
-    assert!(personality.prompt.len() <= PERSONALITY_PROMPT_MAX_BYTES);
+    assert!(agent_profile.prompt.len() <= AGENT_PROFILE_PROMPT_MAX_BYTES);
     assert!(
-        personality
+        agent_profile
             .prompt
-            .ends_with(PERSONALITY_PROMPT_TRUNCATION_MARKER)
+            .ends_with(AGENT_PROFILE_PROMPT_TRUNCATION_MARKER)
     );
     assert!(
-        personality
+        agent_profile
             .prompt
-            .is_char_boundary(personality.prompt.len())
+            .is_char_boundary(agent_profile.prompt.len())
     );
-}
-
-#[test]
-fn test_personality_fingerprint_changes_with_id_or_prompt() {
-    // Arrange
-    let personality = Personality {
-        description: "Reviews code".to_string(),
-        id: "reviewer".to_string(),
-        name: "Reviewer".to_string(),
-        prompt: "Review carefully.".to_string(),
-    };
-    let mut changed_id = personality.clone();
-    changed_id.id = "security-reviewer".to_string();
-    let mut changed_prompt = personality.clone();
-    changed_prompt.prompt = "Review security carefully.".to_string();
-
-    // Act
-    let fingerprint = personality.fingerprint();
-
-    // Assert
-    assert_eq!(fingerprint, "dad9785239f763e7");
-    assert_ne!(fingerprint, changed_id.fingerprint());
-    assert_ne!(fingerprint, changed_prompt.fingerprint());
-}
-
-#[test]
-fn test_personality_fingerprint_separates_id_and_prompt_components() {
-    // Arrange
-    let first = Personality {
-        description: String::new(),
-        id: "ab".to_string(),
-        name: String::new(),
-        prompt: "c".to_string(),
-    };
-    let second = Personality {
-        description: String::new(),
-        id: "a".to_string(),
-        name: String::new(),
-        prompt: "bc".to_string(),
-    };
-
-    // Act
-    let first_fingerprint = first.fingerprint();
-    let second_fingerprint = second.fingerprint();
-
-    // Assert
-    assert_ne!(first_fingerprint, second_fingerprint);
 }

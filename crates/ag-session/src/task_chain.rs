@@ -1,10 +1,11 @@
 //! A static Planner, explicit acceptance, and Implementer workflow.
 
 use ag_protocol::TurnPromptAttachment;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    AcceptedTaskPlan, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility, SessionId,
-    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    AcceptedTaskPlan, AgentSelection, DurableMessageVisibility, SessionId, SubmitAgentTaskRequest,
+    TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 
 /// Idempotent launch input captured before the first Planner attempt.
@@ -12,6 +13,8 @@ use crate::{
 pub struct StartPlanThenImplementRequest {
     /// Provider/model captured for both roles, independent of later settings.
     pub agent: AgentSelection,
+    /// Resolved definitions captured together before planning starts.
+    pub agents: Box<PlanThenImplementAgents>,
     /// Images accompanying the original request.
     pub attachments: Vec<TurnPromptAttachment>,
     /// Globally unique workflow identity, retained for launch redelivery.
@@ -28,7 +31,8 @@ impl StartPlanThenImplementRequest {
         SubmitAgentTaskRequest {
             assignment: TaskAgentAssignment {
                 agent: self.agent,
-                definition: BuiltinAgentDefinition::Planner,
+                role: TaskAgentRole::Planner,
+                definition: self.agents.planner.clone(),
             },
             attempt_id: self.planner_attempt_id.clone(),
             input: TaskAgentInput {
@@ -46,6 +50,27 @@ impl StartPlanThenImplementRequest {
     /// Identifies the separate Implementer task reserved by this workflow.
     pub fn implementer_task_id(&self) -> String {
         format!("chain:{}:implementer", self.chain_id)
+    }
+}
+
+/// Definitions assigned to workflow stages, independent of stage policy.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PlanThenImplementAgents {
+    /// Agent used for implementation after explicit acceptance.
+    pub implementer: crate::AgentDefinition,
+    /// Agent used for planning and revisions.
+    pub planner: crate::AgentDefinition,
+}
+
+impl PlanThenImplementAgents {
+    /// Resolves the bundled defaults, returning `None` if either is
+    /// unavailable.
+    #[must_use]
+    pub fn bundled() -> Option<Self> {
+        Some(Self {
+            implementer: crate::AgentDefinition::bundled("implementer")?,
+            planner: crate::AgentDefinition::bundled("planner")?,
+        })
     }
 }
 
@@ -118,6 +143,8 @@ impl TaskChainReplyOutcome {
 /// Consistent durable workflow snapshot; reading never dispatches work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskChain {
+    /// Immutable definitions captured for both workflow stages at launch.
+    pub agents: PlanThenImplementAgents,
     /// Exact immutable accepted version, present after explicit handoff.
     pub accepted_plan: Option<AcceptedTaskPlan>,
     /// Shared captured provider/model selection.

@@ -2,8 +2,8 @@
 
 use ag_session::{
     AcceptTaskChainPlanRequest, AgentAnswerContent, AgentKind, AgentModel, AgentSelection,
-    BuiltinAgentDefinition, ContinueTaskChainRequest, SessionMessageKind,
-    StartPlanThenImplementRequest, TaskChainPhase,
+    ContinueTaskChainRequest, SessionMessageKind, StartPlanThenImplementRequest, TaskAgentRole,
+    TaskChainPhase,
 };
 use ag_store::{Database, DbError, TaskAgentTurnMetadata};
 use tempfile::tempdir;
@@ -180,7 +180,7 @@ async fn role_transcript_failure_rolls_back_response_usage_and_continuation_befo
     assert_eq!(
         AgentAnswerContent::decode(&messages[2].content),
         Some(AgentAnswerContent {
-            agent: BuiltinAgentDefinition::Planner,
+            agent: TaskAgentRole::Planner,
             text: "Durable plan".into()
         })
     );
@@ -199,6 +199,7 @@ async fn chain_database() -> Result<Database, DbError> {
 
 fn chain_request() -> StartPlanThenImplementRequest {
     StartPlanThenImplementRequest {
+        agents: ag_session::test_support::workflow_agents(),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
@@ -265,6 +266,7 @@ async fn reopening_never_replays_an_interrupted_implementation() {
         .await
         .expect("session");
     let start = StartPlanThenImplementRequest {
+        agents: ag_session::test_support::workflow_agents(),
         attachments: Vec::new(),
         agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
         chain_id: "chain".into(),
@@ -375,6 +377,7 @@ async fn reopening_keeps_reply_receipts_without_duplicate_prompts() {
         .start_task_chain(
             "session",
             &StartPlanThenImplementRequest {
+                agents: ag_session::test_support::workflow_agents(),
                 attachments: Vec::new(),
                 agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
                 chain_id: "chain".into(),

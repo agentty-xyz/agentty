@@ -50,8 +50,8 @@ use crate::domain::transient_message::{
     TransientMessageSlot,
 };
 use crate::domain::turn_prompt::TurnPrompt;
+use crate::infra::agent_profile::{AgentCatalogClient, RealAgentCatalogClient};
 use crate::infra::fs::{FsClient, RealFsClient};
-use crate::infra::personality::{PersonalityCatalogClient, RealPersonalityCatalogClient};
 use crate::infra::project_discovery::{ProjectDiscoveryClient, RealProjectDiscoveryClient};
 use crate::infra::tmux::{self, RealTmuxClient, TmuxClient};
 use crate::presentation::app_mode::{
@@ -120,7 +120,7 @@ pub(crate) struct AppClients {
     pub(super) fs_client: Arc<dyn FsClient>,
     pub(super) git_client: Arc<dyn GitClient>,
     pub(super) is_tmux_session: bool,
-    pub(super) personality_catalog_client: Arc<dyn PersonalityCatalogClient>,
+    pub(super) agent_profile_catalog_client: Arc<dyn AgentCatalogClient>,
     pub(super) project_discovery_home: Option<PathBuf>,
     pub(super) project_discovery_client: Arc<dyn ProjectDiscoveryClient>,
     pub(super) review_request_client: Arc<dyn ReviewRequestClient>,
@@ -143,7 +143,7 @@ impl AppClients {
             fs_client: Arc::new(RealFsClient),
             git_client: Arc::new(RealGitClient),
             is_tmux_session: tmux::is_tmux_session(),
-            personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
+            agent_profile_catalog_client: Arc::new(RealAgentCatalogClient),
             project_discovery_home: RealProjectDiscoveryClient::home_directory(),
             project_discovery_client: Arc::new(RealProjectDiscoveryClient),
             review_request_client: Arc::new(RealReviewRequestClient::default()),
@@ -1114,23 +1114,6 @@ impl App {
     ) -> Result<(), AppError> {
         self.sessions
             .set_session_model(&self.services, session_id, session_agent)
-            .await?;
-        self.process_pending_app_events().await;
-
-        Ok(())
-    }
-
-    /// Persists and applies a personality selection for a session.
-    ///
-    /// # Errors
-    /// Returns an error if persistence fails.
-    pub async fn set_session_personality(
-        &mut self,
-        session_id: &str,
-        personality_id: Option<String>,
-    ) -> Result<(), AppError> {
-        self.sessions
-            .set_session_personality(&self.services, session_id, personality_id)
             .await?;
         self.process_pending_app_events().await;
 

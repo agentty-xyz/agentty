@@ -241,7 +241,7 @@ async fn codex_terminal_items_require_a_matching_successful_turn_and_thread() {
 }
 
 #[tokio::test]
-async fn start_runtime_omits_personality_from_the_process_command() {
+async fn start_runtime_omits_agent_profile_from_the_process_command() {
     // Arrange
     let runtime_parent = tempdir().expect("create runtime parent");
     let request = AppServerTurnRequest {
@@ -252,7 +252,10 @@ async fn start_runtime_omits_personality_from_the_process_command() {
         main_checkout_root: None,
         model: model_fixture::CODEX_MODEL.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: ag_contracts::PersonalityPrompt::active("Review carefully.".to_string(), true),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::active(
+            "Review carefully.".to_string(),
+            true,
+        ),
         prompt: TurnPrompt::from("Run the turn"),
         request_kind: ag_contracts::AgentRequestKind::SessionStart,
         replay_transcript: None,
@@ -287,7 +290,7 @@ async fn start_runtime_with_built_command_bootstraps_thread_start_with_the_reque
         main_checkout_root: None,
         model: model_fixture::CODEX_MODEL.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("Run the turn"),
         request_kind: ag_contracts::AgentRequestKind::SessionStart,
         replay_transcript: None,
@@ -325,7 +328,7 @@ async fn runtime_bootstrap_bills_fresh_threads_but_establishes_a_baseline_for_re
             main_checkout_root: None,
             model: model_fixture::CODEX_MODEL.as_str().to_string(),
             permission_mode: PermissionMode::AutoEdit,
-            personality: ag_contracts::PersonalityPrompt::default(),
+            agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
             prompt: TurnPrompt::from("Run the turn"),
             request_kind: ag_contracts::AgentRequestKind::SessionStart,
             replay_transcript: None,

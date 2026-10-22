@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT session_id, agent, model, user_request, planner_task_attempt_id FROM task_chain WHERE id = ?",
+  "query": "SELECT session_id, agent, model, user_request, planner_task_attempt_id, agent_definitions FROM task_chain WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,17 @@
             "name": "planner_task_attempt_id"
           }
         }
+      },
+      {
+        "name": "agent_definitions",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_chain",
+            "name": "agent_definitions"
+          }
+        }
       }
     ],
     "parameters": {
@@ -67,8 +78,9 @@
       false,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "b05f09d908ae3dc97181748cad39a3e241141626187496ebfd8738720468f1f5"
+  "hash": "f80bd39665ac50d4f5c157df7358eab0c9d8abde90efa022693ba2b8d1265ecf"
 }

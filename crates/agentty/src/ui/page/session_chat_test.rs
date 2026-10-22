@@ -1,4 +1,4 @@
-use ag_session::{BuiltinAgentDefinition, test_support as model_fixture};
+use ag_session::{TaskAgentRole, test_support as model_fixture};
 use ratatui::layout::Rect;
 use ratatui::widgets::Paragraph;
 
@@ -1237,7 +1237,7 @@ fn composer_shows_the_armed_plan_request_and_the_orchestrator_state() {
         chain_id: "chain".into(),
         edges: Vec::new(),
         nodes: vec![TaskChainGraphNode {
-            agent: BuiltinAgentDefinition::Planner,
+            agent: TaskAgentRole::Planner,
             status: TaskChainNodeStatus::AwaitingApproval,
         }],
     };

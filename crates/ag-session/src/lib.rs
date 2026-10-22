@@ -6,13 +6,12 @@
 //! depending on terminal UI state.
 
 mod agent;
-mod agent_definition;
+mod agent_profile;
 mod discovery;
 mod env;
 mod error;
 mod message;
 mod model;
-mod personality;
 mod project;
 mod question;
 mod review;
@@ -22,6 +21,7 @@ mod task;
 mod task_chain;
 mod task_execution;
 mod task_plan;
+mod task_role;
 mod transcript_notice;
 
 /// Shared explicit model selections for deterministic tests and demos.
@@ -36,7 +36,11 @@ pub use agent::{
     resolve_agent_selection_for_model, resolve_model_for_available_agent_kinds,
     resolve_prompt_model_agent_kind, selectable_models_for_agent_kinds,
 };
-pub use agent_definition::{AgentContextRequirement, AgentOutputKind, BuiltinAgentDefinition};
+pub use agent_profile::{
+    AGENT_PROFILE_PROMPT_MAX_BYTES, AgentDefinition, AgentDefinitionParseError,
+    AgentDefinitionSource, AgentDefinitionSummary, agent_definition_identity,
+    bundled_agent_definitions, parse_agent_definition, parse_agent_summary,
+};
 pub use discovery::{
     AgentAvailabilityProbe, AgentCliInfo, AgentCliVersion, StaticAgentAvailabilityProbe,
 };
@@ -50,10 +54,6 @@ pub use model::{
     ForgeKind, PermissionMode, ResponseStyle, ReviewRequest, ReviewRequestState,
     ReviewRequestSummary, Session, SessionId, SessionSettings, SessionStatus, SpeedMode,
     activity_day_key_with_offset, session_branch,
-};
-pub use personality::{
-    PERSONALITY_PROMPT_MAX_BYTES, Personality, PersonalityParseError, PersonalitySummary,
-    parse_agent_definition, parse_agent_summary,
 };
 pub use project::{
     Project, ProjectListItem, mru_project_order, ordered_project_items, project_name_from_path,
@@ -70,12 +70,14 @@ pub use service::{
 pub use setting::SettingName;
 pub use task::{CreateTaskRequest, SubmitTaskRequest, Task, TaskAttempt, TaskAttemptStatus};
 pub use task_chain::{
-    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, ReplyToTaskChainRequest,
-    StartPlanThenImplementRequest, TaskChain, TaskChainPhase, TaskChainReplyOutcome,
+    AcceptTaskChainPlanRequest, ContinueTaskChainRequest, PlanThenImplementAgents,
+    ReplyToTaskChainRequest, StartPlanThenImplementRequest, TaskChain, TaskChainPhase,
+    TaskChainReplyOutcome,
 };
 pub use task_execution::{
     AcceptedTaskPlan, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentContext,
     TaskAgentHistory, TaskAgentInput, TaskAgentTurn,
 };
 pub use task_plan::AcceptTaskPlanRequest;
+pub use task_role::{AgentContextRequirement, AgentOutputKind, TaskAgentRole};
 pub use transcript_notice::TranscriptNotice;

@@ -36,7 +36,6 @@ use crate::domain::agent::{AgentKind, AgentModel, AgentSelection};
 use crate::domain::session::{PublishedBranchSyncStatus, Status};
 use crate::infra::db::AppRepositories;
 use crate::infra::fs;
-use crate::infra::personality::RealPersonalityCatalogClient;
 
 #[tokio::test]
 /// Verifies completed turns keep a linked open PR/MR title and
@@ -66,7 +65,6 @@ async fn test_apply_turn_result_syncs_linked_review_request_metadata_after_commi
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(auto_commit_git_client(commit_message, &mut sequence)),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(review_metadata_sync_client(
             base_dir.path(),
@@ -154,7 +152,6 @@ async fn test_apply_turn_result_skips_review_request_metadata_sync_when_auto_pus
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(auto_commit_git_client_with_push_failure(commit_message)),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),
@@ -265,7 +262,6 @@ async fn test_apply_turn_result_skips_background_push_while_sync_is_queued() {
         fs_client: Arc::new(fs::MockFsClient::new()),
         git_client: Arc::new(mock_git_client),
         transcript: empty_transcript(),
-        personality_catalog_client: Arc::new(RealPersonalityCatalogClient),
         queued_messages: Arc::new(Mutex::new(VecDeque::new())),
         review_request_client: Arc::new(forge::MockReviewRequestClient::new()),
         session_update_versions: Arc::default(),

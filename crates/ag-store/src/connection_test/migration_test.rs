@@ -1,14 +1,121 @@
 use ag_session::{
-    AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition, DurableMessageVisibility,
-    SessionMessageKind, SettingName, SubmitAgentTaskRequest, SubmitTaskRequest,
-    TaskAgentAssignment, TaskAgentInput,
+    AgentKind, AgentModel, AgentSelection, DurableMessageVisibility, SessionMessageKind,
+    SettingName, SubmitAgentTaskRequest, SubmitTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    TaskAgentRole,
 };
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqlitePoolOptions;
 
 use super::support::insert_session_fixture;
+use crate::LEGACY_SESSION_AGENT_CLEAR_MARKER;
 use crate::connection::Database;
+
+#[tokio::test]
+async fn removal_of_session_selection_preserves_conversation_and_task_snapshots() {
+    // Arrange: reconstruct the optional columns from the previous schema.
+    let database = Database::open_in_memory().await.expect("database");
+    sqlx::raw_sql(
+        "ALTER TABLE session ADD COLUMN agent_profile_id TEXT; ALTER TABLE session ADD COLUMN \
+         applied_agent_profile_id TEXT; ALTER TABLE session ADD COLUMN \
+         applied_agent_profile_prompt_hash TEXT;",
+    )
+    .execute(database.pool())
+    .await
+    .expect("previous schema");
+    let project = database
+        .projects()
+        .upsert_project("project", None)
+        .await
+        .expect("project");
+    let sessions = [
+        ("session", Some("chat")),
+        ("without-selection", Some("untracked-chat")),
+        ("without-conversation", None),
+    ];
+    for (id, conversation) in sessions {
+        insert_session_fixture(&database, id, "main", "Review", project).await;
+        database
+            .sessions()
+            .update_session_provider_conversation_id(id, conversation.map(str::to_owned))
+            .await
+            .expect("provider conversation");
+    }
+    sqlx::query(
+        "UPDATE session SET agent_profile_id = 'reviewer', applied_agent_profile_id = 'reviewer', \
+         applied_agent_profile_prompt_hash = 'legacy-hash' WHERE id = 'session'",
+    )
+    .execute(database.pool())
+    .await
+    .expect("legacy selection");
+    let request = SubmitAgentTaskRequest {
+        assignment: TaskAgentAssignment {
+            agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("definition"),
+        },
+        attempt_id: "attempt".into(),
+        input: TaskAgentInput {
+            attachments: Vec::new(),
+            accepted_plan: None,
+            clarification: None,
+            user_request: "Plan a change".into(),
+        },
+        objective: "A plan".into(),
+        task_id: "task".into(),
+        visibility: DurableMessageVisibility::Visible,
+    };
+    database
+        .tasks()
+        .claim_agent_attempt("session", &request, "reply")
+        .await
+        .expect("task");
+    let before = database
+        .tasks()
+        .load_agent_context("task")
+        .await
+        .expect("context");
+
+    // Act
+    rerun_embedded_migration(database.pool(), 100).await;
+    rerun_embedded_migration(database.pool(), 101).await;
+
+    // Assert
+    for (id, conversation) in sessions {
+        let actual: (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT provider_conversation_id, app_server_instruction_provider_conversation_id \
+             FROM session WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(database.pool())
+        .await
+        .expect("migrated session");
+        assert_eq!(
+            actual,
+            (
+                conversation.map(str::to_owned),
+                Some(LEGACY_SESSION_AGENT_CLEAR_MARKER.to_owned())
+            ),
+            "legacy instructions must be cleared for {id}"
+        );
+    }
+    assert_eq!(
+        database
+            .tasks()
+            .load_agent_context("task")
+            .await
+            .expect("context"),
+        before
+    );
+    let obsolete_columns: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('session') WHERE name IN ('agent_profile_id', \
+         'applied_agent_profile_id', 'applied_agent_profile_prompt_hash')",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("columns");
+    assert_eq!(obsolete_columns, 0);
+}
 
 #[tokio::test]
 async fn task_history_migration_preserves_existing_assignments() {
@@ -31,7 +138,8 @@ async fn task_history_migration_preserves_existing_assignments() {
     let request = SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::AgentDefinition::bundled("planner").expect("bundled agent"),
         },
         attempt_id: "existing-attempt".to_string(),
         input: TaskAgentInput {
@@ -126,6 +234,10 @@ async fn task_context_migration_preserves_unassigned_task_history() {
 
     // Act
     rerun_embedded_migration(database.pool(), 93).await;
+    sqlx::query("ALTER TABLE task_agent_context ADD COLUMN definition TEXT")
+        .execute(database.pool())
+        .await
+        .expect("current definition column");
     let after = database
         .tasks()
         .load_task(&request.task_id)

@@ -188,7 +188,6 @@ pub(super) fn session_fixture() -> Session {
             is_draft: false,
             parent_session_id: None,
             permission_mode: PermissionMode::AutoEdit,
-            personality_id: Some("reviewer".to_string()),
             project_id: 7,
             reasoning_level: ReasoningLevel::High,
             response_style: ResponseStyle::Balanced,

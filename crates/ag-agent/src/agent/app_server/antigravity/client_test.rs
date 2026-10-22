@@ -24,7 +24,7 @@ fn request(folder: PathBuf) -> AppServerTurnRequest {
         model: AgentModel::Gemini31Pro.as_str().to_string(),
         permission_mode: PermissionMode::AutoEdit,
         persisted_instruction_conversation_id: None,
-        personality: ag_contracts::PersonalityPrompt::default(),
+        agent_profile: ag_contracts::AgentDefinitionPrompt::default(),
         prompt: TurnPrompt::from("Continue"),
         provider_conversation_id: None,
         reasoning_level: ReasoningLevel::High,

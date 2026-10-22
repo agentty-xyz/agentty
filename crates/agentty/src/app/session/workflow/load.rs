@@ -635,7 +635,6 @@ impl SessionManager {
             is_draft: input.row.is_draft,
             parent_session_id: input.parent_session_id,
             permission_mode: input.permission_mode,
-            personality_id: input.row.personality_id,
             project_name: input.project_name,
             prompt: input.session_prompt,
             queued_messages: input.session_queued_messages,

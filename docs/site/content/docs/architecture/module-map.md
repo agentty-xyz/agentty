@@ -61,14 +61,16 @@ contracts.
 - Keep frontend-neutral session and task models in `ag-session` and persistence in
   `ag-store`. Task attempts project execution state from worker-owned operations; task
   completion is explicit outcome acceptance.
+- `ag-session` owns portable agent definitions and bundled defaults. The injected
+  infrastructure catalog overlays repository definitions. Workflows own stage contracts
+  and acceptance; execution consumes captured definitions independently of their IDs.
 - Environment identity and resolved location contracts belong to `ag-session`. The host
   resolves the shared local Env through existing worktree isolation checks; session
   workflows retain provisioning and cleanup ownership. Conversations and permissions
   remain separate from environment identity.
-- Built-in agent role contracts belong to `ag-session`: instructions, context
-  requirements, expected output, and permission limits. They are independent of model
-  selection and personalities; workflow execution and runtime permission enforcement
-  remain with their existing owners.
+- Workflow role contracts belong to `ag-session`: context requirements, expected output,
+  and permission limits. Markdown definitions supply instructions; workflow execution
+  and runtime permission enforcement remain with their existing owners.
 - Task-chain chat routing belongs to `app/`: composer messages, `/apply` instructions,
   and stop requests reach the orchestrator through the gateway. `presentation/` and
   `ui/` only project the chain graph and composer labels; session chat has no separate

@@ -1,8 +1,8 @@
 //! Public task-history durability and idempotent response persistence.
 
 use ag_session::{
-    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, BuiltinAgentDefinition,
-    DurableMessageVisibility, SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput,
+    AcceptTaskPlanRequest, AgentKind, AgentModel, AgentSelection, DurableMessageVisibility,
+    SubmitAgentTaskRequest, TaskAgentAssignment, TaskAgentInput, TaskAgentRole,
 };
 use ag_store::{Database, DbError, TaskAgentTurnMetadata};
 use tempfile::tempdir;
@@ -116,7 +116,9 @@ async fn assert_reopened_plan_handoff(
         .await?;
     assert_eq!(plan.text, "A plan");
     let mut implementation = request;
-    implementation.assignment.definition = BuiltinAgentDefinition::Implementer;
+    implementation.assignment.role = TaskAgentRole::Implementer;
+    implementation.assignment.definition =
+        ag_session::test_support::agent_definition("implementer");
     implementation.task_id = "implementation".into();
     implementation.attempt_id = "implement".into();
     implementation.input.accepted_plan = Some(plan);
@@ -135,7 +137,8 @@ fn planner_request() -> SubmitAgentTaskRequest {
     SubmitAgentTaskRequest {
         assignment: TaskAgentAssignment {
             agent: AgentSelection::new(AgentKind::Codex, AgentModel::Gpt61Sol),
-            definition: BuiltinAgentDefinition::Planner,
+            role: TaskAgentRole::Planner,
+            definition: ag_session::test_support::agent_definition("planner"),
         },
         attempt_id: "first".to_string(),
         input: TaskAgentInput {

@@ -15,7 +15,6 @@ use crate::domain::agent::{
 };
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputState};
 use crate::domain::permission::PermissionMode;
-use crate::domain::personality::PersonalitySummary;
 
 fn insert_test_attachment(
     attachment_state: &mut PromptAttachmentState,
@@ -371,7 +370,7 @@ fn test_prompt_slash_state_replace_available_agent_kinds_clears_unavailable_sele
 fn test_slash_suggestion_list_for_command_stage_has_description() {
     // Arrange
     let composer = PromptComposerState::with_input_and_history(
-        InputState::with_text("/pers".to_string()),
+        InputState::with_text("/model".to_string()),
         AgentKind::ALL.to_vec(),
         Vec::new(),
     );
@@ -387,10 +386,8 @@ fn test_slash_suggestion_list_for_command_stage_has_description() {
         PromptSuggestionList {
             items: vec![PromptSuggestionItem {
                 badge: None,
-                detail: Some(
-                    "List: .agents/agents/. Choose a personality for this session.".to_string(),
-                ),
-                label: "/personality".to_string(),
+                detail: Some("Choose an agent and model for this session.".to_string()),
+                label: "/model".to_string(),
                 metadata: None,
             }],
             selected_index: 0,
@@ -419,10 +416,7 @@ fn test_slash_suggestion_list_for_command_stage_contains_matches_non_prefix_inpu
         .into_iter()
         .map(|item| item.label)
         .collect::<Vec<_>>();
-    assert_eq!(
-        labels,
-        vec!["/mode", "/model", "/personality", "/reasoning"]
-    );
+    assert_eq!(labels, vec!["/mode", "/model", "/reasoning"]);
 }
 
 #[test]
@@ -446,74 +440,6 @@ fn test_mode_is_selected_for_m_shortcut() {
         vec!["/mode", "/model"]
     );
     assert_eq!(selection, Some(PromptSuggestionSelection::Command("/mode")));
-}
-
-#[test]
-fn test_personality_slash_stage_lists_default_and_workspace_profiles() {
-    // Arrange
-    let reviewer = PersonalitySummary {
-        description: "Reviews code".to_string(),
-        id: "reviewer".to_string(),
-        name: "Code Reviewer".to_string(),
-    };
-    let mut slash_state = PromptSlashState {
-        personalities: vec![reviewer.clone()],
-        stage: PromptSlashStage::Personality,
-        ..PromptSlashState::default()
-    };
-
-    // Act
-    let default_selection =
-        resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
-    slash_state.selected_index = 1;
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/personality", &slash_state, AgentKind::Codex, false)
-            .expect("personality suggestions should render");
-    let selection =
-        resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
-
-    // Assert
-    assert_eq!(
-        suggestion_list.title,
-        "/personality (j/k move, Enter select)"
-    );
-    assert_eq!(suggestion_list.items[0].label, "None (default)");
-    assert_eq!(suggestion_list.items[1].label, "Code Reviewer");
-    assert_eq!(
-        suggestion_list.items[1].detail.as_deref(),
-        Some("Reviews code")
-    );
-    assert_eq!(
-        selection,
-        Some(PromptSuggestionSelection::Personality(Some(reviewer)))
-    );
-    assert_eq!(
-        default_selection,
-        Some(PromptSuggestionSelection::Personality(None))
-    );
-}
-
-#[test]
-fn test_personality_slash_stage_shows_non_actionable_empty_hint() {
-    // Arrange
-    let slash_state = PromptSlashState {
-        stage: PromptSlashStage::Personality,
-        ..PromptSlashState::default()
-    };
-
-    // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/personality", &slash_state, AgentKind::Codex, false)
-            .expect("empty personality hint should render");
-    let selection =
-        resolve_prompt_slash_selection("/personality", &slash_state, AgentKind::Codex, false);
-
-    // Assert
-    assert_eq!(
-        suggestion_list.items[0].label,
-        "No personalities found in `.agents/agents`."
-    );
-    assert_eq!(selection, None);
 }
 
 #[test]
@@ -939,14 +865,7 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     // Assert
     assert_eq!(
         labels,
-        vec![
-            "/mode",
-            "/model",
-            "/personality",
-            "/reasoning",
-            "/style",
-            "/speed"
-        ]
+        vec!["/mode", "/model", "/reasoning", "/style", "/speed"]
     );
     assert_eq!(suggestion_list.selected_index, 0);
 }
@@ -995,7 +914,7 @@ fn test_prompt_slash_command_list_omits_speed_for_unsupported_agent() {
             .iter()
             .map(|item| item.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["/mode", "/model", "/personality", "/reasoning", "/style"]
+        vec!["/mode", "/model", "/reasoning", "/style"]
     );
 }
 
