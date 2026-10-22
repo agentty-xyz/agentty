@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ag_tui_text::text_util;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::ui::diff_util::{DiffLine, DiffLineKind, FileTreeItem, diff_header_paths};
 use crate::ui::{Component, style};
@@ -139,6 +139,22 @@ impl FileExplorer {
             preserved_suffix_span_count,
             selected_index: 0,
         }
+    }
+
+    /// Measures the longest complete row, including borders and room for the
+    /// loading placeholder. Callers can cache this until the tree changes.
+    pub(crate) fn preferred_width(file_list_lines: &[Line<'_>]) -> u16 {
+        let content_width = file_list_lines
+            .iter()
+            .map(Line::width)
+            .max()
+            .unwrap_or_default()
+            .max(LOADING_LABEL.width());
+
+        u16::try_from(
+            content_width.saturating_add(usize::from(FILE_EXPLORER_HORIZONTAL_BORDER_WIDTH)),
+        )
+        .unwrap_or(u16::MAX)
     }
 
     /// Sets the selected item index in the file tree.
@@ -415,33 +431,94 @@ impl FileExplorer {
         )
     }
 
-    /// Right-aligns a preserved suffix, truncating the file-tree label first
-    /// when both cannot fit in the available width.
+    /// Gives names priority over totals and limits indentation on narrow
+    /// panels.
     fn line_for_width(&self, line: &Line<'static>, max_width: usize) -> Line<'static> {
         let suffix_start = line
             .spans
             .len()
             .saturating_sub(self.preserved_suffix_span_count);
-        if self.preserved_suffix_span_count == 0 || suffix_start == 0 {
+        if suffix_start == 0 {
             return line.clone();
         }
-
-        let suffix_spans = line.spans[suffix_start..].to_vec();
-        let suffix_width = suffix_spans.iter().map(Span::width).sum::<usize>();
-        let available_prefix_width = max_width.saturating_sub(suffix_width);
-        let prefix_spans = line.spans[..suffix_start].to_vec();
+        let mut prefix_spans = line.spans[..suffix_start].to_vec();
+        let label_index = usize::from(
+            prefix_spans[0].content.len() == 2
+                && matches!(prefix_spans[0].content.as_ref(), "A " | "M " | "D " | "R "),
+        );
+        if let Some(label) = prefix_spans.get_mut(label_index) {
+            let name = label.content.trim_start_matches(['│', '├', '└', ' ']);
+            let indentation = &label.content[..label.content.len() - name.len()];
+            let indent_width = indentation.width();
+            let max_indent = max_width / 4;
+            if indent_width > max_indent {
+                label.content = format!("{}{name}", " ".repeat(max_indent)).into();
+            }
+        }
         let prefix_width = prefix_spans.iter().map(Span::width).sum::<usize>();
-        let mut spans = if prefix_width > available_prefix_width {
-            text_util::truncate_spans_with_ellipsis(prefix_spans, available_prefix_width)
-        } else {
-            prefix_spans
-        };
+        let mut suffix_spans = line.spans[suffix_start..].to_vec();
+        let suffix_width = suffix_spans.iter().map(Span::width).sum::<usize>();
+        let is_folder = prefix_spans
+            .last()
+            .is_some_and(|span| span.content.ends_with('/'));
+        let show_totals = max_width >= suffix_width + prefix_width.min(20)
+            && (!is_folder || prefix_width + suffix_width <= max_width);
+        if !show_totals {
+            suffix_spans.clear();
+        }
+        let available_prefix_width =
+            max_width.saturating_sub(if show_totals { suffix_width } else { 0 });
+        let mut remaining_width = available_prefix_width;
+        let mut spans = Vec::new();
+        for span in prefix_spans {
+            let text = Self::middle_truncate(&span.content, remaining_width);
+            remaining_width = remaining_width.saturating_sub(text.width());
+            spans.push(Span::styled(text, span.style));
+        }
         let rendered_prefix_width = spans.iter().map(Span::width).sum::<usize>();
         let padding_width = available_prefix_width.saturating_sub(rendered_prefix_width);
         spans.push(Span::raw(" ".repeat(padding_width)));
         spans.extend(suffix_spans);
 
         Line::from(spans)
+    }
+
+    /// Truncates by terminal cells, retaining the extension and a name suffix.
+    fn middle_truncate(text: &str, max_width: usize) -> String {
+        if text.width() <= max_width {
+            return text.to_string();
+        }
+        if max_width == 0 {
+            return String::new();
+        }
+        let available = max_width - 1;
+        let extension_width = text
+            .rsplit_once('.')
+            .map_or(0, |(_, extension)| extension.width() + 1);
+        let suffix_budget = (available / 2).max(extension_width).min(available);
+        let mut suffix_start = text.len();
+        let mut suffix_width = 0;
+        for (index, character) in text.char_indices().rev() {
+            let width = character.width().unwrap_or(0);
+            if suffix_width + width > suffix_budget {
+                break;
+            }
+            suffix_start = index;
+            suffix_width += width;
+        }
+        let prefix_budget = available - suffix_width;
+        let mut prefix_end = 0;
+        let mut prefix_width = 0;
+        for (index, character) in text.char_indices() {
+            let width = character.width().unwrap_or(0);
+            if prefix_width + width > prefix_budget {
+                break;
+            }
+            prefix_end = index + character.len_utf8();
+            prefix_width += width;
+        }
+
+        format!("{}…{}", &text[..prefix_end], &text[suffix_start..])
     }
 }
 
@@ -468,12 +545,14 @@ impl Component for FileExplorer {
                     ))
                     .border_style(style::border_style()),
             )
-            .highlight_style(style::selection_style());
+            .highlight_style(if self.is_focused {
+                style::selection_style()
+            } else {
+                Style::default()
+            });
 
         let mut state = ListState::default();
-        if self.is_focused {
-            state.select(Some(self.selected_index));
-        }
+        state.select(Some(self.selected_index));
 
         f.render_stateful_widget(list, area, &mut state);
     }

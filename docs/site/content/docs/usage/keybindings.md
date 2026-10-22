@@ -231,6 +231,10 @@ clears a range selection.
 | `?`                         | Help                                           |
 
 <a id="usage-diff-totals"></a> The panel and file tree show added/removed line totals.
+The tree fits its longest row, including badges and totals, up to `30%` of the available
+width and `60` columns. Totals align at that shared edge. Filenames retain their
+extensions when shortened. `A`, `M`, `D`, and `R` mark added, modified, deleted, and
+renamed files; binary files show `Binary`. Totals disappear when names need the space.
 File comments sit above the patch; inline comments retain their old/new line context.
 
 Press `Enter` on a comment to edit it and `Enter` or `Esc` to finish. Finish with empty

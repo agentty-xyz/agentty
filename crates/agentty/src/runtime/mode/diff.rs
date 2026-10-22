@@ -872,7 +872,7 @@ fn focus_selected_file_changes(
         content_area,
         render_cache_store.diff_layout_cache(),
     );
-    let page_areas = diff_util::diff_page_areas(content_area);
+    let page_areas = diff_util::diff_page_areas(content_area, content.file_list_width);
     let sidebar_areas = diff_util::diff_sidebar_areas(
         page_areas.file_list_area,
         navigation.review_comments_are_visible,

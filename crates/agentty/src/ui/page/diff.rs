@@ -136,9 +136,18 @@ impl DiffChangeTotals {
     }
 }
 
+/// Git metadata used to decorate cached file-tree rows.
+struct DiffFileDetails {
+    binary: bool,
+    status: &'static str,
+}
+
 /// Parsed diff data reused by file-tree rendering and diff layout assembly.
 #[derive(Clone)]
 pub(crate) struct DiffContentSnapshot {
+    /// Width of the longest complete file-tree row, including panel borders.
+    /// Cached with the tree until the diff or active theme changes.
+    pub(crate) file_list_width: u16,
     file_line_ranges: Arc<HashMap<String, Vec<Range<usize>>>>,
     file_list_lines: Arc<[Line<'static>]>,
     key: DiffContentCacheKey,
@@ -147,6 +156,81 @@ pub(crate) struct DiffContentSnapshot {
 }
 
 impl DiffContentSnapshot {
+    /// Caches file metadata from Git headers, independently of line totals.
+    fn file_details(parsed_lines: &[DiffLine<'_>]) -> HashMap<String, DiffFileDetails> {
+        let mut details = HashMap::new();
+        let mut current_path = None;
+        let mut in_hunk = false;
+        for line in parsed_lines {
+            if line.kind == DiffLineKind::FileHeader && line.content.starts_with("diff --git ") {
+                current_path = diff_header_paths(line.content).map(|(old_path, path)| {
+                    details.insert(
+                        path.clone(),
+                        DiffFileDetails {
+                            binary: false,
+                            status: if old_path == path {
+                                "Modified"
+                            } else {
+                                "Renamed"
+                            },
+                        },
+                    );
+
+                    path
+                });
+                in_hunk = false;
+                continue;
+            }
+            if line.kind == DiffLineKind::HunkHeader {
+                in_hunk = true;
+            }
+            if in_hunk {
+                continue;
+            }
+            let Some(detail) = current_path.as_ref().and_then(|path| details.get_mut(path)) else {
+                continue;
+            };
+            if line.content.starts_with("new file mode ") || line.content == "--- /dev/null" {
+                detail.status = "Added";
+            } else if line.content.starts_with("deleted file mode ")
+                || line.content == "+++ /dev/null"
+            {
+                detail.status = "Deleted";
+            }
+            if line.content.starts_with("Binary files ") || line.content == "GIT binary patch" {
+                detail.binary = true;
+            }
+        }
+
+        details
+    }
+
+    /// Adds badges to cached tree rows while prioritizing filenames.
+    fn append_file_details(
+        file_list_lines: &mut [Line<'static>],
+        tree_items: &[FileTreeItem],
+        details: &HashMap<String, DiffFileDetails>,
+    ) {
+        for (line, item) in file_list_lines.iter_mut().zip(tree_items) {
+            let FileTreeItem::File(path) = item else {
+                continue;
+            };
+            let Some(detail) = details.get(path) else {
+                continue;
+            };
+            // The patch retains rename origins; the tree prioritizes filenames.
+            line.spans.truncate(1);
+            let (badge, color) = match detail.status {
+                "Added" => ("A ", style::palette::success()),
+                "Deleted" => ("D ", style::palette::danger()),
+                "Renamed" => ("R ", style::palette::info()),
+                _ => ("M ", style::palette::accent()),
+            };
+            line.spans
+                .insert(0, Span::styled(badge, Style::default().fg(color)));
+        }
+    }
+
     /// Returns cached file-explorer lines for the left diff panel.
     pub(crate) fn file_list_lines(&self) -> Arc<[Line<'static>]> {
         Arc::clone(&self.file_list_lines)
@@ -413,8 +497,26 @@ impl DiffContentSnapshot {
     fn append_file_list_change_totals(
         file_list_lines: &mut [Line<'static>],
         change_totals: &[DiffChangeTotals],
+        tree_items: &[FileTreeItem],
+        file_details: &HashMap<String, DiffFileDetails>,
     ) {
-        for (line, totals) in file_list_lines.iter_mut().zip(change_totals) {
+        for ((line, totals), item) in file_list_lines
+            .iter_mut()
+            .zip(change_totals)
+            .zip(tree_items)
+        {
+            if let FileTreeItem::File(path) = item
+                && file_details.get(path).is_some_and(|detail| detail.binary)
+            {
+                line.spans.extend([
+                    Span::raw(" "),
+                    Span::styled("Binary", Style::default().fg(style::palette::info())),
+                    Span::raw(""),
+                    Span::raw(""),
+                ]);
+
+                continue;
+            }
             line.spans.push(Span::raw(" "));
             line.spans.push(Span::styled(
                 format!("+{}", totals.added_lines),
@@ -1012,9 +1114,17 @@ impl DiffLayoutCache {
         let (mut file_list_lines, tree_items) = FileExplorer::file_tree(&parsed_lines);
         let change_totals =
             DiffContentSnapshot::change_totals_by_tree_item(&parsed_lines, &tree_items);
-        DiffContentSnapshot::append_file_list_change_totals(&mut file_list_lines, &change_totals);
+        let file_details = DiffContentSnapshot::file_details(&parsed_lines);
+        DiffContentSnapshot::append_file_details(&mut file_list_lines, &tree_items, &file_details);
+        DiffContentSnapshot::append_file_list_change_totals(
+            &mut file_list_lines,
+            &change_totals,
+            &tree_items,
+            &file_details,
+        );
         let file_line_ranges = DiffContentSnapshot::file_line_ranges(&parsed_lines);
         let snapshot = DiffContentSnapshot {
+            file_list_width: FileExplorer::preferred_width(&file_list_lines),
             file_line_ranges: Arc::new(file_line_ranges),
             file_list_lines: Arc::from(file_list_lines),
             key,
@@ -1843,8 +1953,8 @@ pub(crate) fn diff_view_max_scroll_offset(
     markdown_render_cache: &markdown::MarkdownRenderCache,
     preview: &DiffPreview,
 ) -> u16 {
-    let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
     let content = diff_layout_cache.content(diff);
+    let diff_area = diff_util::diff_page_areas(terminal_area, content.file_list_width).diff_area;
     if preview_path_for_selection(preview, &content, selected_index).is_some() {
         return match preview {
             DiffPreview::Ready {
@@ -1884,8 +1994,8 @@ pub(crate) fn diff_changed_line_layout(
     terminal_area: Rect,
     diff_layout_cache: &DiffLayoutCache,
 ) -> DiffResolvedLayout {
-    let diff_area = diff_util::diff_page_areas(terminal_area).diff_area;
     let content = diff_layout_cache.content(diff);
+    let diff_area = diff_util::diff_page_areas(terminal_area, content.file_list_width).diff_area;
 
     diff_layout_cache.resolved_layout(&content, line_comments, selected_file_index, diff_area)
 }
@@ -1969,8 +2079,8 @@ impl DiffPage<'_> {
 
 impl Page for DiffPage<'_> {
     fn render(&mut self, f: &mut Frame, area: Rect) {
-        let areas = diff_util::diff_page_areas(area);
         let content = self.diff_layout_cache.content(self.diff);
+        let areas = diff_util::diff_page_areas(area, content.file_list_width);
         let sidebar_areas =
             diff_util::diff_sidebar_areas(areas.file_list_area, self.review_comments.is_some());
 
