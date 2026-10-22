@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use super::{FileExplorer, LOADING_LABEL, NO_FILES_LABEL};
 use crate::domain::theme::ColorTheme;
@@ -61,7 +62,7 @@ fn loading_renders_explicit_placeholder_without_empty_state() {
 }
 
 #[test]
-fn test_render_right_aligns_preserved_suffix_and_truncates_long_labels() {
+fn test_render_right_aligns_totals_and_prioritizes_long_names() {
     // Arrange
     let change_totals = || {
         [
@@ -110,7 +111,7 @@ fn test_render_right_aligns_preserved_suffix_and_truncates_long_labels() {
         .map(ratatui::buffer::Cell::symbol)
         .collect::<String>();
     assert!(text.contains("└ main.rs   +12/-3"));
-    assert!(text.contains("└ path/t... +12/-3"));
+    assert!(text.contains("└ path/to…/main.rs"));
 }
 
 const DIFF_SAME_PATH_HEADER: &str = "diff --git a/src/main.rs b/src/main.rs";
@@ -144,6 +145,146 @@ fn line_text(line: &Line<'static>) -> String {
         .iter()
         .map(|span| span.content.to_string())
         .collect()
+}
+
+#[test]
+fn preferred_width_fits_complete_rows_in_terminal_cells() {
+    // Arrange
+    let cases = [
+        (Vec::new(), 12),
+        (vec![Line::from("short")], 12),
+        (
+            vec![
+                Line::from("M short.rs +1/-0"),
+                Line::from("M longer_name.rs +123/-45"),
+            ],
+            27,
+        ),
+        (vec![Line::from("M 日本.rs +12/-3")], 18),
+        (
+            vec![Line::from("x".repeat(usize::from(u16::MAX)))],
+            u16::MAX,
+        ),
+    ];
+    for (lines, expected_width) in cases {
+        // Act
+        let width = FileExplorer::preferred_width(&lines);
+
+        // Assert
+        assert_eq!(width, expected_width);
+    }
+}
+
+#[test]
+fn middle_truncation_preserves_extensions_and_terminal_width() {
+    // Arrange
+    let cases = [
+        ("hello.rs", 8, "hello.rs"),
+        ("hello.rs", 5, "h….rs"),
+        ("hello.rs", 1, "…"),
+        ("hello.rs", 0, ""),
+        ("日本語資料.rs", 9, "日本….rs"),
+        ("long_filename", 7, "lon…ame"),
+        ("file.extension", 5, "…sion"),
+        ("", 0, ""),
+    ];
+    for (text, width, expected) in cases {
+        // Act
+        let shortened = FileExplorer::middle_truncate(text, width);
+
+        // Assert
+        assert_eq!(shortened, expected);
+        assert!(shortened.width() <= width);
+    }
+}
+
+#[test]
+fn narrow_rows_hide_totals_and_reduce_deep_indentation() {
+    // Arrange
+    let explorer = FileExplorer::from_cached_lines(Arc::from([]), 4);
+    let row = |name: &str| {
+        Line::from(vec![
+            Span::raw(name.to_string()),
+            Span::raw(" "),
+            Span::raw("+123456"),
+            Span::raw("/"),
+            Span::raw("-987654"),
+        ])
+    };
+    let folder = row("│ │ │ ├ long_folder/");
+    let file = row("│ │ │ └ execution_handler_test.rs");
+
+    // Act
+    let folder_line = explorer.line_for_width(&folder, 24);
+    let file_line = explorer.line_for_width(&file, 24);
+    let zero_width = explorer.line_for_width(&file, 0);
+    let placeholder = explorer.line_for_width(&Line::from("No files"), 24);
+
+    // Assert
+    assert!(!line_text(&folder_line).contains("+123456"));
+    assert!(!line_text(&file_line).contains("+123456"));
+    assert!(line_text(&file_line).ends_with("_test.rs"));
+    assert!(line_text(&file_line).starts_with("      "));
+    assert!(file_line.width() <= 24);
+    assert_eq!(zero_width.width(), 0);
+    assert_eq!(line_text(&placeholder), "No files");
+}
+
+#[test]
+fn cached_badge_without_filename_keeps_totals_aligned() {
+    // Arrange
+    let explorer = FileExplorer::from_cached_lines(Arc::from([]), 4);
+    let row = Line::from(vec![
+        Span::raw("M "),
+        Span::raw(" "),
+        Span::raw("+1"),
+        Span::raw("/"),
+        Span::raw("-0"),
+    ]);
+
+    // Act
+    let rendered = explorer.line_for_width(&row, 12);
+
+    // Assert
+    assert_eq!(line_text(&rendered), "M      +1/-0");
+    assert_eq!(rendered.width(), 12);
+}
+
+#[test]
+fn unfocused_explorer_keeps_selected_file_in_view() {
+    // Arrange
+    let lines: Arc<[Line<'static>]> = (0..20)
+        .map(|index| Line::from(format!("file_{index}.rs")))
+        .collect::<Vec<_>>()
+        .into();
+    let backend = ratatui::backend::TestBackend::new(30, 6);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| {
+            FileExplorer::from_cached_lines(Arc::clone(&lines), 0)
+                .selected_index(19)
+                .focused(false)
+                .render(frame, frame.area());
+        })
+        .expect("render");
+
+    // Assert
+    let buffer = terminal.backend().buffer();
+    let text = buffer
+        .content()
+        .iter()
+        .map(ratatui::buffer::Cell::symbol)
+        .collect::<String>();
+    assert!(text.contains("file_19.rs"));
+    assert!(!text.contains("file_0.rs"));
+    assert!(
+        !buffer
+            .content()
+            .iter()
+            .any(|cell| cell.bg == style::palette::surface_selection())
+    );
 }
 
 #[test]

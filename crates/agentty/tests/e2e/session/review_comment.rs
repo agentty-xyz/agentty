@@ -192,7 +192,7 @@ async fn test_session_review_comments() -> E2eResult {
                     // Wait for both asynchronous panels before focusing a
                     // comment, avoiding a timing-dependent loading frame.
                     .wait_for_text("println!(\"review\")", 5000)
-                    .wait_for_text("[ ] src/main.rs:1-2", 5000)
+                    .wait_for_text("Unresolved", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .press_key("c")
                     .wait_for_text("Please explain why this review output is needed.", 5000)

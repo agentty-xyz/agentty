@@ -396,13 +396,45 @@ fn test_diff_page_areas_keep_footer_flush_with_bottom() {
     let area = Rect::new(5, 3, 42, 10);
 
     // Act
-    let areas = diff_page_areas(area);
+    let areas = diff_page_areas(area, 12);
 
     // Assert
-    assert_eq!(areas.file_list_area, Rect::new(6, 4, 8, 8));
-    assert_eq!(areas.diff_area, Rect::new(14, 4, 32, 8));
+    assert_eq!(areas.file_list_area, Rect::new(6, 4, 12, 8));
+    assert_eq!(areas.diff_area, Rect::new(18, 4, 28, 8));
     assert_eq!(areas.footer_area, Rect::new(6, 12, 40, 1));
     assert_eq!(areas.footer_area.bottom(), area.bottom());
+}
+
+#[test]
+fn test_diff_page_sidebar_scales_and_caps_without_losing_patch_space() {
+    // Arrange
+    for (width, preferred_width, expected_width) in [
+        (0, 12, 0),
+        (1, 12, 0),
+        (2, 12, 0),
+        (30, 60, 8),
+        (80, 18, 18),
+        (80, 60, 23),
+        (120, 20, 20),
+        (120, 60, 35),
+        (202, 30, 30),
+        (300, u16::MAX, 60),
+        (u16::MAX, 20, 20),
+    ] {
+        let area = Rect::new(0, 0, width, 30);
+
+        // Act
+        let areas = diff_page_areas(area, preferred_width);
+
+        // Assert
+        let content_width = width.saturating_sub(2);
+        assert_eq!(areas.file_list_area.width, expected_width);
+        assert_eq!(
+            areas.file_list_area.width + areas.diff_area.width,
+            content_width
+        );
+        assert!(u32::from(areas.diff_area.width) >= u32::from(content_width) * 7 / 10);
+    }
 }
 
 #[test]
@@ -412,7 +444,7 @@ fn test_diff_view_max_scroll_offset_returns_zero_for_short_diff() {
     let terminal_area = Rect::new(0, 0, 120, 30);
 
     // Act
-    let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area);
+    let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area, 18);
 
     // Assert
     assert_eq!(max_scroll_offset, 0);
@@ -426,7 +458,7 @@ fn test_diff_view_max_scroll_offset_counts_wrapped_overflow() {
     let terminal_area = Rect::new(0, 0, 30, 8);
 
     // Act
-    let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area);
+    let max_scroll_offset = diff_view_max_scroll_offset(&parsed_lines, terminal_area, 18);
 
     // Assert
     assert!(max_scroll_offset > 0);
