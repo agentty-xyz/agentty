@@ -10,6 +10,7 @@ mod agent_profile;
 mod discovery;
 mod env;
 mod error;
+mod execution_graph;
 mod message;
 mod model;
 mod project;
@@ -46,6 +47,12 @@ pub use discovery::{
 };
 pub use env::{EnvId, ResolvedEnv};
 pub use error::SessionError;
+pub use execution_graph::{
+    ExecutionGraph, GraphCompletionGate, GraphContext, GraphContractError, GraphDependency,
+    GraphExecutionProfile, GraphExecutionRef, GraphInputBinding, GraphNode, GraphOutput,
+    GraphPostProcessing, GraphResolvedInput, GraphResult, GraphResultRef, GraphResultState,
+    GraphWorkspaceAccess,
+};
 pub use message::{
     AgentAnswerContent, SessionMessage, SessionMessageKind, SessionMessageKindParseError,
     SessionTranscript, normalized_message_content, stored_message_content,

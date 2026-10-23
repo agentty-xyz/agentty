@@ -64,6 +64,9 @@ contracts.
 - `ag-session` owns portable agent definitions and bundled defaults. The injected
   infrastructure catalog overlays repository definitions. Workflows own stage contracts
   and acceptance; execution consumes captured definitions independently of their IDs.
+- Generic [execution graph contracts](@/docs/architecture/execution-graphs.md) also
+  belong to `ag-session`: pure graph validation, node requirements, and exact result
+  bindings. They do not replace existing workflow coordinators or execution records.
 - Environment identity and resolved location contracts belong to `ag-session`. The host
   resolves the shared local Env through existing worktree isolation checks; session
   workflows retain provisioning and cleanup ownership. Conversations and permissions
