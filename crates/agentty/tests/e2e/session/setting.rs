@@ -325,13 +325,13 @@ async fn slash_command_selection_wraps_from_first_to_last() -> E2eResult {
     Ok(())
 }
 
-/// Verify `/speed` exposes normal and fast modes, reflects the selection, and
+/// Verify `/fast` toggles normal and fast modes with one submit, and
 /// drops both fast mode and its speed display when `/model` switches to a
 /// provider without a speed control.
 #[tokio::test]
-async fn session_speed_mode_selection() -> E2eResult {
+async fn session_fast_mode_toggle() -> E2eResult {
     // Arrange, Act, Assert
-    FeatureTest::new("session_speed_mode_selection")
+    FeatureTest::new("session_fast_mode_toggle")
         .with_git()
         .with_terminal_size(180, 24)
         .setup(|env| Box::pin(async move { seed_review_ready_session(env).await }))
@@ -342,18 +342,20 @@ async fn session_speed_mode_selection() -> E2eResult {
                     .compose(&common::switch_to_tab("Sessions"))
                     .compose(&common::open_selected_session_view())
                     .press_key("/")
-                    .write_text("speed")
-                    .wait_for_text("/speed", 3000)
-                    .press_key("Enter")
-                    .wait_for_text("/speed Mode", 3000)
-                    .capture_labeled(
-                        "speed_mode_picker",
-                        "Speed picker offers normal and fast modes",
-                    )
-                    .press_key("Down")
+                    .write_text("fast")
+                    .wait_for_text("Toggle between normal and fast responses", 3000)
                     .press_key("Enter")
                     .wait_for_text("· Balanced · Fast · Auto Edit", 5000)
                     .capture_labeled("fast_mode_selected", "Composer reflects fast mode")
+                    .write_text("/fast")
+                    .wait_for_text("Toggle between normal and fast responses", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("· Balanced · Normal · Auto Edit", 5000)
+                    .capture_labeled("normal_mode_selected", "Composer reflects normal mode")
+                    .write_text("/fast")
+                    .wait_for_text("Toggle between normal and fast responses", 3000)
+                    .press_key("Enter")
+                    .wait_for_text("· Balanced · Fast · Auto Edit", 5000)
                     .press_key("/")
                     .write_text("model")
                     .wait_for_text("/model", 3000)
@@ -370,12 +372,7 @@ async fn session_speed_mode_selection() -> E2eResult {
             },
             |frame, report| {
                 Box::pin(async move {
-                    let picker_frame = common::frame_from_capture(&report.captures[0]);
-                    let picker_full = Region::full(picker_frame.cols(), picker_frame.rows());
-                    assertion::assert_text_in_region(&picker_frame, "Normal", &picker_full);
-                    assertion::assert_text_in_region(&picker_frame, "Fast", &picker_full);
-
-                    let fast_frame = common::frame_from_capture(&report.captures[1]);
+                    let fast_frame = common::frame_from_capture(&report.captures[0]);
                     let fast_full = Region::full(fast_frame.cols(), fast_frame.rows());
                     assertion::assert_text_in_region(
                         &fast_frame,
@@ -389,6 +386,16 @@ async fn session_speed_mode_selection() -> E2eResult {
                     );
                     assertion::assert_not_visible(&fast_frame, "Speed:");
                     assertion::assert_not_visible(&fast_frame, "Reasoning:");
+                    assertion::assert_not_visible(&fast_frame, "/fast");
+
+                    let normal_frame = common::frame_from_capture(&report.captures[1]);
+                    let normal_full = Region::full(normal_frame.cols(), normal_frame.rows());
+                    assertion::assert_text_in_region(
+                        &normal_frame,
+                        "· Balanced · Normal · Auto Edit",
+                        &normal_full,
+                    );
+                    assertion::assert_not_visible(&normal_frame, "/fast");
 
                     // Gemini keeps response style in the composer while
                     // dropping the unsupported speed status.

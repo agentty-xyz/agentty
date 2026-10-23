@@ -269,8 +269,9 @@ backend and model, `/reasoning` to change reasoning effort, and `/style` to choo
 answer length. See [Slash Commands](@/docs/usage/workflow.md#slash-commands) for
 response styles and permission modes.
 
-Claude and Codex also support `/speed`. `Fast` reduces latency at higher provider cost
-and may switch to a compatible model:
+Claude and Codex also support `/fast`. Press `Enter` on the command to toggle the
+current session between `Normal` and `Fast`. `Fast` reduces latency at higher provider
+cost and may switch to a compatible model:
 
 | Selection   | Model used with Fast |
 | ----------- | -------------------- |

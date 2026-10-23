@@ -10,9 +10,7 @@ use super::{
     current_line_delete_range, drain_prompt_submission, insert_prompt_local_image,
     insert_prompt_local_image_at, prompt_slash_option_count, resolve_prompt_slash_selection,
 };
-use crate::domain::agent::{
-    AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle, SpeedMode,
-};
+use crate::domain::agent::{AgentKind, AgentModel, AgentSelection, ReasoningLevel, ResponseStyle};
 use crate::domain::input::{INPUT_HISTORY_LIMIT, InputState};
 use crate::domain::permission::PermissionMode;
 
@@ -564,37 +562,31 @@ fn test_selected_slash_action_returns_selected_reasoning_level() {
 }
 
 #[test]
-fn test_speed_stage_lists_modes_and_returns_selected_speed() {
-    // Arrange
-    let slash_state = PromptSlashState {
-        selected_index: 1,
-        stage: PromptSlashStage::Speed,
-        ..PromptSlashState::default()
-    };
+fn test_fast_command_is_available_only_for_supported_agents() {
+    for &agent_kind in AgentKind::ALL {
+        // Arrange
+        let slash_state = PromptSlashState::default();
 
-    // Act
-    let suggestion_list =
-        build_prompt_slash_suggestion_list("/speed", &slash_state, AgentKind::Codex, false)
-            .expect("speed suggestions should render");
-    let selection = resolve_prompt_slash_selection("/speed", &slash_state, AgentKind::Codex, false);
+        // Act
+        let suggestion_list =
+            build_prompt_slash_suggestion_list("/fast", &slash_state, agent_kind, false);
+        let selection = resolve_prompt_slash_selection("/fast", &slash_state, agent_kind, false);
 
-    // Assert
-    assert_eq!(
-        suggestion_list
-            .items
-            .iter()
-            .map(|item| item.label.as_str())
-            .collect::<Vec<_>>(),
-        vec!["Normal", "Fast"]
-    );
-    assert_eq!(
-        suggestion_list.items[1].detail.as_deref(),
-        Some("Faster responses at a higher provider cost.")
-    );
-    assert_eq!(
-        selection,
-        Some(PromptSuggestionSelection::Speed(SpeedMode::Fast))
-    );
+        // Assert
+        if matches!(agent_kind, AgentKind::Claude | AgentKind::Codex) {
+            let suggestion_list = suggestion_list.expect("fast command should render");
+            assert_eq!(suggestion_list.items.len(), 1);
+            assert_eq!(suggestion_list.items[0].label, "/fast");
+            assert_eq!(
+                suggestion_list.items[0].detail.as_deref(),
+                Some("Toggle between normal and fast responses for this session.")
+            );
+            assert_eq!(selection, Some(PromptSuggestionSelection::Command("/fast")));
+        } else {
+            assert!(suggestion_list.is_none());
+            assert_eq!(selection, None);
+        }
+    }
 }
 
 #[test]
@@ -865,7 +857,7 @@ fn test_prompt_slash_command_list_omits_apply_when_disabled() {
     // Assert
     assert_eq!(
         labels,
-        vec!["/mode", "/model", "/reasoning", "/style", "/speed"]
+        vec!["/mode", "/model", "/reasoning", "/style", "/fast"]
     );
     assert_eq!(suggestion_list.selected_index, 0);
 }
@@ -898,7 +890,7 @@ fn plan_command_availability_keeps_rendering_selection_and_navigation_aligned() 
 }
 
 #[test]
-fn test_prompt_slash_command_list_omits_speed_for_unsupported_agent() {
+fn test_prompt_slash_command_list_omits_fast_for_unsupported_agent() {
     // Arrange
     let slash_state = PromptSlashState::default();
 

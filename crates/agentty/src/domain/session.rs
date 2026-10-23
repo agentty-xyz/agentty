@@ -293,7 +293,7 @@ pub struct Session {
     pub review_request: Option<ReviewRequest>,
     /// Derived size bucket computed from diff size.
     pub size: SessionSize,
-    /// Response-speed preference selected through `/speed`.
+    /// Response-speed preference toggled through `/fast`.
     pub speed_mode: SpeedMode,
     /// Token usage statistics associated with this session.
     pub stats: SessionStats,

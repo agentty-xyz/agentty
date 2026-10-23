@@ -929,8 +929,17 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Command("/reasoning")) => {
             open_prompt_reasoning_stage(app, prompt_context.session_index);
         }
-        Some(PromptSuggestionSelection::Command("/speed")) => {
-            open_prompt_speed_stage(app, prompt_context.session_index);
+        Some(PromptSuggestionSelection::Command("/fast")) => {
+            let current_speed_mode = app
+                .session_at(prompt_context.session_index)
+                .map_or_else(SpeedMode::default, |session| session.speed_mode);
+            let speed_mode = match current_speed_mode {
+                SpeedMode::Normal => SpeedMode::Fast,
+                SpeedMode::Fast => SpeedMode::Normal,
+            };
+            clear_prompt_slash_input(app).await;
+            app.update_prompt_session_speed_mode(session_id, speed_mode)
+                .await;
         }
         Some(PromptSuggestionSelection::Command("/style")) => {
             open_prompt_response_style_stage(app, prompt_context.session_index);
@@ -961,11 +970,6 @@ async fn handle_prompt_slash_submit(app: &mut App, prompt_context: &PromptContex
         Some(PromptSuggestionSelection::Reasoning(reasoning_level)) => {
             clear_prompt_slash_input(app).await;
             app.update_prompt_session_reasoning_level(session_id, reasoning_level)
-                .await;
-        }
-        Some(PromptSuggestionSelection::Speed(speed_mode)) => {
-            clear_prompt_slash_input(app).await;
-            app.update_prompt_session_speed_mode(session_id, speed_mode)
                 .await;
         }
         Some(PromptSuggestionSelection::Style(response_style)) => {
@@ -1112,23 +1116,6 @@ fn open_prompt_response_style_stage(app: &mut App, session_index: usize) {
 
     if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
         slash_state.stage = PromptSlashStage::Style;
-        slash_state.selected_agent = None;
-        slash_state.selected_index = selected_index;
-    }
-}
-
-/// Opens `/speed` with the current session preference preselected.
-fn open_prompt_speed_stage(app: &mut App, session_index: usize) {
-    let selected_speed_mode = app
-        .session_at(session_index)
-        .map_or_else(SpeedMode::default, |session| session.speed_mode);
-    let selected_index = SpeedMode::ALL
-        .iter()
-        .position(|speed_mode| *speed_mode == selected_speed_mode)
-        .unwrap_or(0);
-
-    if let AppMode::Prompt { slash_state, .. } = &mut app.mode {
-        slash_state.stage = PromptSlashStage::Speed;
         slash_state.selected_agent = None;
         slash_state.selected_index = selected_index;
     }
