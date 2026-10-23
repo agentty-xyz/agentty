@@ -7,8 +7,8 @@ use testty::assertion;
 use testty::region::Region;
 
 use super::fixture::{
-    E2eResult, run_git, run_git_stdout, seed_review_ready_session, seed_review_worktree_with_diff,
-    seed_running_stop_session,
+    E2eResult, run_git, run_git_stdout, seed_linked_review_worktree_with_diff,
+    seed_review_ready_session, seed_running_stop_session,
 };
 use crate::common::{BuilderEnv, FeatureTest, SessionSeed};
 use crate::{common, test_support};
@@ -305,13 +305,19 @@ fn seed_child_worktree_for_onto_rebase(
     Ok(parent_tip)
 }
 
-/// Seeds a review-ready fork source whose persisted and actual worktree diff
-/// must not be inherited by the forked branch-tip worktree.
+/// Seeds a committed source change plus an uncommitted edit so fork counts
+/// must reflect the frozen branch tip rather than stale source statistics.
 async fn seed_dirty_fork_source_session(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
     seed_review_ready_session(env).await?;
-    seed_review_worktree_with_diff(env)
+    seed_linked_review_worktree_with_diff(env)?;
+    std::fs::write(
+        env.agentty_root.join("wt/review-s/src/main.rs"),
+        "uncommitted source edit\n",
+    )?;
+
+    Ok(())
 }
 
 /// Verify that choosing Stacked creates a fifth-level draft under the selected
@@ -711,6 +717,7 @@ async fn session_fork_confirmation_creates_session_from_review_session() -> E2eR
                     .capture_labeled("fork_confirmation", "Fork confirmation popup")
                     .write_text("y")
                     .wait_for_text("Review-ready session shortcuts", 5000)
+                    .wait_for_text("+3 -0", 5000)
                     .wait_for_stable_frame(300, 5000)
                     .capture_labeled("forked_session_view", "Forked session opened")
                     .press_key("Enter")
@@ -755,6 +762,11 @@ async fn session_fork_confirmation_creates_session_from_review_session() -> E2eR
                         &forked_view_full,
                     );
                     assertion::assert_not_visible(&forked_view_frame, "Confirm Fork");
+                    assertion::assert_text_in_region(
+                        &forked_view_frame,
+                        "+3 -0",
+                        &forked_view_full,
+                    );
 
                     let forked_chat_frame = common::frame_from_capture(&report.captures[3]);
                     let forked_chat_full =
