@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kind, actor, reason, recorded_at FROM execution_graph_evidence WHERE execution_graph_result_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "kind",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_evidence",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "actor",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_evidence",
+            "name": "actor"
+          }
+        }
+      },
+      {
+        "name": "reason",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_evidence",
+            "name": "reason"
+          }
+        }
+      },
+      {
+        "name": "recorded_at",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_evidence",
+            "name": "recorded_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3aa7fd7f01630d991b03b49012f9249afe1b5c05c7febe2aa5a163fee065f0df"
+}

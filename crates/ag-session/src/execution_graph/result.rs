@@ -1,11 +1,12 @@
 use std::num::NonZeroU64;
 
 use ag_protocol::ProtocolRequestProfile;
+use serde::{Deserialize, Serialize};
 
 use super::GraphContractError;
 
 /// Link to existing execution records; never a second execution status.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphExecutionRef {
     /// One task attempt and its authoritative ordered workflow operation.
     TaskAttempt {
@@ -26,7 +27,10 @@ pub enum GraphExecutionRef {
 
 impl GraphExecutionRef {
     /// Checks required identity fields without asserting record existence.
-    pub(super) fn validate(&self) -> Result<(), GraphContractError> {
+    ///
+    /// # Errors
+    /// Rejects blank attempt, operation, task, or utility-run identities.
+    pub fn validate(&self) -> Result<(), GraphContractError> {
         match self {
             Self::TaskAttempt {
                 attempt_id,
@@ -49,7 +53,7 @@ impl GraphExecutionRef {
 /// The host must retain the body and verify execution ownership. Revisions and
 /// retries never retarget this reference to a newer response. Validation of a
 /// caller-constructed reference is not proof that storage contains it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphResultRef {
     /// Existing task-attempt or utility-run authority that produced this
     /// result.
@@ -90,7 +94,7 @@ impl GraphResultRef {
 ///
 /// Advancing state requires authoritative evidence for this exact reference.
 /// Caller-supplied state must never establish validation or user acceptance.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphResultState {
     /// Saved output, potentially incomplete or containing clarification.
     Produced,
@@ -101,7 +105,7 @@ pub enum GraphResultState {
 }
 
 /// Snapshot supplied by the host's authoritative result store.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphResult {
     /// Immutable producing execution, revision, schema, and version.
     pub reference: GraphResultRef,
@@ -112,7 +116,7 @@ pub struct GraphResult {
 /// Exact input captured with a newly admitted execution.
 ///
 /// Redelivery must retain this reference, even if a newer result is available.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphResolvedInput {
     /// Declared input slot on the consumer.
     pub name: String,

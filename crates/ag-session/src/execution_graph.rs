@@ -4,6 +4,7 @@ mod error;
 mod graph;
 mod node;
 mod result;
+mod selection;
 
 #[cfg(test)]
 #[path = "execution_graph/test_support_test.rs"]

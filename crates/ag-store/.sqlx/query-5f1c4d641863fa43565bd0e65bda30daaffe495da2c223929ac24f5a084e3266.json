@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT reference FROM execution_graph_execution WHERE execution_graph_id = ? AND revision = ? ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "reference",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_execution",
+            "name": "reference"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f1c4d641863fa43565bd0e65bda30daaffe495da2c223929ac24f5a084e3266"
+}

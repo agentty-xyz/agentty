@@ -14,6 +14,11 @@ pub struct AppRepositories {
 }
 
 impl AppRepositories {
+    /// Returns immutable graph revisions, execution links, and exact results.
+    pub fn graphs(&self) -> &dyn crate::GraphRepository {
+        self.repositories.graph.as_ref()
+    }
+
     /// Returns the activity-event repository.
     pub fn activity(&self) -> &dyn activity::ActivityRepository {
         self.repositories.activity.as_ref()
@@ -67,6 +72,10 @@ impl AppRepositories {
         Self {
             repositories: Arc::new(RepositorySet {
                 activity: Arc::new(activity::SqliteActivityRepository::new(pool.clone())),
+                graph: Arc::new(crate::execution_graph::SqliteGraphRepository::new(
+                    pool.clone(),
+                    Arc::clone(&timestamp_source),
+                )),
                 operation: Arc::new(operation::SqliteOperationRepository::new(
                     pool.clone(),
                     Arc::clone(&timestamp_source),
@@ -99,6 +108,7 @@ impl AppRepositories {
 /// number of repositories carried through asynchronous workflows.
 struct RepositorySet {
     activity: Arc<dyn activity::ActivityRepository>,
+    graph: Arc<dyn crate::GraphRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,

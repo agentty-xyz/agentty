@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.session_id, a.task_id, a.session_operation_id, o.session_id AS operation_session_id, o.status, o.cancel_requested FROM task_attempt a JOIN task t ON t.id = a.task_id JOIN session_operation o ON o.id = a.session_operation_id WHERE a.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "session_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "task_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "task_id"
+          }
+        }
+      },
+      {
+        "name": "session_operation_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "task_attempt",
+            "name": "session_operation_id"
+          }
+        }
+      },
+      {
+        "name": "operation_session_id",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "cancel_requested",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "session_operation",
+            "name": "cancel_requested"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "37990c32f79d3c867c8a99a8a3c528a975493551a76c96339f44f5f831ad535a"
+}

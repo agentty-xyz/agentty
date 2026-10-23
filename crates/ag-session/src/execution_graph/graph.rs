@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
 
+use serde::{Deserialize, Serialize};
+
 use super::{
     GraphCompletionGate, GraphContext, GraphContractError, GraphExecutionRef, GraphNode,
     GraphPostProcessing, GraphResolvedInput, GraphResult, GraphResultState,
@@ -14,7 +16,7 @@ use crate::{EnvId, SessionId};
 /// conflicts, and existing worker capacity. A revision is a stale-action fence,
 /// not authorization to mutate started work or automatically replay after
 /// restart.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ExecutionGraph {
     /// Stable graph-instance identity, separate from command delivery identity.
     pub id: String,

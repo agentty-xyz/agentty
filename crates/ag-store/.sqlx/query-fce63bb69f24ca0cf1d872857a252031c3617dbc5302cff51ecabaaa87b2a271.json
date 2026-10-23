@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COALESCE(MAX(version), 0) AS \"version!: i64\" FROM execution_graph_result WHERE execution_graph_id = ? AND node_id = ? AND output_name = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "version!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fce63bb69f24ca0cf1d872857a252031c3617dbc5302cff51ecabaaa87b2a271"
+}
