@@ -1022,13 +1022,27 @@ async fn sync_review_request_metadata(
         )
         .await
         .map_err(|error| SessionError::Workflow(error.detail_message()))?;
-    let desired_metadata = SessionTaskService::review_request_metadata(
-        &current_metadata,
-        &input.folder,
-        generated_metadata.body.as_deref().unwrap_or_default(),
-        &generated_metadata.title,
-        evaluation.run_client.as_ref(),
-        evaluation.session_agent,
+    let current_summary = metadata_sync_input
+        .review_request_client
+        .refresh_review_request(
+            remote.clone(),
+            linked_review_request.summary.display_id.clone(),
+        )
+        .await
+        .map_err(|error| SessionError::Workflow(error.detail_message()))?;
+    let desired_metadata = crate::app::review_request::ReviewRequestGenerator {
+        db: &input.db,
+        folder: &input.folder,
+        git_client: &input.git_client,
+        run_client: evaluation.run_client.as_ref(),
+        session_agent: evaluation.session_agent,
+        session_id: &input.session_id,
+        transcript: &input.transcript,
+    }
+    .generate(
+        Some(&current_metadata),
+        &generated_metadata,
+        &current_summary.target_branch,
     )
     .await?;
     let update_input = forge::UpdateReviewRequestInput {

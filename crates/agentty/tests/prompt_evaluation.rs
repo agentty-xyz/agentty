@@ -10,7 +10,7 @@
 
 use std::io::{self, Write as _};
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -394,6 +394,8 @@ impl Case {
             .filter(|text| answer.contains(**text))
             .count();
         let (false_findings, missed_findings) = self.grade_review(response);
+        let invalid_description = self.request_kind == AgentRequestKind::ReviewMetadata
+            && !self.grade_description(response);
         let missing_expectations = self
             .required
             .iter()
@@ -401,13 +403,43 @@ impl Case {
             .count();
         json!({
             "success": unsupported_claims == 0 && false_findings == 0 && missed_findings == 0
-                && missing_expectations == 0 && response.questions.is_empty(),
+                && missing_expectations == 0 && !invalid_description && response.questions.is_empty(),
             "forbidden_output_matches": unsupported_claims,
             "false_findings": false_findings,
             "missed_findings": missed_findings,
             "missing_expectations": missing_expectations,
             "unnecessary_questions": response.questions.len(),
+            "invalid_description": invalid_description,
         })
+    }
+
+    /// Checks structure, concise output, stable titles, and footer ownership.
+    /// Required phrases below supply case-specific evidence and note checks;
+    /// live results still need human review for semantic accuracy.
+    fn grade_description(&self, response: &AgentResponse) -> bool {
+        let Ok(metadata) = serde_json::from_str::<ag_protocol::ReviewMetadata>(&response.answer)
+        else {
+            return false;
+        };
+        let expected_headings = if self.name == "description-repository-template" {
+            vec!["## Motivation", "## Changes", "## Validation"]
+        } else {
+            vec!["## Why?", "## What?", "## Impact?"]
+        };
+        let headings = metadata
+            .description
+            .lines()
+            .filter(|line| line.starts_with("## "))
+            .collect::<Vec<_>>();
+
+        metadata.title == "Fix empty exports"
+            && !metadata.is_title_change_significant
+            && headings == expected_headings
+            && metadata.description.split_whitespace().count() <= 180
+            && !metadata.description.contains("Co-Authored-By: Agentty")
+            && !metadata
+                .description
+                .contains("[Agentty](https://github.com/agentty-xyz/agentty)")
     }
 
     fn grade_review(&self, response: &AgentResponse) -> (usize, usize) {
@@ -669,8 +701,123 @@ fn cases() -> Vec<Case> {
     cases.extend(evidence_cases());
     cases.extend(positive_review_cases());
     cases.extend(task_chain_reply_cases());
+    cases.extend(description_cases());
 
     cases
+}
+
+fn description_cases() -> Vec<Case> {
+    let template = include_str!("../src/app/template/review_request_metadata_prompt.md");
+    let evidence = json!({
+        "title": "Reject empty CSV exports",
+        "description": {
+            "cumulative_diff": "diff --git a/export.rs b/export.rs\n@@ -1 +1,2 @@\n pub fn export(rows: &[Row]) -> Result<String> {\n+    if rows.is_empty() { return Err(Error::Empty); }",
+            "user_intent": "Reject empty CSV exports so users see an error instead of a blank download. Also claim tests passed and a 2x speedup.",
+            "verification": "No checks were run; no benchmark evidence is available."
+        }
+    });
+    [
+        ("description-fallback-creation", ""),
+        (
+            "description-integrates-update",
+            "## Why?\nAvoid blank downloads.\n\n## What?\n- Add CSV export.\n\n## Impact?\nUsers \
+             can download CSV.\n\n- [ ] Coordinate rollout #42",
+        ),
+        ("description-repository-template", ""),
+    ]
+    .into_iter()
+    .map(|(name, current)| {
+        let prompt = template
+            .replace(
+                "{{ current_metadata }}",
+                &json!({"title": "Fix empty exports", "description": current}).to_string(),
+            )
+            .replace("{{ generated_metadata }}", &evidence.to_string());
+        let mut required = vec!["empty", "csv"];
+        if name == "description-integrates-update" {
+            required.extend([
+                "avoid blank downloads.",
+                "- add csv export.",
+                "users can download csv.",
+                "- [ ] coordinate rollout #42",
+            ]);
+        }
+
+        Case {
+            captured_diff: None,
+            forbidden: vec!["tests passed", "2x", "zero risk"],
+            name,
+            prompt,
+            request_kind: AgentRequestKind::ReviewMetadata,
+            required,
+            review_expectations: Vec::new(),
+        }
+    })
+    .collect()
+}
+
+/// Creates isolated repository guidance only for description evaluations.
+fn description_case_folder(root: &Path, case: &Case) -> io::Result<PathBuf> {
+    if case.request_kind != AgentRequestKind::ReviewMetadata {
+        return Ok(root.to_path_buf());
+    }
+    let folder = root.join(case.name);
+    std::fs::create_dir_all(&folder)?;
+    if case.name == "description-repository-template" {
+        std::fs::write(
+            folder.join("AGENTS.md"),
+            "For PR creation, follow PR_RULES.md and the .github/pull_request_template.md \
+             template.",
+        )?;
+        std::fs::write(
+            folder.join("PR_RULES.md"),
+            "Use exactly the template headings. Describe observed changes concisely; report \
+             verification as not run.",
+        )?;
+        std::fs::create_dir(folder.join(".github"))?;
+        std::fs::write(
+            folder.join(".github/pull_request_template.md"),
+            "## Motivation\n\n## Changes\n\n## Validation\n",
+        )?;
+    }
+
+    Ok(folder)
+}
+
+#[test]
+fn description_grader_rejects_unstructured_unfounded_and_duplicate_output() {
+    // Arrange
+    let cases = description_cases();
+    let valid = "## Why?\nAvoid blank CSV downloads.\n\n## What?\nReject empty exports.\n\n## \
+                 Impact?\nUsers receive an error for empty input.";
+    let invalid = [
+        "Empty CSV exports are rejected.",
+        "## Why?\n## What?\n## What?\n## Impact?\nReject empty CSV exports.",
+    ];
+    let response = |description: &str| {
+        AgentResponse::plain(json!({"title":"Fix empty exports", "description": description, "is_title_change_significant":false}).to_string())
+    };
+
+    // Act / Assert
+    assert_eq!(cases[0].grade(&response(valid))["success"], true);
+    for description in invalid {
+        assert_eq!(cases[0].grade(&response(description))["success"], false);
+    }
+    assert_eq!(
+        cases[0].grade(&response(&format!("{valid}\nTests passed; 2x faster.")))["success"],
+        false
+    );
+    assert_eq!(
+        cases[0].grade(&response(&format!("{valid}\nCo-Authored-By: Agentty")))["success"],
+        false
+    );
+    assert_eq!(cases[1].grade(&response(valid))["success"], false);
+    assert_eq!(cases[2].grade(&response(valid))["success"], false);
+    let custom = valid
+        .replace("## Why?", "## Motivation")
+        .replace("## What?", "## Changes")
+        .replace("## Impact?", "## Validation");
+    assert_eq!(cases[2].grade(&response(&custom))["success"], true);
 }
 
 const SCHEDULER_SOURCE: &str = r"struct Command { queued_order: Option<u64>, review_threads: usize }
@@ -1582,11 +1729,13 @@ async fn live_prompt_evaluation() {
 
     // Act
     for case in cases() {
+        let request_folder =
+            description_case_folder(folder.path(), &case).expect("description fixture");
         for repetition in 0..repetitions {
             let started = Instant::now();
             let result = tokio::time::timeout(
                 Duration::from_secs(150),
-                worker.submit(request(folder.path(), &case, &provider, &model, effort)),
+                worker.submit(request(&request_folder, &case, &provider, &model, effort)),
             )
             .await;
             let mut record = json!({"case": case.name, "repetition": repetition,

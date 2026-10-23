@@ -2429,7 +2429,9 @@ impl App {
         Some(BranchPublishTaskContext {
             app_event_tx: self.services.event_sender(),
             branch_operation_lock: Arc::clone(&handles.branch_operation_lock),
+            run_client: self.services.session_run_client(session_id),
             session: branch_publish_session,
+            session_agent: session.agent,
             session_update_versions: self.services.session_update_versions(),
             transcript: Arc::clone(&handles.transcript),
         })

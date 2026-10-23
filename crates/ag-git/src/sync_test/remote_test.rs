@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mockall::Sequence;
@@ -13,15 +13,117 @@ use crate::repo::{
     AsyncGitCommand, AsyncGitCommandOutput, MockAsyncGitCommandRunner, ProcessAsyncGitCommandRunner,
 };
 use crate::sync::{
-    PullRebaseResult, SingleCommitMessageStrategy, branch_tracking_statuses,
+    PullRebaseResult, SingleCommitMessageStrategy, advertised_commit, branch_tracking_statuses,
     commit_all_preserving_single_commit, current_branch_name, current_branch_remote_name,
-    current_upstream_reference, get_ref_ahead_behind, parse_branch_push_updated,
-    parse_branch_tracking_statuses, parse_current_branch_remote_output, primary_upstream_reference,
-    pull_rebase, pull_rebase_with_runner, push_current_branch,
+    current_upstream_reference, fetch_remote_branch_commits_with_runner, get_ref_ahead_behind,
+    parse_branch_push_updated, parse_branch_tracking_statuses, parse_current_branch_remote_output,
+    primary_upstream_reference, pull_rebase, pull_rebase_with_runner, push_current_branch,
     push_current_branch_to_new_remote_branch, push_current_branch_to_new_remote_branch_with_runner,
     push_current_branch_to_remote_branch, push_current_branch_to_remote_branch_with_runner,
     push_current_branch_with_runner, remote_branch_exists, remote_branch_exists_with_runner,
 };
+
+#[test]
+fn advertised_commits_require_exact_refs_and_full_object_ids() {
+    // Arrange
+    for (output, accepted) in [
+        (format!("{}\trefs/heads/release\n", "a".repeat(40)), true),
+        (format!("{}\trefs/heads/release\n", "b".repeat(64)), true),
+        (
+            format!("{}\trefs/heads/release-other\n", "a".repeat(40)),
+            false,
+        ),
+        (format!("{}\trefs/heads/release\n", "g".repeat(40)), false),
+        ("abc123\trefs/heads/release\n".into(), false),
+        ("malformed output".into(), false),
+        (String::new(), false),
+    ] {
+        // Act
+        let result = advertised_commit(&output, "refs/heads/release");
+
+        // Assert
+        assert_eq!(result.is_ok(), accepted, "{output}");
+    }
+}
+
+#[tokio::test]
+async fn remote_branch_commits_fetch_advertised_hashes_and_report_command_failures() {
+    // Arrange
+    for failure in ["none", "lookup", "fetch"] {
+        let base = "a".repeat(40);
+        let source = "b".repeat(40);
+        let mut runner = MockAsyncGitCommandRunner::new();
+        let mut sequence = Sequence::new();
+        let response = async_git_output(
+            i32::from(failure == "lookup"),
+            format!("{source}\trefs/heads/review\n{base}\trefs/heads/release\n"),
+            "lookup failure",
+        );
+        runner
+            .expect_run()
+            .once()
+            .in_sequence(&mut sequence)
+            .withf(|command| {
+                command.repo_path == Path::new("project")
+                    && command.arguments
+                        == [
+                            "ls-remote",
+                            "--refs",
+                            "--",
+                            "review-remote",
+                            "refs/heads/release",
+                            "refs/heads/review",
+                        ]
+            })
+            .return_once(move |_| Box::pin(async move { Ok(response) }));
+        if failure != "lookup" {
+            let arguments = vec![
+                "fetch".into(),
+                "--no-tags".into(),
+                "--no-prune".into(),
+                "--no-prune-tags".into(),
+                "--no-write-fetch-head".into(),
+                "--no-recurse-submodules".into(),
+                "--refmap=".into(),
+                "--".into(),
+                "review-remote".into(),
+                base.clone(),
+                source.clone(),
+            ];
+            let response = async_git_output(i32::from(failure == "fetch"), "", "fetch failure");
+            runner
+                .expect_run()
+                .once()
+                .in_sequence(&mut sequence)
+                .withf(move |command| {
+                    command.repo_path == Path::new("project") && command.arguments == arguments
+                })
+                .return_once(move |_| Box::pin(async move { Ok(response) }));
+        }
+
+        // Act
+        let result = fetch_remote_branch_commits_with_runner(
+            PathBuf::from("project"),
+            "review-remote".into(),
+            "release".into(),
+            "review".into(),
+            &runner,
+        )
+        .await;
+
+        // Assert
+        if failure == "none" {
+            assert_eq!(result.expect("fetched commits"), (base, source));
+        } else {
+            assert!(
+                result
+                    .expect_err("command failure")
+                    .to_string()
+                    .contains(failure)
+            );
+        }
+    }
+}
 
 #[test]
 fn branch_push_status_uses_only_the_destination_ref() {

@@ -456,8 +456,14 @@ worktree changes to fit a prompt.
 - **Session sync** rebases onto the local or remote base. Agent assistance resolves
   conflicts; Agentty owns staging, hook checks, continuation, and bounded repair.
 - **Publishing** shares branch ownership with sync and auto-push. Force-with-lease
-  protects remote changes. Existing review descriptions are preserved, with best-effort
-  concurrent-edit checks before metadata updates.
+  protects remote changes. Creation, manual refresh, and automatic metadata updates use
+  the same read-only utility through the Run Worker, with cumulative committed evidence
+  from immutable published commits, bounded user intent, and repository PR/MR guidance.
+  Generation compares published commits against the effective review target; updates
+  read the live forge target before acquiring the advertised source and target commits
+  independently of configured fetch refspecs. Existing description content is preserved
+  in the generated section order; code normalizes Agentty attribution after
+  reconciliation. Best-effort concurrent-edit checks precede metadata updates.
 - **Remote merge** marks `Merged`. Successful manual target sync persists archival and
   child-restack intent before cleanup; failed persistence leaves work retryable.
 

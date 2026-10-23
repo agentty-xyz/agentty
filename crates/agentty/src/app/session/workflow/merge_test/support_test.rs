@@ -409,6 +409,14 @@ pub(super) fn linked_github_review_request() -> crate::domain::session::ReviewRe
 pub(super) fn metadata_sync_git_client() -> git::MockGitClient {
     let mut mock_git_client = git::MockGitClient::new();
     mock_git_client
+        .expect_fetch_remote_branch_commits()
+        .once()
+        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+    mock_git_client
+        .expect_committed_diff()
+        .once()
+        .returning(|_, _, _| Box::pin(async { Ok("cumulative sync changes".into()) }));
+    mock_git_client
         .expect_head_commit_message()
         .once()
         .withf(|session_folder| session_folder.ends_with("sess-rebase"))
@@ -481,6 +489,10 @@ pub(super) fn metadata_sync_review_request_client(
                 })
             })
         });
+    mock_review_request_client
+        .expect_refresh_review_request()
+        .once()
+        .returning(|_, _| Box::pin(async { Ok(linked_github_review_request().summary) }));
     mock_review_request_client
         .expect_sync_review_request_metadata()
         .once()

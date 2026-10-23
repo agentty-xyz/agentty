@@ -216,7 +216,7 @@ async fn spawned_push_preserves_cancellation_inner_failures_and_join_errors() {
 #[tokio::test]
 async fn metadata_sync_returns_head_lookup_and_forge_errors_with_existing_warnings() {
     // Arrange
-    for failure in ["head", "detect", "metadata"] {
+    for failure in ["head", "detect", "metadata", "summary"] {
         let db = linked_review_request_db().await;
         let mut git_client = MockGitClient::new();
         let mut forge_client = MockReviewRequestClient::new();
@@ -247,14 +247,33 @@ async fn metadata_sync_returns_head_lookup_and_forge_errors_with_existing_warnin
                 forge_client
                     .expect_review_request_metadata()
                     .once()
-                    .returning(|_, _| {
-                        Box::pin(async {
+                    .returning(move |_, _| {
+                        Box::pin(async move {
+                            if failure == "summary" {
+                                return Ok(forge::ReviewRequestMetadata {
+                                    body: "Details".into(),
+                                    title: "Title".into(),
+                                });
+                            }
                             Err(forge::ReviewRequestError::OperationFailed {
                                 forge_kind: forge::ForgeKind::GitHub,
                                 message: "forge read failed".into(),
                             })
                         })
                     });
+                if failure == "summary" {
+                    forge_client
+                        .expect_refresh_review_request()
+                        .once()
+                        .returning(|_, _| {
+                            Box::pin(async {
+                                Err(forge::ReviewRequestError::OperationFailed {
+                                    forge_kind: forge::ForgeKind::GitHub,
+                                    message: "target lookup failed".into(),
+                                })
+                            })
+                        });
+                }
             }
             Some("Generated title")
         };
@@ -281,6 +300,18 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
     git_client.expect_repo_url().once().returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
+    git_client
+        .expect_fetch_remote_branch_commits()
+        .once()
+        .withf(|_, remote, base, source| {
+            remote == "origin" && base == "release" && source == "wt/session-id"
+        })
+        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+    git_client
+        .expect_committed_diff()
+        .once()
+        .withf(|_, target, source| target == &"1".repeat(40) && source == &"2".repeat(40))
+        .returning(|_, _, _| Box::pin(async { Ok("cumulative change".into()) }));
     let mut review_request_client = MockReviewRequestClient::new();
     review_request_client
         .expect_detect_remote()
@@ -299,6 +330,16 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
             })
         });
     review_request_client
+        .expect_refresh_review_request()
+        .once()
+        .returning(|_, _| {
+            Box::pin(async {
+                let mut summary = open_review_request("#42").summary;
+                summary.target_branch = "release".into();
+                Ok(summary)
+            })
+        });
+    review_request_client
         .expect_sync_review_request_metadata()
         .once()
         .withf(|_, display_id, input| {
@@ -313,16 +354,11 @@ async fn metadata_sync_reconciles_live_remote_metadata_without_persisted_baselin
         })
         .returning(|_, _, _| {
             Box::pin(async {
-                Ok(forge::ReviewRequestSummary {
-                    display_id: "#42".to_string(),
-                    forge_kind: forge::ForgeKind::GitHub,
-                    source_branch: "wt/session-id".to_string(),
-                    state: ReviewRequestState::Open,
-                    status_summary: None,
-                    target_branch: "main".to_string(),
-                    title: "Manual stable title".to_string(),
-                    web_url: "https://github.com/agentty-xyz/agentty/pull/42".to_string(),
-                })
+                let mut summary = open_review_request("#42").summary;
+                summary.target_branch = "release".into();
+                summary.title = "Manual stable title".into();
+
+                Ok(summary)
             })
         });
     let mut run_client = ag_worker::MockRunClient::new();
@@ -522,29 +558,11 @@ async fn review_comment_resolution_reports_reply_and_resolution_failures() {
 async fn manual_push_retries_all_saved_replies_and_resolves_only_fixed() {
     // Arrange
     let db = linked_review_request_db().await;
-    let mut git_client = MockGitClient::new();
+    let mut git_client = push_git_client();
     git_client.expect_repo_url().times(2).returning(|_| {
         Box::pin(async { Ok("https://github.com/agentty-xyz/agentty.git".to_string()) })
     });
-    git_client
-        .expect_in_progress_operation()
-        .once()
-        .returning(|_| Box::pin(async { Ok(None) }));
-    git_client
-        .expect_detect_git_info()
-        .once()
-        .returning(|_| Box::pin(async { Some(session_branch("session-id")) }));
-    git_client
-        .expect_push_current_branch_to_remote_branch_with_outcome()
-        .once()
-        .returning(|_, _| {
-            Box::pin(async {
-                Ok(BranchPushOutcome {
-                    updated: true,
-                    upstream_reference: "origin/wt/session-id".to_string(),
-                })
-            })
-        });
+    expect_successful_push(&mut git_client);
     db.reviews()
         .prepare_session_review_comment_turn(
             "session-id",
@@ -591,6 +609,8 @@ async fn manual_push_retries_all_saved_replies_and_resolves_only_fixed() {
         PublishBranchAction::Push,
         BranchPublishTaskContext {
             app_event_tx: input.app_event_tx,
+            run_client: Arc::new(ag_worker::MockRunClient::new()),
+            session_agent: model_fixture::codex_selection(),
             branch_operation_lock: Arc::new(tokio::sync::Mutex::new(())),
             session: BranchPublishTaskSession {
                 base_branch: "main".to_string(),
@@ -1420,8 +1440,14 @@ fn persisted_resolution_test_input(
 /// Builds one detached-push input for direct metadata-sync tests.
 fn metadata_sync_test_input(
     db: AppRepositories,
-    git_client: MockGitClient,
+    mut git_client: MockGitClient,
 ) -> (PublishedBranchAutoPushInput, Arc<Mutex<SessionTranscript>>) {
+    git_client
+        .expect_fetch_remote_branch_commits()
+        .returning(|_, _, _, _| Box::pin(async { Ok(("1".repeat(40), "2".repeat(40))) }));
+    git_client
+        .expect_committed_diff()
+        .returning(|_, _, _| Box::pin(async { Ok("cumulative change".to_string()) }));
     let transcript = Arc::new(Mutex::new(SessionTranscript::default()));
     let input = PublishedBranchAutoPushInput {
         app_event_tx: mpsc::unbounded_channel().0,
@@ -1499,6 +1525,10 @@ fn review_comment_snapshot(thread_ids: &[&str]) -> forge::ReviewCommentSnapshot 
 async fn linked_review_request_db() -> AppRepositories {
     let db = AppRepositories::in_memory().await.expect("db should open");
     insert_session(&db).await;
+    db.sessions()
+        .update_session_published_upstream_ref("session-id", Some("origin/wt/session-id".into()))
+        .await
+        .expect("published branch");
     link_open_review_request(&db, "#42").await;
 
     db

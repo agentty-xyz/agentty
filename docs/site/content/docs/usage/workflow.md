@@ -394,8 +394,18 @@ GitLab merge request. During a turn or rebase, publishing waits in the session q
    with `p`.
 
 Review-request titles stay stable unless the primary objective changes. Description
-updates preserve existing content and append new details. Agentty checks for concurrent
-remote edits before updating, but an edit after that check can still race.
+creation and updates follow repository PR/MR instructions, referenced skills, and
+templates. Without repository rules, descriptions use `Why?`, `What?`, and `Impact?`
+sections with concise, evidence-backed details comparing the published branch with the
+review request's target branch. Refreshes use the current remote target, including
+retargeted requests and targets absent from a single-branch clone's local refs.
+Uncommitted worktree edits are excluded. Updates integrate new details into the relevant
+sections while preserving existing content, notes, references, checklists, and Markdown
+and HTML code examples. The coauthor setting controls one Agentty attribution footer at
+the end. Descriptions that leave an open code fence or HTML comment around the footer
+are rejected for retry. Generation failures are also reported for retry. Agentty checks
+for concurrent remote edits before updating, but an edit after that check can still
+race.
 
 ### Addressing Review Comments
 

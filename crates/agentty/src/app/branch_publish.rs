@@ -5,11 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use ag_forge as forge;
 use ag_git::{BranchPushOutcome, GitClient};
+use ag_worker::RunClient;
 use tokio::sync::mpsc;
 
 use super::session::{self, unix_timestamp_from_system_time};
 use crate::app::service::SessionUpdateVersionMap;
 use crate::app::{AppEvent, review_request};
+use crate::domain::agent::AgentSelection;
 use crate::domain::session::{PublishBranchAction, ReviewRequest, Session, SessionId, Status};
 use crate::domain::session_message::SessionTranscript;
 use crate::domain::transcript_notice::TranscriptNotice;
@@ -59,8 +61,12 @@ pub(crate) struct BranchPublishTaskContext {
     /// Serializes manual publishing with other branch mutations for the same
     /// session.
     pub(crate) branch_operation_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Scoped worker client for review-request description generation.
+    pub(crate) run_client: Arc<dyn RunClient>,
     /// Immutable session data used throughout the background workflow.
     pub(crate) session: BranchPublishTaskSession,
+    /// Agent/model used by review-request utilities.
+    pub(crate) session_agent: AgentSelection,
     /// Shared transcript projection versions.
     pub(crate) session_update_versions: SessionUpdateVersionMap,
     /// Live transcript receiving durable review-comment progress.
@@ -253,7 +259,9 @@ pub(crate) async fn run_branch_publish_action(
     let BranchPublishTaskContext {
         app_event_tx,
         branch_operation_lock,
+        run_client,
         session: branch_publish_session,
+        session_agent,
         session_update_versions,
         transcript,
     } = branch_publish_context;
@@ -266,7 +274,7 @@ pub(crate) async fn run_branch_publish_action(
         review_request_client: Arc::clone(&review_request_client),
         session_id: branch_publish_session.id.clone(),
         session_update_versions,
-        transcript,
+        transcript: Arc::clone(&transcript),
     };
 
     let result = match publish_branch_action {
@@ -283,10 +291,17 @@ pub(crate) async fn run_branch_publish_action(
         PublishBranchAction::PublishPullRequest => {
             publish_pull_request(
                 &branch_publish_session,
-                db,
                 clock,
-                git_client,
                 review_request_client,
+                &review_request::ReviewRequestGenerator {
+                    db: &db,
+                    folder: &branch_publish_session.folder,
+                    git_client: &git_client,
+                    run_client: run_client.as_ref(),
+                    session_agent,
+                    session_id: &branch_publish_session.id,
+                    transcript: &transcript,
+                },
                 remote_branch_name.as_deref(),
             )
             .await
@@ -426,10 +441,9 @@ pub(crate) async fn push_session_branch(
 /// request.
 async fn publish_pull_request(
     branch_publish_session: &BranchPublishTaskSession,
-    db: db::AppRepositories,
     clock: Arc<dyn Clock>,
-    git_client: Arc<dyn GitClient>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    generator: &review_request::ReviewRequestGenerator<'_>,
     remote_branch_name: Option<&str>,
 ) -> BranchPublishTaskResult {
     if !branch_publish_session.status.allows_review_actions() {
@@ -444,9 +458,9 @@ async fn publish_pull_request(
         str::to_string,
     );
     let push_outcome = push_session_branch_to_remote(
-        &db,
+        generator.db,
         branch_publish_session.folder.clone(),
-        git_client.clone(),
+        Arc::clone(generator.git_client),
         PublishBranchAction::PublishPullRequest,
         &branch_publish_session.id,
         remote_branch_name,
@@ -455,16 +469,15 @@ async fn publish_pull_request(
     .await?;
     let remote = review_request_remote(
         branch_publish_session,
-        git_client.clone(),
+        Arc::clone(generator.git_client),
         review_request_client.as_ref(),
     )
     .await?;
     let review_request = create_or_refresh_review_request(
         branch_publish_session,
         &clock,
-        &db,
-        git_client.clone(),
         review_request_client,
+        generator,
         remote,
         branch_name.clone(),
     )
@@ -681,16 +694,16 @@ async fn review_request_remote(
 async fn create_or_refresh_review_request(
     branch_publish_session: &BranchPublishTaskSession,
     clock: &Arc<dyn Clock>,
-    db: &db::AppRepositories,
-    git_client: Arc<dyn GitClient>,
     review_request_client: Arc<dyn forge::ReviewRequestClient>,
+    generator: &review_request::ReviewRequestGenerator<'_>,
     remote: forge::ForgeRemote,
     source_branch: String,
 ) -> Result<ReviewRequest, BranchPublishTaskFailure> {
+    let mut refresh_metadata = true;
     let review_request_summary =
         if let Some(review_request) = &branch_publish_session.review_request {
             review_request_client
-                .refresh_review_request(remote, review_request.summary.display_id.clone())
+                .refresh_review_request(remote.clone(), review_request.summary.display_id.clone())
                 .await
                 .map_err(|error| {
                     BranchPublishTaskFailure::failed(
@@ -709,7 +722,7 @@ async fn create_or_refresh_review_request(
             })?
         {
             review_request_client
-                .refresh_review_request(remote, existing_review_request.display_id)
+                .refresh_review_request(remote.clone(), existing_review_request.display_id)
                 .await
                 .map_err(|error| {
                     BranchPublishTaskFailure::failed(
@@ -718,12 +731,13 @@ async fn create_or_refresh_review_request(
                     )
                 })?
         } else {
+            refresh_metadata = false;
             let create_input =
-                load_review_request_create_input(branch_publish_session, git_client, source_branch)
+                load_review_request_create_input(branch_publish_session, generator, source_branch)
                     .await?;
 
             review_request_client
-                .create_review_request(remote, create_input)
+                .create_review_request(remote.clone(), create_input)
                 .await
                 .map_err(|error| {
                     BranchPublishTaskFailure::failed(
@@ -732,12 +746,27 @@ async fn create_or_refresh_review_request(
                     )
                 })?
         };
+    let review_request_summary =
+        if review_request_summary.state == forge::ReviewRequestState::Open && refresh_metadata {
+            refresh_review_request_metadata(
+                branch_publish_session,
+                generator,
+                review_request_client.as_ref(),
+                remote,
+                &review_request_summary,
+            )
+            .await?
+        } else {
+            review_request_summary
+        };
     let review_request = ReviewRequest {
         last_refreshed_at: unix_timestamp_from_system_time(clock.now_system_time()),
         summary: review_request_summary,
     };
 
-    db.reviews()
+    generator
+        .db
+        .reviews()
         .update_session_review_request(&branch_publish_session.id, Some(review_request.clone()))
         .await
         .map_err(|error| {
@@ -753,14 +782,14 @@ async fn create_or_refresh_review_request(
     Ok(review_request)
 }
 
-/// Builds one normalized create-request payload from branch-publish session
-/// commit message.
+/// Generates a PR/MR description for initial publication.
 async fn load_review_request_create_input(
     branch_publish_session: &BranchPublishTaskSession,
-    git_client: Arc<dyn GitClient>,
+    generator: &review_request::ReviewRequestGenerator<'_>,
     source_branch: String,
 ) -> Result<forge::CreateReviewRequestInput, BranchPublishTaskFailure> {
-    let commit_message = git_client
+    let commit_message = generator
+        .git_client
         .head_commit_message(branch_publish_session.folder.clone())
         .await
         .map_err(|error| {
@@ -785,12 +814,81 @@ async fn load_review_request_create_input(
             )
         })?;
 
+    let metadata = generator
+        .generate(
+            None,
+            &review_request_commit_message,
+            &branch_publish_session.base_branch,
+        )
+        .await
+        .map_err(|error| {
+            BranchPublishTaskFailure::failed(
+                PublishBranchAction::PublishPullRequest,
+                format!("Failed to generate review-request description: {error}"),
+            )
+        })?;
+
     Ok(forge::CreateReviewRequestInput {
-        body: review_request_commit_message.body,
+        body: Some(metadata.body),
         source_branch,
         target_branch: branch_publish_session.base_branch.clone(),
-        title: review_request_commit_message.title,
+        title: metadata.title,
     })
+}
+
+/// Reconciles a manual refresh against live remote metadata, retaining the
+/// forge's compare-before-write protection against concurrent edits.
+async fn refresh_review_request_metadata(
+    session: &BranchPublishTaskSession,
+    generator: &review_request::ReviewRequestGenerator<'_>,
+    client: &dyn forge::ReviewRequestClient,
+    remote: forge::ForgeRemote,
+    summary: &forge::ReviewRequestSummary,
+) -> Result<forge::ReviewRequestSummary, BranchPublishTaskFailure> {
+    let failure = |error: String| {
+        BranchPublishTaskFailure::failed(PublishBranchAction::PublishPullRequest, error)
+    };
+    let commit_message = generator
+        .git_client
+        .head_commit_message(session.folder.clone())
+        .await
+        .map_err(|error| failure(error.to_string()))?;
+    let commit = commit_message
+        .as_deref()
+        .and_then(review_request::parse_review_request_commit_message)
+        .ok_or_else(|| {
+            failure("Session branch has no commit message for review-request refresh.".to_string())
+        })?;
+    let current = client
+        .review_request_metadata(remote.clone(), summary.display_id.clone())
+        .await
+        .map_err(|error| failure(error.detail_message()))?;
+    let desired = generator
+        .generate(Some(&current), &commit, &summary.target_branch)
+        .await
+        .map_err(|error| {
+            failure(format!(
+                "Failed to generate review-request description: {error}"
+            ))
+        })?;
+
+    client
+        .sync_review_request_metadata(
+            remote,
+            summary.display_id.clone(),
+            forge::UpdateReviewRequestInput {
+                body: Some(forge::ReviewRequestMetadataFieldUpdate {
+                    current: current.body,
+                    desired: desired.body,
+                }),
+                title: Some(forge::ReviewRequestMetadataFieldUpdate {
+                    current: current.title,
+                    desired: desired.title,
+                }),
+            },
+        )
+        .await
+        .map_err(|error| failure(error.detail_message()))
 }
 
 /// Returns one forge-native review-request creation helper for a pushed

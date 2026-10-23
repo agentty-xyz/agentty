@@ -13,7 +13,7 @@ use testty::region::Region;
 
 use super::fixture::{
     E2eResult, run_git, seed_project_settings, seed_rebase_transcript_session_with_delay,
-    seed_running_stop_session,
+    seed_review_description_provider, seed_running_stop_session,
 };
 use crate::common;
 use crate::common::{BuilderEnv, FeatureTest, ReleaseGate, SessionSeed};
@@ -83,10 +83,14 @@ const QUEUED_REVIEW_FOLLOW_UP_ANSWER: &str = "Queued review follow-up completed 
 
 /// Answer emitted for one-shot utility prompts in the mixed FIFO scenario.
 ///
-/// Title generation, commit-message generation, and review-request metadata
-/// run as detached one-shot commands alongside session turns, so they need a
-/// response that no scenario assertion looks for.
+/// Title and commit-message generation run as detached one-shot commands
+/// alongside session turns, so they need a response that no scenario
+/// assertion looks for.
 const QUEUED_FIFO_UTILITY_ANSWER: &str = "Queued FIFO helper response";
+
+/// Structured metadata result for Claude publication utilities, distinct
+/// from the chat answers used to prove queue order.
+const QUEUED_REVIEW_METADATA_RESULT: &str = r###"{"type":"result","subtype":"success","result":"{\"title\":\"Queued review request\",\"description\":\"## Why?\\nReviewers need context.\\n\\n## What?\\nPublish queued session changes.\\n\\n## Impact?\\nChanges are ready for review.\",\"is_title_change_significant\":false}","usage":{"input_tokens":5,"output_tokens":9}}"###;
 
 /// Focused-review result emitted after a turn completes in an inactive project.
 const DEFERRED_PROJECT_REVIEW_TEXT: &str = "Deferred project completion received focused review.";
@@ -262,6 +266,7 @@ exec '{}' "$@"
 async fn install_queued_review_request_stubs(
     env: &BuilderEnv,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    seed_review_description_provider(env)?;
     run_git(
         &env.workdir,
         &[
@@ -277,7 +282,14 @@ async fn install_queued_review_request_stubs(
         r#"#!/bin/sh
 if [ "$1" = "update" ]; then exit 0; fi
 if [ "$1" = "--version" ]; then printf 'claude 0.0.0-test\n'; exit 0; fi
-cat > /dev/null 2>&1
+input=$(cat)
+case "$input" in
+  *"Reconcile the current review-request title and description"*)
+    printf '%s\n' '{{"type":"system","subtype":"init"}}'
+    printf '%s\n' '{QUEUED_REVIEW_METADATA_RESULT}'
+    exit 0
+    ;;
+esac
 sleep 8
 printf '%s\n' '{{"type":"system","subtype":"init"}}'
 printf '%s\n' '{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{QUEUED_REVIEW_REQUEST_TURN_ANSWER}"}}]}}}}'
@@ -295,6 +307,18 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"{{\"answer\":\"{Q
     let git_path = env.stub_bin.join("git");
     let git_script = format!(
         r#"#!/bin/sh
+if [ "$1" = "ls-remote" ] && [ "$2" = "--refs" ]; then
+  published_hash=$('{}' rev-parse HEAD)
+  for reference in "$@"; do
+    case "$reference" in
+      refs/heads/*) printf '%s\t%s\n' "$published_hash" "$reference" ;;
+    esac
+  done
+  exit 0
+fi
+if [ "$1" = "fetch" ] && [ "$2" = "--no-tags" ]; then
+  exit 0
+fi
 if [ "$1" = "push" ]; then
   sleep 2
   case " $* " in
@@ -312,6 +336,7 @@ if [ "$1" = "push" ]; then
 fi
 exec '{}' "$@"
 "#,
+        real_git.display(),
         real_git.display()
     );
     std::fs::write(&git_path, git_script)?;
@@ -400,6 +425,10 @@ emit_answer() {{
 }}
 input=$(cat)
 case "$input" in
+  *"Reconcile the current review-request title and description"*)
+    printf '%s\n' '{{"type":"system","subtype":"init"}}'
+    printf '%s\n' '{QUEUED_REVIEW_METADATA_RESULT}'
+    ;;
   *"For this one-shot utility prompt"*)
     emit_answer '{QUEUED_FIFO_UTILITY_ANSWER}'
     ;;

@@ -1,6 +1,7 @@
 //! Session task execution helpers for process running, output capture, and
 //! status persistence.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -619,8 +620,12 @@ impl SessionTaskService {
         run_client: &dyn RunClient,
         session_agent: AgentSelection,
     ) -> Result<forge::ReviewRequestMetadata, SessionError> {
+        let current_metadata = forge::ReviewRequestMetadata {
+            body: crate::app::review_request::strip_attribution(&current_metadata.body),
+            title: current_metadata.title.clone(),
+        };
         let prompt = Self::review_request_metadata_prompt(
-            current_metadata,
+            &current_metadata,
             generated_description,
             generated_title,
         );
@@ -628,7 +633,7 @@ impl SessionTaskService {
             .submit(ag_contracts::OneShotRequest {
                 activity_tx: None,
                 execution_policy: ag_contracts::ExecutionPolicy::default(),
-                provider_call_budget: None,
+                provider_call_budget: Some(ag_contracts::ProviderCallBudget::new(8)),
                 harness: (session_agent.kind()).to_string(),
                 child_pid: None,
                 folder: folder.to_path_buf(),
@@ -659,12 +664,16 @@ impl SessionTaskService {
         } else {
             current_metadata.title.clone()
         };
-        Self::validate_preserved_review_content(&current_metadata.body, &evaluation.description)?;
+        let description =
+            crate::app::review_request::normalize_attribution(&evaluation.description, false)?;
+        if description.trim().is_empty() {
+            return Err(SessionError::Workflow(
+                "Review-request metadata evaluation returned an empty description".to_string(),
+            ));
+        }
+        Self::validate_preserved_review_content(&current_metadata.body, &description)?;
         Ok(forge::ReviewRequestMetadata {
-            body: super::review_description::preserve_description(
-                &current_metadata.body,
-                &evaluation.description,
-            ),
+            body: description,
             title,
         })
     }
@@ -855,12 +864,12 @@ impl SessionTaskService {
         generated_title: &str,
     ) -> String {
         let current_metadata_json = serde_json::json!({
-            "description": current_metadata.body,
+            "description": crate::app::review_request::strip_attribution(&current_metadata.body),
             "title": current_metadata.title,
         })
         .to_string();
         let generated_metadata_json = serde_json::json!({
-            "description": generated_description,
+            "description": crate::app::review_request::strip_attribution(generated_description),
             "title": generated_title,
         })
         .to_string();
@@ -875,8 +884,10 @@ impl SessionTaskService {
         template.render().unwrap_or_default()
     }
 
-    /// Rejects a reconciled description that drops an existing substantive
-    /// line, URL, or numeric issue reference.
+    /// Rejects changes to existing nonblank lines, code blocks, or inline-code
+    /// spans, including delimiters, significant whitespace, and
+    /// code/comment context. Intact blocks and spans may move between
+    /// sections.
     fn validate_preserved_review_content(
         current_description: &str,
         desired_description: &str,
@@ -890,15 +901,20 @@ impl SessionTaskService {
             )));
         }
 
-        if let Some(content) = current_description
-            .lines()
-            .map(str::trim)
-            .filter(|line| Self::is_substantive_review_line(line))
+        let mut desired_lines = HashMap::<_, usize>::new();
+        for line in crate::app::review_request::markdown_lines(desired_description) {
+            *desired_lines.entry(line).or_default() += 1;
+        }
+        if let Some((content, _)) = crate::app::review_request::markdown_lines(current_description)
+            .filter(|(line, _)| !line.trim().is_empty())
             .find(|line| {
-                !desired_description
-                    .lines()
-                    .map(str::trim)
-                    .any(|desired_line| desired_line == *line)
+                if let Some(count) = desired_lines.get_mut(line).filter(|count| **count > 0) {
+                    *count -= 1;
+
+                    return false;
+                }
+
+                true
             })
         {
             return Err(SessionError::Workflow(format!(
@@ -906,15 +922,42 @@ impl SessionTaskService {
             )));
         }
 
+        for (kind, mut desired_spans, current_spans) in [
+            (
+                "code block",
+                Self::review_code_blocks(desired_description),
+                Self::review_code_blocks(current_description),
+            ),
+            (
+                "inline-code span",
+                crate::app::review_request::inline_code_spans(desired_description),
+                crate::app::review_request::inline_code_spans(current_description),
+            ),
+        ] {
+            for span in current_spans {
+                if let Some(index) = desired_spans
+                    .iter()
+                    .position(|candidate| *candidate == span)
+                {
+                    desired_spans.remove(index);
+                } else {
+                    return Err(SessionError::Workflow(format!(
+                        "Review-request metadata evaluation changed an existing Markdown {kind}"
+                    )));
+                }
+            }
+        }
+
         Ok(())
     }
 
-    /// Returns whether a review-description line contains text or a non-ASCII
-    /// symbol rather than only Markdown punctuation and whitespace.
-    fn is_substantive_review_line(line: &str) -> bool {
-        line.chars().any(|character| {
-            character.is_alphanumeric() || (!character.is_ascii() && !character.is_whitespace())
-        })
+    /// Retains the original Markdown source, rather than rendered code text,
+    /// so fences, internal blank lines, and indentation remain significant.
+    fn review_code_blocks(description: &str) -> Vec<&str> {
+        crate::app::review_request::code_block_ranges(description)
+            .into_iter()
+            .map(|range| description[range].trim_end_matches('\n'))
+            .collect()
     }
 
     /// Extracts URLs and numeric `#123` issue references from one description.
@@ -1083,6 +1126,23 @@ impl SessionTaskService {
         }
 
         serde_json::json!({"user_requests": selected, "omitted_requests": requests.len().saturating_sub(MAX_REQUESTS)}).to_string()
+    }
+
+    /// Bounds cumulative change evidence and user intent independently of
+    /// commit formatting. Requests provide intent, never proof of completed
+    /// work.
+    pub(crate) fn review_request_evidence(
+        diff: &str,
+        commit_body: &str,
+        transcript: &Mutex<SessionTranscript>,
+    ) -> String {
+        serde_json::json!({
+            "cumulative_diff": super::commit_context::diff(diff),
+            "commit_summary": super::commit_context::excerpt(
+                &crate::app::review_request::strip_attribution(commit_body), 3_000),
+            "user_intent": Self::commit_user_requests(transcript),
+        })
+        .to_string()
     }
 
     /// Renders the session commit-message prompt, submits it to the injected
