@@ -102,9 +102,10 @@ impl<'a> ReviewCommentPage<'a> {
         is_focused: bool,
     ) {
         let item_count = review_comment_item_count(self.comment_snapshot);
-        let title = format!(
-            " Comments ({item_count}) · Selected {} ",
-            self.selected_comments.len()
+        let title = comment_list_title(
+            item_count,
+            self.selected_comments.len(),
+            usize::from(area.width.saturating_sub(2)),
         );
         let (items, selection_rows) = if rows.is_empty() {
             (
@@ -185,7 +186,8 @@ pub(crate) fn review_comment_view_max_scroll_offset(
     selected_comment_index: usize,
     area: Rect,
 ) -> u16 {
-    let detail_area = diff_util::diff_page_areas(area).diff_area;
+    let content = render_caches.diff_layout.content(diff);
+    let detail_area = diff_util::diff_page_areas(area, content.file_list_width).diff_area;
     let viewport_height = detail_area.height.saturating_sub(2);
     let content_width = usize::from(detail_area.width.saturating_sub(2).max(1));
     let rows =
@@ -244,6 +246,19 @@ fn review_comment_selection_marker(
     } else {
         Span::styled("[ ] ", Style::default().fg(style::palette::text_muted()))
     }
+}
+
+/// Keeps the selected count visible when the sidebar needs a shorter title.
+fn comment_list_title(item_count: usize, selected_count: usize, width: usize) -> String {
+    let title = format!(" Comments ({item_count}) · Selected {selected_count} ");
+    if title.chars().count() <= width {
+        return title;
+    }
+    if selected_count == 0 {
+        return format!(" Comments ({item_count}) ");
+    }
+
+    format!("Selected {selected_count}")
 }
 
 /// Builds group headings and selectable entry rows, returning each entry's

@@ -487,7 +487,7 @@ async fn test_compact_diff_tree() -> E2eResult {
             |frame, _report| {
                 Box::pin(async move {
                     let full = Region::full(frame.cols(), frame.rows());
-                    let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
+                    let file_tree = diff_file_tree_region(frame);
 
                     assertion::assert_text_in_region(frame, "app/session/", &full);
                     assertion::assert_text_in_region(frame, "handler.rs", &full);
@@ -504,7 +504,7 @@ async fn test_compact_diff_tree() -> E2eResult {
                         .next()
                         .expect("compact tree should render its nested path");
                     assert_eq!(root_match.rect.col, 2);
-                    assert_eq!(nested_match.rect.col, 4);
+                    assert_eq!(nested_match.rect.col, 6);
                 })
             },
         )
@@ -661,74 +661,89 @@ async fn test_slow_diff_loading_remains_cancelable() -> E2eResult {
 /// `l` moves focus into changed-line navigation without resetting the viewport.
 #[tokio::test]
 async fn test_diff_changed_line_navigation() -> E2eResult {
-    // Arrange
-    FeatureTest::new("diff_changed_line_navigation")
-        .with_git()
-        .setup(|env| Box::pin(async move { seed_scrollable_diff_session(env).await }))
-        .run(
-            |scenario| {
-                // Act
-                let scenario = scenario
-                    .compose(&common::wait_for_agentty_startup())
-                    .compose(&common::switch_to_tab("Sessions"))
-                    .compose(&common::open_selected_session_view())
-                    .press_key("d")
-                    .wait_for_text("main.rs", 5000)
-                    .press_key("j")
-                    .wait_for_stable_frame(200, 3000);
-                let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
-                scenario
-                    .wait_for_text("changed line 70", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .capture_labeled(
-                        "diff_file_scroll",
-                        "Selected file scrolled without leaving Files focus",
-                    )
-                    .press_key("l")
-                    .wait_for_text("Esc/Left: files", 5000)
-                    .wait_for_text("changed line 70", 5000)
-                    .wait_for_stable_frame(300, 5000)
-                    .viewing_pause_ms(1500)
-                    .capture_labeled(
-                        "diff_changed_line_navigation",
-                        "Changed-line cursor entered at the retained file position",
-                    )
-            },
-            |frame, report| {
-                Box::pin(async move {
-                    // Assert
-                    let file_focus_frame = common::frame_from_capture(&report.captures[0]);
-                    let file_focus_full =
-                        Region::full(file_focus_frame.cols(), file_focus_frame.rows());
-                    let full = Region::full(frame.cols(), frame.rows());
+    for (cols, rows) in [(80, 24), (200, 40)] {
+        // Arrange
+        FeatureTest::new("diff_changed_line_navigation")
+            .with_git()
+            .with_terminal_size(cols, rows)
+            .setup(|env| Box::pin(async move { seed_scrollable_diff_session(env).await }))
+            .run(
+                |scenario| {
+                    // Act
+                    let scenario = scenario
+                        .compose(&common::wait_for_agentty_startup())
+                        .compose(&common::switch_to_tab("Sessions"))
+                        .compose(&common::open_selected_session_view())
+                        .press_key("d")
+                        .wait_for_text("main.rs", 5000)
+                        .press_key("j")
+                        .wait_for_stable_frame(200, 3000);
+                    let scenario = (0..70).fold(scenario, |scenario, _| scenario.press_key("Down"));
+                    scenario
+                        .wait_for_text("changed line 70", 5000)
+                        .wait_for_stable_frame(300, 5000)
+                        .capture_labeled(
+                            "diff_file_scroll",
+                            "Selected file scrolled without leaving Files focus",
+                        )
+                        .press_key("l")
+                        .wait_for_text("Esc/Left: files", 5000)
+                        .wait_for_text("changed line 70", 5000)
+                        .wait_for_stable_frame(300, 5000)
+                        .viewing_pause_ms(1500)
+                        .capture_labeled(
+                            "diff_changed_line_navigation",
+                            "Changed-line cursor entered at the retained file position",
+                        )
+                },
+                |frame, report| {
+                    Box::pin(async move {
+                        // Assert
+                        let file_focus_frame = common::frame_from_capture(&report.captures[0]);
+                        let file_focus_full =
+                            Region::full(file_focus_frame.cols(), file_focus_frame.rows());
+                        let full = Region::full(frame.cols(), frame.rows());
 
-                    assertion::assert_text_in_region(
-                        &file_focus_frame,
-                        "changed line 70",
-                        &file_focus_full,
-                    );
-                    assertion::assert_text_in_region(
-                        &file_focus_frame,
-                        "j/k: select file",
-                        &file_focus_full,
-                    );
-                    assertion::assert_text_in_region(frame, "changed line 70", &full);
-                    assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
-                    assertion::assert_text_in_region(frame, "j/k: select row", &full);
-                    let file_row = frame
-                        .find_text("src/")
-                        .first()
-                        .expect("selected file's parent folder should remain visible")
-                        .rect
-                        .row
-                        .saturating_add(1);
-                    let aligned_changed_line = file_focus_frame.row_text(file_row);
-                    assert!(aligned_changed_line.contains("changed line"));
-                    assert_eq!(frame.row_text(file_row), aligned_changed_line);
-                })
-            },
-        )
-        .await?;
+                        assertion::assert_text_in_region(
+                            &file_focus_frame,
+                            "changed line 70",
+                            &file_focus_full,
+                        );
+                        assertion::assert_text_in_region(
+                            &file_focus_frame,
+                            "j/k: select file",
+                            &file_focus_full,
+                        );
+                        assertion::assert_text_in_region(frame, "changed line 70", &full);
+                        let file_tree = diff_file_tree_region(frame);
+                        assert_eq!(
+                            file_tree.width, 21,
+                            "sidebar should fit the complete file row"
+                        );
+                        assert_eq!(file_tree, diff_file_tree_region(&file_focus_frame));
+                        assertion::assert_not_visible(frame, "Modified  +80 / -0");
+                        assertion::assert_not_visible(&file_focus_frame, "Modified  +80 / -0");
+                        assertion::assert_text_in_region(
+                            frame,
+                            "M └ main.rs",
+                            &diff_file_tree_region(frame),
+                        );
+                        assertion::assert_text_in_region(frame, "Esc/Left: files", &full);
+                        assertion::assert_text_in_region(frame, "j/k: select row", &full);
+                        let source_row = frame
+                            .find_text("changed line 70")
+                            .first()
+                            .expect("scrolled source should remain visible")
+                            .rect
+                            .row;
+                        let aligned_changed_line = file_focus_frame.row_text(source_row);
+                        assert!(aligned_changed_line.contains("changed line"));
+                        assert_eq!(frame.row_text(source_row), aligned_changed_line);
+                    })
+                },
+            )
+            .await?;
+    }
 
     Ok(())
 }
@@ -1245,7 +1260,7 @@ async fn diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
 /// Verifies the compact Files panel keeps both per-row totals and the expected
 /// left-aligned hierarchy.
 fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
-    let file_tree = Region::new(0, 0, frame.cols() / 5, frame.rows());
+    let file_tree = diff_file_tree_region(frame);
 
     assertion::assert_text_in_region(frame, "src/", &file_tree);
     assertion::assert_text_in_region(frame, "mai", &file_tree);
@@ -1254,7 +1269,7 @@ fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
     let root_match = &root_matches[0];
     let file_match = &file_matches[0];
     assert_eq!(root_match.rect.col, 2);
-    assert_eq!(file_match.rect.col, 4);
+    assert_eq!(file_match.rect.col, 6);
 
     let text = frame.text_in_region(&file_tree);
     assert_eq!(
@@ -1262,6 +1277,17 @@ fn assert_diff_file_tree_change_totals(frame: &TerminalFrame) {
         2,
         "expected change totals on both file-tree rows:\n{text}"
     );
+}
+
+/// Finds the painted Files panel, including its left margin and right border.
+fn diff_file_tree_region(frame: &TerminalFrame) -> Region {
+    let headings = frame.find_text("Files");
+    assert!(!headings.is_empty(), "Files heading");
+    let border_column =
+        (0..frame.cols()).find(|column| frame.cell_text(headings[0].rect.row, *column) == "┐");
+    assert!(border_column.is_some(), "Files right border");
+
+    Region::new(0, 0, border_column.unwrap_or_default() + 1, frame.rows())
 }
 
 /// Verify binary-only changes retain the chat-focus diff hint and open in the
@@ -1299,6 +1325,11 @@ async fn binary_diff_preview_opens_from_prompt_chat_focus() -> E2eResult {
                     let full = Region::full(frame.cols(), frame.rows());
                     assertion::assert_text_in_region(frame, "asset.bin", &full);
                     assertion::assert_text_in_region(frame, "Binary files", &full);
+                    assertion::assert_text_in_region(
+                        frame,
+                        "M asset.bin",
+                        &diff_file_tree_region(frame),
+                    );
                 })
             },
         )

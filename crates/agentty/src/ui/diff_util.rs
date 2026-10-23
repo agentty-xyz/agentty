@@ -313,8 +313,9 @@ pub fn wrap_diff_content(content: &str, max_width: usize) -> Vec<&str> {
 }
 
 /// Returns the shared diff-page areas with top and side margins, a help footer
-/// flush with the page bottom, and the file-list split used by the diff view.
-pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
+/// flush with the page bottom. The preferred file-list width includes borders
+/// and is capped at 30% of available width and 60 columns.
+pub fn diff_page_areas(terminal_area: Rect, preferred_file_list_width: u16) -> DiffPageAreas {
     let terminal_area = Rect {
         y: terminal_area
             .y
@@ -328,7 +329,12 @@ pub fn diff_page_areas(terminal_area: Rect) -> DiffPageAreas {
         .split(terminal_area);
     let content_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .constraints([
+            Constraint::Length(
+                preferred_file_list_width.min(page_chunks[0].width.min(200) * 3 / 10),
+            ),
+            Constraint::Min(0),
+        ])
         .split(page_chunks[0]);
 
     DiffPageAreas {
@@ -445,9 +451,13 @@ pub fn rendered_diff_line_count(parsed_lines: &[DiffLine<'_>], layout: DiffRende
 ///
 /// The calculation mirrors diff-page layout, wrapping, and scrollbar width so
 /// runtime key handling can clamp scroll state to what the user can actually
-/// see.
-pub fn diff_view_max_scroll_offset(parsed_lines: &[DiffLine<'_>], terminal_area: Rect) -> u16 {
-    let diff_area = diff_page_areas(terminal_area).diff_area;
+/// see. The preferred sidebar width must match the painted file tree.
+pub fn diff_view_max_scroll_offset(
+    parsed_lines: &[DiffLine<'_>],
+    terminal_area: Rect,
+    preferred_file_list_width: u16,
+) -> u16 {
+    let diff_area = diff_page_areas(terminal_area, preferred_file_list_width).diff_area;
     let mut layout = diff_render_layout(parsed_lines, diff_area, false);
     if layout.viewport_height == 0 {
         return 0;

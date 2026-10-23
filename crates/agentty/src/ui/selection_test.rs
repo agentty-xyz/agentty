@@ -189,36 +189,42 @@ fn project_and_session_highlights_move_without_shifting_columns() {
 }
 
 #[test]
-fn file_explorer_highlight_only_appears_when_focused_and_preserves_suffixes() {
+fn file_explorer_highlight_only_appears_when_focused_and_shows_fitting_totals() {
     for theme in ColorTheme::ALL {
-        for is_focused in [false, true] {
-            // Arrange
-            let _theme_scope = style::scoped_active_theme(theme);
-            let mut terminal =
-                ratatui::Terminal::new(TestBackend::new(24, 10)).expect("create terminal");
-            let explorer = FileExplorer::from_cached_lines(
-                Arc::from([Line::from(vec![
-                    Span::raw("long-file-name.rs"),
-                    Span::raw(" +2 -1"),
-                ])]),
-                1,
-            )
-            .focused(is_focused);
+        for width in [24, 32] {
+            for is_focused in [false, true] {
+                // Arrange
+                let _theme_scope = style::scoped_active_theme(theme);
+                let mut terminal =
+                    ratatui::Terminal::new(TestBackend::new(width, 10)).expect("create terminal");
+                let explorer = FileExplorer::from_cached_lines(
+                    Arc::from([Line::from(vec![
+                        Span::raw("long-file-name.rs"),
+                        Span::raw(" +2 -1"),
+                    ])]),
+                    1,
+                )
+                .focused(is_focused);
 
-            // Act
-            terminal
-                .draw(|frame| explorer.render(frame, frame.area()))
-                .expect("draw explorer");
+                // Act
+                terminal
+                    .draw(|frame| explorer.render(frame, frame.area()))
+                    .expect("draw explorer");
 
-            // Assert
-            let buffer = terminal.backend().buffer();
-            assert_eq!(selector_count(buffer), 0);
-            text_position(buffer, "+2 -1");
-            if is_focused {
-                assert_selection(buffer, "long-file");
-            } else {
-                let position = text_position(buffer, "long-file");
-                assert_ne!(buffer[position].bg, style::palette::surface_selection());
+                // Assert
+                let buffer = terminal.backend().buffer();
+                assert_eq!(selector_count(buffer), 0);
+                if width == 32 {
+                    text_position(buffer, "+2 -1");
+                } else {
+                    assert!(!buffer.content().iter().any(|cell| cell.symbol() == "+"));
+                }
+                if is_focused {
+                    assert_selection(buffer, "long-file");
+                } else {
+                    let position = text_position(buffer, "long-file");
+                    assert_ne!(buffer[position].bg, style::palette::surface_selection());
+                }
             }
         }
     }

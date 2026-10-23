@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use ratatui::buffer::Cell;
@@ -6,9 +7,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::{
-    COMMENT_INPUT_MAX_VISIBLE_LINES, DIFF_COMMENT_CACHE_ENTRY_LIMIT, DiffLayoutCache, DiffPage,
-    DiffPageInput, comment_lookup_area, diff_changed_line_layout, diff_line_comment_insertions,
-    diff_view_max_scroll_offset, preview_path_for_selection, wrapped_comment_input,
+    COMMENT_INPUT_MAX_VISIBLE_LINES, DIFF_COMMENT_CACHE_ENTRY_LIMIT, DiffChangeTotals,
+    DiffContentSnapshot, DiffLayoutCache, DiffPage, DiffPageInput, comment_lookup_area,
+    diff_changed_line_layout, diff_line_comment_insertions, diff_view_max_scroll_offset,
+    preview_path_for_selection, wrapped_comment_input,
 };
 use crate::domain::session::Session;
 use crate::domain::theme::ColorTheme;
@@ -389,7 +391,10 @@ fn test_diff_comment_lookup_renders_matches_and_constrained_footer() {
             height == 14 && has_match && editing
         );
         if height == 14 && has_match && editing {
-            let areas = diff_util::diff_page_areas(Rect::new(0, 0, 100, height));
+            let areas = diff_util::diff_page_areas(
+                Rect::new(0, 0, 100, height),
+                diff_layout_cache.content(diff).file_list_width,
+            );
             assert_comment_lookup_position(terminal.backend().buffer(), areas.diff_area);
         }
     }
@@ -997,9 +1002,9 @@ fn test_diff_content_snapshot_appends_change_totals_to_each_file_tree_line() {
         [
             "src/ +2/-1",
             "├ ui/ +1/-0",
-            "│ └ diff.rs +1/-0",
-            "└ main.rs +1/-1",
-            "README.md +1/-0",
+            "M │ └ diff.rs +1/-0",
+            "M └ main.rs +1/-1",
+            "M README.md +1/-0",
         ]
     );
     assert_eq!(lines[0].spans[2].style.fg, Some(style::palette::success()));
@@ -1008,6 +1013,40 @@ fn test_diff_content_snapshot_appends_change_totals_to_each_file_tree_line() {
         Some(style::palette::text_muted())
     );
     assert_eq!(lines[0].spans[4].style.fg, Some(style::palette::danger()));
+}
+
+#[test]
+fn sidebar_fits_complete_rows_and_aligns_totals() {
+    // Arrange
+    let session = session_fixture();
+    let diff = concat!(
+        "diff --git a/a.rs b/a.rs\n@@ -0,0 +1 @@\n+a\n",
+        "diff --git a/longer_file.rs b/longer_file.rs\n@@ -0,0 +1 @@\n+longer\n",
+    );
+    let cache = DiffLayoutCache::default();
+    let content = cache.content(diff);
+    let mut page = new_diff_page(&session, diff, 0, 0);
+    let area = Rect::new(0, 0, 120, 20);
+    let sidebar = diff_util::diff_page_areas(area, content.file_list_width).file_list_area;
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 20)).expect("terminal");
+
+    // Act
+    terminal
+        .draw(|frame| page.render(frame, area))
+        .expect("render");
+
+    // Assert
+    assert_eq!(content.file_list_width, 24);
+    assert_eq!(sidebar.width, 24);
+    let buffer = terminal.backend().buffer();
+    assert_eq!(buffer[(sidebar.right() - 1, sidebar.y)].symbol(), "┐");
+    assert_eq!(buffer[(sidebar.right(), sidebar.y)].symbol(), "┌");
+    for row in [sidebar.y + 1, sidebar.y + 2] {
+        assert_eq!(buffer[(sidebar.right() - 2, row)].symbol(), "0");
+        assert_eq!(buffer[(sidebar.right() - 6, row)].symbol(), "+");
+    }
+    assert!(buffer_text(buffer).contains("M longer_file.rs +1/-0"));
 }
 
 #[test]
@@ -1023,6 +1062,139 @@ fn test_diff_content_snapshot_identifies_files() {
     // Assert
     assert!(!folder_is_file);
     assert!(file_is_file);
+}
+
+#[test]
+fn file_metadata_uses_headers_for_status_and_binary_badges() {
+    // Arrange
+    let cases = [
+        ("new file mode 100644\n", "Added", "A ", false),
+        ("--- /dev/null\n", "Added", "A ", false),
+        ("deleted file mode 100644\n", "Deleted", "D ", false),
+        ("+++ /dev/null\n", "Deleted", "D ", false),
+        (
+            "old mode 100644\nnew mode 100755\n",
+            "Modified",
+            "M ",
+            false,
+        ),
+        (
+            "Binary files a/file.rs and b/file.rs differ\n",
+            "Modified",
+            "M ",
+            true,
+        ),
+        ("GIT binary patch\n", "Modified", "M ", true),
+        (
+            "@@ -1 +1 @@\n-new file mode 100644\n+deleted file mode 100644\n+diff --git a/fake.rs \
+             b/fake.rs\n",
+            "Modified",
+            "M ",
+            false,
+        ),
+    ];
+    for (metadata, status, badge, binary) in cases {
+        let cache = DiffLayoutCache::default();
+        let diff = format!("diff --git a/file.rs b/file.rs\n{metadata}");
+
+        // Act
+        let content = cache.content(&diff);
+        let parsed = parse_diff_lines(&diff);
+        let details = DiffContentSnapshot::file_details(&parsed);
+        let rows = content.file_list_lines();
+
+        // Assert
+        assert_eq!(details["file.rs"].status, status);
+        assert_eq!(details["file.rs"].binary, binary);
+        assert_eq!(rows[0].spans[0].content, badge);
+        assert_eq!(content.item_count(), 1);
+        assert_eq!(rows[0].to_string().contains("Binary"), binary);
+    }
+
+    // Arrange
+    let cache = DiffLayoutCache::default();
+
+    // Act
+    let content = cache.content(concat!(
+        "diff --git a/old.rs b/new.rs\n",
+        "similarity index 100%\nrename from old.rs\nrename to new.rs\n",
+    ));
+
+    // Assert
+    assert_eq!(content.file_list_lines()[0].to_string(), "R new.rs +0/-0");
+}
+
+#[test]
+fn selected_patch_and_preview_use_full_panel_when_scrolled() {
+    // Arrange
+    let session = session_fixture();
+    let mut diff = "diff --git a/old.md b/new.md\n@@ -1 +1,80 @@\n-before\n".to_string();
+    let mut preview_content = String::new();
+    for index in 0..80 {
+        writeln!(diff, "+changed {index}").expect("write diff");
+        writeln!(preview_content, "- changed {index}").expect("write preview");
+    }
+    let area = Rect::new(0, 0, 100, 18);
+    let panel = diff_util::diff_page_areas(
+        area,
+        test_diff_layout_cache().content(&diff).file_list_width,
+    )
+    .diff_area;
+    for preview in [
+        DiffPreview::default(),
+        DiffPreview::Ready {
+            content: preview_content,
+            path: "new.md".to_string(),
+            request_id: 1,
+        },
+    ] {
+        let mut page = new_diff_page_with_preview(&session, &diff, u16::MAX, 0, &preview);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 18)).expect("terminal");
+
+        // Act
+        terminal
+            .draw(|frame| Page::render(&mut page, frame, area))
+            .expect("render");
+
+        // Assert
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(panel.x, panel.y)].symbol(), "┌");
+        assert_eq!(buffer[(panel.x, panel.bottom() - 1)].symbol(), "└");
+        let text = buffer_text(buffer);
+        assert!(text.contains("changed 79"));
+        assert!(!text.contains("changed 0"));
+    }
+}
+
+#[test]
+fn file_tree_keeps_large_exact_totals_and_tolerates_unknown_headers() {
+    // Arrange
+    let parsed = parse_diff_lines("diff --git a/main.rs b/main.rs\n");
+    let (mut lines, items) = FileExplorer::file_tree(&parsed);
+    let details = DiffContentSnapshot::file_details(&parsed);
+    let totals = [DiffChangeTotals {
+        added_lines: usize::MAX,
+        removed_lines: usize::MAX,
+    }];
+    let cache = DiffLayoutCache::default();
+
+    // Act
+    DiffContentSnapshot::append_file_details(&mut lines, &items, &details);
+    DiffContentSnapshot::append_file_list_change_totals(&mut lines, &totals, &items, &details);
+    let unknown = cache.content("orphan metadata\ndiff --git old/path new/path\n");
+
+    // Assert
+    assert_eq!(
+        lines[0].to_string(),
+        format!("M main.rs +{}/-{}", usize::MAX, usize::MAX)
+    );
+    assert_eq!(unknown.item_count(), 1);
+    assert!(
+        unknown.file_list_lines()[0]
+            .to_string()
+            .contains("old/path new/path")
+    );
 }
 
 #[test]

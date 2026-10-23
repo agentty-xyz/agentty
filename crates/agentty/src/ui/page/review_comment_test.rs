@@ -2,13 +2,14 @@ use ag_forge::{
     ReviewComment, ReviewCommentAnchorSide, ReviewCommentSnapshot, ReviewCommentThread,
 };
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 
 use super::{
     ReviewCommentPage, ReviewCommentPageInput, ReviewCommentRenderCaches, code_context_line,
-    code_context_lines, comment_detail_lines, comment_list_items, diff_line_matches_anchor,
-    review_comment_item_count, review_comment_selected_is_actionable,
+    code_context_lines, comment_detail_lines, comment_list_items, comment_list_title,
+    diff_line_matches_anchor, review_comment_item_count, review_comment_selected_is_actionable,
     review_comment_view_max_scroll_offset,
 };
 use crate::domain::theme::ColorTheme;
@@ -133,7 +134,10 @@ fn render_review_comment_page_with_selections(
                 selected_comment_index,
                 session: &session,
             });
-            let areas = diff_util::diff_page_areas(frame.area());
+            let areas = diff_util::diff_page_areas(
+                frame.area(),
+                diff_layout_cache.content(SAMPLE_DIFF).file_list_width,
+            );
             let rows =
                 snapshot.map_or_default(review_comment_selection::grouped_review_comment_rows);
             page.render_comment_list(frame, areas.file_list_area, &rows, true);
@@ -191,12 +195,21 @@ fn test_render_shows_comment_selector_and_general_detail() {
     // Act
     let buffer = render_review_comment_page(Some(&snapshot), None, false, 1, 0, (140, 24));
     let text = buffer_text(&buffer);
+    let sidebar_width = crate::ui::page::diff::DiffLayoutCache::default()
+        .content(SAMPLE_DIFF)
+        .file_list_width;
+    let selector_text = buffer
+        .content()
+        .chunks(usize::from(buffer.area.width))
+        .flat_map(|row| row[..=usize::from(sidebar_width)].iter().map(Cell::symbol))
+        .collect::<String>();
 
     // Assert
     assert!(text.contains("Comments (2)"));
     assert!(text.contains("Unresolved"));
     assert!(text.contains("Standalone"));
-    assert!(text.contains("General · alice"));
+    assert!(selector_text.contains("General"));
+    assert!(text.contains("alice"));
     assert!(text.contains("src/main.rs:2"));
     assert!(text.contains("Comment — Review comments session"));
     assert!(text.contains("Scope: General discussion"));
@@ -208,6 +221,23 @@ fn test_render_shows_comment_selector_and_general_detail() {
             .iter()
             .any(|cell| cell.bg == style::palette::surface_selection())
     );
+}
+
+#[test]
+fn comment_selector_title_keeps_counts_visible_at_compact_widths() {
+    // Arrange
+    for (selected_count, width, expected) in [
+        (0, 17, " Comments (6) "),
+        (2, 17, "Selected 2"),
+        (2, 40, " Comments (6) · Selected 2 "),
+    ] {
+        // Act
+        let title = comment_list_title(6, selected_count, width);
+
+        // Assert
+        assert_eq!(title, expected);
+        assert!(title.chars().count() <= width);
+    }
 }
 
 #[test]
