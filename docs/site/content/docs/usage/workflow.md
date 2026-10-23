@@ -303,6 +303,8 @@ previews use the same renderer.
 Press `F` in a root **Review** or **AgentReview** session to confirm a fork. It receives
 a new worktree from the source commit and a copy of the saved conversation. Uncommitted
 changes are not copied. Publishing, review state, usage, and timing start independently.
+Change counts are recalculated from the new worktree against the source session's base
+branch as soon as workspace setup finishes, including when continuing with `/plan`.
 Stacked children cannot be forked.
 
 ### Commit and Merge Behavior

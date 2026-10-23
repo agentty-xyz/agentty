@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{isolation, session_branch, session_folder};
+use super::{SessionTaskService, isolation, session_branch, session_folder};
 use crate::app::session::SessionError;
-use crate::app::{AppServices, SessionManager};
+use crate::app::{AppEvent, AppServices, SessionManager};
 use crate::domain::agent::parse_persisted_session_agent_model;
+use crate::domain::session::Status;
 use crate::infra::db::{SessionPreparationRow, SessionPreparationState, SessionRow};
 
 impl SessionManager {
@@ -126,12 +127,29 @@ impl SessionManager {
             SessionError::Workflow(format!("Failed to setup session backend: {error}"))
         })?;
         if row.parent_session_id.is_some() {
-            let hash = git_client.head_hash(folder).await?;
+            let hash = git_client.head_hash(folder.clone()).await?;
             services
                 .db()
                 .sessions()
                 .update_session_stack_base_commit_hash(session_id, Some(hash))
                 .await?;
+        }
+        // Forks start review-ready with inherited commits; ordinary drafts
+        // refresh their diff during execution instead.
+        if row.status == Status::Review.to_string()
+            && let Some(diff_stats) = SessionTaskService::refresh_persisted_session_diff_stats(
+                services.db(),
+                fs_client.as_ref(),
+                git_client.as_ref(),
+                session_id,
+                &folder,
+            )
+            .await
+        {
+            services.emit_app_event(AppEvent::SessionDiffStatsUpdated {
+                diff_stats,
+                session_id: session_id.as_str().into(),
+            });
         }
 
         Ok(())

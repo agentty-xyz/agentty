@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use ag_session::PermissionMode;
+
 use super::App;
 use crate::app::AppError;
 use crate::domain::session::{SessionDiffState, SessionId, SessionStats, Status};
@@ -135,7 +137,7 @@ async fn assert_forked_session_snapshot(app: &App, forked_session_id: &str) {
             && session.published_upstream_ref.is_none()
             && session.stats.added_lines == 0
             && session.stats.deleted_lines == 0
-            && session.stats.diff_state == SessionDiffState::Unknown
+            && session.stats.diff_state == SessionDiffState::Empty
             && session.stats.input_tokens == 0
             && session.stats.output_tokens == 0
     ));
@@ -198,6 +200,69 @@ async fn test_fork_session_from_dirty_source_prepares_frozen_snapshot() {
     // Assert
     assert_ne!(forked_session_id, source_session_id);
     assert_forked_session_snapshot(&app, &forked_session_id).await;
+}
+
+#[tokio::test]
+async fn fork_refreshes_committed_changes_for_every_permission_mode() {
+    for permission_mode in PermissionMode::ALL {
+        // Arrange
+        let (mut app, _base_dir) =
+            crate::test_support::new_git_test_app_with_mock_tmux_client().await;
+        let source_id = create_review_source_session_for_fork_test(&mut app).await;
+        let folder = app
+            .sessions
+            .session_for_id(&source_id)
+            .expect("source")
+            .folder
+            .clone();
+        app.services
+            .git_client()
+            .commit_all(folder.clone(), "source change".into())
+            .await
+            .expect("commit source");
+        tokio::fs::write(folder.join("README.md"), "uncommitted source change\n")
+            .await
+            .expect("dirty source");
+        app.services
+            .db()
+            .sessions()
+            .update_session_permission_mode(&source_id, permission_mode)
+            .await
+            .expect("permission mode");
+        // Both review-ready statuses use the same preparation path.
+        let status = if permission_mode == PermissionMode::ReadOnly {
+            Status::AgentReview
+        } else {
+            Status::Review
+        };
+        crate::test_support::set_session_status_for_test(&mut app, &source_id, status);
+
+        // Act
+        let fork_id = app.fork_session(&source_id).await.expect("fork");
+        crate::test_support::finish_session_creation_tasks(&mut app).await;
+
+        // Assert
+        let fork = app.sessions.session_for_id(&fork_id).expect("fork");
+        assert_eq!((fork.stats.added_lines, fork.stats.deleted_lines), (1, 1));
+        assert_eq!(fork.stats.diff_state, SessionDiffState::Present);
+        assert_eq!(
+            std::fs::read_to_string(fork.folder.join("README.md")).expect("snapshot"),
+            "dirty source worktree"
+        );
+        let row = app
+            .services
+            .db()
+            .sessions()
+            .load_session(&fork_id)
+            .await
+            .expect("load")
+            .expect("persisted fork");
+        assert_eq!(
+            (row.added_lines, row.deleted_lines, row.has_diff),
+            (1, 1, Some(true))
+        );
+        assert_eq!(row.permission_mode, permission_mode.label());
+    }
 }
 
 #[tokio::test]
