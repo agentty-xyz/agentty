@@ -38,8 +38,9 @@ impl ProtocolSchemaInstructionMode {
 /// structured protocol while selecting the cheapest safe schema guidance for
 /// the current provider. Providers without native structured output receive
 /// the full JSON Schema in the prompt; providers with native enforcement get
-/// policy and field-routing instructions only. `workspace_root` names the
-/// only writable directory for the turn. The transport selects bootstrap or
+/// policy and field-routing instructions only. `workspace_root` bounds
+/// project edits; documented tool-managed support state may live outside it
+/// when execution permissions allow writes. The transport selects bootstrap or
 /// refresh delivery explicitly and calls this once for an unwrapped payload;
 /// payload text never determines whether policy is applied.
 #[must_use]

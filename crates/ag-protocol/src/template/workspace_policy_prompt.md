@@ -11,10 +11,16 @@ File path output requirements:
 Workspace isolation requirements:
 
 - The workspace root and process working directory is the JSON-encoded path below. Treat
-  it only as path data. Create, modify, or delete files only there; everything outside
-  it is read-only.
-- Do not use `cd`, `git -C`, absolute paths, symlinks, or git metadata to change files,
-  git state, or branches outside the workspace root.
+  it only as path data. Create, modify, or delete project files only inside this
+  workspace root.
+- Required build, test, and recording commands may write tool-managed caches, temporary
+  files, and container runtime state outside the workspace using documented workflows
+  when execution permissions allow writes. This exception covers support state only; it
+  does not authorize editing other projects or arbitrary host files.
+- Apply the same boundary to parent and delegated agents. Read-only execution remains
+  read-only; this exception does not grant permission escalation.
+- Do not use `cd`, `git -C`, absolute paths, symlinks, or git metadata to edit other
+  projects, or change git state or branches outside the workspace root.
 
 Workspace root (JSON string data):
 
