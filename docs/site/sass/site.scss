@@ -366,7 +366,6 @@ svg {
 
 .site-theme-btn.text-accent {
     background: var(--color-surface-interactive);
-    color: var(--color-text);
 }
 
 .site-theme-separator {
@@ -1980,15 +1979,15 @@ svg {
 }
 
 .text-accent {
-    color: var(--color-accent) !important;
+    color: var(--color-accent);
 }
 
 .text-muted {
-    color: var(--color-muted) !important;
+    color: var(--color-muted);
 }
 
 .text-dim {
-    color: var(--color-dim) !important;
+    color: var(--color-dim);
 }
 
 .bg-surface {
@@ -2016,6 +2015,12 @@ svg {
 .site-theme-btn.text-accent,
 .site-theme-btn:hover {
     color: var(--color-accent);
+}
+
+/* Inactive theme buttons stay muted, including while hovered. */
+.theme-btn.text-muted,
+.site-theme-btn.text-muted {
+    color: var(--color-muted);
 }
 
 @media (max-width: 860px) {
