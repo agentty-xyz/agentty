@@ -27,6 +27,9 @@ the task for the Planner**. `/plan <task>` does the same in one line. `Esc` disa
 composer and keeps your text. Paste images into the initial task or any later reply with
 the [image paste shortcuts](@/docs/usage/workflow.md#usage-prompt-extras).
 
+When you enable `/plan` during a session, the Planner receives the earlier conversation
+as context, so you can refer to recommendations or decisions already discussed.
+
 Once a session owns a plan workflow, every message you send goes to the orchestrator,
 and `/plan` is no longer offered. The chat shows your messages, each answer under a
 **Planner** or **Implementer** header, and a live execution graph with each role's

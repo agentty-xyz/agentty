@@ -171,6 +171,65 @@ fn open_composer(scenario: Scenario) -> Scenario {
         .wait_for_text(COMPOSER_FOOTER, 5000)
 }
 
+#[tokio::test]
+async fn plan_enabled_mid_session_receives_previous_conversation() -> E2eResult {
+    // Arrange, Act, Assert: the provider only confirms receipt after seeing
+    // both the earlier user message and the recommendation it answered with.
+    FeatureTest::new("plan_session_history")
+        .with_git()
+        .args(["--experimental-multi-agent".to_string()])
+        .setup(|env| Box::pin(async move {
+            seed_workflow_project(env).await?;
+            std::fs::write(env.stub_bin.join("claude"), r#"#!/bin/sh
+if [ "$1" = "update" ]; then exit 0; fi
+if [ "$1" = "--version" ]; then printf 'claude test\n'; exit 0; fi
+prompt=$(cat)
+case "$prompt" in
+  *'Generate a concise, commit-style title'*) answer='Plan graph execution' ;;
+  *'Repository planner definition'*)
+    case "$prompt" in
+      *'Session conversation at workflow launch'*'What should we build next?'*'Build a graph with branch joins.'*)
+        answer='Planner received the earlier graph recommendation.' ;;
+      *) printf 'Planner is missing the earlier conversation\n' >&2; exit 1 ;;
+    esac
+    ;;
+  *) answer='Build a graph with branch joins.' ;;
+esac
+printf '{"type":"result","subtype":"success","structured_output":{"answer":"%s"},"usage":{"input_tokens":8,"output_tokens":6}}\n' "$answer"
+"#)?;
+
+            Ok(())
+        }))
+        .run(
+            |scenario| {
+                let scenario = scenario
+                    .compose(&common::wait_for_agentty_startup())
+                    .compose(&common::switch_to_tab("Sessions"))
+                    .press_key("a")
+                    .wait_for_text("Regular", 5000)
+                    .press_key("Enter")
+                    .wait_for_text("Type your message", 10000)
+                    .write_text("What should we build next?")
+                    .press_key("Enter")
+                    .wait_for_text("Build a graph with branch joins.", 20000)
+                    .wait_for_text("Enter: reply", 10000);
+                send_chat_message(scenario, "/plan Work on that recommendation")
+                    .wait_for_text("Planner received the earlier graph recommendation.", 20000)
+                    .wait_for_text("Planner      ● Awaiting your approval", 10000)
+                    .capture_labeled("history", "Planner retains the earlier discussion")
+            },
+            |frame, _report| Box::pin(async move {
+                assert_visible(frame, &[
+                    "Planner received the earlier graph recommendation.",
+                    "Planner      ● Awaiting your approval",
+                ]);
+            }),
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Waits until the scripted Implementer process runs, so cancellation
 /// exercises the running worker rather than queued admission.
 fn wait_for_implementer(scenario: Scenario, started: PathBuf) -> Scenario {
@@ -385,6 +444,7 @@ async fn plan_conversation_pastes_images_into_initial_and_revision_messages() ->
                     .wait_for_text("Revise the screen [Image #1]", 5000)
                     .press_key("Enter")
                     .wait_for_text("Revision image received by Planner", 20000)
+                    .wait_for_text("Planner      ● Awaiting your approval", 10000)
                     .capture_labeled("revised", "Pasted images reach the Planner")
             },
             |frame, _report| {
