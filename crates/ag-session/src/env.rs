@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::SessionId;
 
 /// Stable identity and lifecycle owner of an execution environment.
@@ -10,7 +12,7 @@ use crate::SessionId;
 /// Its identity uses the full persisted session ID, never the shortened branch
 /// name or a filesystem path. Session setup and cleanup remain authoritative;
 /// finishing a task does not release the environment.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum EnvId {
     /// A local worktree owned by one session and shared by its tasks.
     SessionWorktree(SessionId),

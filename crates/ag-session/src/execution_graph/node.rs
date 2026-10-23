@@ -1,13 +1,15 @@
 use ag_protocol::{ProtocolRequestProfile, TurnPrompt};
+use serde::{Deserialize, Serialize};
 
 use super::GraphContractError;
 use crate::{AgentDefinition, AgentSelection, EnvId, PermissionMode};
 
 /// An agent invocation template, independent of built-in workflow roles.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphNode {
     /// Captured model/provider, never resolved from mutable settings at
     /// dispatch.
+    #[serde(with = "super::selection")]
     pub agent: AgentSelection,
     /// Complete captured instructions, independent of a role or catalog ID.
     pub definition: AgentDefinition,
@@ -37,7 +39,7 @@ pub struct GraphNode {
 /// These values neither grant permissions nor configure a runtime directly.
 /// Worker-owned execution policy remains an independent ceiling. Unsupported
 /// requirements must be rejected rather than silently downgraded.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphExecutionProfile {
     /// Fresh utility context or isolated, resumable task conversation.
     pub context: GraphContext,
@@ -109,7 +111,7 @@ impl GraphExecutionProfile {
 }
 
 /// Provider conversation lifetime and existing execution authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphContext {
     /// New context for each utility run; no provider continuation is shared.
     Fresh,
@@ -121,7 +123,7 @@ pub enum GraphContext {
 }
 
 /// Host mutation effects, independent of model tools and response schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphPostProcessing {
     /// No commit, publication, or automatic remediation effects.
     None,
@@ -130,7 +132,7 @@ pub enum GraphPostProcessing {
 }
 
 /// Resource requirement within one Env, not a security sandbox.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum GraphWorkspaceAccess {
     /// Read-only execution may share the Env with other readers.
     SharedRead,
@@ -140,7 +142,7 @@ pub enum GraphWorkspaceAccess {
 }
 
 /// One prerequisite; multiple gates on one producer are permitted.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct GraphDependency {
     /// Condition the host must establish from authoritative records.
     pub gate: GraphCompletionGate,
@@ -149,7 +151,7 @@ pub struct GraphDependency {
 }
 
 /// Completion condition, distinct from desired-outcome task completion.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub enum GraphCompletionGate {
     /// Successful authoritative execution including ordered post-processing,
     /// with no unanswered clarification. A provider answer alone is
@@ -180,7 +182,7 @@ impl GraphCompletionGate {
 }
 
 /// Named output containing one complete response under an existing schema.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphOutput {
     /// Output name unique on the producing node.
     pub name: String,
@@ -189,7 +191,7 @@ pub struct GraphOutput {
 }
 
 /// A planned handoff; no attempt or result needs to exist when planning.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GraphInputBinding {
     /// Slot name unique on the consuming node.
     pub name: String,

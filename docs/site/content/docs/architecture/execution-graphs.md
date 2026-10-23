@@ -1,13 +1,13 @@
 +++
-title = "Execution Graph Contracts"
-description = "Validated graph shapes, node execution requirements, and exact result handoffs."
+title = "Execution Graphs"
+description = "Validated graph snapshots, durable results, and exact handoffs."
 weight = 8
 +++
 
-`ag-session` provides pure contracts for arbitrary static execution graphs. They
-describe work before attempts exist and validate its structure without effects. Graph
-persistence, dispatch, and recovery are not implemented; `/plan` still uses `TaskChain`,
-and focused review retains its existing coordinator.
+`ag-session` provides pure contracts for arbitrary static execution graphs. `ag-store`
+persists their revisions, execution links, and exact result versions. Graph dispatch and
+recovery are not integrated; `/plan` still uses `TaskChain`, and focused review retains
+its existing coordinator.
 
 ## Graph and Node Identity
 
@@ -67,11 +67,38 @@ from execution status. Validation requires successful settlement with no pending
 questions; acceptance selects that exact validated version. Caller-constructed
 references and state are not evidence of persistence, validation, or user approval.
 
+## Durable Snapshots and Evidence
+
+`GraphRepository`, available through `AppRepositories::graphs()`, saves a complete
+validated snapshot before any execution exists. It retains node definitions, requests
+and attachments, dependencies, profiles, Env references, and planned bindings. Revisions
+start at one and advance with an expected-current-revision check. Identical historical
+deliveries are idempotent; conflicting contents or session ownership are rejected. Once
+executions are linked, further revisions are rejected until safe mutation policy is
+implemented.
+
+Execution links reference existing task attempts and their operations, or session-owned
+utility runs. Linking checks ownership and captures every declared input against stored
+result evidence in one transaction. It does not admit or dispatch work, enforce capacity
+or Env access, or establish dependency gates unrelated to those inputs. A coordinator
+must combine those checks with dispatch admission.
+
+Each execution can publish one immutable body per declared output. Consecutive versions
+retain separate identities and producing execution references. Validation records host
+evidence only after successful settlement, protocol parsing, and clarification checks.
+Acceptance separately records an explicit host-attested action on that exact validated
+version. Evidence retains its first timestamp; conflicting redelivery is rejected. These
+APIs are trusted host boundaries, not model-callable approval tools.
+
+Result state is projected from evidence; execution state remains authoritative in the
+existing operation or utility run. Later results never retarget saved inputs or inherit
+acceptance. Reopening the database restores snapshots and receipts without replaying
+work or completing tasks. Deleting the owning session removes its graph records.
+
 ## Host Integration Boundary
 
-A future coordinator must load authoritative records, verify session and execution
-ownership, check all gates and graph revisions atomically, and persist exact inputs with
-dispatch admission. It must enforce Env conflicts, shared budgets, worker capacity,
-cancellation, and explicit restart recovery. These contracts provide no automatic replay
-or permission to revise started work. Graph size limits, dynamic proposals, and runtime
-expansion remain coordinator policy to implement separately.
+A future coordinator must combine authoritative gates, graph revisions, and exact input
+capture atomically with dispatch admission. It must enforce Env conflicts, shared
+budgets, worker capacity, cancellation, and explicit restart recovery. Storage provides
+no automatic replay or permission to revise started work. Graph size limits, dynamic
+proposals, and runtime expansion remain coordinator policy to implement separately.

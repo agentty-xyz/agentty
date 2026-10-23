@@ -39,6 +39,7 @@ impl AppRepositories {
         Self {
             repositories: Arc::new(RepositorySet {
                 activity: Arc::clone(&existing.activity),
+                graph: Arc::clone(&existing.graph),
                 operation: Arc::clone(&existing.operation),
                 project: Arc::clone(&existing.project),
                 review: Arc::clone(&existing.review),

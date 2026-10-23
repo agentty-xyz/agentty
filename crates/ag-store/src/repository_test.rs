@@ -199,6 +199,7 @@ async fn repository_parts_support_focused_adapter_injection() {
     let repositories = AppRepositories {
         repositories: Arc::new(RepositorySet {
             activity: Arc::clone(&baseline.repositories.activity),
+            graph: Arc::clone(&baseline.repositories.graph),
             operation: Arc::new(operation),
             project: Arc::clone(&baseline.repositories.project),
             review: Arc::clone(&baseline.repositories.review),

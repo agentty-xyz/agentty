@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE execution_graph SET revision = revision WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "17284360d7c1223f40108826a05e7441d98e2fe311e69964c00239eb967d26bb"
+}

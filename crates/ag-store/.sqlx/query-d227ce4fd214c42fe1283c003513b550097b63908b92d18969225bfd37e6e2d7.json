@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.name, r.reference FROM execution_graph_input i JOIN execution_graph_result r ON r.id = i.execution_graph_result_id WHERE i.execution_graph_execution_id = ? ORDER BY i.position",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_input",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "reference",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "execution_graph_result",
+            "name": "reference"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d227ce4fd214c42fe1283c003513b550097b63908b92d18969225bfd37e6e2d7"
+}

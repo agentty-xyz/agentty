@@ -3,6 +3,7 @@
 mod activity;
 mod connection;
 mod error;
+mod execution_graph;
 mod operation;
 mod project;
 mod repository;
@@ -26,6 +27,11 @@ pub use activity::ActivityRepository;
 pub use connection::Database;
 pub use error::DbError;
 pub(crate) use error::DbResultExt;
+#[cfg(any(test, feature = "test-utils"))]
+pub use execution_graph::MockGraphRepository;
+pub use execution_graph::{
+    GraphEvidence, GraphExecutionRecord, GraphRepository, StoredGraphEvidence, StoredGraphResult,
+};
 pub use operation::{OperationRepository, SessionOperationRow};
 pub use project::{ProjectListRow, ProjectRepository, ProjectRow};
 pub use repository::AppRepositories;

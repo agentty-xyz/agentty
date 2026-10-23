@@ -31,7 +31,10 @@ integration tests exercise supported APIs without exposing private implementatio
 Execution graph validation and result binding are pure `ag-session` contracts. Unit
 tests cover structural errors, profile restrictions, and stale or mismatched result
 references. Public-contract tests describe plan acceptance and fresh review branches
-with a join; they do not establish graph persistence or dispatch.
+with a join. `GraphRepository` boundary tests cover immutable revisions, ownership,
+exact input binding, result evidence, and transactional rollback. A public on-disk test
+retains accepted results and execution receipts across reopening without retargeting or
+replay. These checks do not establish graph dispatch.
 
 The `ag-session` `test-utils` feature supplies pinned model selections for unrelated
 workflow tests and demos. Model catalog, default, and retirement tests keep independent,
