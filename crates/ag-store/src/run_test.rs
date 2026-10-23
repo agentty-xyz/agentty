@@ -6,6 +6,62 @@ use ag_worker::{RunInfo, RunState};
 use crate::Database;
 
 #[tokio::test]
+async fn preadmitted_claim_checks_identity_once_and_honors_durable_closure() {
+    // Arrange
+    let database = crate::test_support::task_database_fixture().await;
+    let repository = database.runs();
+    let run = RunInfo {
+        folder: "workspace".into(),
+        id: "recorded".into(),
+        parent_id: Some("graph".into()),
+        project_id: None,
+        purpose: "graph:node".into(),
+        session_id: Some("session".into()),
+    };
+    repository.create(&run).await.expect("queued");
+
+    // Act / Assert
+    for field in 0..5 {
+        let mut wrong = run.clone();
+        match field {
+            0 => wrong.id = "missing".into(),
+            1 => wrong.folder = "other".into(),
+            2 => wrong.parent_id = None,
+            3 => wrong.purpose = "other".into(),
+            _ => wrong.session_id = None,
+        }
+        assert!(!repository.claim_queued(&wrong).await.expect("mismatch"));
+    }
+    assert!(repository.claim_queued(&run).await.expect("claim"));
+    assert!(!repository.claim_queued(&run).await.expect("duplicate"));
+    repository
+        .transition(&run.id, RunState::Completed, None)
+        .await
+        .expect("completed");
+    assert!(
+        !repository
+            .claim_queued(&run)
+            .await
+            .expect("no resurrection")
+    );
+    let mut closed = run.clone();
+    closed.id = "closed".into();
+    repository.create(&closed).await.expect("queued");
+    repository.close_session("session").await.expect("closed");
+    assert!(
+        !repository
+            .claim_queued(&closed)
+            .await
+            .expect("closed admission")
+    );
+    sqlx::query("DROP TABLE agent_run")
+        .execute(database.pool())
+        .await
+        .expect("drop for error injection");
+    assert!(repository.claim_queued(&run).await.is_err());
+}
+
+#[tokio::test]
 async fn utility_lifecycle_is_durable_and_terminal_states_are_not_resurrected() {
     // Arrange
     let now = Arc::new(AtomicI64::new(1));

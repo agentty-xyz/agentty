@@ -5,9 +5,10 @@ weight = 8
 +++
 
 `ag-session` provides pure contracts for arbitrary static execution graphs. `ag-store`
-persists their revisions, execution links, and exact result versions. Graph dispatch and
-recovery are not integrated; `/plan` still uses `TaskChain`, and focused review retains
-its existing coordinator.
+persists their revisions, execution links, and exact result versions. `ag-worker`
+provides a deterministic static executor with atomic storage admission and a fresh
+utility worker adapter. `/plan` still uses `TaskChain`, and focused review retains its
+existing coordinator; neither workflow has migrated to this executor.
 
 ## Graph and Node Identity
 
@@ -40,7 +41,12 @@ restrictions, or worker policy. Ordered session effects are explicit and remain 
 execution settlement. Read-only definitions cannot request those effects.
 
 A shared budget ID names a host-owned provider-call budget covering retries and protocol
-repairs. The contract does not allocate or enforce that budget. Hosts must reject
+repairs. The static executor resolves that ID to the same shared counter for every
+consumer and rejects unknown budgets. Before durable admission, it atomically reserves
+the initial provider call and transfers that reservation through worker execution.
+Blocked or existing admissions return unused reservations. If no call is available, the
+node remains unclaimed until a later call supplies a fresh budget. The first provider
+attempt redeems its reservation; retries charge the shared counter. Hosts must reject
 unsupported requirements and continue submitting all model work through
 [workers and runtime](@/docs/core-components/execution.md).
 
@@ -95,10 +101,38 @@ existing operation or utility run. Later results never retarget saved inputs or 
 acceptance. Reopening the database restores snapshots and receipts without replaying
 work or completing tasks. Deleting the owning session removes its graph records.
 
-## Host Integration Boundary
+## Static Dispatch
 
-A future coordinator must combine authoritative gates, graph revisions, and exact input
-capture atomically with dispatch admission. It must enforce Env conflicts, shared
-budgets, worker capacity, cancellation, and explicit restart recovery. Storage provides
-no automatic replay or permission to revise started work. Graph size limits, dynamic
-proposals, and runtime expansion remain coordinator policy to implement separately.
+`GraphExecutor::run_ready` drains ready nodes in declaration order, running compatible
+branches concurrently and reevaluating joins after settlement. Each node requires every
+dependency gate. `GraphDispatchRepository` checks the current revision, gates, Env
+conflicts, and exact inputs in the same transaction that creates the operation-backed
+task attempt or utility run. Competing admissions return the original receipt without
+dispatching again, including after a restart or failed execution.
+
+The executor intersects session and definition permissions, retains worker policy and
+capacity ceilings, and holds shared-reader or exclusive-writer Env leases through
+settlement. Hosts share one `GraphResources` pool with other work using those Envs; the
+database also excludes conflicting active operations and utilities across graphs.
+Dropping a driver leaves admitted work owned through cleanup. Inherited cancellation
+still reaches workers. Runner panics follow the same durable failure path as returned
+errors before resource leases are released.
+
+Successful settlement saves the complete schema-valid response, even for nodes without
+named outputs. Question-free outputs receive validation evidence; user acceptance and
+desired-outcome task completion remain separate actions. A failed or clarification
+response cannot release an execution-success gate. A wave drains admitted peers before
+reporting a failure.
+
+The supplied `GraphUtilityRunner` supports fresh text, focused-review, and
+review-metadata nodes through the existing utility worker, retaining their preadmitted
+identities. It rejects attachments. Hosts implement `GraphNodeRunner` for task
+conversations and ordered session effects; unsupported profiles are rejected before any
+node is admitted. Task identities must be unused when first admitted. The captured graph
+node and exact inputs remain the runner's source of assignment and context.
+
+An empty dispatch result means no work was admitted, not that the graph is complete.
+Hosts call again when gates or resource availability change. Graph cancellation,
+explicit retry/resume, workflow migration, graph proposals, and runtime expansion remain
+separate work. Storage provides no automatic replay or permission to revise started
+work.

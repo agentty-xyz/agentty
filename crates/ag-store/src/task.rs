@@ -395,7 +395,7 @@ impl SqliteTaskRepository {
         .await
     }
 
-    async fn claim_attempt_in_transaction(
+    pub(crate) async fn claim_attempt_in_transaction(
         connection: &mut SqliteConnection,
         session_id: &str,
         request: &SubmitTaskRequest,

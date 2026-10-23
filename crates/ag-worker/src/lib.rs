@@ -4,6 +4,7 @@
 //! worker owns serial dispatch and cancellation; it does not depend on a
 //! frontend, provider implementation, Git, or SQLite.
 
+mod graph;
 mod lifecycle;
 mod mailbox;
 mod provider;
@@ -14,6 +15,10 @@ mod store;
 mod turn;
 mod utility;
 
+pub use graph::{
+    GraphAdmission, GraphDispatch, GraphDispatchRepository, GraphExecutionRecord, GraphExecutor,
+    GraphInputValue, GraphNodeRunner, GraphResources, GraphRunRequest, GraphUtilityRunner,
+};
 pub use lifecycle::{Clock, HeartbeatClock, execute, recover};
 #[cfg(any(test, feature = "test-utils"))]
 pub use mailbox::test_session_worker_handle;

@@ -43,7 +43,10 @@ test structural rules without storage or workers. Existing `/plan` and review
 coordinators remain authoritative until graph dispatch is integrated. Use
 `GraphRepository` in `ag-store` for revision snapshots, exact results, and execution
 links; keep operation and utility-run lifecycle authority with their existing owners.
-Exercise storage invariants with SQLite and durable handoffs through the public API.
+Use `GraphDispatchRepository` for atomic admission and `GraphExecutor` to drain ready
+nodes. Inject worker adapters through `GraphNodeRunner`, reject unsupported profiles,
+and share `GraphResources` Env leases with other host work. Exercise storage invariants
+with SQLite and worker dispatch through the public API.
 
 ## Add a New Agent Backend or Model
 

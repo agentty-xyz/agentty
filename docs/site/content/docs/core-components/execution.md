@@ -49,9 +49,12 @@ Application composition supplies worker configuration and host policy. Session t
 `SessionRunClient`; utilities use `RunClient`. Admission persists ownership and purpose
 before execution. Retries and protocol repairs remain attempts within the same
 supervised run and retain its per-turn filesystem permissions and provider-call budget.
-Commit generation prepares bounded evidence deterministically; primary and fallback
-requests share their budget, including transport repairs. Captured utility ownership
-remains authoritative when an active host phase supplies a trace link.
+Coordinators can reserve an initial provider call before durable admission. The request
+and its clones share that reservation: the first attempt redeems it, retries charge the
+shared pool, and dropping all unused owners refunds the call. Commit generation prepares
+bounded evidence deterministically; primary and fallback requests share their budget,
+including transport repairs. Captured utility ownership remains authoritative when an
+active host phase supplies a trace link.
 
 `SessionRunClient::for_task_context` binds retained provider resources and native
 history to a host-allocated task-context UUID. Session ownership, shared capacity, and

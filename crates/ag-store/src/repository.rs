@@ -14,6 +14,11 @@ pub struct AppRepositories {
 }
 
 impl AppRepositories {
+    /// Returns atomic static-graph admission and result settlement.
+    pub fn graph_dispatch(&self) -> Arc<dyn ag_worker::GraphDispatchRepository> {
+        self.repositories.graph.clone()
+    }
+
     /// Returns immutable graph revisions, execution links, and exact results.
     pub fn graphs(&self) -> &dyn crate::GraphRepository {
         self.repositories.graph.as_ref()
@@ -108,7 +113,7 @@ impl AppRepositories {
 /// number of repositories carried through asynchronous workflows.
 struct RepositorySet {
     activity: Arc<dyn activity::ActivityRepository>,
-    graph: Arc<dyn crate::GraphRepository>,
+    graph: Arc<crate::execution_graph::SqliteGraphRepository>,
     operation: Arc<dyn operation::OperationRepository<crate::DbError>>,
     project: Arc<dyn project::ProjectRepository>,
     review: Arc<dyn review::ReviewRepository>,

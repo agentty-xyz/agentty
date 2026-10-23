@@ -16,11 +16,91 @@ use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+use crate::run::mock::MockRunRepository;
 use crate::test_support::{AppServerTurnResponse, MockAppServerClient, TRACER_PROVIDER_LOCK};
 use crate::{
     HeartbeatClock, RunClient, RunInfo, RunRepository, RunScope, RunState, RunWorker,
     RuntimeConfig, in_scope, scoped_client,
 };
+
+#[tokio::test]
+async fn recorded_submission_rejects_folder_mismatch_and_unsupported_storage() {
+    // Arrange
+    let mut client = ag_contracts::MockOneShotClient::new();
+    client.expect_close().once().return_const(());
+    let worker = RunWorker::with_client(
+        Arc::new(client),
+        Arc::new(Repository::default()),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let input = request();
+    let mut run = RunInfo {
+        folder: "different".into(),
+        id: "recorded".into(),
+        parent_id: None,
+        project_id: None,
+        purpose: "test".into(),
+        session_id: None,
+    };
+
+    // Act
+    let mismatch = worker.submit_recorded(input.clone(), run.clone()).await;
+    run.folder.clone_from(&input.folder);
+    let unsupported = worker.submit_recorded(input, run).await;
+    worker.shutdown().await;
+
+    // Assert
+    assert!(
+        mismatch
+            .expect_err("mismatched folder")
+            .to_string()
+            .contains("folder")
+    );
+    assert!(
+        unsupported
+            .expect_err("unsupported repository")
+            .to_string()
+            .contains("unsupported")
+    );
+}
+
+#[tokio::test]
+async fn recorded_submission_does_not_execute_when_the_durable_claim_is_rejected() {
+    // Arrange
+    let mut client = ag_contracts::MockOneShotClient::new();
+    client.expect_close().once().return_const(());
+    let mut repository = MockRunRepository::new();
+    repository
+        .expect_claim_queued()
+        .once()
+        .return_const(Ok(false));
+    let worker = RunWorker::with_client(
+        Arc::new(client),
+        Arc::new(repository),
+        Arc::new(HeartbeatClock),
+        NonZeroUsize::MIN,
+    );
+    let input = request();
+    let run = RunInfo {
+        folder: input.folder.clone(),
+        id: "already-claimed".into(),
+        parent_id: None,
+        project_id: None,
+        purpose: "test".into(),
+        session_id: None,
+    };
+
+    // Act
+    let result = worker.submit_recorded(input, run).await;
+    worker.shutdown().await;
+
+    // Assert
+    assert_eq!(
+        result.expect_err("claim rejected").to_string(),
+        "Recorded run is not queued or does not match"
+    );
+}
 
 #[tokio::test]
 async fn configured_utility_policy_survives_pooling_and_protocol_repair() {

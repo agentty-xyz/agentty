@@ -116,6 +116,14 @@ pub async fn in_scope<T>(scope: RunScope, work: impl Future<Output = T>) -> T {
         .await
 }
 
+/// Retains all enclosing cancellation sources and trace state across a
+/// worker-owned task spawn.
+pub(crate) async fn in_context<T>(context: RunContext, work: impl Future<Output = T>) -> T {
+    CURRENT
+        .scope(context.clone(), work.with_context(context.trace))
+        .await
+}
+
 /// Captures ownership for a utility client passed to another task or workflow.
 /// Child submissions execute directly under worker supervision, never behind
 /// a waiting parent in the session command queue.

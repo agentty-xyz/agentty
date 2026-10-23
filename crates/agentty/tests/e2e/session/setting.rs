@@ -437,6 +437,7 @@ async fn test_session_response_style() -> E2eResult {
                     .wait_for_text("/style Response style", 3000)
                     .wait_for_text("Concise", 3000)
                     .wait_for_text("Detailed", 3000)
+                    .wait_for_stable_frame(300, 5000)
                     .capture_labeled(
                         "response_style_picker",
                         "Response style picker explains all three choices",

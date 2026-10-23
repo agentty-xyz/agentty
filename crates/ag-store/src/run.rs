@@ -27,6 +27,27 @@ impl SqliteRunRepository {
 
 #[async_trait]
 impl RunRepository for SqliteRunRepository {
+    async fn claim_queued(&self, run: &RunInfo) -> Result<bool, OneShotError> {
+        let changed = sqlx::query(
+            "UPDATE agent_run SET status = 'running', started_at = ?, heartbeat_at = ? WHERE id = \
+             ? AND status = 'queued' AND session_id IS ? AND parent_id IS ? AND folder = ? AND \
+             purpose = ? AND NOT EXISTS (SELECT 1 FROM agent_run_closed_session WHERE session_id \
+             = agent_run.session_id)",
+        )
+        .bind(self.timestamp_source.now_timestamp_seconds())
+        .bind(self.timestamp_source.now_timestamp_seconds())
+        .bind(&run.id)
+        .bind(&run.session_id)
+        .bind(&run.parent_id)
+        .bind(run.folder.to_string_lossy().as_ref())
+        .bind(&run.purpose)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| Self::error(&error))?;
+
+        Ok(changed.rows_affected() == 1)
+    }
+
     async fn create(&self, run: &RunInfo) -> Result<(), OneShotError> {
         let inserted = sqlx::query(
             "INSERT INTO agent_run (id, parent_id, session_id, project_id, folder, purpose, \

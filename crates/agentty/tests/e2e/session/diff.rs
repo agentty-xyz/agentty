@@ -5,6 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use ag_session::SettingName;
 #[cfg(unix)]
 use ag_session::test_support as model_fixture;
+use agentty::db::{DB_DIR, DB_FILE};
 use agentty::domain::theme::ColorTheme;
 use testty::assertion;
 use testty::frame::TerminalFrame;
@@ -827,7 +828,8 @@ async fn test_diff_line_comments() -> E2eResult {
                 seed_linked_review_worktree_with_diff(env)?;
                 seed_line_comment_codex_stub(env)?;
                 seed_line_comment_review_stub(env).await?;
-                seed_sessions_startup_tab(env).await
+                seed_sessions_startup_tab(env).await?;
+                seed_line_comment_recording(env).await
             })
         })
         .run(diff_line_comments_scenario, |frame, report| {
@@ -837,6 +839,30 @@ async fn test_diff_line_comments() -> E2eResult {
             })
         })
         .await?;
+
+    Ok(())
+}
+
+/// Restores the initial transcript and review baseline before VHS replay.
+async fn seed_line_comment_recording(env: &BuilderEnv) -> E2eResult {
+    let database = common::open_database(env).await?;
+    let snapshot = env.agentty_root.join("before-line-comments.sqlite");
+    sqlx::query("VACUUM INTO ?")
+        .bind(snapshot.to_string_lossy().as_ref())
+        .execute(database.pool())
+        .await?;
+    database.pool().close().await;
+    let db_path = env.agentty_root.join(DB_DIR).join(DB_FILE);
+    let quote =
+        |path: &std::path::Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    std::fs::write(
+        env.stub_bin.join(common::VHS_SETUP_SCRIPT_NAME),
+        format!(
+            "set -e\nrm -f {db}-wal {db}-shm\ncp {snapshot} {db}\n",
+            db = quote(&db_path),
+            snapshot = quote(&snapshot),
+        ),
+    )?;
 
     Ok(())
 }
@@ -954,8 +980,10 @@ fn submit_diff_line_comments(scenario: Scenario) -> Scenario {
         )
         .wait_for_text("src/main.rs:2 [new]: Why print review?", 5000)
         .wait_for_text("Enter: reply", 5000)
-        // VHS reuses the reviewed diff, so automatic review may be skipped.
         .write_text("G")
+        // Reply is available before automatic review finishes. Its final
+        // output must exist before capturing or scrolling the transcript.
+        .wait_for_text("No review findings.", 15000)
         .wait_for_stable_frame(1000, 5000)
         .viewing_pause_ms(1500)
         .capture_labeled(
@@ -1028,6 +1056,12 @@ fn assert_diff_line_comments(frame: &TerminalFrame, report: &ProofReport) {
         common::frame_from_capture(&report.captures[4]),
         common::frame_from_capture(&report.captures[5]),
     ];
+    let review_frame = &response_frames[0];
+    assertion::assert_text_in_region(
+        review_frame,
+        "No review findings.",
+        &Region::full(review_frame.cols(), review_frame.rows()),
+    );
     for text in ["Line comment received.", "[Commit] No changes to commit."] {
         assert!(
             response_frames

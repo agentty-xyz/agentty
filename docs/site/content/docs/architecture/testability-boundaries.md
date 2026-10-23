@@ -34,7 +34,13 @@ references. Public-contract tests describe plan acceptance and fresh review bran
 with a join. `GraphRepository` boundary tests cover immutable revisions, ownership,
 exact input binding, result evidence, and transactional rollback. A public on-disk test
 retains accepted results and execution receipts across reopening without retargeting or
-replay. These checks do not establish graph dispatch.
+replay. Static dispatch tests use real SQLite admission and scripted providers behind
+the real utility worker to prove parallel branches, joins, exact inputs, shared budgets,
+and permissions. `GraphNodeRunner` supplies the host execution boundary; shared
+`GraphResources` leases make Env contention deterministic without real processes. Budget
+contract tests cover reservation ownership, refunds, and retry accounting. A scripted
+utility occupying worker capacity reproduces delayed provider consumption while graph
+admission proceeds.
 
 The `ag-session` `test-utils` feature supplies pinned model selections for unrelated
 workflow tests and demos. Model catalog, default, and retirement tests keep independent,
