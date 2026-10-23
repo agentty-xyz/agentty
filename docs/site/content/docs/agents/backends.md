@@ -44,6 +44,12 @@ need current external information can use the web without an interactive permiss
 grant. Claude `Auto Edit` retains Claude Code's unsandboxed command fallback for tools
 that cannot run inside its sandbox.
 
+Agentty's instructions keep project edits inside the session worktree. Required build,
+test, and recording commands may use documented external caches, temporary files, and
+container runtime storage when execution permissions allow writes. This support-state
+exception applies to parent and delegated agents and does not expand `Read Only`
+permissions.
+
 Treat fetched web content as untrusted context. Claude still has edit-capable tools
 during the turn, so keep web-backed prompts specific and review the session diff before
 merging.

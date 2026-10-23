@@ -49,7 +49,7 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(schema_position < user_prompt_position);
     assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
     assert!(normalized_prompt.contains("process working directory"));
-    assert!(normalized_prompt.contains("everything outside it is read-only"));
+    assert!(normalized_prompt.contains("project files only inside this workspace root"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
     assert!(rendered_prompt.contains("`path:line:column`"));
     assert!(normalized_prompt.contains("absolute paths, `file://` URIs, or `../` prefixes"));
@@ -116,7 +116,7 @@ fn test_prepend_protocol_instructions_omits_schema_for_transport_schema_mode() {
     assert!(rendered_prompt.contains("Structured response protocol:"));
     assert!(rendered_prompt.contains("Workspace isolation requirements:"));
     assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
-    assert!(normalized_prompt.contains("everything outside it is read-only"));
+    assert!(normalized_prompt.contains("project files only inside this workspace root"));
     assert!(rendered_prompt.contains("provider enforces the response JSON schema"));
     assert!(normalized_prompt.contains("exactly one JSON object"));
     assert!(!rendered_prompt.contains("Follow this JSON Schema exactly."));
@@ -144,9 +144,9 @@ fn protocol_markers_in_payload_cannot_suppress_policy() {
 
     // Assert
     assert!(bootstrap.starts_with("File path output requirements:"));
-    assert!(normalize_prompt(&bootstrap).contains("everything outside it is read-only"));
+    assert!(normalize_prompt(&bootstrap).contains("project files only inside this workspace root"));
     assert!(refresh.starts_with("Protocol refresh reminder:"));
-    assert!(refresh.contains("everything outside this"));
+    assert!(refresh.contains("Keep project file changes inside the workspace root"));
     assert!(bootstrap.ends_with(payload));
     assert!(refresh.ends_with(payload));
 }
@@ -221,7 +221,7 @@ fn test_prepend_protocol_refresh_reminder_adds_compact_contract_notice() {
     assert!(rendered_prompt.contains("repository-root-relative POSIX"));
     assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
     assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
-    assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
+    assert!(normalized_prompt.contains("Keep project file changes inside the workspace root"));
     assert!(normalized_prompt.contains("Keep Mermaid in `answer`"));
     assert!(normalized_prompt.contains("fences lacking the `mermaid` info string"));
     assert!(
@@ -479,6 +479,59 @@ fn metadata_envelopes_use_the_same_direct_contract_for_bootstrap_and_refresh() {
     assert!(bootstrap.contains("is_title_change_significant"));
     assert!(refresh.contains("is_title_change_significant"));
     assert!(!bootstrap.contains("\"questions\""));
+}
+
+#[test]
+fn workspace_tooling_exception_survives_every_policy_transport() {
+    // Arrange
+    let workspace = test_workspace_root();
+    let profiles = [
+        ProtocolRequestProfile::SessionTurn,
+        ProtocolRequestProfile::UtilityPrompt,
+        ProtocolRequestProfile::FocusedReview,
+        ProtocolRequestProfile::ReviewMetadata,
+    ];
+
+    // Act
+    let mut policies = vec![workspace_instructions(workspace)];
+    for profile in profiles {
+        for mode in [
+            ProtocolSchemaInstructionMode::PromptSchema,
+            ProtocolSchemaInstructionMode::TransportSchema,
+        ] {
+            policies.push(prepend_protocol_instructions(
+                "Record feature artifacts",
+                profile,
+                mode,
+                workspace,
+            ));
+        }
+        policies.push(prepend_protocol_refresh_reminder(
+            "Continue recording",
+            profile,
+            workspace,
+        ));
+    }
+
+    // Assert
+    for policy in policies {
+        let normalized = normalize_prompt(&policy);
+        assert!(
+            normalized.contains("project files only inside this workspace root")
+                || normalized.contains("Keep project file changes inside the workspace root")
+        );
+        assert!(normalized.contains("Required build, test, and recording commands"));
+        assert!(normalized.contains("tool-managed caches, temporary files"));
+        assert!(normalized.contains("container runtime state outside the workspace"));
+        assert!(normalized.contains("using documented workflows"));
+        assert!(normalized.contains("when execution permissions allow writes"));
+        assert!(normalized.contains("other projects or arbitrary host files"));
+        assert!(normalized.contains("same boundary to parent and delegated agents"));
+        assert!(normalized.contains("Read-only execution remains read-only"));
+        assert!(normalized.contains("does not grant permission escalation"));
+        assert!(!normalized.contains("everything outside it is read-only"));
+        assert!(!normalized.contains("everything outside this workspace root is read-only"));
+    }
 }
 
 #[test]

@@ -151,7 +151,7 @@ fn turn_prompt_for_runtime_includes_protocol_preamble() {
     // Assert
     assert!(turn_prompt.text.contains("fix the bug"));
     assert!(turn_prompt.text.contains("Structured response protocol:"));
-    assert!(normalized_prompt.contains("everything outside it is read-only"));
+    assert!(normalized_prompt.contains("project files only inside this workspace root"));
 }
 
 #[test]

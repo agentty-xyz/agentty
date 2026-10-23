@@ -82,7 +82,7 @@ fn test_prepend_protocol_instructions_adds_session_protocol_instructions() {
     assert!(protocol_position < schema_position);
     assert!(schema_position < user_prompt_position);
     assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
-    assert!(normalized_prompt.contains("everything outside it is read-only"));
+    assert!(normalized_prompt.contains("project files only inside this workspace root"));
     assert!(rendered_prompt.contains("repository-root-relative POSIX paths"));
     assert!(normalized_prompt.contains("Git commands must be read-only"));
     assert!(normalized_prompt.contains("Never run mutating commands"));
@@ -288,7 +288,7 @@ fn test_prepend_protocol_refresh_reminder_adds_compact_contract_notice() {
     assert!(rendered_prompt.contains("repository-root-relative POSIX"));
     assert!(normalized_prompt.contains("only read-only git commands; never mutating ones"));
     assert!(rendered_prompt.contains("\"/tmp/agentty-wt/session-1\""));
-    assert!(normalized_prompt.contains("everything outside this workspace root is read-only"));
+    assert!(normalized_prompt.contains("Keep project file changes inside the workspace root"));
     assert!(
         rendered_prompt
             .contains("______________________________________________________________________")

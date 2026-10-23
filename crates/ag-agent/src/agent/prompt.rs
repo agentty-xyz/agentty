@@ -65,8 +65,8 @@ pub(crate) struct PromptPreparationRequest<'a> {
     /// Schema guidance mode selected from the provider's structured-output
     /// capability.
     pub schema_instruction_mode: ProtocolSchemaInstructionMode,
-    /// Workspace folder rendered into the isolation contract as the only
-    /// writable root for the turn.
+    /// Workspace folder rendered into the isolation contract as the root
+    /// for project edits, with an exception for tool-managed support state.
     pub workspace_root: &'a Path,
 }
 
