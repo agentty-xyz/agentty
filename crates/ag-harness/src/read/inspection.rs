@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::command::RepositoryCommandOutput;
+use super::output::{fitting_prefix, longest_fitting};
 use super::runtime::{
     DEFAULT_RESULT_LINES, MAX_READ_BYTES, MAX_READ_LINES, MAX_UNTRACKED_DIFF_FILES, ReadTool,
 };
@@ -209,9 +210,9 @@ impl ReadTool {
     }
 
     /// Encodes `items` within [`MAX_TOOL_RESULT_BYTES`] and as a result
-    /// `fits` accepts, keeping the longest run of leading whole items, and
-    /// marks a cut result truncated. With no item fitting, the result is
-    /// empty.
+    /// `fits` accepts, keeping the longest run of leading whole items, else
+    /// the first bytes of the first item, and marks a cut result truncated.
+    /// The result is empty only when not even one byte fits.
     pub(super) fn bounded_items_result(
         action: &str,
         items: &[String],
@@ -224,16 +225,26 @@ impl ReadTool {
             return encoded;
         }
 
-        let mut fitting_items = 0_usize;
-        let mut candidate_items = items.len();
-        while fitting_items < candidate_items {
-            let midpoint = fitting_items + (candidate_items - fitting_items).div_ceil(2);
-            let candidate = Self::encode_items_result(action, &items[..midpoint], true);
-            if accepts(&candidate) {
-                fitting_items = midpoint;
-            } else {
-                candidate_items = midpoint - 1;
-            }
+        let fitting_items = longest_fitting(items.len(), |count| {
+            accepts(&Self::encode_items_result(action, &items[..count], true))
+        });
+        if fitting_items == 0
+            && let Some(first) = items.first()
+        {
+            let bytes = fitting_prefix(first, |prefix| {
+                accepts(&Self::encode_items_result(
+                    action,
+                    &[prefix.to_string()],
+                    true,
+                ))
+            });
+
+            let shown = (bytes > 0)
+                .then(|| first[..bytes].to_string())
+                .into_iter()
+                .collect::<Vec<_>>();
+
+            return Self::encode_items_result(action, &shown, true);
         }
 
         Self::encode_items_result(action, &items[..fitting_items], true)
@@ -249,9 +260,9 @@ impl ReadTool {
     }
 
     /// Encodes `text` within [`MAX_TOOL_RESULT_BYTES`] and as a result
-    /// `fits` accepts, keeping its longest run of leading whole lines, and
-    /// marks a cut result truncated. With no line fitting, the result is
-    /// empty.
+    /// `fits` accepts, keeping its longest run of leading whole lines, else
+    /// the first bytes of its first line, and marks a cut result truncated.
+    /// The result is empty only when not even one byte fits.
     pub(super) fn bounded_text_result(
         action: &str,
         text: &str,
@@ -278,18 +289,20 @@ impl ReadTool {
             .filter(|boundary| *boundary < text.len())
             .chain(std::iter::once(text.len()))
             .collect::<Vec<_>>();
-        let mut fitting_boundary = 0_usize;
-        let mut candidate_boundary = boundaries.len() - 1;
-        while fitting_boundary < candidate_boundary {
-            let midpoint = fitting_boundary + (candidate_boundary - fitting_boundary).div_ceil(2);
-            if accepts(&encode(&text[..boundaries[midpoint]], true)?) {
-                fitting_boundary = midpoint;
-            } else {
-                candidate_boundary = midpoint - 1;
-            }
-        }
+        let fitting_boundary = longest_fitting(boundaries.len() - 1, |index| {
+            encode(&text[..boundaries[index]], true).is_ok_and(|candidate| accepts(&candidate))
+        });
+        let end = if fitting_boundary == 0 {
+            let first_line = text.split('\n').next().unwrap_or_default();
 
-        encode(&text[..boundaries[fitting_boundary]], true).map_err(ReadError::from)
+            fitting_prefix(first_line, |prefix| {
+                encode(prefix, true).is_ok_and(|candidate| accepts(&candidate))
+            })
+        } else {
+            boundaries[fitting_boundary]
+        };
+
+        encode(&text[..end], true).map_err(ReadError::from)
     }
 
     pub(super) fn bounded_inspection_text(

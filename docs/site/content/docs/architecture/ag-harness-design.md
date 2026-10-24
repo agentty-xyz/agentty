@@ -145,14 +145,16 @@ run of leading whole lines and states, before the content, the lines it shows, t
 file's line count when the read could count it within its scan limit, and the exact
 `offset` and `limit` that fetch the next page; a first line too long to show whole shows
 its first bytes and says that `read` cannot return the rest of it. A `list` or `search`
-keeps whole items and a `diff` whole lines, marked `truncated`. The results of one
-response's calls may weigh 50% together: results are kept in call order while they fit,
-and from the first `read` result that does not, every `read` of the response is answered
-with a `deferred` result that repeats its exact arguments, so the model fetches it in a
-later response. The read that crossed the share ran to be measured; later ones do not
-run. The turn report lists them as `ToolActivity::ReadDeferred`, and a deferred read
-supersedes nothing and runs again when the model repeats it. Results of other tools
-count toward the share but are always kept.
+keeps whole items and a `diff` whole lines, or the first bytes of the first one when
+none fits whole, marked `truncated`. The results of one response's calls may weigh 50%
+together: results are kept in call order while they fit, and from the first `read`
+result that does not, every `read` of the response is answered with a `deferred` result
+that repeats its exact arguments, so the model fetches it in a later response. The read
+that crossed the share ran to be measured; later ones do not run. The turn report lists
+them as `ToolActivity::ReadDeferred`. A deferred read, like a repeat answered by the
+note below, neither supersedes an earlier result nor is superseded, and runs when the
+model asks for it again. Results of other tools count toward the share but are always
+kept.
 
 Before running a `read`, the engine compares its canonical arguments with the reads
 already run in the turn. When an identical read ran earlier, no `write` or `bash` call

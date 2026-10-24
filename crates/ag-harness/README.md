@@ -172,10 +172,11 @@ let outcome = session
   calibrated input budget: a `file` or `show` read keeps its leading whole lines and
   states the lines shown, the file's line count, and the exact `offset` and `limit` that
   fetch the next page (a first line too long to show whole shows its first bytes). A
-  `list` or `search` keeps whole items, a `diff` whole lines. One response's results may
-  weigh 50% together: the first that fit are kept, and every later `read` is answered
-  with a `deferred` result repeating its exact arguments, reported as
-  `ToolActivity::ReadDeferred`, for the model to fetch in a later response.
+  `list` or `search` keeps whole items, a `diff` whole lines (or the first bytes of the
+  first one when none fits). One response's results may weigh 50% together: the first
+  that fit are kept, and every later `read` is answered with a `deferred` result
+  repeating its exact arguments, reported as `ToolActivity::ReadDeferred`, for the model
+  to fetch in a later response.
 - **Identical reads are answered from the earlier result.** A `read` whose arguments
   match an earlier read of the same turn returns a short note naming that call instead
   of running again, while the last request still carried the earlier result whole, no

@@ -316,10 +316,10 @@ impl Engine<'_> {
             let mut deferred = is_read && matches!(shortcut, Some(ReadShortcut::Defer));
             let (mut result, mut activity) = self
                 .execute_tool_call(call, &rounds.tools, turn_id, shortcut, &|content: &str| {
-                    share.result_fits(call.id(), content)
+                    share.result_fits(call, content)
                 })
                 .await?;
-            if !share.keeps(call.id(), &result, ran_read)
+            if !share.keeps(call, &result, ran_read)
                 && let Some(arguments) = call.read_arguments()
             {
                 result = context::deferred_read_result(arguments);
@@ -328,7 +328,7 @@ impl Engine<'_> {
                     duration: activity.duration(),
                     summary: sanitize_report_text(read_summary(arguments)),
                 };
-                share.keeps(call.id(), &result, false);
+                share.keeps(call, &result, false);
                 deferred = true;
             }
             let result_bytes = result.len();
@@ -1040,18 +1040,18 @@ impl<'a> RoundShare<'a> {
         }
     }
 
-    /// Whether a `read` result `content` for the call `call_id` weighs at
-    /// most the share one result may take.
-    fn result_fits(&self, call_id: &str, content: &str) -> bool {
-        self.weight(call_id, content) <= self.result_cap
+    /// Whether a `read` result `content` for `call` weighs at most the
+    /// share one result may take.
+    fn result_fits(&self, call: &ToolCall, content: &str) -> bool {
+        self.weight(call, content) <= self.result_cap
     }
 
-    /// Counts the `result` of the call `call_id` toward the round and
-    /// returns whether the round keeps it: always, except the result of a
-    /// `read` that `ran`, once the round's results would exceed the share,
-    /// after which later reads are deferred.
-    fn keeps(&mut self, call_id: &str, result: &str, ran: bool) -> bool {
-        let used = self.used.saturating_add(self.weight(call_id, result));
+    /// Counts the `result` of `call` toward the round and returns whether
+    /// the round keeps it: always, except the result of a `read` that `ran`,
+    /// once the round's results would exceed the share, after which later
+    /// reads are deferred.
+    fn keeps(&mut self, call: &ToolCall, result: &str, ran: bool) -> bool {
+        let used = self.used.saturating_add(self.weight(call, result));
         if ran && used > self.round_cap {
             self.deferring = true;
 
@@ -1062,11 +1062,13 @@ impl<'a> RoundShare<'a> {
         true
     }
 
-    fn weight(&self, call_id: &str, content: &str) -> u64 {
+    /// Weighs `content` as the result message the request records for
+    /// `call`, under that call's own tool name.
+    fn weight(&self, call: &ToolCall, content: &str) -> u64 {
         self.estimator.message_weight(&ModelMessage::ToolResult {
-            call_id: call_id.to_string(),
+            call_id: call.id().to_string(),
             content: content.to_string(),
-            name: Tool::Read.name().to_string(),
+            name: call.name().to_string(),
         })
     }
 }

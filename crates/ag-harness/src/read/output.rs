@@ -91,7 +91,7 @@ impl ReadOutput {
             .chain((!self.content.is_empty()).then_some(self.content.len()))
             .collect::<Vec<_>>();
         // Every line together already failed, with less metadata than a cut.
-        let fitting_lines = Self::longest_fitting(line_ends.len().saturating_sub(1), |lines| {
+        let fitting_lines = longest_fitting(line_ends.len().saturating_sub(1), |lines| {
             serde_json::to_string(&self.with_line_prefix(&line_ends, lines))
                 .is_ok_and(|candidate| accepts(&candidate))
         });
@@ -99,43 +99,21 @@ impl ReadOutput {
             self.with_line_prefix(&line_ends, fitting_lines)
         } else {
             let first_line = &self.content[..line_ends.first().copied().unwrap_or(0)];
-            let boundaries = first_line
-                .char_indices()
-                .map(|(index, _)| index)
-                .skip(1)
-                .chain((!first_line.is_empty()).then_some(first_line.len()))
-                .collect::<Vec<_>>();
-            let fitting_bytes = Self::longest_fitting(boundaries.len(), |count| {
-                serde_json::to_string(&self.with_line_part(&line_ends, boundaries[count - 1]))
+            let bytes = fitting_prefix(first_line, |prefix| {
+                serde_json::to_string(&self.with_line_part(&line_ends, prefix.len()))
                     .is_ok_and(|candidate| accepts(&candidate))
             });
-            if fitting_bytes == 0 {
+            if bytes == 0 {
                 return Err(ReadError::LineTooLong {
                     line: self.start_line,
                     path: self.path.clone(),
                 });
             }
 
-            self.with_line_part(&line_ends, boundaries[fitting_bytes - 1])
+            self.with_line_part(&line_ends, bytes)
         };
 
         Ok((serde_json::to_string(&page)?, page))
-    }
-
-    /// Returns the largest count in `0..=most` that `fits`, which holds for
-    /// every count below one that fits.
-    fn longest_fitting(most: usize, fits: impl Fn(usize) -> bool) -> usize {
-        let (mut fitting, mut candidate) = (0_usize, most);
-        while fitting < candidate {
-            let midpoint = fitting + (candidate - fitting).div_ceil(2);
-            if fits(midpoint) {
-                fitting = midpoint;
-            } else {
-                candidate = midpoint - 1;
-            }
-        }
-
-        fitting
     }
 
     /// Returns this output cut to its first `lines` whole lines.
@@ -466,4 +444,36 @@ fn rejected_tool_result(error: impl fmt::Display, path: &str) -> Result<String, 
         path,
         status: "rejected",
     })
+}
+
+/// Returns the largest count in `0..=most` that `fits`, which holds for
+/// every count below one that fits.
+pub(super) fn longest_fitting(most: usize, fits: impl Fn(usize) -> bool) -> usize {
+    let (mut fitting, mut candidate) = (0_usize, most);
+    while fitting < candidate {
+        let midpoint = fitting + (candidate - fitting).div_ceil(2);
+        if fits(midpoint) {
+            fitting = midpoint;
+        } else {
+            candidate = midpoint - 1;
+        }
+    }
+
+    fitting
+}
+
+/// Returns the byte length of the longest non-empty prefix of `text` that
+/// ends on a character boundary and `fits`, or zero when none does.
+pub(super) fn fitting_prefix(text: &str, fits: impl Fn(&str) -> bool) -> usize {
+    let boundaries = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .skip(1)
+        .chain((!text.is_empty()).then_some(text.len()))
+        .collect::<Vec<_>>();
+    let count = longest_fitting(boundaries.len(), |count| {
+        fits(&text[..boundaries[count - 1]])
+    });
+
+    count.checked_sub(1).map_or(0, |index| boundaries[index])
 }

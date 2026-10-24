@@ -23,14 +23,19 @@ fn output(content: &str, start_line: u64, total_lines: Option<u64>) -> ReadOutpu
 }
 
 /// Accepts results whose shown `content` or `result` holds at most `lines`
-/// lines or items and at most `bytes` bytes.
+/// lines or items and at most `bytes` bytes of text or per item.
 fn at_most(lines: usize, bytes: usize) -> impl Fn(&str) -> bool + Sync {
     move |result: &str| {
         let result: Value = serde_json::from_str(result).expect("result JSON");
         let shown = result.get("content").or_else(|| result.get("result"));
         match shown {
             Some(Value::String(text)) => text.lines().count() <= lines && text.len() <= bytes,
-            Some(Value::Array(items)) => items.len() <= lines,
+            Some(Value::Array(items)) => {
+                items.len() <= lines
+                    && items
+                        .iter()
+                        .all(|item| item.as_str().is_some_and(|item| item.len() <= bytes))
+            }
             _ => false,
         }
     }
@@ -204,4 +209,96 @@ fn refitting_fails_when_no_form_fits() {
 
     // Assert
     assert_eq!(refitted, None);
+}
+
+#[test]
+fn pages_reads_ending_in_an_empty_or_unterminated_line_exactly() {
+    // Arrange
+    let mut empty_last_line = output("a\n", 1, Some(2));
+    empty_last_line.end_line = Some(2);
+    let cases = [
+        (
+            empty_last_line,
+            1,
+            "a",
+            "Showing lines 1-1 of 2. Use offset=2 limit=1 to continue.",
+        ),
+        (
+            output("ab\ncd", 1, Some(2)),
+            2,
+            "ab",
+            "Showing lines 1-1 of 2. Use offset=2 limit=1 to continue.",
+        ),
+    ];
+
+    for (output, bytes, content, continuation) in cases {
+        // Act
+        let (result, shown) = output
+            .to_tool_result_within(&at_most(usize::MAX, bytes))
+            .expect("one line fits");
+
+        // Assert
+        let result: Value = serde_json::from_str(&result).expect("result JSON");
+        assert_eq!(shown.content(), content);
+        assert_eq!(shown.end_line(), Some(1));
+        assert_eq!(shown.next_offset(), Some(2));
+        assert_eq!(shown.total_lines(), Some(2));
+        assert_eq!(result["continuation"], continuation);
+    }
+}
+
+#[test]
+fn a_first_line_cut_counts_the_metadata_until_not_one_byte_fits() {
+    // Arrange
+    // Long enough that the whole result outweighs any cut of it.
+    let output = output(&format!("{}\nij", "abcdefgh".repeat(100)), 1, Some(2));
+    let one_byte = output
+        .to_tool_result_within(&at_most(1, 1))
+        .expect("one byte fits")
+        .0
+        .len();
+
+    // Act
+    let (result, shown) = output
+        .to_tool_result_within(&|result: &str| result.len() <= one_byte)
+        .expect("exactly one byte fits beside the metadata");
+    let error = output
+        .to_tool_result_within(&|result: &str| result.len() < one_byte)
+        .expect_err("the metadata alone leaves no room");
+
+    // Assert
+    assert_eq!(result.len(), one_byte);
+    assert_eq!(shown.content(), "a");
+    assert_eq!(shown.next_offset(), Some(2));
+    assert_eq!(shown.total_lines(), Some(2));
+    assert!(matches!(error, ReadError::LineTooLong { line: 1, .. }));
+}
+
+#[test]
+fn inspection_results_keep_the_first_bytes_when_no_whole_line_or_item_fits() {
+    // Arrange
+    let diff = |result: &str| {
+        json!({"action": "diff", "comparison_base": "abc123", "result": result, "truncated": false})
+            .to_string()
+    };
+    let search =
+        json!({"action": "search", "result": ["src/lib.rs:7:abcdefgh", "b"], "truncated": false})
+            .to_string();
+    let cases = [
+        (diff("l1\nl2"), 1, usize::MAX, json!("l1\n")),
+        (diff("abcdefgh\nij"), 1, 3, json!("abc")),
+        (search, 1, 13, json!(["src/lib.rs:7:"])),
+    ];
+
+    for (content, lines, bytes, shown) in cases {
+        // Act
+        let refitted = fit_tool_result(&content, &at_most(lines, bytes));
+
+        // Assert
+        let refitted: Value =
+            serde_json::from_str(&refitted.expect("refitted result")).expect("JSON");
+        assert_eq!(refitted["result"], shown, "{content}");
+        assert_eq!(refitted["truncated"], true, "{content}");
+    }
+    assert_eq!(fit_tool_result(&diff("abc"), &|_| false), None);
 }

@@ -2015,7 +2015,8 @@ fn is_tool_call_message(message: &ModelMessage) -> bool {
 }
 
 /// Returns, oldest first, each tool result whose index lies in `range` that
-/// a later call of `messages` superseded, with the nearest such call.
+/// a later call of `messages` superseded, with the nearest such call. A
+/// repeat or deferred `read` result neither supersedes nor is superseded.
 /// Results pair with the latest earlier call of their identifier, so
 /// identifiers reused across turns stay distinct.
 fn find_superseded<'a>(
@@ -2042,7 +2043,11 @@ fn find_superseded<'a>(
         .iter()
         .enumerate()
         .filter_map(|(position, (call, result))| {
-            let result = result.filter(|result| range.contains(result))?;
+            // A result without content of its own stands in for nothing a
+            // later call could return again.
+            let result = result.filter(|result| {
+                range.contains(result) && !is_contentless_read(&messages[*result])
+            })?;
             let supersession = calls[position + 1..]
                 .iter()
                 .find_map(|(later, later_result)| {
@@ -2378,9 +2383,8 @@ pub(crate) fn repeated_read_result(same_as_call: &str) -> String {
 /// fill [`LATEST_ROUND_CAP_PERCENT`] of the capacity. It repeats the call's
 /// exact arguments, so the model can fetch the result in a later response.
 pub(crate) fn deferred_read_result(arguments: &ReadArguments) -> String {
-    let note = "This read's result is not shown: the earlier results of this response already \
-                fill the share of the context window that one round of tool calls may use. Call \
-                read again with exactly these arguments in a later response to see it.";
+    let note = "Not shown: this response's earlier results fill one round's share of the context \
+                window. Call read with these arguments in a later response.";
     let call = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
 
     // Fields are written in this order so the result starts with

@@ -422,6 +422,25 @@ fn later_rereads_writes_and_reruns_supersede_history_and_current_results() {
         &read_of("s2", &search),
         deferred_read_result(&arguments(&search)),
     );
+    // Nor is one superseded when the model fetches it later: only the run
+    // search before it is.
+    record(
+        &mut request,
+        &read_of("s3", &search),
+        json!({"action": "search", "result": ["src/lib.rs:1:fn fit"], "truncated": false})
+            .to_string(),
+    );
+    let notes = json!({"path": "notes.md"});
+    record(
+        &mut request,
+        &read_of("n1", &notes),
+        deferred_read_result(&arguments(&notes)),
+    );
+    record(
+        &mut request,
+        &read_of("n2", &notes),
+        file_result("notes.md", 1, 4),
+    );
 
     // Act
     let superseded = superseded(request.messages());
@@ -433,6 +452,7 @@ fn later_rereads_writes_and_reruns_supersede_history_and_current_results() {
             (3, "r1".to_string(), SupersessionCause::Reread),
             (7, "b2".to_string(), SupersessionCause::Rerun),
             (9, "w1".to_string(), SupersessionCause::Write),
+            (19, "s3".to_string(), SupersessionCause::Reread),
         ]
     );
 }
@@ -527,7 +547,7 @@ fn deferred_read_results_repeat_the_exact_call() {
         parsed["deferred"]
             .as_str()
             .expect("note")
-            .contains("Call read again with exactly these arguments")
+            .contains("Call read with these arguments in a later response")
     );
 }
 
