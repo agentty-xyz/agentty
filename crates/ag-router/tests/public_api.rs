@@ -284,11 +284,11 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
     // Arrange
     let notes = "Notes: src/a.rs defines alpha_one. Next I read src/b.rs.";
     let cases = [
-        (Provider::Kimi, "kimi/kimi-k2.6"),
-        (Provider::Muse, "muse/muse-spark-1.3"),
-        (Provider::Qwen, "qwen/qwen3.8-max"),
+        (Provider::Kimi, "kimi/kimi-k2.6", Some("session-1")),
+        (Provider::Muse, "muse/muse-spark-1.3", Some("session-1")),
+        (Provider::Qwen, "qwen/qwen3.8-max", None),
     ];
-    for (provider, model) in cases {
+    for (provider, model, sent_cache_key) in cases {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/chat/completions"))
@@ -314,6 +314,7 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
                 json!({"type":"object"}),
             ));
         }
+        request.options.prompt_cache_key = Some("session-1".to_string());
         let router = router(provider, &server)?;
 
         // Act
@@ -351,6 +352,11 @@ async fn keeps_assistant_text_beside_tool_calls_and_replays_it_as_content()
         assert_eq!(calls[1].assistant_text(), None, "{model}");
         assert_eq!(replayed["content"], notes, "{model}");
         assert_eq!(replayed["tool_calls"].as_array().map(Vec::len), Some(2));
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(Value::as_str),
+            sent_cache_key,
+            "{model}"
+        );
     }
 
     Ok(())
