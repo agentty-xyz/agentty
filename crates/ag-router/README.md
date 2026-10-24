@@ -46,6 +46,9 @@ match router.execute(request).await? {
 The public response contract is always JSON Schema. Muse receives native `json_schema`
 wire requests; Kimi and Qwen use their supported `json_object` mode plus a schema
 instruction, then all three undergo the same local validation. Tool calls are
-intermediate responses and are never executed by this crate. Provider selection is
-explicit; routing does not retry a request on another provider. The current `Task`
-surface supports chat only. Streaming and other model modes are not yet implemented.
+intermediate responses and are never executed by this crate. An optional
+`GenerationOptions::prompt_cache_key` is sent as `prompt_cache_key` to Muse and Kimi,
+which route requests sharing a key to the backend holding their cached prefix; Qwen
+requests leave it off. Provider selection is explicit; routing does not retry a request
+on another provider. The current `Task` surface supports chat only. Streaming and other
+model modes are not yet implemented.

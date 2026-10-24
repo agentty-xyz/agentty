@@ -122,8 +122,11 @@ impl JsonSchemaFormat {
 }
 
 /// Optional generation settings.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct GenerationOptions {
+    /// Stable key grouping requests that share a prompt prefix, sent as
+    /// `prompt_cache_key` only to providers that route prompt-cache hits by it.
+    pub prompt_cache_key: Option<String>,
     /// Requested reasoning depth, if supported by the model.
     pub reasoning_effort: Option<ReasoningEffort>,
 }

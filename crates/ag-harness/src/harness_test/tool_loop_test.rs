@@ -898,3 +898,68 @@ async fn a_failed_turn_reports_the_requests_and_tool_calls_before_its_failure() 
     assert_eq!(report.model_requests().len(), 1);
     assert_eq!(report.tool_calls().len(), 1);
 }
+
+#[tokio::test]
+async fn requests_share_one_cache_key_per_session_and_per_stateless_turn() {
+    // Arrange
+    let mut responses = reads(4);
+    responses.extend([
+        Ok(output()),
+        Err(overflow()),
+        Ok(output()),
+        Ok(output()),
+        Ok(output()),
+        Ok(output()),
+        Ok(output()),
+    ]);
+    let (model, requests) = scripted(responses);
+    let harness = overflow_harness(model, 20_000).store(Arc::new(MemoryStore::new()));
+    let mut session = harness
+        .session("keyed-session", object_schema())
+        .create()
+        .await
+        .expect("session");
+    let mut other = harness
+        .session("other-session", object_schema())
+        .create()
+        .await
+        .expect("other session");
+
+    // Act
+    session
+        .send("read the notes")
+        .await
+        .expect("tool loop turn");
+    let recovered = session
+        .send("summarize them")
+        .await
+        .expect("fitted retry turn");
+    let mut resumed = harness.resume("keyed-session").await.expect("resume");
+    resumed.send("anything else?").await.expect("resumed turn");
+    other.send("hello").await.expect("other session turn");
+    harness
+        .run_once("first one-shot", object_schema())
+        .await
+        .expect("first one-shot turn");
+    harness
+        .run_once("second one-shot", object_schema())
+        .await
+        .expect("second one-shot turn");
+
+    // Assert
+    assert_eq!(recovered.report().context_overflow_recoveries(), 1);
+    let requests = requests.lock().expect("requests lock");
+    let keys: Vec<&str> = requests
+        .iter()
+        .map(|request| request.cache_key().expect("every turn request is keyed"))
+        .collect();
+    assert_eq!(keys.len(), 11);
+    let session_key = keys[0];
+    assert!(session_key.starts_with("ag-session-"));
+    assert!(!session_key.contains("keyed"));
+    assert!(keys[..8].iter().all(|key| *key == session_key));
+    assert_ne!(keys[8], session_key);
+    assert!(keys[8].starts_with("ag-session-"));
+    assert!(keys[9].starts_with("ag-turn-"));
+    assert_ne!(keys[9], keys[10]);
+}

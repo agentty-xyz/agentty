@@ -1,12 +1,15 @@
 use std::collections::VecDeque;
 use std::future::{Future, IntoFuture};
+use std::hash::{BuildHasher, RandomState};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 
 use crate::calibration::ContextCalibration;
@@ -589,9 +592,19 @@ impl Session {
         }
         let retained_messages = messages.len();
         let request = ModelRequest::with_history(messages, input, options.schema().clone())
-            .with_history_turn_starts(history_turn_starts);
+            .with_history_turn_starts(history_turn_starts)
+            .with_cache_key(self.cache_key());
 
         (request, retained_messages, history)
+    }
+
+    /// Returns the prompt-cache key shared by every turn request of this
+    /// session, stable across handles and resume. Hashing bounds its length
+    /// and keeps the host-chosen session ID off the provider wire.
+    fn cache_key(&self) -> String {
+        let digest = Sha256::digest(self.id.as_bytes());
+
+        format!("ag-session-{}", hex::encode(&digest[..16]))
     }
 
     /// Rejects image-bearing input the history budget would evict at once,
@@ -1161,7 +1174,8 @@ impl Harness {
         self.check_input_capability(&input)?;
         self.admit_mandatory_content(None, &input, &options)?;
         let _effects = effects.retain();
-        let request = ModelRequest::new(input, options.schema().clone());
+        let request = ModelRequest::new(input, options.schema().clone())
+            .with_cache_key(Self::turn_cache_key());
         let turn = self.lifecycle.start_turn();
         let turn_id = turn.as_ref().map(TurnLifecycle::id);
         let mut engine = self.engine(&options);
@@ -1169,6 +1183,15 @@ impl Harness {
         let result = engine.run(request, turn_id, None).await;
 
         Self::finish_turn(turn, result)
+    }
+
+    /// Returns a fresh prompt-cache key for one stateless turn, so its tool
+    /// loop routes together without pinning unrelated turns to one backend.
+    fn turn_cache_key() -> String {
+        static NEXT_TURN: AtomicU64 = AtomicU64::new(0);
+        let turn = NEXT_TURN.fetch_add(1, Ordering::Relaxed);
+
+        format!("ag-turn-{:016x}", RandomState::new().hash_one(turn))
     }
 
     /// Admits mandatory content against the context budget scaled by the

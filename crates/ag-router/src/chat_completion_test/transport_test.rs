@@ -64,6 +64,7 @@ fn normalizes_transport_error_classification() {
             context_overflow_markers: &[],
             display_name: "Provider",
             image_input: false,
+            prompt_cache_key: false,
             reasoning_format: ReasoningFormat::Effort(max_as_xhigh),
             response_format_with_tools: true,
             structured_output: StructuredOutputMode::JsonSchema,

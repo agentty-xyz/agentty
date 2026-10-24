@@ -376,6 +376,57 @@ async fn replays_image_and_batched_function_history_for_kimi()
     Ok(())
 }
 
+#[tokio::test]
+async fn sends_prompt_cache_key_only_to_providers_that_route_by_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let cases = [
+        (
+            "muse/muse-spark-1.3",
+            Provider::Muse,
+            Some("session-key"),
+            true,
+        ),
+        ("muse/muse-spark-1.3", Provider::Muse, None, false),
+        ("kimi/kimi-k3", Provider::Kimi, Some("session-key"), true),
+        (
+            "qwen/qwen3.8-max",
+            Provider::Qwen,
+            Some("session-key"),
+            false,
+        ),
+    ];
+
+    for (model, provider, key, expected) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut request = request(model)?;
+        request.options.prompt_cache_key = key.map(str::to_string);
+
+        // Act
+        router(provider, &server)?.execute(request).await?;
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or("request recording disabled")?;
+        let body: Value = serde_json::from_slice(&requests[0].body)?;
+
+        // Assert
+        assert_eq!(
+            body.get("prompt_cache_key"),
+            expected.then(|| json!("session-key")).as_ref(),
+            "{model} with key {key:?}"
+        );
+    }
+
+    Ok(())
+}
+
 /// Returns the router error for one request answered with `status` and
 /// `body`.
 async fn failure(

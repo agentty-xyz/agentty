@@ -1,11 +1,31 @@
 use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 use crate::provider::kimi::KimiConfig;
 use crate::provider::test_support::STRUCTURED_OUTPUT_INSTRUCTION;
 use crate::schema_contract::OutputSchema;
 use crate::{model, tool};
+
+/// Matches a durable-session request whose body equals the wrapped value
+/// plus the session's `prompt_cache_key`.
+pub(super) struct SessionBody(pub(super) Value);
+
+impl Match for SessionBody {
+    fn matches(&self, request: &Request) -> bool {
+        let Ok(mut body) = request.body_json::<Value>() else {
+            return false;
+        };
+        let key = body
+            .as_object_mut()
+            .and_then(|body| body.remove("prompt_cache_key"));
+
+        key.as_ref()
+            .and_then(Value::as_str)
+            .is_some_and(|key| key.starts_with("ag-session-"))
+            && body == self.0
+    }
+}
 
 pub(super) fn person_schema_value() -> Value {
     json!({

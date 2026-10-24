@@ -1,10 +1,10 @@
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{bearer_token, body_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::support::{
-    kimi, kimi_model, mount_tool_response, person_schema, person_schema_value, read_request,
-    read_tool_wire,
+    SessionBody, kimi, kimi_model, mount_tool_response, person_schema, person_schema_value,
+    read_request, read_tool_wire,
 };
 use crate::context_budget_fixture::unbounded_context_budget;
 use crate::harness::Harness;
@@ -114,7 +114,7 @@ async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {
                     "content": format!(
@@ -143,7 +143,7 @@ async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {
                     "content": format!(
@@ -194,6 +194,20 @@ async fn preserves_terminal_k3_reasoning_for_next_session_turn() {
     // Assert
     assert_eq!(first.output(), &json!({ "name": "Ada" }));
     assert_eq!(second.output(), first.output());
+    let keys: Vec<_> = server
+        .received_requests()
+        .await
+        .expect("request recording should be enabled")
+        .iter()
+        .map(|request| {
+            request
+                .body_json::<Value>()
+                .expect("request body should be JSON")["prompt_cache_key"]
+                .clone()
+        })
+        .collect();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1]);
 }
 
 #[tokio::test]
@@ -207,7 +221,7 @@ async fn preserves_terminal_k2_6_reasoning_for_next_session_turn() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {
                     "content": format!(
@@ -237,7 +251,7 @@ async fn preserves_terminal_k2_6_reasoning_for_next_session_turn() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {
                     "content": format!(

@@ -14,7 +14,7 @@ use serde_json::json;
 use testty::session::PtySessionBuilder;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use wiremock::matchers::{bearer_token, body_json, body_string_contains, method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Match, Mock, MockServer, Request, ResponseTemplate};
 
 const READ_ONLY_SYSTEM_PROMPT: &str = concat!(
     "You are operating in a read-only repository harness. The read tool supports file, list, ",
@@ -48,6 +48,26 @@ const READ_WRITE_SYSTEM_PROMPT: &str = concat!(
     "claim that a file was created or modified after the write tool succeeds. File deletion and ",
     "command execution are unavailable."
 );
+
+/// Matches a session request whose body equals the wrapped value plus the
+/// `prompt_cache_key` that Muse and Kimi receive for every session turn.
+struct SessionBody(serde_json::Value);
+
+impl Match for SessionBody {
+    fn matches(&self, request: &Request) -> bool {
+        let Ok(mut body) = request.body_json::<serde_json::Value>() else {
+            return false;
+        };
+        let key = body
+            .as_object_mut()
+            .and_then(|body| body.remove("prompt_cache_key"));
+
+        key.as_ref()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|key| key.starts_with("ag-session-"))
+            && body == self.0
+    }
+}
 
 fn chat_schema() -> serde_json::Value {
     json!({
@@ -343,7 +363,7 @@ async fn kimi_custom_models_use_supported_reasoning_formats() {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(bearer_token("test-key"))
-            .and(body_json(expected_request))
+            .and(SessionBody(expected_request))
             .respond_with(response("provider response", 4, 2))
             .expect(1)
             .mount(&server)
@@ -419,12 +439,18 @@ async fn provider_flags_select_kimi_and_qwen_wire_formats() {
             .await
             .expect("provider request should be recorded");
         assert_eq!(requests.len(), 1);
+        let mut body = requests[0]
+            .body_json::<serde_json::Value>()
+            .expect("provider request should contain JSON");
+        let cache_key = body
+            .as_object_mut()
+            .and_then(|body| body.remove("prompt_cache_key"));
         assert_eq!(
-            requests[0]
-                .body_json::<serde_json::Value>()
-                .expect("provider request should contain JSON"),
-            expected_request
+            cache_key.is_some(),
+            provider == ModelProvider::Kimi,
+            "{provider} cache key"
         );
+        assert_eq!(body, expected_request);
     }
 }
 
@@ -435,7 +461,7 @@ async fn initial_prompt_prints_answer_and_model_metadata() {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(bearer_token("test-key"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
                 {"content": "Hello", "role": "user"}
@@ -833,7 +859,7 @@ async fn stdin_chat_emits_failure_before_retry_and_exits_unsuccessfully() {
         .await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
                 {"content": "first question", "role": "user"},
@@ -927,7 +953,7 @@ async fn read_tool_reports_the_file_without_printing_its_contents() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
                 {"content": "Inspect the manifest", "role": "user"}
@@ -1079,7 +1105,7 @@ async fn redirected_output_with_terminal_stdin_is_one_shot() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .and(body_json(json!({
+        .and(SessionBody(json!({
             "messages": [
                 {"content": READ_ONLY_SYSTEM_PROMPT, "role": "system"},
                 {"content": "Hello", "role": "user"}
