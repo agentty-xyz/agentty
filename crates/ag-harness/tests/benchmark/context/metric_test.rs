@@ -6,7 +6,7 @@ use ag_harness::tool::ReadAction;
 use ag_harness::turn::ToolActivity;
 use serde_json::{Value, json};
 
-use crate::metric::{duplicate_reads, record_cache_reuse};
+use crate::metric::{deferred_reads, duplicate_reads, record_cache_reuse};
 
 fn file_read(path: &str, start_line: u64) -> ToolActivity {
     ToolActivity::Read {
@@ -91,6 +91,18 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
             1,
         ),
         (
+            "a deferred read is not a read, so fetching it later is no repeat",
+            vec![
+                ToolActivity::ReadDeferred {
+                    action: ReadAction::File,
+                    duration: Duration::ZERO,
+                    summary: "src/a.rs".to_string(),
+                },
+                file_read("src/a.rs", 1),
+            ],
+            0,
+        ),
+        (
             "writes and rejected reads are not reads",
             vec![
                 ToolActivity::Write {
@@ -118,6 +130,23 @@ fn duplicate_reads_key_inspections_by_their_arguments() {
         // Assert
         assert_eq!(duplicates, expected, "{case}");
     }
+}
+
+#[test]
+fn deferred_reads_count_only_reads_answered_with_their_call() {
+    // Arrange
+    let deferred = ToolActivity::ReadDeferred {
+        action: ReadAction::Search,
+        duration: Duration::ZERO,
+        summary: "pub fn".to_string(),
+    };
+    let tool_calls = vec![file_read("src/a.rs", 1), deferred.clone(), deferred];
+
+    // Act
+    let deferred = deferred_reads(&tool_calls);
+
+    // Assert
+    assert_eq!(deferred, 2);
 }
 
 #[test]

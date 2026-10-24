@@ -14,6 +14,7 @@ pub(super) struct Activity {
     cache: Map<String, Value>,
     context: [(&'static str, usize); 9],
     context_overflow_recoveries: usize,
+    deferred_reads: usize,
     duplicate_reads: usize,
     input_tokens: Option<u64>,
     malformed_tool_calls: usize,
@@ -63,6 +64,7 @@ impl Activity {
             cache,
             context: context.0,
             context_overflow_recoveries: report.context_overflow_recoveries(),
+            deferred_reads: metric::deferred_reads(report.tool_calls()),
             duplicate_reads: metric::duplicate_reads(report.tool_calls()),
             input_tokens,
             malformed_tool_calls: report.malformed_tool_calls(),
@@ -86,6 +88,7 @@ impl Activity {
         line.insert("output_corrections".into(), json!(self.output_corrections));
         line.insert("tool_calls".into(), json!(self.tool_calls));
         line.insert("duplicate_reads".into(), json!(self.duplicate_reads));
+        line.insert("deferred_reads".into(), json!(self.deferred_reads));
         line.insert("input_tokens".into(), json!(self.input_tokens));
         line.insert("output_tokens".into(), json!(self.output_tokens));
         for (name, value) in &self.cache {
@@ -213,11 +216,12 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 18] = [
+const ACTIVITY_FIELDS: [&str; 19] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
     "duplicate_reads",
+    "deferred_reads",
     "input_tokens",
     "output_tokens",
     "cache_hit_tokens",

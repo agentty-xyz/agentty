@@ -123,7 +123,9 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
   starting line, an inspection with the same canonical arguments (a `search` for one
   query in two paths is not a repeat), or a repeat the harness answered without running
-  it.
+  it. `deferred_reads` counts reads answered with their exact call instead of a result
+  because earlier results of the same response already filled the round's share of the
+  budget; fetching one later is not a repeat.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
 - `requests` lists every reported request in order, including outputs rejected and

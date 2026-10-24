@@ -45,6 +45,15 @@ pub(super) fn duplicate_reads(tool_calls: &[ToolActivity]) -> usize {
     duplicates
 }
 
+/// Counts reads answered with the call that fetches them because earlier
+/// results of their response already filled the round's share.
+pub(super) fn deferred_reads(tool_calls: &[ToolActivity]) -> usize {
+    tool_calls
+        .iter()
+        .filter(|activity| matches!(activity, ToolActivity::ReadDeferred { .. }))
+        .count()
+}
+
 /// Adds prompt-cache reuse to each turn request record, measured against
 /// the previous turn request, and returns the run's cache totals.
 ///
