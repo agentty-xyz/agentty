@@ -170,6 +170,7 @@ fn summary_schema_accepts_only_bounded_structured_output() {
     );
     assert!(GENERATION_INSTRUCTIONS.contains("Summarize"));
     assert!(GENERATION_INSTRUCTIONS.contains("preserve every concrete fact verbatim"));
+    assert!(GENERATION_INSTRUCTIONS.contains("Record only what the source shows: never infer"));
 }
 
 #[test]

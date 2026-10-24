@@ -54,6 +54,12 @@ pub(crate) const MAX_CONSECUTIVE_MALFORMED_TOOL_RESPONSES: usize = 3;
 /// stops after a bounded number of wasted requests.
 pub(crate) const MAX_CONTEXT_OVERFLOW_RECOVERIES: usize = 2;
 
+/// Request-only feedback after a summary request that continues the turn,
+/// tools included, was answered with tool calls; the calls never run.
+const SUMMARY_TOOL_CALL_FEEDBACK: &str = "[harness] Those tool calls were not run: this reply \
+                                          must be the summary itself. Do not call any tool; reply \
+                                          with only the JSON summary object requested above.";
+
 /// Shared execution dependencies and the immutable configuration for one turn.
 pub(crate) struct Engine<'a> {
     pub(crate) context_budget: context::ContextBudget,
@@ -83,7 +89,13 @@ impl Engine<'_> {
         let (request, tools) = self
             .prepare_request(request, journal)
             .map_err(EngineFailure::unreported)?;
-        let mut state = TurnState::new(ToolRounds::new(tools, recorder));
+        // Only a turn that may summarize asks the model how to.
+        let shared_prefix_summaries = self.context_summaries == ContextSummaryPolicy::Enabled
+            && self.model.keeps_prefix_across_schemas();
+        let mut state = TurnState::new(
+            ToolRounds::new(tools, recorder),
+            context::ContextFit::new(shared_prefix_summaries),
+        );
         match self.drive(request, turn_id, &mut state).await {
             Ok((output, messages)) => {
                 let report = state.into_report(started_at.elapsed());
@@ -416,12 +428,13 @@ impl Engine<'_> {
         }
     }
 
-    /// Sends the tool-free summary request at low reasoning effort,
-    /// re-requesting an invalid output with corrective feedback at most
-    /// [`MAX_OUTPUT_CORRECTIONS`] times, and returns a summary that satisfies
-    /// the summary schema, fits the job's size limit, and is smaller than its
-    /// source. Every answered request is reported with
-    /// [`ModelRequestPurpose::ContextSummary`] and calibrates later estimates.
+    /// Sends the job's summary request, re-requesting an invalid output, or
+    /// tool calls in answer to a request that continues the turn with its
+    /// tools, with corrective feedback at most [`MAX_OUTPUT_CORRECTIONS`]
+    /// times, and returns a summary that satisfies the summary schema, fits
+    /// the job's size limit, and is smaller than its source. Every answered
+    /// request is reported with [`ModelRequestPurpose::ContextSummary`] and
+    /// calibrates later estimates.
     async fn request_summary(
         &self,
         job: &RoundSummaryJob,
@@ -432,17 +445,15 @@ impl Engine<'_> {
         if self.lifecycle.is_enabled() {
             request.mark_lifecycle_observed();
         }
-        // Summarizing restates what the rounds hold rather than reasoning
-        // about them; a reasoning model at the turn's effort can outlast the
-        // request timeout on a large source.
-        request = request.with_model_reasoning_effort(ReasoningEffort::Low);
         let mut corrections = 0;
         loop {
             let (_, calibration) = self
                 .context_calibration
                 .effective_budget(self.context_budget);
+            // A continued request states the turn's schema in its prompt.
+            let prompt_schema = request.prefix_schema().unwrap_or(request.schema());
             let estimated_weight = request.messages().iter().fold(
-                self.context_estimator.request_weight(request.schema()),
+                self.context_estimator.request_weight(prompt_schema),
                 |weight, message| {
                     weight.saturating_add(self.context_estimator.message_weight(message))
                 },
@@ -483,7 +494,13 @@ impl Engine<'_> {
                 calibration,
             ));
             let ModelResponse::Output(summary) = response else {
-                return Err(ContextSummaryErrorType::InvalidOutput);
+                if corrections == MAX_OUTPUT_CORRECTIONS || request.tools().is_empty() {
+                    return Err(ContextSummaryErrorType::InvalidOutput);
+                }
+                corrections += 1;
+                request.record_feedback(SUMMARY_TOOL_CALL_FEEDBACK.to_string());
+
+                continue;
             };
 
             return compaction::accept_summary(
@@ -794,10 +811,10 @@ struct TurnState {
 }
 
 impl TurnState {
-    fn new(rounds: ToolRounds) -> Self {
+    fn new(rounds: ToolRounds, context_fit: context::ContextFit) -> Self {
         Self {
             rounds,
-            context_fit: context::ContextFit::default(),
+            context_fit,
             model_request_index: 0,
             model_requests: Vec::new(),
             output_corrections: 0,

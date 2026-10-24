@@ -555,6 +555,8 @@ fn wrapper_preserves_adapter_schema_preflight() {
         model.validate_schema(&scalar),
         Err(model::ModelError::UnsupportedOutputSchema { .. })
     ));
+    // Muse constrains output natively, so another schema loses the prefix.
+    assert!(!model.keeps_prefix_across_schemas());
 }
 
 #[test]

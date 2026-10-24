@@ -1070,6 +1070,51 @@ fn routed_request_preserves_image_batch_cache_key_and_all_reasoning_efforts() {
     }
 }
 
+#[test]
+fn continued_requests_route_the_schema_their_conversation_used() {
+    // Arrange
+    let qwen = ModelClient::qwen(QwenConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "qwen3.8-max".to_string(),
+    })
+    .expect("valid model identity");
+    let muse = ModelClient::muse(MuseConfig {
+        api_key: "test-key".to_string(),
+        base_url: "https://example.com/v1".to_string(),
+        model: "muse-spark-1.3".to_string(),
+    })
+    .expect("valid model identity");
+    let turn_schema = OutputSchema::new(json!({"type":"object"})).expect("valid schema");
+    let summary_schema =
+        OutputSchema::new(json!({"type":"object","required":["context"]})).expect("valid schema");
+    let turn = ModelRequest::new("list the files", turn_schema.clone());
+
+    // Act
+    let continued = turn.continued_with(
+        ModelMessage::User("summarize".to_string()),
+        summary_schema.clone(),
+    );
+    let again = continued.continued_with(
+        ModelMessage::User("summarize again".to_string()),
+        summary_schema.clone(),
+    );
+    let routed = qwen
+        .to_router_request(&continued)
+        .expect("continued request routes");
+    let plain = qwen.to_router_request(&turn).expect("turn request routes");
+
+    // Assert
+    assert!(Model::keeps_prefix_across_schemas(&qwen));
+    assert!(!Model::keeps_prefix_across_schemas(&muse));
+    assert_eq!(continued.prefix_schema(), Some(&turn_schema));
+    assert_eq!(again.prefix_schema(), Some(&turn_schema));
+    assert_eq!(again.messages().len(), 3);
+    assert_eq!(routed.options.prefix_schema, Some(turn_schema));
+    assert_eq!(routed.schema(), &summary_schema);
+    assert_eq!(plain.options.prefix_schema, None);
+}
+
 #[tokio::test]
 async fn routed_request_rejects_invalid_replayed_tool_call_before_network() {
     // Arrange

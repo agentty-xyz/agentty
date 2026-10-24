@@ -90,6 +90,19 @@ impl Router {
         self.backend(model)?.validate_input(input)
     }
 
+    /// Returns whether the selected model is asked for structured output by
+    /// a leading prompt message stating the schema, so a request carrying
+    /// [`crate::GenerationOptions::prefix_schema`] keeps the cached prefix of
+    /// the conversation it continues while asking for another schema. A
+    /// model constrained natively renders the requested schema into its
+    /// prompt, so changing it loses that prefix.
+    ///
+    /// # Errors
+    /// Returns a routing error for an unknown or unconfigured model.
+    pub fn keeps_prefix_across_schemas(&self, model: &str) -> Result<bool, ModelError> {
+        Ok(self.backend(model)?.keeps_prefix_across_schemas())
+    }
+
     /// Executes one request and validates terminal JSON against its schema.
     ///
     /// # Errors

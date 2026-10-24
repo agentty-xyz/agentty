@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::support::object_schema;
+use crate::compaction::summary_schema;
 use crate::context::{ContextBudget, ContextSummaryPolicy};
 use crate::file_system::MockFileSystem;
 use crate::harness::Harness;
@@ -18,13 +19,18 @@ use crate::model::{
     Model, ModelCompletion, ModelError, ModelMessage, ModelRequest, ModelResponse, ReasoningEffort,
 };
 use crate::repository::Repository;
-use crate::round_summary::ROUND_SUMMARY_INSTRUCTIONS;
+use crate::round_summary::{CONTINUED_SUMMARY_PREFIX, ROUND_SUMMARY_INSTRUCTIONS};
 use crate::store::MemoryStore;
 use crate::tool::{Tool, ToolCall};
 use crate::turn::{ModelRequestPurpose, TurnOutcome};
 
 /// Weight budget that holds about five 8 KB file reads.
 const BUDGET: u64 = 12_000;
+
+/// Weight budget whose uncalibrated share leaves room for the summary
+/// instruction beside the last request sent before a summary, so the
+/// summary continues that request.
+const ROOMY_BUDGET: u64 = 14_000;
 
 /// Rounds each turn reads, one distinct file per round, before answering.
 const READS: usize = 10;
@@ -33,6 +39,7 @@ const READS: usize = 10;
 /// answering, and summary requests with the scripted responses, in order,
 /// then with a valid summary.
 struct SummarizingModel {
+    keeps_prefix: bool,
     requests: Arc<Mutex<Vec<ModelRequest>>>,
     summaries: Mutex<VecDeque<Result<ModelResponse, ModelError>>>,
 }
@@ -43,9 +50,21 @@ impl SummarizingModel {
     ) -> (Self, Arc<Mutex<Vec<ModelRequest>>>) {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = Self {
+            keeps_prefix: false,
             requests: Arc::clone(&requests),
             summaries: Mutex::new(summaries.into()),
         };
+
+        (model, requests)
+    }
+
+    /// Returns a model that keeps its cached prefix across output schemas,
+    /// so the harness continues turn requests to ask for summaries.
+    fn keeping_prefix(
+        summaries: Vec<Result<ModelResponse, ModelError>>,
+    ) -> (Self, Arc<Mutex<Vec<ModelRequest>>>) {
+        let (mut model, requests) = Self::new(summaries);
+        model.keeps_prefix = true;
 
         (model, requests)
     }
@@ -53,6 +72,10 @@ impl SummarizingModel {
 
 #[async_trait]
 impl Model for SummarizingModel {
+    fn keeps_prefix_across_schemas(&self) -> bool {
+        self.keeps_prefix
+    }
+
     async fn complete(&self, request: ModelRequest) -> Result<ModelCompletion, ModelError> {
         let mut requests = self.requests.lock().expect("requests lock");
         requests.push(request.clone());
@@ -90,6 +113,7 @@ fn is_summary_request(request: &ModelRequest) -> bool {
         == Some(&ModelMessage::System(
             ROUND_SUMMARY_INSTRUCTIONS.to_string(),
         ))
+        || request.prefix_schema().is_some()
 }
 
 fn valid_summary() -> Value {
@@ -114,9 +138,13 @@ fn files() -> MockFileSystem {
 }
 
 fn harness(model: SummarizingModel, policy: ContextSummaryPolicy) -> Harness {
+    budgeted_harness(model, policy, BUDGET)
+}
+
+fn budgeted_harness(model: SummarizingModel, policy: ContextSummaryPolicy, budget: u64) -> Harness {
     Harness::new(
         model,
-        ContextBudget::new(NonZeroU64::new(BUDGET).expect("nonzero budget")),
+        ContextBudget::new(NonZeroU64::new(budget).expect("nonzero budget")),
     )
     .repository(Repository::fixture("repo"))
     .allow(Tool::Read)
@@ -245,6 +273,92 @@ async fn turns_send_earlier_rounds_as_a_summary_once_they_outgrow_the_budget() {
             ..
         } if summarized_tool_calls > 0
     ));
+}
+
+#[tokio::test]
+async fn summaries_continue_the_last_turn_request_for_a_model_that_keeps_its_prefix() {
+    // Arrange
+    let (model, requests) = SummarizingModel::keeping_prefix(Vec::new());
+    let harness = budgeted_harness(model, ContextSummaryPolicy::Enabled, ROOMY_BUDGET)
+        .model_reasoning_effort(ReasoningEffort::High);
+
+    // Act
+    let outcome = read_files(&harness).await;
+
+    // Assert
+    let recorded = requests.lock().expect("requests lock").clone();
+    let index = recorded
+        .iter()
+        .position(is_summary_request)
+        .expect("a summary request");
+    let (summary, previous) = (&recorded[index], &recorded[index - 1]);
+    let (instruction, continued) = summary.messages().split_last().expect("instruction");
+    assert_eq!(continued, previous.messages());
+    assert!(matches!(
+        instruction,
+        ModelMessage::User(text)
+            if text.starts_with(CONTINUED_SUMMARY_PREFIX)
+                && text.contains("call `read_1`")
+                && text.contains(&summary_schema().expect("summary schema").value().to_string())
+    ));
+    assert_eq!(summary.tools(), previous.tools());
+    assert_eq!(
+        summary.model_reasoning_effort(),
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(summary.prefix_schema(), Some(previous.schema()));
+    assert_eq!(summary.schema(), &summary_schema().expect("summary schema"));
+    assert!(carries(&last_turn_request(&requests), "cobalt-41"));
+    assert_eq!(outcome.report().context_summary_failures(), 0);
+}
+
+#[tokio::test]
+async fn tool_calls_answering_a_continued_summary_request_are_corrected() {
+    // Arrange
+    let tool_call = || {
+        Ok(ModelResponse::ToolCall(ToolCall::read(
+            "summary_read".to_string(),
+            serde_json::from_value(json!({"path": "f0.txt"})).expect("read arguments"),
+            None,
+        )))
+    };
+    let (corrected, corrected_requests) = SummarizingModel::keeping_prefix(vec![tool_call()]);
+    let (exhausted, _) =
+        SummarizingModel::keeping_prefix(vec![tool_call(), tool_call(), tool_call()]);
+    let (exhausted, events) = observed(budgeted_harness(
+        exhausted,
+        ContextSummaryPolicy::Enabled,
+        ROOMY_BUDGET,
+    ));
+
+    // Act
+    let corrected = read_files(&budgeted_harness(
+        corrected,
+        ContextSummaryPolicy::Enabled,
+        ROOMY_BUDGET,
+    ))
+    .await;
+    let exhausted = read_files(&exhausted).await;
+
+    // Assert
+    let summaries = summary_requests(&corrected_requests);
+    assert!(carries(
+        &summaries[1],
+        "[harness] Those tool calls were not run"
+    ));
+    assert!(carries(
+        &last_turn_request(&corrected_requests),
+        "cobalt-41"
+    ));
+    assert_eq!(corrected.report().context_summary_failures(), 0);
+    assert!(exhausted.report().context_summary_failures() >= 1);
+    assert!(summary_events(&events).iter().any(|event| matches!(
+        event,
+        LifecycleEventKind::ContextSummaryFailed {
+            error_type: ContextSummaryErrorType::InvalidOutput,
+            ..
+        }
+    )));
 }
 
 #[tokio::test]

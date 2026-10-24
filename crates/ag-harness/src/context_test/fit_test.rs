@@ -525,7 +525,7 @@ fn fit_drops_the_oldest_rounds_of_a_long_turn_behind_one_note() {
         std::panic::resume_unwind(Box::new("dropped-round note expected"));
     };
     assert!(note.contains("earlier tool call(s) of this turn"));
-    assert!(note.contains("Writes applied: `src/lib.rs`."));
+    assert!(note.contains("Files modified: `src/lib.rs`."));
     assert!(note.contains("Commands run: `cargo test`, `cargo test`."));
     assert_eq!(note.matches("src/lib.rs").count(), 1);
     assert!(matches!(

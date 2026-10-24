@@ -174,6 +174,15 @@ impl ChatCompletionBackend {
         Ok(())
     }
 
+    /// Returns whether this provider states the output schema in a leading
+    /// system message rather than constraining output natively.
+    pub(crate) fn keeps_prefix_across_schemas(&self) -> bool {
+        matches!(
+            self.policy.structured_output,
+            StructuredOutputMode::JsonObject { .. }
+        )
+    }
+
     /// Rejects image content unless this configuration documents support.
     pub(crate) fn validate_input(&self, input: &input::TurnInput) -> Result<(), model::ModelError> {
         if input.has_images() && !self.policy.image_input {
@@ -289,15 +298,14 @@ impl ChatCompletionBackend {
         request: &model::ModelRequest,
     ) -> Result<Vec<ChatCompletionMessagePayload>, model::ModelError> {
         let mut messages = Vec::with_capacity(request.messages().len() + 1);
-        if matches!(
-            self.policy.structured_output,
-            StructuredOutputMode::JsonObject { .. }
-        ) {
+        if self.keeps_prefix_across_schemas() {
+            let schema = request
+                .options
+                .prefix_schema
+                .as_ref()
+                .unwrap_or_else(|| request.schema());
             messages.push(ChatCompletionMessagePayload::Text {
-                content: format!(
-                    "{STRUCTURED_OUTPUT_INSTRUCTION}{}",
-                    request.schema().value()
-                ),
+                content: format!("{STRUCTURED_OUTPUT_INSTRUCTION}{}", schema.value()),
                 role: "system",
             });
         }

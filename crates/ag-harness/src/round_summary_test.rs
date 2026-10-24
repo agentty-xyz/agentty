@@ -4,9 +4,13 @@ use serde_json::{Value, json};
 
 use crate::compaction::{MAX_SOURCE_TEXT_BYTES, summary_schema};
 use crate::lifecycle::ContextSummaryTrigger;
-use crate::model::ModelMessage;
-use crate::round_summary::{ROUND_SUMMARY_INSTRUCTIONS, RoundSummaryJob, render_source};
-use crate::tool::ToolCall;
+use crate::model::{ModelMessage, ModelRequest, ReasoningEffort};
+use crate::round_summary::{
+    CONTINUED_SUMMARY_PREFIX, CoveredCalls, ROUND_SUMMARY_INSTRUCTIONS, RoundSummaryJob,
+    render_source,
+};
+use crate::schema_contract::OutputSchema;
+use crate::tool::{ToolCall, ToolDefinition};
 
 fn read_round(id: &str, path: &str, content: &str) -> Vec<ModelMessage> {
     let call = ToolCall::from_json(
@@ -117,4 +121,83 @@ fn job_requests_a_tool_free_summary_of_its_source() {
     assert_eq!(job.request().prompt(), "source text");
     assert_eq!(job.request().tools(), []);
     assert_eq!(job.request().schema(), &schema);
+    assert_eq!(
+        job.request().model_reasoning_effort(),
+        Some(ReasoningEffort::Low)
+    );
+    assert_eq!(job.request().prefix_schema(), None);
+    assert!(ROUND_SUMMARY_INSTRUCTIONS.contains("Record only what the rounds show: never infer"));
+}
+
+#[test]
+fn continuing_job_appends_its_instruction_to_the_last_sent_request() {
+    // Arrange
+    let turn_schema = OutputSchema::new(json!({"type": "object"})).expect("turn schema");
+    let sent = ModelRequest::new("List every public function.", turn_schema.clone())
+        .with_tool(ToolDefinition::read())
+        .with_model_reasoning_effort(ReasoningEffort::High)
+        .with_cache_key("session-1".to_string());
+    let schema = summary_schema().expect("summary schema");
+    let covered = |carries_summary| CoveredCalls {
+        carries_summary,
+        first: "r1",
+        last: "r4",
+    };
+
+    // Act
+    let job = RoundSummaryJob::continuing(
+        2..9,
+        ContextSummaryTrigger::Proactive,
+        &sent,
+        &covered(false),
+        700,
+        512,
+        schema.clone(),
+    );
+    let carried = RoundSummaryJob::continuing(
+        2..9,
+        ContextSummaryTrigger::Proactive,
+        &sent,
+        &covered(true),
+        700,
+        512,
+        schema.clone(),
+    );
+
+    // Assert
+    let request = job.request();
+    let (instruction, continued) = request.messages().split_last().expect("instruction");
+    assert_eq!(continued, sent.messages());
+    let ModelMessage::User(text) = instruction else {
+        std::panic::resume_unwind(Box::new(format!(
+            "instruction expected, got {instruction:?}"
+        )));
+    };
+    assert!(text.starts_with(CONTINUED_SUMMARY_PREFIX));
+    assert!(text.contains("do not call any tool"));
+    assert!(text.contains("from call `r1` through call `r4`"));
+    assert!(text.contains("at most 512 bytes"));
+    assert!(text.ends_with(&schema.value().to_string()));
+    assert!(!text.contains("Carry forward"));
+    assert!(
+        carried
+            .request()
+            .messages()
+            .last()
+            .is_some_and(|message| matches!(
+                message,
+                ModelMessage::User(text) if text.contains("Carry forward")
+            ))
+    );
+    assert_eq!(request.tools(), sent.tools());
+    assert_eq!(
+        request.model_reasoning_effort(),
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(request.cache_key(), Some("session-1"));
+    assert_eq!(request.prefix_schema(), Some(&turn_schema));
+    assert_eq!(request.schema(), &schema);
+    assert_eq!(job.range(), 2..9);
+    assert_eq!(job.source_bytes(), 700);
+    assert_eq!(job.max_summary_bytes(), 512);
 }

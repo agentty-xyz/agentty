@@ -50,6 +50,12 @@ intermediate responses and are never executed by this crate. Text a model writes
 its calls is kept on the first call (`ToolCall::assistant_text`) and replayed as that
 assistant message's `content`. An optional `GenerationOptions::prompt_cache_key` is sent
 as `prompt_cache_key` to Muse and Kimi, which route requests sharing a key to the
-backend holding their cached prefix; Qwen requests leave it off. Provider selection is
-explicit; routing does not retry a request on another provider. The current `Task`
-surface supports chat only. Streaming and other model modes are not yet implemented.
+backend holding their cached prefix; Qwen requests leave it off. A request that asks for
+another schema than the conversation it continues sets
+`GenerationOptions::prefix_schema` to the conversation's schema: Kimi and Qwen keep
+stating that one in their leading schema instruction, so the request keeps the cached
+prefix (`Router::keeps_prefix_across_schemas`), and the caller states the requested
+schema after the conversation; Muse receives the requested schema natively. Provider
+selection is explicit; routing does not retry a request on another provider. The current
+`Task` surface supports chat only. Streaming and other model modes are not yet
+implemented.

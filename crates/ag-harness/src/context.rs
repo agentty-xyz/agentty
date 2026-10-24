@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::input::TurnInput;
 use crate::lifecycle::ContextSummaryTrigger;
 use crate::model::{ModelMessage, ModelRequest};
-use crate::round_summary::{self, RoundSummaryJob, SOURCE_TEXT_LEVELS};
+use crate::round_summary::{self, CoveredCalls, RoundSummaryJob, SOURCE_TEXT_LEVELS};
 use crate::schema_contract::OutputSchema;
 use crate::tool::{ReadAction, ReadArguments, Tool, ToolCall, ToolCallArguments, ToolDefinition};
 use crate::turn::{ContextActivity, TurnError, TurnOptions};
@@ -83,6 +83,16 @@ pub(crate) const MAX_SUMMARY_FAILURES_PER_TURN: usize = 2;
 /// non-empty value.
 pub(crate) const CLEARED_REASONING: &str = "[reasoning cleared to fit the context window]";
 
+/// How a notice naming a newer result in `superseded_by` tells the model to
+/// use it. A notice is never rewritten once sent, and the newer result may be
+/// cleared or cut later, so the guidance covers both.
+macro_rules! newer_result_guidance {
+    () => {
+        "Use that newer result while it is shown; if it was cleared or cut too, what it lacks is \
+         not available, so read it again before using it."
+    };
+}
+
 /// Leading bytes of every cleared-result notice, so a notice loaded from
 /// reduced history is never cleared again.
 const CLEARED_RESULT_PREFIX: &str = r#"{"context_cleared":"#;
@@ -98,15 +108,17 @@ const DEFERRED_READ_PREFIX: &str = r#"{"deferred":"#;
 /// Notice that replaces a repeated-read result once the earlier result it
 /// points to was cleared.
 const CLEARED_REPEAT_NOTICE: &str = "This read repeated an earlier read whose result was since \
-                                     cleared or cut to fit the context window, so it is not shown \
-                                     whole. If you still need it, read it again, narrowed with \
-                                     offset/limit.";
+                                     cleared or cut to fit the context window, so what it no \
+                                     longer shows is not available. Read it again, narrowed with \
+                                     offset/limit, before using it.";
 
 /// Notice that replaces a repeated-read result once the earlier result it
 /// points to was cleared because a later read returned it again.
-const SUPERSEDED_REPEAT_NOTICE: &str =
+const SUPERSEDED_REPEAT_NOTICE: &str = concat!(
     "This read repeated an earlier read whose result was since cleared because a later read, \
-     named in superseded_by, returned it again. Use that newer result instead of reading it again.";
+     named in superseded_by, returned it again. ",
+    newer_result_guidance!()
+);
 
 /// Outcome fields of a `bash` or `write` result kept in its cleared notice.
 const OUTCOME_KEYS: [&str; 6] = [
@@ -230,8 +242,11 @@ pub enum ContextBudgetError {
 /// Whether a turn may ask the model to summarize its earlier tool rounds
 /// once a request outgrows the [`ContextBudget`].
 ///
-/// A summary costs one extra tool-free model request and replaces the
-/// summarized rounds in the turn's later requests only; canonical turn
+/// A summary costs one extra model request, which continues the turn's last
+/// request when the model keeps its cached prefix across output schemas
+/// (see [`crate::model::Model::keeps_prefix_across_schemas`]) and is a
+/// tool-free request of its own otherwise. It replaces the summarized
+/// rounds in the turn's later requests only; canonical turn
 /// messages, durable journals, and replayed history keep every round. A
 /// failed or rejected summary falls back to removing the rounds behind a
 /// deterministic note, and a turn stops asking after
@@ -689,6 +704,10 @@ pub(crate) struct ContextFit {
     reduced_counts: [usize; 3],
     required: u64,
     sent_weight: u64,
+    /// Whether summaries continue the turn's last request, which the model
+    /// serves from its cached prefix, instead of sending a source of their
+    /// own.
+    shared_prefix_summaries: bool,
     /// Canonical index through which earlier rounds were already offered to
     /// a summary request, successful or not.
     summary_attempted_through: usize,
@@ -704,10 +723,21 @@ pub(crate) enum FitStep<'fit> {
     /// the reductions it carries.
     Send(Option<&'fit ModelRequest>, ContextActivity),
     /// Summarize earlier tool rounds first, then fit again.
-    Summarize(RoundSummaryJob),
+    Summarize(Box<RoundSummaryJob>),
 }
 
 impl ContextFit {
+    /// Returns a fit for one turn whose summaries continue its last request
+    /// when `shared_prefix_summaries` holds: the model keeps its cached
+    /// prefix across output schemas (see
+    /// [`crate::model::Model::keeps_prefix_across_schemas`]).
+    pub(crate) fn new(shared_prefix_summaries: bool) -> Self {
+        Self {
+            shared_prefix_summaries,
+            ..Self::default()
+        }
+    }
+
     /// Returns the approximate weight of the request the last
     /// [`Self::fit`] returned, as sent and without reserved output.
     pub(crate) fn sent_weight(&self) -> u64 {
@@ -802,13 +832,27 @@ impl ContextFit {
                 || (over
                     && base.saturating_add(self.required)
                         > Self::target(budget, FIT_TARGET_PERCENT)))
-            && let Some(job) = self.summary_job(estimator, budget, request, &layout, trigger)
         {
-            // The taken copy is rebuilt after the summary, carrying every
-            // reduction made so far.
-            self.reduced |= changed;
+            // The last request sent: the reduced copy, or the canonical
+            // messages synced before this fit while none was reduced.
+            let canonical;
+            let sent = match &previous {
+                Some(previous) => Some(previous),
+                None if self.shared_prefix_summaries && !self.reduced && synced > 0 => {
+                    canonical = request.with_fitted_messages(request.messages()[..synced].to_vec());
+                    Some(&canonical)
+                }
+                None => None,
+            };
+            if let Some(job) =
+                self.summary_job(estimator, (budget, base), request, &layout, trigger, sent)
+            {
+                // The taken copy is rebuilt after the summary, carrying every
+                // reduction made so far.
+                self.reduced |= changed;
 
-            return Ok(FitStep::Summarize(job));
+                return Ok(FitStep::Summarize(Box::new(job)));
+            }
         }
         if over && self.extend(estimator, budget, request, &layout, base) {
             changed = true;
@@ -1024,18 +1068,23 @@ impl ContextFit {
     ///
     /// A proactive summary keeps the latest round and the rounds before it
     /// within [`SUMMARY_KEEP_TAIL_PERCENT`] of the capacity whole; a
-    /// context-overflow summary keeps only the latest round. The source
-    /// carries the task, any earlier summary, and each covered round with
-    /// superseded results as their notices, its text cut to the first of
-    /// [`SOURCE_TEXT_LEVELS`] that fits, then without its oldest rounds,
-    /// which the note still names.
+    /// context-overflow summary keeps only the latest round. With shared
+    /// prefix summaries, the job continues `sent`, the turn's last request,
+    /// with an instruction naming the covered calls, so the model serves it
+    /// from its cached prefix and summarizes the rounds as it last saw them,
+    /// when that request fits the budget whose fixed weight is `base`.
+    /// Otherwise its source carries the task, any earlier summary, and each
+    /// covered round with superseded results as their notices, its text cut
+    /// to the first of [`SOURCE_TEXT_LEVELS`] that fits, then without its
+    /// oldest rounds, which the note still names.
     fn summary_job(
         &mut self,
         estimator: &dyn ContextEstimator,
-        budget: ContextBudget,
+        (budget, base): (ContextBudget, u64),
         request: &ModelRequest,
         layout: &Layout<'_>,
         trigger: ContextSummaryTrigger,
+        sent: Option<&ModelRequest>,
     ) -> Option<RoundSummaryJob> {
         if self.summary_failures >= MAX_SUMMARY_FAILURES_PER_TURN {
             return None;
@@ -1064,6 +1113,31 @@ impl ContextFit {
         {
             return None;
         }
+        let max_summary_bytes = usize::try_from(
+            (capacity.saturating_mul(SUMMARY_MAX_PERCENT) / 100)
+                .saturating_mul(SUMMARY_BYTES_PER_WEIGHT),
+        )
+        .unwrap_or(usize::MAX)
+        .min(compaction::MAX_SUMMARY_BYTES);
+        let schema = compaction::summary_schema().ok()?;
+        if let Some(sent) = sent.filter(|_| self.shared_prefix_summaries) {
+            let job = RoundSummaryJob::continuing(
+                start..tail_start,
+                trigger,
+                sent,
+                &self.covered_calls(messages, &round_starts),
+                self.sent_bytes(messages, start..tail_start),
+                max_summary_bytes,
+                schema.clone(),
+            );
+            if base.saturating_add(weigh_messages(estimator, job.request().messages()))
+                <= budget.max_request_weight().get()
+            {
+                self.summary_attempted_through = tail_start;
+
+                return Some(job);
+            }
+        }
         // The first round also carries any request-only message before it.
         round_starts[0] = start;
         let rounds: Vec<Vec<ModelMessage>> = round_starts
@@ -1074,13 +1148,6 @@ impl ContextFit {
             })
             .collect();
         let rounds: Vec<&[ModelMessage]> = rounds.iter().map(Vec::as_slice).collect();
-        let max_summary_bytes = usize::try_from(
-            (capacity.saturating_mul(SUMMARY_MAX_PERCENT) / 100)
-                .saturating_mul(SUMMARY_BYTES_PER_WEIGHT),
-        )
-        .unwrap_or(usize::MAX)
-        .min(compaction::MAX_SUMMARY_BYTES);
-        let schema = compaction::summary_schema().ok()?;
         let tightest = SOURCE_TEXT_LEVELS[SOURCE_TEXT_LEVELS.len() - 1];
         let attempts = SOURCE_TEXT_LEVELS
             .iter()
@@ -1137,6 +1204,37 @@ impl ContextFit {
         self.messages[range]
             .iter()
             .fold(0_u64, |weight, entry| weight.saturating_add(entry.weight))
+    }
+
+    /// Names the first call of the round at the first of `round_starts` and
+    /// the last call of the round at the last, with whether an installed
+    /// summary stands in for still earlier rounds.
+    fn covered_calls<'m>(
+        &self,
+        messages: &'m [ModelMessage],
+        round_starts: &[usize],
+    ) -> CoveredCalls<'m> {
+        let last_calls = tool_calls(&messages[round_starts[round_starts.len() - 1]]);
+
+        CoveredCalls {
+            carries_summary: self.dropped_rounds.summary.is_some(),
+            first: tool_calls(&messages[round_starts[0]])[0].id(),
+            last: last_calls[last_calls.len() - 1].id(),
+        }
+    }
+
+    /// Returns the retained bytes of the canonical messages in `range`, each
+    /// in its cached reduced form or whole.
+    fn sent_bytes(&self, messages: &[ModelMessage], range: Range<usize>) -> usize {
+        range
+            .map(|index| {
+                self.messages[index]
+                    .reduced
+                    .as_ref()
+                    .unwrap_or(&messages[index])
+                    .retained_bytes()
+            })
+            .sum()
     }
 
     /// Returns the canonical messages in `range` as a summary sees them: a
@@ -2060,11 +2158,11 @@ impl SupersessionCause {
     /// Returns the notice text for a result this cause superseded.
     fn notice(self) -> &'static str {
         match self {
-            Self::Reread => {
+            Self::Reread => concat!(
                 "This earlier read result was cleared to fit the context window because a later \
-                 read of the same target, named in superseded_by, returned it again. Use that \
-                 newer result instead of reading it again."
-            }
+                 read of the same target, named in superseded_by, returned it again. ",
+                newer_result_guidance!()
+            ),
             Self::Rerun => {
                 "This earlier command result was cleared to fit the context window because the \
                  same command ran again later, in the call named in superseded_by. That newer \
@@ -2072,8 +2170,9 @@ impl SupersessionCause {
             }
             Self::Write => {
                 "This earlier read result was cleared to fit the context window because a later \
-                 write, named in superseded_by, changed the file it showed. If you still need the \
-                 file, read it again, narrowed with offset/limit."
+                 write, named in superseded_by, changed the file it showed, so its content is not \
+                 current. If you still need the file, read it again, narrowed with offset/limit, \
+                 before using it."
             }
         }
     }
@@ -2110,22 +2209,35 @@ impl DroppedRounds {
 struct RoundNote {
     calls: usize,
     commands: Vec<String>,
+    /// Distinct paths of applied writes.
+    files_modified: Vec<String>,
+    /// Distinct paths of `file` reads.
+    files_read: Vec<String>,
+    /// Distinct targets of every other read.
     reads: Vec<String>,
     summary: Option<Value>,
     weight: u64,
-    writes: Vec<String>,
 }
 
 impl RoundNote {
+    /// Most paths one list of the note names; a long turn's further paths
+    /// are counted instead.
+    const MAX_NAMED_FILES: usize = 64;
+
     /// Returns one note naming everything `notes` name, without a summary.
     fn merged(notes: &[Self]) -> Self {
         let mut merged = Self::default();
         for note in notes {
             merged.calls += note.calls;
             merged.commands.extend(note.commands.iter().cloned());
-            merged.writes.extend(note.writes.iter().cloned());
-            for target in &note.reads {
-                merged.add_read(target.clone());
+            for (names, merged_names) in [
+                (&note.files_read, &mut merged.files_read),
+                (&note.files_modified, &mut merged.files_modified),
+                (&note.reads, &mut merged.reads),
+            ] {
+                for name in names {
+                    Self::add(merged_names, name.clone());
+                }
             }
         }
 
@@ -2133,8 +2245,8 @@ impl RoundNote {
     }
 
     /// Counts one dropped round's calls and remembers the paths of its
-    /// applied writes, the sources of its commands, and its distinct read
-    /// targets.
+    /// files read and applied writes, the sources of its commands, and its
+    /// other distinct read targets.
     fn record(&mut self, calls: &[ToolCall], records: &CallRecords) {
         self.calls += calls.len();
         for call in calls {
@@ -2142,32 +2254,38 @@ impl RoundNote {
                 ToolCallArguments::Bash(arguments) => {
                     self.commands.push(arguments.command().to_string());
                 }
-                ToolCallArguments::Read(arguments) => self.add_read(read_target(arguments)),
+                ToolCallArguments::Read(arguments) if arguments.action() == ReadAction::File => {
+                    Self::add(&mut self.files_read, arguments.path().to_string());
+                }
+                ToolCallArguments::Read(arguments) => {
+                    Self::add(&mut self.reads, read_target(arguments));
+                }
                 ToolCallArguments::Write(arguments)
                     if records.write_outcomes.get(call.id()).map(String::as_str)
                         == Some("applied") =>
                 {
-                    self.writes.push(arguments.path().to_string());
+                    Self::add(&mut self.files_modified, arguments.path().to_string());
                 }
                 ToolCallArguments::Write(_) | ToolCallArguments::Malformed(_) => {}
             }
         }
     }
 
-    /// Remembers one read target unless the note already names it.
-    fn add_read(&mut self, target: String) {
-        if !self.reads.contains(&target) {
-            self.reads.push(target);
+    /// Remembers `name` unless `names` already holds it.
+    fn add(names: &mut Vec<String>, name: String) {
+        if !names.contains(&name) {
+            names.push(name);
         }
     }
 
     /// Renders the bounded note that stands in for its dropped rounds,
-    /// carrying their summary, when one exists, as data.
+    /// carrying their summary, when one exists, as data, and listing the
+    /// files they read and wrote as the harness recorded them.
     fn message(&self) -> ModelMessage {
         let mut note = format!(
             "[harness] {} earlier tool call(s) of this turn were removed with their results to \
-             fit the context window. Writes and commands among them already took effect; do not \
-             repeat them only to recover their output.",
+             fit the context window, so those results are not available. Writes and commands \
+             among them already took effect; do not repeat them only to recover their output.",
             self.calls
         );
         if let Some(summary) = &self.summary {
@@ -2177,29 +2295,45 @@ impl RoundNote {
             );
             note.push_str(&summary.to_string());
         }
-        if !self.writes.is_empty() {
-            note.push_str(" Writes applied: ");
-            note.push_str(&TurnStop::name_effects(&self.writes));
-            note.push('.');
+        for (label, names) in [
+            (" Files modified: ", Self::name_files(&self.files_modified)),
+            (" Commands run: ", TurnStop::name_effects(&self.commands)),
+            (" Files read: ", Self::name_files(&self.files_read)),
+            (" Other reads: ", TurnStop::name_effects(&self.reads)),
+        ] {
+            if !names.is_empty() {
+                note.push_str(label);
+                note.push_str(&names);
+                note.push('.');
+            }
         }
-        if !self.commands.is_empty() {
-            note.push_str(" Commands run: ");
-            note.push_str(&TurnStop::name_effects(&self.commands));
-            note.push('.');
-        }
-        if !self.reads.is_empty() {
-            note.push_str(" Reads whose results were removed: ");
-            note.push_str(&TurnStop::name_effects(&self.reads));
+        if !self.files_read.is_empty() || !self.reads.is_empty() {
             note.push_str(if self.summary.is_some() {
-                ". Rely on the summary for what they showed, and re-read only what it lacks, \
-                 narrowed with offset/limit."
+                " Rely on the summary for what those reads showed; what it does not record is not \
+                 available, so read it again, narrowed with offset/limit, before using it."
             } else {
-                ". Re-read only what you still need, narrowed with offset/limit, instead of \
-                 repeating these reads."
+                " What those reads showed is not available: before using any of it, read again, \
+                 narrowed with offset/limit, only what you still need."
             });
         }
 
         ModelMessage::User(note)
+    }
+
+    /// Names up to [`Self::MAX_NAMED_FILES`] paths, each bounded like a
+    /// stop note's effects, and counts the rest.
+    fn name_files(paths: &[String]) -> String {
+        let mut names: Vec<String> = paths
+            .iter()
+            .take(Self::MAX_NAMED_FILES)
+            .map(|path| TurnStop::name_effects(std::slice::from_ref(path)))
+            .collect();
+        let omitted = paths.len().saturating_sub(Self::MAX_NAMED_FILES);
+        if omitted > 0 {
+            names.push(format!("and {omitted} more"));
+        }
+
+        names.join(", ")
     }
 }
 
@@ -2600,12 +2734,13 @@ fn cleared_result_notice(
     let text = match superseded {
         Some(supersession) => supersession.cause.notice(),
         None if is_read => {
-            "This earlier read result was cleared to fit the context window. If you still need it, \
-             read it again, narrowed with offset/limit."
+            "This earlier read result was cleared to fit the context window, so its content is not \
+             available. Read it again, narrowed with offset/limit, before using any of it."
         }
         None => {
-            "This earlier tool result was cleared to fit the context window. The call already ran \
-             with the outcome recorded here; do NOT repeat it to recover its output."
+            "This earlier tool result was cleared to fit the context window, so its output is not \
+             available. The call already ran with the outcome recorded here; do NOT repeat it to \
+             recover its output."
         }
     };
     let mut notice = Map::new();
@@ -2684,8 +2819,9 @@ fn truncated_result(content: &str, kept_bytes: usize) -> String {
 
     json!({
         "context_truncated": "This tool result was cut to its head and tail to fit the context \
-                              window. Request a narrower result (offset/limit, a narrower path or \
-                              search) if you need the omitted middle.",
+                              window, so its omitted middle is not available. Request a narrower \
+                              result (offset/limit, a narrower path or search) before relying on \
+                              it.",
         "head": &content[..head_end],
         "omitted_bytes": tail_start - head_end,
         "tail": &content[tail_start..],

@@ -88,16 +88,19 @@ oldest first, down to 50% of the capacity left after reserved output: a `read` w
 target a later read returned again over at least the same lines (a covering line window
 for `file` and `show`, the same or a larger limit otherwise), a `file` read or `diff`
 showing a path a later applied `write` changed, or a `bash` result whose exact command
-ran again. Their notices name the superseding call. A read answered by the repeated-read
-note below supersedes nothing. The results the latest round added are then cut while the
-round is new, so the cut costs no cached prefix: each to 25% of that capacity, and the
-round's largest to one common size while together they exceed 50%. A `read` result is
-cut by the rules that bounded it when it ran (below), and any other result to a head and
-tail excerpt; `read` results already meet both shares when they run, so only a budget
-that calibration lowered since cuts one. A result sent whole before is never cut, only
-cleared. The request is then reduced to 50% of its capacity, oldest first, with replayed
-history before the current turn: the other tool results become tool-aware notices (a
-`read` notice names its target), then each assistant message loses its reasoning
+ran again. Their notices name the superseding call and say to use it while it is shown,
+and to read again before using what it no longer shows: a sent notice is never
+rewritten, so its wording stays true once the newer result is cleared or cut too. A read
+answered by the repeated-read note below supersedes nothing. The results the latest
+round added are then cut while the round is new, so the cut costs no cached prefix: each
+to 25% of that capacity, and the round's largest to one common size while together they
+exceed 50%. A `read` result is cut by the rules that bounded it when it ran (below), and
+any other result to a head and tail excerpt; `read` results already meet both shares
+when they run, so only a budget that calibration lowered since cuts one. A result sent
+whole before is never cut, only cleared. The request is then reduced to 50% of its
+capacity, oldest first, with replayed history before the current turn: the other tool
+results become tool-aware notices (a `read` notice names its target and says its content
+is not available until read again), then each assistant message loses its reasoning
 (providers that replay reasoning still receive a non-empty placeholder) and its `write`
 patches (a note on their recorded outcome) in one rewrite. The rounds holding the newest
 five results keep their results, reasoning, and patches until everything older is
@@ -108,8 +111,9 @@ and then the current turn's oldest tool rounds are dropped whole, each call mess
 all its results, down to 70%; a dropped round also loses the text the model wrote beside
 its calls, so dropping stops short of the clearing target. Each reduction that drops
 rounds names them in one bounded note appended after the earlier notes, which counts the
-removed calls, names the writes they applied and the commands they ran, and lists their
-distinct read targets to re-read only if still needed; once no earlier round is left to
+removed calls, lists the files they modified and read (up to 64 paths each, as the
+harness recorded them), the commands they ran, and their other read targets, and says
+what they showed is not available until read again; once no earlier round is left to
 drop, the notes merge into one. A repeated-read note whose earlier result is cleared,
 cut, or summarized becomes a notice that it is no longer shown whole, naming the newer
 read when one returned it again. Tool calls keep their identifiers, so tool groups stay
@@ -126,30 +130,44 @@ With `ContextSummaryPolicy::Enabled`, a request that still exceeds 50% of its ca
 after superseded results are cleared and oversized results capped first summarizes the
 current turn's earlier tool rounds. The latest round and the rounds before it within a
 quarter of the capacity stay whole; the rounds before them that no summary or note
-covers yet form the source, which carries the task, any earlier summary to carry
-forward, and each round as bounded JSON with superseded results as their notices. The
-source text is cut at shrinking levels, then its oldest rounds are left out, until the
-tool-free summary request fits the budget. A summary is requested only when the rounds
-not yet offered to one weigh a fifth of the capacity, so a turn summarizes again only
-after enough new rounds aged out. The engine sends that request as one of the turn's
-model requests at low reasoning effort, since restating rounds needs no deliberation and
-a reasoning model at the turn's effort can outlast the request timeout on a large
-source. It re-requests invalid output like a final output and accepts a summary that
-matches the checkpoint summary schema, fits 15% of the capacity, and is smaller than its
-source. The covered rounds then become one note carrying the summary as data beside the
-dropped-round ledger of their writes, commands, and read targets, which replaces the
-earlier notes, and every reduction watermark moves past them. Like every reduction, the
-summary exists only in sent copies: canonical messages, the journal, and replayed
-history keep the rounds, and a resumed or later turn never sees it. A failed, rejected,
-or cancelled summary falls back to the steps above for that fit, and a turn stops asking
-after two failures. Summary requests are reported with
-`ModelRequestPurpose::ContextSummary`, calibrate later estimates, and emit
-`ContextSummaryStarted`/`Completed`/`Failed` lifecycle events that the trace observer
-projects as an `agent.compaction` span around their model requests. A failure is
-classified as `Model` when a request failed at the provider or in transport (its own
-`ModelRequestFailed` carries the class and HTTP status), `InvalidOutput` when
-corrections ran out or the model answered with a tool call, `Rejected` when a valid
-summary did not fit, or `Cancelled`.
+covers yet are summarized. A summary is requested only when the rounds not yet offered
+to one weigh a fifth of the capacity, so a turn summarizes again only after enough new
+rounds aged out, and it is sent as one of the turn's model requests in one of two forms.
+When the model keeps its cached prefix across output schemas
+(`Model::keeps_prefix_across_schemas`: Kimi and Qwen, which state the schema in a
+leading system message) and the turn's last request plus one instruction fits the
+budget, the summary request is that last request, with its tools, reasoning effort, and
+cache key, plus an appended instruction naming the first and last covered calls and
+stating the summary schema; `ModelRequest::prefix_schema` keeps the turn's schema in the
+leading message, so the provider serves the request from the turn's cached prefix, and
+the model summarizes the rounds as it last saw them, its replayed reasoning included.
+Live, Qwen3.8-Max cached 92–93% of such requests; changing the tools, the reasoning
+effort, or the stated schema instead dropped the cache to zero for both Qwen and Muse,
+and Muse, which constrains output to the `response_format` schema, cannot answer another
+schema without changing it, so Muse keeps the other form. Otherwise the source is
+rendered as its own tool-free request at low reasoning effort, since restating rounds
+needs no deliberation and a reasoning model at the turn's effort can outlast the request
+timeout on a large source: the task, any earlier summary to carry forward, and each
+round as bounded JSON with superseded results as their notices, its text cut at
+shrinking levels, then its oldest rounds left out, until the request fits the budget.
+Both instructions ask to record only what the rounds show and to name what a cleared or
+cut result no longer shows instead of filling it in. The engine re-requests invalid
+output like a final output, re-requests tool calls answering a continued summary with
+feedback that they were not run, and accepts a summary that matches the checkpoint
+summary schema, fits 15% of the capacity, and is smaller than its source. The covered
+rounds then become one note carrying the summary as data beside the dropped-round ledger
+of their files, commands, and other reads, which replaces the earlier notes, and every
+reduction watermark moves past them. Like every reduction, the summary exists only in
+sent copies: canonical messages, the journal, and replayed history keep the rounds, and
+a resumed or later turn never sees it. A failed, rejected, or cancelled summary falls
+back to the steps above for that fit, and a turn stops asking after two failures.
+Summary requests are reported with `ModelRequestPurpose::ContextSummary`, calibrate
+later estimates, and emit `ContextSummaryStarted`/`Completed`/`Failed` lifecycle events
+that the trace observer projects as an `agent.compaction` span around their model
+requests. A failure is classified as `Model` when a request failed at the provider or in
+transport (its own `ModelRequestFailed` carries the class and HTTP status),
+`InvalidOutput` when corrections ran out or the model answered a tool-free summary
+request with a tool call, `Rejected` when a valid summary did not fit, or `Cancelled`.
 
 Every `read` result is bounded as it runs, against the calibrated budget of the request
 it joins, so it enters history at the size later requests send. One result may weigh 25%
@@ -363,17 +381,21 @@ the containing worktree; the library never searches `PATH`.
 `ag-router` owns built-in Chat Completions transport, provider wire policies, and local
 JSON Schema validation. Its public `Router::execute` request names a `provider/model`
 and always includes a `JsonSchemaFormat`; terminal output is validated JSON, while
-intermediate function calls return to the caller for execution. The harness converts its
-built-in tool requests and responses at this boundary and retains tool permissions,
-sessions, lifecycle events, and telemetry. The router currently covers chat completion;
-it has no streaming or automatic provider fallback.
+intermediate function calls return to the caller for execution. A request may name the
+schema of the conversation it continues (`GenerationOptions::prefix_schema`); Kimi and
+Qwen state that one in their leading schema message while the response is still
+validated against the request's own schema. The harness converts its built-in tool
+requests and responses at this boundary and retains tool permissions, sessions,
+lifecycle events, and telemetry. The router currently covers chat completion; it has no
+streaming or automatic provider fallback.
 
 Providers cache prompt prefixes per backend, so cache hits depend on routing related
 requests together. The harness gives every turn request of a durable session one key,
 hashed from the session ID so it is stable across handles and resume and bounded in
-length, and each stateless turn a fresh random key shared by its tool loop. Checkpoint
-and round-summary requests, whose prefixes differ, carry none. `ag-router` sends the key
-as `prompt_cache_key` only where the provider policy enables it: Muse and Kimi, whose
+length, and each stateless turn a fresh random key shared by its tool loop. A round
+summary that continues the turn's request carries its key; checkpoint and tool-free
+round-summary requests, whose prefixes differ, carry none. `ag-router` sends the key as
+`prompt_cache_key` only where the provider policy enables it: Muse and Kimi, whose
 documentation routes by it (Moonshot asks coding agents for a session key). Qwen ignores
 the field, and the Meta Model API rejects body fields it does not know, so each provider
 policy opts in explicitly. Live, a keyed Muse sequence missed the cache on none of 43

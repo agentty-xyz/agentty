@@ -512,6 +512,68 @@ async fn sends_prompt_cache_key_only_to_providers_that_route_by_it()
     Ok(())
 }
 
+#[tokio::test]
+async fn states_the_prefix_schema_only_where_the_schema_is_a_prompt_message()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Arrange
+    let prefix = OutputSchema::new(json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"]
+    }))?;
+    let cases = [
+        ("qwen/qwen3.8-max", Provider::Qwen, true),
+        ("kimi/kimi-k3", Provider::Kimi, true),
+        ("muse/muse-spark-1.3", Provider::Muse, false),
+    ];
+
+    for (model, provider, keeps_prefix) in cases {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(completion(r#"{"name":"Ada"}"#)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let router = router(provider, &server)?;
+        let mut request = request(model)?;
+        request.options.prefix_schema = Some(prefix.clone());
+
+        // Act
+        let keeps = router.keeps_prefix_across_schemas(model)?;
+        let response = router.execute(request).await?;
+        let requests = server
+            .received_requests()
+            .await
+            .ok_or("request recording disabled")?;
+        let body: Value = serde_json::from_slice(&requests[0].body)?;
+
+        // Assert
+        assert_eq!(keeps, keeps_prefix, "{model}");
+        assert!(
+            matches!(response, Completion::Output { value, .. } if value == json!({"name":"Ada"})),
+            "{model} validates the request's own schema"
+        );
+        let leading = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if keeps_prefix {
+            assert!(leading.ends_with(&prefix.value().to_string()), "{model}");
+            assert_eq!(body["response_format"], json!({"type": "json_object"}));
+        } else {
+            assert_eq!(leading, "Extract the name");
+            assert_eq!(
+                body["response_format"]["json_schema"]["schema"],
+                *schema()?.value()
+            );
+        }
+    }
+    assert!(matches!(
+        Router::new([])?.keeps_prefix_across_schemas("qwen/qwen3.8-max"),
+        Err(ModelError::UnknownProvider)
+    ));
+
+    Ok(())
+}
+
 /// Returns the router error for one request answered with `status` and
 /// `body`.
 async fn failure(
