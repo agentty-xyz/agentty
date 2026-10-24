@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1226,4 +1226,100 @@ async fn requests_only_append_between_rare_context_reductions() {
         }
     }
     assert!(forms.values().all(|seen| seen.len() <= 2));
+}
+
+/// Returns the reasoning each request sent beside each call, by call
+/// identifier.
+fn sent_reasoning(request: &ModelRequest) -> HashMap<&str, Option<&str>> {
+    request
+        .messages()
+        .iter()
+        .flat_map(|message| match message {
+            ModelMessage::AssistantToolCall(call) => std::slice::from_ref(call),
+            ModelMessage::AssistantToolCalls(calls) => calls.as_slice(),
+            _ => &[],
+        })
+        .map(|call| (call.id(), call.reasoning_content()))
+        .collect()
+}
+
+#[tokio::test]
+async fn notes_in_reasoning_outlive_the_results_they_describe() {
+    // Arrange
+    // As Qwen does, each response notes in its reasoning what the previous
+    // file defined and reads the next one, so the turn's only record of an
+    // earlier file is the reasoning of the round after it.
+    let mut responses: Vec<Result<ModelResponse, ModelError>> = (0..24)
+        .map(|round| {
+            let notes = format!(
+                "notes_{}.txt defines name_a, name_b, and name_c; next I read notes_{round}.txt. ",
+                round.max(1) - 1
+            )
+            .repeat(2);
+            Ok(ModelResponse::ToolCall(
+                ToolCall::from_json(
+                    format!("read_{round}"),
+                    "read",
+                    &json!({"path": format!("notes_{round}.txt")}).to_string(),
+                    Some(notes),
+                )
+                .expect("read call"),
+            ))
+        })
+        .collect();
+    responses.push(Ok(output()));
+    let (model, requests) = scripted(responses);
+    let content = (0..200)
+        .flat_map(|line| format!("line {line} of the notes\n").into_bytes())
+        .collect();
+    let opened = Arc::new(AtomicUsize::new(0));
+    let harness = budgeted_harness(model, 12_000, counting_file_system(content, &opened));
+
+    // Act
+    let outcome = harness
+        .run_once("list the names every notes file defines", object_schema())
+        .await
+        .expect("turn succeeds");
+
+    // Assert
+    let requests = requests.lock().expect("requests lock");
+    let reports = outcome.report().model_requests();
+    // The first request that clears a result still sends whole the notes
+    // the next round made on it.
+    let mut cleared = HashSet::new();
+    for (index, request) in requests.iter().enumerate() {
+        let reasoning = sent_reasoning(request);
+        for message in request.messages() {
+            let ModelMessage::ToolResult {
+                call_id, content, ..
+            } = message
+            else {
+                continue;
+            };
+            if !content.starts_with(r#"{"context_cleared":"#) || !cleared.insert(call_id.clone()) {
+                continue;
+            }
+            let round: usize = call_id["read_".len()..].parse().expect("round");
+            let notes = reasoning
+                .get(format!("read_{}", round + 1).as_str())
+                .copied()
+                .flatten();
+            assert!(
+                notes.is_some_and(|notes| notes.contains(&format!("notes_{round}.txt defines"))),
+                "request {index} cleared the result of {call_id} and the notes on it"
+            );
+        }
+    }
+    assert!(
+        cleared.len() >= 10,
+        "only {} results cleared",
+        cleared.len()
+    );
+    // Requests still only append between reductions.
+    for index in 1..requests.len() {
+        let previous = requests[index - 1].messages();
+        if !reduces_further(reports[index - 1].context(), reports[index].context()) {
+            assert_eq!(requests[index].messages()[..previous.len()], *previous);
+        }
+    }
 }

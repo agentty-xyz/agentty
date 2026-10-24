@@ -35,9 +35,24 @@ pub(crate) const DROP_TARGET_PERCENT: u64 = 70;
 
 /// Tool results of the current turn, newest first and by whole rounds, that
 /// an over-budget request keeps whole, with their rounds' reasoning and
-/// patches, until every older result, reasoning, and patch is cleared. The
-/// latest round is always kept, however many results it holds.
+/// patches, until every older result, and every older reasoning and patch
+/// outside [`KEEP_REASONING_PERCENT`], is cleared. The latest round is always
+/// kept, however many results it holds.
 pub(crate) const KEEP_RECENT_RESULTS: usize = 5;
+
+/// Share, in percent, of the request capacity left after reserved output
+/// within which the call messages of the current turn's newest earlier
+/// rounds, newest first, keep their provider reasoning, with any `write`
+/// patches beside it, after their results are cleared. A model that keeps
+/// its findings only in reasoning loses them with that reasoning, so these
+/// messages outlive the results they describe and are never cleared to
+/// reach [`FIT_TARGET_PERCENT`], nor their rounds dropped to reach
+/// [`DROP_TARGET_PERCENT`]. They lose their reasoning, in one rewrite like
+/// any older call message, once newer rounds push them out of this share,
+/// or before a replayed history turn would be dropped, and their rounds are
+/// dropped only when the request would not fit otherwise. A tenth holds many
+/// rounds of short notes and bounds what long reasoning costs.
+pub(crate) const KEEP_REASONING_PERCENT: u64 = 10;
 
 /// Share, in percent, of the request capacity left after reserved output
 /// that one tool result may keep. A `read` result is cut to it as it runs;
@@ -154,12 +169,13 @@ pub(crate) const ELIDED_SOURCE_LIMIT_FACTOR: usize = 8;
 /// round's oversized tool results (a `read` result by whole lines, as when it
 /// ran, any other to a head and tail excerpt), clearing the other older tool
 /// results, then reasoning and write patches, keeping the newest results whole
-/// longest, dropping the oldest history turns, then the current turn's oldest
-/// tool rounds behind an appended note, and finally cutting the latest results
-/// further and the latest write patches to their outcome. Every reduced
-/// message keeps its reduced form, so the following requests append to it.
-/// With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead be
-/// replaced by a model-written summary before those steps.
+/// longest and the newest rounds' reasoning within a tenth of the capacity
+/// past their results, dropping the oldest history turns, then the current
+/// turn's oldest tool rounds behind an appended note, and finally cutting the
+/// latest results further and the latest write patches to their outcome. Every
+/// reduced message keeps its reduced form, so the following requests append to
+/// it. With [`ContextSummaryPolicy::Enabled`], earlier tool rounds may instead
+/// be replaced by a model-written summary before those steps.
 /// The stored byte-based replay budget still bounds how much history is
 /// loaded. Provider-reported input tokens calibrate the weights against this
 /// budget in memory; until a provider reports usage, requests use 90% of the
@@ -1129,12 +1145,16 @@ impl ContextFit {
     /// turn): the other tool results become notices, then assistant reasoning
     /// and `write` patches are cleared together, one message at a time; the
     /// rounds holding the newest [`KEEP_RECENT_RESULTS`] results are cleared
-    /// the same way only after everything older. Whole projected history
-    /// turns, then whole earlier tool rounds of the current turn, oldest
-    /// first, are then dropped down to [`DROP_TARGET_PERCENT`], each fit's
-    /// dropped rounds named by one note appended after the earlier ones. The
-    /// latest tool-call round is never reduced by these steps. Only when the
-    /// request still exceeds the budget are the latest round's results,
+    /// the same way only after everything older. The call messages of the
+    /// newest earlier rounds that carry reasoning, within
+    /// [`KEEP_REASONING_PERCENT`] of the capacity, keep their reasoning
+    /// through these steps, after their results are cleared, and their rounds
+    /// are dropped only while the request exceeds the budget. Whole projected
+    /// history turns, then whole earlier tool rounds of the current turn,
+    /// oldest first, are then dropped down to [`DROP_TARGET_PERCENT`], each
+    /// fit's dropped rounds named by one note appended after the earlier ones.
+    /// The latest tool-call round is never reduced by these steps. Only when
+    /// the request still exceeds the budget are the latest round's results,
     /// largest first, cut further, and as the last resort its `write` patches
     /// replaced by a note on their recorded outcome. Tool calls keep their
     /// identifiers so groups stay well-formed, and every reduced message keeps
@@ -1623,7 +1643,10 @@ impl ContextFit {
     /// Results before the recent rounds (see [`Self::recent_start`]) become
     /// notices first, then those rounds' calls lose their reasoning and
     /// `write` patches, and only then are the recent rounds before the latest
-    /// one reduced the same way.
+    /// one reduced the same way. The call messages of the rounds whose
+    /// reasoning is kept (see [`Self::kept_reasoning_start`]) are skipped by
+    /// both passes, and those rounds are dropped only while the request
+    /// exceeds the budget.
     fn extend(
         &mut self,
         estimator: &dyn ContextEstimator,
@@ -1633,6 +1656,8 @@ impl ContextFit {
         base: u64,
     ) -> bool {
         let recent_start = self.recent_start(request.messages(), layout);
+        let kept_reasoning_start =
+            self.kept_reasoning_start(request.messages(), layout, Self::capacity(budget));
         let latest_round = layout.latest_round;
         let mut changed = false;
         let mut tier = Tier {
@@ -1645,7 +1670,11 @@ impl ContextFit {
         for end in [recent_start, latest_round] {
             self.elided_results_before =
                 self.elide_results(&mut tier, self.elided_results_before, end);
-            self.cleared_calls_before = self.clear_calls(&mut tier, self.cleared_calls_before, end);
+            self.cleared_calls_before = self.clear_calls(
+                &mut tier,
+                self.cleared_calls_before,
+                end.min(kept_reasoning_start),
+            );
         }
         // A replayed history turn that clearing reached is cleared whole, so
         // the next turn can replay it as this request sent it.
@@ -1656,15 +1685,32 @@ impl ContextFit {
             self.cleared_calls_before = self.clear_calls(&mut tier, self.cleared_calls_before, end);
         }
         let drop_target = Self::target(budget, DROP_TARGET_PERCENT);
+        // Kept reasoning never costs a whole earlier turn: it is cleared,
+        // oldest first, before any history turn is dropped.
+        if base.saturating_add(self.required) > drop_target
+            && layout.history_turn_starts.len() > self.dropped_history_turns
+        {
+            tier.target = drop_target;
+            self.cleared_calls_before =
+                self.clear_calls(&mut tier, self.cleared_calls_before, latest_round);
+        }
+        let kept_reasoning_start = kept_reasoning_start.max(self.cleared_calls_before);
         while base.saturating_add(self.required) > drop_target && self.drop_history_turn(layout) {
             changed = true;
         }
         while base.saturating_add(self.required) > drop_target
-            && self.drop_round(estimator, request, layout)
+            && self.drop_round(estimator, request, layout, kept_reasoning_start)
         {
             changed = true;
         }
-        // With every earlier round dropped, the notes are what remains.
+        // The rounds that keep their reasoning are dropped only to fit.
+        while base.saturating_add(self.required) > budget.max_request_weight().get()
+            && self.drop_round(estimator, request, layout, latest_round)
+        {
+            changed = true;
+        }
+        // With every earlier round that may be dropped gone, the notes are
+        // what remains.
         if base.saturating_add(self.required) > drop_target && self.dropped_rounds.notes.len() > 1 {
             self.merge_notes(estimator);
             changed = true;
@@ -1728,6 +1774,60 @@ impl ContextFit {
             }
             kept += results(round_start..start);
             start = round_start;
+        }
+
+        start
+    }
+
+    /// Returns where the current turn's rounds whose reasoning outlives
+    /// their results start: the oldest round carrying reasoning among the
+    /// rounds before the latest one, newest first and from the first call
+    /// message not yet considered for clearing, whose messages other than
+    /// results weigh at most [`KEEP_REASONING_PERCENT`] of `capacity`
+    /// together, up to a call message with a `write` patch to clear but no
+    /// reasoning. A call message with neither, such as one whose reasoning
+    /// repeats the cleared placeholder, is passed over, as clearing would not
+    /// change it, but still counts. The latest round when no round carrying
+    /// reasoning qualifies, so a model whose reasoning is never replayed
+    /// reduces as if none were kept.
+    fn kept_reasoning_start(
+        &self,
+        messages: &[ModelMessage],
+        layout: &Layout<'_>,
+        capacity: u64,
+    ) -> usize {
+        let floor = self
+            .dropped_rounds
+            .end
+            .max(layout.input_index + 1)
+            .max(self.cleared_calls_before);
+        let share = capacity.saturating_mul(KEEP_REASONING_PERCENT) / 100;
+        let mut start = layout.latest_round;
+        let mut newer_round = layout.latest_round;
+        let mut kept = 0_u64;
+        let round_starts: Vec<usize> = (floor..layout.latest_round)
+            .filter(|index| is_tool_call_message(&messages[*index]))
+            .collect();
+        for round_start in round_starts.into_iter().rev() {
+            kept = (round_start..newer_round)
+                .filter(|index| !matches!(messages[*index], ModelMessage::ToolResult { .. }))
+                .fold(kept, |weight, index| {
+                    weight.saturating_add(self.messages[index].weight)
+                });
+            let message = &messages[round_start];
+            let reasoned = carries_reasoning(message);
+            if kept > share
+                || (!reasoned
+                    && Reduction::ShrinkWrite
+                        .apply(message, &self.records)
+                        .is_some())
+            {
+                break;
+            }
+            if reasoned {
+                start = round_start;
+            }
+            newer_round = round_start;
         }
 
         start
@@ -2074,18 +2174,19 @@ impl ContextFit {
     /// its call message with every result and any request-only message
     /// before it, out of the request and names it in this fit's note, which
     /// follows the notes of earlier fits unchanged; returns `false` when no
-    /// round precedes the latest one, including when the current turn has no
-    /// tool round.
+    /// round starts before `before`, at most the latest round, including when
+    /// the current turn has no tool round.
     fn drop_round(
         &mut self,
         estimator: &dyn ContextEstimator,
         request: &ModelRequest,
         layout: &Layout<'_>,
+        before: usize,
     ) -> bool {
         let messages = request.messages();
         let start = self.dropped_rounds.end.max(layout.input_index + 1);
         let Some(call_index) = messages
-            .get(start..layout.latest_round)
+            .get(start..before)
             .and_then(|earlier| earlier.iter().position(is_tool_call_message))
             .map(|offset| start + offset)
         else {
@@ -2716,6 +2817,15 @@ fn tool_calls(message: &ModelMessage) -> &[ToolCall] {
 
 fn is_tool_call_message(message: &ModelMessage) -> bool {
     !tool_calls(message).is_empty()
+}
+
+/// Returns whether any call of an assistant tool-call message carries
+/// provider reasoning that clearing would shorten.
+fn carries_reasoning(message: &ModelMessage) -> bool {
+    tool_calls(message).iter().any(|call| {
+        call.reasoning_content()
+            .is_some_and(|reasoning| reasoning.len() > CLEARED_REASONING.len())
+    })
 }
 
 /// Returns, oldest first, each tool result whose index lies in `range` that

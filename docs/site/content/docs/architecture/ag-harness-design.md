@@ -104,29 +104,39 @@ is not available until read again), then each assistant message loses its reason
 (providers that replay reasoning still receive a non-empty placeholder) and its `write`
 patches (a note on their recorded outcome) in one rewrite. The rounds holding the newest
 five results keep their results, reasoning, and patches until everything older is
-cleared, and the latest round is never reduced by these steps. A replayed history turn
-that clearing reaches is cleared whole, so the next turn can replay it as sent. Clearing
-reasoning starts at the oldest assistant message the first time it is needed, so that
-one reduction rewrites the request from there. If clearing cannot reach 50%, the oldest
-replayed turns and then the current turn's oldest tool rounds are dropped whole, each
-call message with all its results, down to 70%; a dropped round also loses the text the
-model wrote beside its calls, so dropping stops short of the clearing target. Each
-reduction that drops rounds names them in one bounded note appended after the earlier
-notes, which counts the removed calls, lists the files they modified and read (up to 64
-paths each, as the harness recorded them), the commands they ran, and their other read
-targets, and says what they showed is not available until read again; once no earlier
-round is left to drop, the notes merge into one. A repeated-read note whose earlier
-result is cleared, cut, or summarized becomes a notice that it is no longer shown whole,
-naming the newer read when one returned it again. Tool calls keep their identifiers, so
-tool groups stay well-formed, and the text the model wrote beside them is never cleared,
-so its notes on what it found outlive the cleared results and leave only with their
-dropped round. Each reduction step is a watermark into the append-only canonical
-messages, and each reduced message is cached, so a request between reductions only
-weighs and appends its new messages. If the request still does not fit, the latest
-round's largest results are cut further the same way, and as the last resort its `write`
-patches are replaced by their recorded outcome; both stay cut in later requests. Only
-when even that fails does the turn fail typed. Each `ModelRequestActivity` reports the
-reductions its request carried.
+cleared, and the latest round is never reduced by these steps. The assistant messages of
+the newest earlier rounds that carry reasoning, within 10% of the capacity, keep it,
+with any `write` patches beside it, after their results are cleared: some models, such
+as Qwen, keep their findings only in reasoning, so clearing it with the results left
+them to re-read every cleared file or to answer from memory. Those messages are not
+cleared to reach 50%, nor their rounds dropped to reach 70% (below); they lose their
+reasoning, in one rewrite, once newer rounds push them out of that share or before a
+replayed history turn would be dropped, and their rounds are dropped only when the
+request would not fit otherwise. A message with nothing to clear, such as one whose
+reasoning repeats the placeholder, is passed over, and one with a `write` patch but no
+reasoning ends the kept rounds, so a model whose reasoning is never replayed is reduced
+as before. A replayed history turn that clearing reaches is cleared whole, so the next
+turn can replay it as sent. Clearing reasoning starts at the oldest assistant message
+the first time it is needed, so that one reduction rewrites the request from there. If
+clearing cannot reach 50%, the oldest replayed turns and then the current turn's oldest
+tool rounds are dropped whole, each call message with all its results, down to 70%; a
+dropped round also loses the text the model wrote beside its calls, so dropping stops
+short of the clearing target. Each reduction that drops rounds names them in one bounded
+note appended after the earlier notes, which counts the removed calls, lists the files
+they modified and read (up to 64 paths each, as the harness recorded them), the commands
+they ran, and their other read targets, and says what they showed is not available until
+read again; once no earlier round is left to drop, the notes merge into one. A
+repeated-read note whose earlier result is cleared, cut, or summarized becomes a notice
+that it is no longer shown whole, naming the newer read when one returned it again. Tool
+calls keep their identifiers, so tool groups stay well-formed, and the text the model
+wrote beside them is never cleared, so its notes on what it found outlive the cleared
+results and leave only with their dropped round. Each reduction step is a watermark into
+the append-only canonical messages, and each reduced message is cached, so a request
+between reductions only weighs and appends its new messages. If the request still does
+not fit, the latest round's largest results are cut further the same way, and as the
+last resort its `write` patches are replaced by their recorded outcome; both stay cut in
+later requests. Only when even that fails does the turn fail typed. Each
+`ModelRequestActivity` reports the reductions its request carried.
 
 With `ContextSummaryPolicy::Enabled`, a request that still exceeds 50% of its capacity
 after superseded results are cleared and oversized results capped first summarizes the
