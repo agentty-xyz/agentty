@@ -132,6 +132,32 @@ fn corrections_and_superseded_results_default_in_legacy_reports() {
 }
 
 #[test]
+fn inspection_arguments_default_in_legacy_reports() {
+    // Arrange
+    let inspection = ToolActivity::ReadInspection {
+        action: ReadAction::Search,
+        arguments: r#"{"action":"search","path":"src/lib.rs","query":"pub fn"}"#.to_string(),
+        duration: Duration::from_millis(1),
+        summary: "pub fn".to_string(),
+    };
+    let mut legacy = serde_json::to_value(&inspection).expect("encoded inspection");
+    legacy["ReadInspection"]
+        .as_object_mut()
+        .expect("inspection fields")
+        .remove("arguments");
+
+    // Act
+    let decoded: ToolActivity = serde_json::from_value(legacy).expect("legacy inspection");
+
+    // Assert
+    assert!(matches!(
+        decoded,
+        ToolActivity::ReadInspection { arguments, summary, .. }
+            if arguments.is_empty() && summary == "pub fn"
+    ));
+}
+
+#[test]
 fn context_summary_fields_default_in_legacy_reports() {
     // Arrange
     let report = TurnReport::new(Duration::from_millis(1), Vec::new(), Vec::new())
@@ -176,6 +202,7 @@ fn tool_activity_display_formats_every_outcome_safely() {
     };
     let inspection = ToolActivity::ReadInspection {
         action: ReadAction::List,
+        arguments: r#"{"action":"list"}"#.to_string(),
         duration: Duration::from_millis(1),
         summary: ".".to_string(),
     };

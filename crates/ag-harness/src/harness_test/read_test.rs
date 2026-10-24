@@ -149,9 +149,10 @@ async fn completes_repository_inspection_round_trip() {
         &outcome.report().tool_calls()[0],
         ToolActivity::ReadInspection {
             action: ReadAction::List,
+            arguments,
             summary,
             ..
-        } if summary == "Cargo.toml"
+        } if summary == "Cargo.toml" && arguments == r#"{"action":"list","path":"Cargo.toml"}"#
     ));
 }
 

@@ -1121,6 +1121,7 @@ async fn execute_repository_inspection(
             result,
             ToolActivity::ReadInspection {
                 action: arguments.action(),
+                arguments: serde_json::to_string(arguments).map_err(ReadError::from)?,
                 duration: started_at.elapsed(),
                 summary: sanitize_report_text(&summary),
             },

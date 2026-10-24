@@ -54,9 +54,9 @@ See `results/2026-09-03.md` for the completed live persistence and compatibility
 
 ## Context suite
 
-The context suite measures in-turn context management at a forced small `ContextBudget`.
-Each scenario runs as one `run_once` turn against a committed Git fixture generated from
-a fixed seed, so every run reads the same bytes:
+The context suite measures in-turn context management at a forced small `ContextBudget`
+or at the model's declared window. Each scenario runs as one `run_once` turn against a
+committed Git fixture generated from a fixed seed, so every run reads the same bytes:
 
 | Scenario             | Task                                                                                                  | Correctness checks                                     |
 | -------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
@@ -84,11 +84,28 @@ tool-definition tokens per 1,000 bytes, tokens per definition, request tokens, a
 when the output schema is rendered into the prompt (for example `225,44,339,0,420,1` for
 Muse Spark 1.3, as declared in `crates/ag-agent/src/agent/model_profile.rs`).
 `AG_HARNESS_CONTEXT_WINDOW` (default `32000`) and `AG_HARNESS_CONTEXT_RESERVED_OUTPUT`
-(default `16384`) set the budget. `AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`)
-bounds each run; a run that exceeds it is recorded as failed.
-`AG_HARNESS_CONTEXT_SUMMARIES=1` enables `ContextSummaryPolicy::Enabled`, so outgrown
-requests summarize earlier tool rounds. Kimi is not paced in this suite, so its
-three-request-per-minute limit makes it unsuitable without a higher quota.
+(default `16384`) set the budget. `AG_HARNESS_CONTEXT_WINDOW=declared` instead uses the
+model's profile as Agentty declares it: its window, its maximum output plus estimate
+margin as the reservation, and its fitted estimator unless `AG_HARNESS_CONTEXT_ESTIMATE`
+overrides it. `AG_HARNESS_CONTEXT_TIMEOUT_SECS` (default `900`) bounds each run; a run
+that exceeds it is recorded as failed. `AG_HARNESS_CONTEXT_SUMMARIES=1` enables
+`ContextSummaryPolicy::Enabled`, so outgrown requests summarize earlier tool rounds.
+Kimi is not paced in this suite, so its three-request-per-minute limit makes it
+unsuitable without a higher quota.
+
+Run both regimes when a change can affect context fitting or prompt caching. The forced
+budget makes every reduction tier fire within a few rounds; the declared window shows
+what a real session sends, where these scenarios never reduce:
+
+```sh
+for window in 32000 declared; do
+  AG_HARNESS_GIT_EXECUTABLE=/absolute/path/to/git \
+  AG_HARNESS_BENCHMARK_SUITE=context \
+  AG_HARNESS_BENCHMARK_PROVIDER=muse \
+  AG_HARNESS_CONTEXT_WINDOW=$window \
+    cargo test --locked -p ag-harness --test benchmark
+done
+```
 
 Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
 `target/ag-harness-context-benchmark.jsonl`) and prints it after `CONTEXT`:
@@ -104,7 +121,9 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   failed model request as its error type with any HTTP status (`transport_error`,
   `provider_error:429`). These come from lifecycle events, so a failed run keeps them.
 - `duplicate_reads` counts reads repeating an earlier file read with the same path and
-  starting line, or an identical `list`/`search` inspection.
+  starting line, an inspection with the same canonical arguments (a `search` for one
+  query in two paths is not a repeat), or a repeat the harness answered without running
+  it.
 - `input_tokens` and `output_tokens` sum provider-reported usage; `null` means the
   provider reported none.
 - `requests` lists every reported request in order, including outputs rejected and
@@ -113,34 +132,52 @@ Each run appends one JSON object to `AG_HARNESS_CONTEXT_RESULTS` (default
   `reasoning_tokens`, and `finish_reason`, the calibrated capacity it was fitted into
   (`budget_weight`), its weight before (`unreduced_weight`) and after
   (`estimated_weight`) reduction, the calibrated token prediction (`calibrated_weight`),
-  and its non-zero `reductions`. `model_calls` counts these requests.
+  and its non-zero `reductions`. `model_calls` counts these requests. Each turn request
+  after the first also compares itself with the previous turn request:
+  `cache_expected_tokens` is the smaller of the two inputs, which an append-only cache
+  could reuse, `prefix_held` is whether the provider reused at least 85% of it, and
+  `reduction_event` is whether its `reductions` differ from the previous one's, so the
+  harness rewrote earlier bytes or newly cut the latest round.
+- `cache_hit_tokens` and `cached_share` sum and divide provider-reported cache hits over
+  every request. `reduction_events` and `held_prefixes` count turn-request pairs, and
+  `lost_prefixes` and `lost_cache_tokens` (each expected token not reused) split the
+  pairs that lost the prefix into `harness`, at a reduction event, and `provider`.
 - `elided_results`, `cleared_reasoning`, `shrunk_write_calls`, `dropped_history_turns`,
   `dropped_tool_calls`, `truncated_results`, `shrunk_latest_write_calls`,
   `summarized_tool_calls`, and `superseded_results` sum `ContextActivity` over every
   accepted request. A reduction carried into later requests is counted once per request,
   so these measure sustained pressure rather than distinct items.
-- `revision`, `model`, `window`, `reserved_output`, `context_summaries`, and `estimate`
-  (the `AG_HARNESS_CONTEXT_ESTIMATE` value, or `null` for `DEFAULT`) identify the
-  configuration. A failed turn's activity fields come from the report on its
-  `TurnFailed` event; they are `null` only when the turn failed before preparing its
-  first request or timed out. `detail` holds the error or failed checks.
+- `revision`, `model`, `window`, `window_mode` (`fixed` or `declared`),
+  `reserved_output`, `context_summaries`, and `estimate` (the
+  `AG_HARNESS_CONTEXT_ESTIMATE` value or the declared estimator, or `null` for
+  `DEFAULT`) identify the configuration. A failed turn's activity fields come from the
+  report on its `TurnFailed` event; they are `null` only when the turn failed before
+  preparing its first request or timed out. `detail` holds the error or failed checks.
 
-To compare runs, aggregate per scenario and model with `jq`:
+To compare runs, aggregate per scenario, model, and window with `jq`:
 
 ```sh
-jq -s -r 'group_by([.scenario, .model, .context_summaries])[] | {
-    scenario: .[0].scenario, model: .[0].model, runs: length,
+jq -s -r 'group_by([.scenario, .model, .window, .context_summaries])[] | {
+    scenario: .[0].scenario, model: .[0].model, window: .[0].window, runs: length,
     summaries: .[0].context_summaries,
     success: (map(select(.success)) | length),
     calls: (map(.model_calls // empty) | add / length),
     duplicates: (map(.duplicate_reads // empty) | add / length),
     input_tokens: (map(.input_tokens // empty) | add / length),
+    cached: (map(.cached_share // empty) | add / length),
+    lost: (map(.lost_prefixes // empty) | "\(map(.harness) | add)/\(map(.provider) | add)"),
     wall_s: (map(.wall_ms) | add / length / 1000)
-  } | [.scenario, .model, .summaries, "\(.success)/\(.runs)", .calls, .duplicates,
-       .input_tokens, .wall_s] | @tsv' results.jsonl
+  } | [.scenario, .model, .window, .summaries, "\(.success)/\(.runs)", .calls, .duplicates,
+       .input_tokens, .cached, .lost, .wall_s] | @tsv' results.jsonl
 ```
 
-Committed baselines live under `results/` as `*-context.jsonl`.
+Committed baselines live under `results/` as `*-context*.jsonl`.
+`results/2026-10-23-context-regimes.jsonl` holds two runs per model and scenario of
+`long_read_loop` and `sequential_writes` at revision `c9ad325b`, at the forced budget
+and at the full window (Muse `1048576`/`131072`, Qwen3.8-Max `1000000`/`131072`), each
+with its declared estimator. Their cache fields were derived from the recorded
+`requests`, and `duplicate_reads` was recounted from the provider requests a logging
+proxy recorded, because the runs predate both.
 
 ## Estimate suite
 

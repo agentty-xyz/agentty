@@ -1,18 +1,17 @@
 //! Per-run measurements written as one JSON line.
 
-use std::collections::BTreeMap;
-
 use ag_harness::TurnOutcome;
 use ag_harness::lifecycle::LifecycleEventKind;
 use ag_harness::model::CompletionMetadata;
-use ag_harness::turn::{
-    ContextActivity, ModelRequestActivity, ModelRequestPurpose, ToolActivity, TurnReport,
-};
+use ag_harness::turn::{ContextActivity, ModelRequestActivity, ModelRequestPurpose, TurnReport};
 use serde_json::{Map, Value, json};
+
+use super::metric;
 
 /// Content-free activity summed over every accepted request of one turn,
 /// with one record per request.
 pub(super) struct Activity {
+    cache: Map<String, Value>,
     context: [(&'static str, usize); 9],
     context_overflow_recoveries: usize,
     duplicate_reads: usize,
@@ -53,17 +52,25 @@ impl Activity {
             }
         }
 
+        let mut requests = report
+            .model_requests()
+            .iter()
+            .map(request_record)
+            .collect::<Vec<_>>();
+        let cache = metric::record_cache_reuse(&mut requests);
+
         Self {
+            cache,
             context: context.0,
             context_overflow_recoveries: report.context_overflow_recoveries(),
-            duplicate_reads: duplicate_reads(report.tool_calls()),
+            duplicate_reads: metric::duplicate_reads(report.tool_calls()),
             input_tokens,
             malformed_tool_calls: report.malformed_tool_calls(),
             model_calls: report.model_requests().len(),
             output_corrections: report.output_corrections(),
             output_tokens,
             repetition_nudges: report.repetition_nudges(),
-            requests: report.model_requests().iter().map(request_record).collect(),
+            requests,
             summary_calls: report
                 .model_requests()
                 .iter()
@@ -81,6 +88,9 @@ impl Activity {
         line.insert("duplicate_reads".into(), json!(self.duplicate_reads));
         line.insert("input_tokens".into(), json!(self.input_tokens));
         line.insert("output_tokens".into(), json!(self.output_tokens));
+        for (name, value) in &self.cache {
+            line.insert(name.clone(), value.clone());
+        }
         line.insert("repetition_nudges".into(), json!(self.repetition_nudges));
         line.insert("summary_calls".into(), json!(self.summary_calls));
         line.insert("summary_failures".into(), json!(self.summary_failures));
@@ -166,6 +176,7 @@ pub(super) struct RunRecord {
     pub(super) success: bool,
     pub(super) wall_ms: u128,
     pub(super) window: u64,
+    pub(super) window_mode: &'static str,
 }
 
 impl RunRecord {
@@ -180,6 +191,7 @@ impl RunRecord {
         line.insert("scenario".into(), json!(self.scenario));
         line.insert("repetition".into(), json!(self.repetition));
         line.insert("window".into(), json!(self.window));
+        line.insert("window_mode".into(), json!(self.window_mode));
         line.insert("reserved_output".into(), json!(self.reserved_output));
         line.insert("context_summaries".into(), json!(self.context_summaries));
         line.insert("estimate".into(), json!(self.estimate));
@@ -201,13 +213,19 @@ impl RunRecord {
     }
 }
 
-const ACTIVITY_FIELDS: [&str; 12] = [
+const ACTIVITY_FIELDS: [&str; 18] = [
     "model_calls",
     "output_corrections",
     "tool_calls",
     "duplicate_reads",
     "input_tokens",
     "output_tokens",
+    "cache_hit_tokens",
+    "cached_share",
+    "reduction_events",
+    "held_prefixes",
+    "lost_prefixes",
+    "lost_cache_tokens",
     "repetition_nudges",
     "summary_calls",
     "summary_failures",
@@ -288,24 +306,4 @@ fn request_record(request: &ModelRequestActivity) -> Value {
         "calibrated_weight": request.calibrated_weight(),
         "reductions": reductions,
     })
-}
-
-/// Counts reads that repeat an earlier read target in the same turn: a file
-/// read at the same path and starting line, or an identical inspection.
-fn duplicate_reads(tool_calls: &[ToolActivity]) -> usize {
-    let mut seen = BTreeMap::<String, usize>::new();
-    for activity in tool_calls {
-        let target = match activity {
-            ToolActivity::Read {
-                path, start_line, ..
-            } => format!("file:{path}:{start_line}"),
-            ToolActivity::ReadInspection {
-                action, summary, ..
-            } => format!("{action:?}:{summary}"),
-            _ => continue,
-        };
-        *seen.entry(target).or_default() += 1;
-    }
-
-    seen.values().map(|count| count - 1).sum()
 }
