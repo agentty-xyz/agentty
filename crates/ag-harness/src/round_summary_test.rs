@@ -127,6 +127,7 @@ fn job_requests_a_tool_free_summary_of_its_source() {
     );
     assert_eq!(job.request().prefix_schema(), None);
     assert!(ROUND_SUMMARY_INSTRUCTIONS.contains("Record only what the rounds show: never infer"));
+    assert!(ROUND_SUMMARY_INSTRUCTIONS.contains("within the schema's maxLength and maxItems"));
 }
 
 #[test]

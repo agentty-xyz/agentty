@@ -22,7 +22,8 @@ macro_rules! summary_guidance {
          that it was seen. Record only what the rounds show: never infer, guess, or complete a \
          name or value that no result shows, and where a result was cleared or cut, name what it \
          no longer shows instead of filling it in. Prefer facts the task still needs over \
-         narration."
+         narration, and keep every field within the schema's maxLength and maxItems: a longer \
+         summary is rejected."
     };
 }
 
