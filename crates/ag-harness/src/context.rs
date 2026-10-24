@@ -2198,6 +2198,16 @@ impl ContextFit {
             .map_or(layout.latest_round, |offset| call_index + 1 + offset);
         let calls = tool_calls(&messages[call_index]);
         self.leave_out(start..end);
+        // A kept round may be dropped before clearing reached it; left-out
+        // messages are never reduced again, or their savings would count
+        // twice.
+        for watermark in [
+            &mut self.capped_results_before,
+            &mut self.cleared_calls_before,
+            &mut self.elided_results_before,
+        ] {
+            *watermark = (*watermark).max(end);
+        }
         let mut note = if self.dropped_rounds.open {
             self.dropped_rounds.notes.pop().unwrap_or_default()
         } else {

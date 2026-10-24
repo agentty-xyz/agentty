@@ -1213,3 +1213,28 @@ fn a_round_that_keeps_its_reasoning_is_dropped_when_nothing_else_fits() {
     assert_eq!(reasoning.len(), 2);
     assert_eq!(reasoning[0], Some(notes.as_str()));
 }
+
+#[test]
+fn a_dropped_kept_round_is_never_reduced_again() {
+    // Arrange
+    let notes = "n".repeat(700);
+    let mut request = request(Vec::new(), Vec::new(), "inspect");
+    for round in 0..2 {
+        record_noted_round(&mut request, &format!("r{round}"), Some(&notes), &[2000]);
+    }
+    record_noted_round(&mut request, "long", Some(&"l".repeat(18_000)), &[500]);
+    let mut fit = ContextFit::default();
+    let (first, first_activity) = fit_owned(&mut fit, budget(20_000), &request).expect("fits");
+    record_noted_round(&mut request, "next", Some(&notes), &[2000]);
+
+    // Act
+    let (second, _) = fit_owned(&mut fit, budget(20_000), &request).expect("fits again");
+
+    // Assert
+    assert_eq!(first_activity.dropped_tool_calls(), 1);
+    assert!(first.is_some());
+    // The weight the fit reports is the weight it sends.
+    let second = second.expect("reduced copy");
+    assert_eq!(fit.sent_weight(), weigh(&second));
+    assert!(weigh(&second) <= 20_000);
+}
